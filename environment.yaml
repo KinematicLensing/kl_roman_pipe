@@ -22,4 +22,5 @@ dependencies:
   - cython
   - sep
   - reproject
+  - black
   - pip
