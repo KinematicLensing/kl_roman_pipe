@@ -1,0 +1,25 @@
+name: kltest
+channels:
+  - conda-forge
+dependencies:
+  - astropy
+  - corner
+  - emcee
+  - fitsio
+  - galsim
+  - ipdb
+  - pudb
+  - jupyter
+  - jupyterlab
+  - mpi4py
+  - numba
+  - numpy==1.26.4
+  - openmpi
+  - schwimmbad
+  - scipy
+  - snakeviz
+  - zeus-mcmc
+  - cython
+  - sep
+  - reproject
+  - pip

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kl_pipe"
+version = "0.1.0"
+description = "Test repo for a roman KL pipeline"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Spencer Everett", email = "severett@caltech.edu" }
+]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pyyaml",
+]
+
+[project.urls]
+Homepage = "https://github.com/SPHEREx/SPHEREx-L4-Cosmology-Pipeline"
+Repository = "https://github.com/sweverett/kl_roman_test"
+
+[tool.setuptools]
+packages = ["kl_pipe"]
