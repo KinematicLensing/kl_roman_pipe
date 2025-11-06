@@ -8,6 +8,7 @@ from kl_tools.coordinates import OrientedAngle
 from kl_tools.utils import get_test_dir, make_dir, build_map_grid
 from kl_tools.kross.rotation_curve_fitter import dist_to_major_axis
 
+
 class TestVelocityModel(unittest.TestCase):
     def setUp(self) -> None:
         # Set up any necessary objects or variables for the tests
@@ -17,7 +18,7 @@ class TestVelocityModel(unittest.TestCase):
             'g2': -0.075,
             'theta_int': np.pi / 3,
             'sini': 0.8,
-            'v0': 10.,
+            'v0': 10.0,
             'vcirc': 200,
             'rscale': 5,
             'r_unit': units.Unit('pixel'),
@@ -40,6 +41,7 @@ class TestVelocityModel(unittest.TestCase):
 
         return
 
+
 class TestOffsetVelocityModel(unittest.TestCase):
     def setUp(self) -> None:
         # Set up any necessary objects or variables for the tests
@@ -49,7 +51,7 @@ class TestOffsetVelocityModel(unittest.TestCase):
             'g2': -0.075,
             'theta_int': np.pi / 3,
             'sini': 0.8,
-            'v0': 10.,
+            'v0': 10.0,
             'vcirc': 200,
             'rscale': 5,
             'x0': 10,
@@ -76,6 +78,7 @@ class TestOffsetVelocityModel(unittest.TestCase):
 
         return
 
+
 class TestVelocityMap(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -93,7 +96,7 @@ class TestVelocityMap(unittest.TestCase):
             'g2': -0.075,
             'theta_int': np.pi / 3,
             'sini': 0.8,
-            'v0': 10.,
+            'v0': 10.0,
             'vcirc': 200,
             'rscale': 5,
             'r_unit': units.Unit('pixel'),
@@ -108,7 +111,7 @@ class TestVelocityMap(unittest.TestCase):
             'g2': -0.075,
             'theta_int': np.pi / 3,
             'sini': 0.8,
-            'v0': 10.,
+            'v0': 10.0,
             'vcirc': 200,
             'rscale': 5,
             'x0': 10,
@@ -127,32 +130,28 @@ class TestVelocityMap(unittest.TestCase):
         show = self.show
         center = True
 
-        outfile = str(outdir /  'speedmap-transorms.png')
+        outfile = str(outdir / 'speedmap-transorms.png')
         vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=True, center=center,
-            rmax=rmax
-            )
+            outfile=outfile, show=show, speed=True, center=center, rmax=rmax
+        )
 
         outfile = str(outdir / 'vmap-transorms.png')
         vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=False, center=center,
-            rmax=rmax
-            )
+            outfile=outfile, show=show, speed=False, center=center, rmax=rmax
+        )
 
         # now for offset model
         offset_vmap = self.offset_vmap
 
         outfile = str(outdir / 'speedmap-transorms-offset.png')
         offset_vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=True, center=center,
-            rmax=rmax
-            )
+            outfile=outfile, show=show, speed=True, center=center, rmax=rmax
+        )
 
         outfile = str(outdir / 'vmap-transorms-offset.png')
         offset_vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=False, center=center,
-            rmax=rmax
-            )
+            outfile=outfile, show=show, speed=False, center=center, rmax=rmax
+        )
 
         return
 
@@ -165,32 +164,38 @@ class TestVelocityMap(unittest.TestCase):
 
         for plane in ['disk', 'gal', 'source', 'obs']:
             outfile = str(outdir / f'vmap-{plane}.png')
-            vmap.plot(
-                plane, outfile=outfile, show=show, center=center,
-                rmax=rmax
-                )
+            vmap.plot(plane, outfile=outfile, show=show, center=center, rmax=rmax)
 
         # plot combined velocity field planes
-        plot_kwargs = {'rmax':rmax}
+        plot_kwargs = {'rmax': rmax}
         outfile = str(outdir / 'vmap-all.png')
         vmap.plot_all_planes(
-            plot_kwargs=plot_kwargs, show=show, outfile=outfile, center=center,
-            )
+            plot_kwargs=plot_kwargs,
+            show=show,
+            outfile=outfile,
+            center=center,
+        )
 
         # plot combined velocity field planes normalized by c
         outfile = str(outdir / 'vmap-all-normed.png')
         vmap.plot_all_planes(
-            plot_kwargs=plot_kwargs, show=show, outfile=outfile,
-                            normalized=True, center=center,
-            )
+            plot_kwargs=plot_kwargs,
+            show=show,
+            outfile=outfile,
+            normalized=True,
+            center=center,
+        )
 
         # now for offset model
 
         offset_vmap = self.offset_vmap
         outfile = str(outdir / 'vmap-all-offset.png')
         offset_vmap.plot_all_planes(
-            plot_kwargs=plot_kwargs, show=show, outfile=outfile, center=center,
-            )
+            plot_kwargs=plot_kwargs,
+            show=show,
+            outfile=outfile,
+            center=center,
+        )
 
         return
 
@@ -203,32 +208,28 @@ class TestVelocityMap(unittest.TestCase):
         Nx, Ny = 50, 30
         X, Y = build_map_grid(Nx, Ny)
 
-        outfile = str(outdir /  'speedmap-transorms-rect.png')
+        outfile = str(outdir / 'speedmap-transorms-rect.png')
         vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=True, center=center,
-            X=X, Y=Y
-            )
+            outfile=outfile, show=show, speed=True, center=center, X=X, Y=Y
+        )
 
         outfile = str(outdir / 'vmap-transorms-rect.png')
         vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=False, center=center,
-            X=X, Y=Y
-            )
+            outfile=outfile, show=show, speed=False, center=center, X=X, Y=Y
+        )
 
         # now for offset model
         offset_vmap = self.offset_vmap
 
         outfile = str(outdir / 'speedmap-transorms-offset-rect.png')
         offset_vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=True, center=center,
-            X=X, Y=Y
-            )
+            outfile=outfile, show=show, speed=True, center=center, X=X, Y=Y
+        )
 
         outfile = str(outdir / 'vmap-transorms-offset-rect.png')
         offset_vmap.plot_map_transforms(
-            outfile=outfile, show=show, speed=False, center=center,
-            X=X, Y=Y
-            )
+            outfile=outfile, show=show, speed=False, center=center, X=X, Y=Y
+        )
 
         return
 
@@ -312,9 +313,7 @@ class TestVelocityMap(unittest.TestCase):
         plt.xlabel('X')
         plt.ylabel('Y')
         plt.colorbar()
-        plt.title(
-            'Vmap Observed; rscale = 5 pixels; theta_int = 30 deg'
-            )
+        plt.title('Vmap Observed; rscale = 5 pixels; theta_int = 30 deg')
         plt.tight_layout()
         plt.gcf().set_size_inches(8, 6)
 
@@ -323,10 +322,10 @@ class TestVelocityMap(unittest.TestCase):
         plt.close()
 
         outfile = self.plot_dir / 'vmap-rscale-pixel_rotation_curve.png'
-        scale_radius = 10 # arcsec
+        scale_radius = 10  # arcsec
         vmap.plot_rotation_curve(
             X, Y, out_file=outfile, show=True, scale_radius=scale_radius
-            )
+        )
 
         return
 
@@ -360,9 +359,7 @@ class TestVelocityMap(unittest.TestCase):
         plt.xlabel('X')
         plt.ylabel('Y')
         plt.colorbar()
-        plt.title(
-            'Vmap Observed; rscale = 5 arcsec; theta_int = 30 deg'
-            )
+        plt.title('Vmap Observed; rscale = 5 arcsec; theta_int = 30 deg')
         plt.tight_layout()
         plt.gcf().set_size_inches(8, 6)
 
@@ -371,13 +368,18 @@ class TestVelocityMap(unittest.TestCase):
         plt.close()
 
         outfile = self.plot_dir / 'vmap-rscale-arcsec_rotation_curve.png'
-        scale_radius = 7 # arcsec
+        scale_radius = 7  # arcsec
         vmap.plot_rotation_curve(
-            X, Y, pix_scale=pix_scale, out_file=outfile, show=True, 
-            scale_radius=scale_radius
-            )
+            X,
+            Y,
+            pix_scale=pix_scale,
+            out_file=outfile,
+            show=True,
+            scale_radius=scale_radius,
+        )
 
         return
+
 
 if __name__ == '__main__':
     unittest.main()
