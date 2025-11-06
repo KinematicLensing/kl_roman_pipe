@@ -26,6 +26,7 @@ container for all the metadata, units, and logic for a 2D image such as size,
 pixel_scale, WCS, etc.
 '''
 
+
 class Pars(object):
     '''
     Holds all of the parameters for a needed MCMC run, both
@@ -42,10 +43,7 @@ class Pars(object):
             a particular experiment and MCMC run
         '''
 
-        args = {
-            'sampled_pars': (sampled_pars, list),
-            'meta_pars': (meta_pars, dict)
-            }
+        args = {'sampled_pars': (sampled_pars, list), 'meta_pars': (meta_pars, dict)}
         utils.check_types(args)
 
         for name in sampled_pars:
@@ -68,6 +66,7 @@ class Pars(object):
 
     def __copy__(self):
         return Pars(deepcopy(self.sampled), deepcopy(self.meta))
+
 
 class SampledPars(object):
     '''
@@ -160,6 +159,7 @@ class SampledPars(object):
     def __copy__(self):
         return SampledPars(deepcopy(self.pars_order))
 
+
 class MetaPars(object):
     '''
     Base class that defines structure for the general meta
@@ -191,8 +191,9 @@ class MetaPars(object):
 
         for key in cls._req_fields:
             if key not in pars:
-                return KeyError(f'{key} is a required field ' +\
-                                'in the parameter list!')
+                return KeyError(
+                    f'{key} is a required field ' + 'in the parameter list!'
+                )
 
         return
 
@@ -228,8 +229,8 @@ class MetaPars(object):
     def values(self):
         return self.pars.values()
 
-class MCMCPars(MetaPars):
 
+class MCMCPars(MetaPars):
     '''
     Class that defines structure for the parameters
     used in MCMC sampling for a given experiment, modeling
@@ -269,9 +270,10 @@ class MCMCPars(MetaPars):
 
         return pars
 
+
 class ImagePars(object):
     '''
-    A convenience class that holds all of the metadata for a 2D image, 
+    A convenience class that holds all of the metadata for a 2D image,
     including size, pixel_scale, WCS, etc.
 
     NOTE: By default the class assumes that you are passing shape
@@ -284,20 +286,18 @@ class ImagePars(object):
         If indexing='ij', this is (Nrow, Ncol) = (Ny, Nx) to match numpy. If
         indexing='xy', this is (Ncol, Nrow) = (Nx, Ny) to match FITS convention.
     indexing: str; default='ij'
-        The indexing convention for the passed image shape. Can be 'ij' (numpy) 
+        The indexing convention for the passed image shape. Can be 'ij' (numpy)
         or 'xy' (FITS)
     pixel_scale: float; default=None
-        The pixel scale, typically in arcseconds/pixel (but other Astropy 
-        units are allowed). This is used to define the WCS coordinate system if 
+        The pixel scale, typically in arcseconds/pixel (but other Astropy
+        units are allowed). This is used to define the WCS coordinate system if
         you do not provide one. Can only be passed if wcs is None.
     wcs: WCS object; default=None
         An astropy WCS object that defines the coordinate system for the image.
         Can only be passed if pixel_scale is None.
     '''
 
-    def __init__(
-            self, shape, indexing, pixel_scale=None, wcs=None
-            ):
+    def __init__(self, shape, indexing, pixel_scale=None, wcs=None):
 
         if not isinstance(shape, tuple):
             raise TypeError('shape must be a tuple!')
@@ -310,7 +310,7 @@ class ImagePars(object):
         if shape[1] <= 0:
             raise ValueError('shape[1] must be > 0!')
         self.shape = shape
-            
+
         if indexing not in ['ij', 'xy']:
             raise ValueError('indexing must be "ij" or "xy"!')
         self.indexing = indexing
@@ -352,12 +352,12 @@ class ImagePars(object):
                 raise ValueError(
                     f'Shape {shape} does not match the expected shape '
                     f'{expected_shape} for the passed WCS!'
-                    )
+                )
 
             self.wcs = wcs
-            self.pixel_scale = float(np.mean(
-                self._estimate_pixel_scale()
-            )) * 3600 # convert to arcsec/pixel
+            self.pixel_scale = (
+                float(np.mean(self._estimate_pixel_scale())) * 3600
+            )  # convert to arcsec/pixel
 
         return
 
@@ -412,6 +412,7 @@ class ImagePars(object):
     def _estimate_pixel_scale(self):
         # Optionally use astropy.wcs.utils.proj_plane_pixel_scales
         from astropy.wcs.utils import proj_plane_pixel_scales
+
         return proj_plane_pixel_scales(self.wcs)
 
     def pixel_to_world(self, *pixel_coords):

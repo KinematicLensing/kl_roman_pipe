@@ -20,563 +20,197 @@ Definition of each plane:
     obs:  Observed image plane. Offset version of cen plane
 '''
 
-from abc import abstractmethod
-import numpy as np
+# transform.py - JAX-friendly coordinate transformations
+import jax.numpy as jnp
+from typing import Tuple
+
 
 SUPPORTED_PLANES = ['disk', 'gal', 'source', 'cen', 'obs']
 
 
-class TransformableImage(object):
-    '''
-    This base class defines the transformation properties
-    and structure for an image (e.g. velocity map, source
-    intensity) that can be rendered in the various planes
-    relevant to kinematic lensing: disk, gal, source, and obs
+def _multiply(transform: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray):
+    """
+    Apply 2x2 transformation matrix to coordinate arrays.
 
-    The unifying feature of these images will be that their
-    rendering in a given plane will be handled by the __call__
-    attribute, along with the plane name, image coords to eval
-    at, and any necessary transformation parameters
-    '''
+    Parameters
+    ----------
+    transform : jnp.ndarray
+        2x2 transformation matrix.
+    x, y : jnp.ndarray
+        Coordinate arrays (must have same shape).
 
-    def __init__(self, transform_pars):
-        '''
-        transform_pars: dict
-            A dictionary that defines the parameters needed
-            to evaluate the plane transformations
-        '''
+    Returns
+    -------
+    xp, yp : jnp.ndarray
+        Transformed coordinates.
+    """
+    coords = jnp.stack([x.ravel(), y.ravel()], axis=0)
+    transformed = jnp.matmul(transform, coords)
 
-        self.transform_pars = transform_pars
-        self._planes = ['disk', 'gal', 'source', 'cen', 'obs']
+    xp = transformed[0].reshape(x.shape)
+    yp = transformed[1].reshape(y.shape)
 
-        self._setup_transformations()
-
-        return
-
-    def _setup_transformations(self):
-        '''
-        TODO: Do we need this?
-        '''
-
-        pars = self.transform_pars
-
-        self.cen2source = _transform_cen2source(pars)
-        self.source2gal = _transform_source2gal(pars)
-        self.gal2disk = _transform_gal2disk(pars)
-
-        # we don't do the following as it is simpler to apply
-        # a translation directly instead of building a 3x3 matrix
-        # self.obs2cen = _transform_obs2cen(pars)
-
-        return
-
-    def __call__(self, plane, x, y, use_numba=False):
-        '''
-        plane: str
-            The plane to evaluate the image in
-        x: np.ndarray
-            The x position(s) to evaluate the image at
-        y: np.ndarray
-            The y position(s) to evaluate the image at
-        use_numba: bool
-            Whether to use numba-friendly versions of the
-            transformation functions
-            NOTE: Not yet fully implemented
-        '''
-
-        if plane not in self._planes:
-            raise ValueError(f'{plane} not a valid image plane!')
-
-        if not isinstance(x, np.ndarray):
-            assert not isinstance(y, np.ndarray)
-            x = np.array(x)
-            y = np.array(y)
-
-        if x.shape != y.shape:
-            raise Exception('x and y arrays must be the same shape!')
-
-        return
-
-    def _get_plane_eval_func(self, plane, use_numba=False):
-        '''
-        plane: str
-            Name of the plane to evaluate positions in
-        use_numba: bool
-            Set to use numba versions of functions
-        '''
-
-        if plane == 'obs':
-            if use_numba is True:
-                func = nb.eval_in_obs_plane
-            else:
-                func = self._eval_in_obs_plane
-        elif plane == 'cen':
-            if use_numba is True:
-                func = nb.eval_in_cen_plane
-            else:
-                func = self._eval_in_cen_plane
-        elif plane == 'source':
-            if use_numba is True:
-                func = nb.eval_in_source_plane
-            else:
-                func = self._eval_in_source_plane
-        elif plane == 'gal':
-            if use_numba is True:
-                func = nb.eval_in_gal_plane
-            else:
-                func = self._eval_in_gal_plane
-        elif plane == 'disk':
-            if use_numba is True:
-                func = nb.eval_in_disk_plane
-            else:
-                func = self._eval_in_disk_plane
-
-        return func
-
-    def _eval_map_in_plane(self, plane, x, y, use_numba=False):
-        '''
-        We use static methods defined in transformation.py
-        to speed up these very common function calls
-
-        The input (x,y) position is defined in the plane
-
-        plane: str
-            The name of the plane to evaluate the map in the given
-            coords
-        use_numba: bool
-            Set to True to use numba versions of transformations
-        '''
-
-        pars = self.transform_pars
+    return xp, yp
 
 
-        func = self._get_plane_eval_func(plane, use_numba=use_numba)
+def obs2cen(
+    x0: float, y0: float, x: jnp.ndarray, y: jnp.ndarray
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Transform from obs to cen plane (remove offset).
 
-        return func(pars, x, y)
-    @classmethod
-    def _eval_in_obs_plane(cls, pars, x, y, **kwargs):
-        '''
-        pars: dict
-            Holds the model & transformation parameters
-        x,y: np.ndarray
-            The position coordintates in the obs plane
+    Parameters
+    ----------
+    x0, y0 : float
+        Centroid offsets.
+    x, y : jnp.ndarray
+        Coordinates in obs plane.
 
-        kwargs holds any additional params that might be needed
-        in subclass evaluations, such as using speed instead of
-        velocity
-        '''
+    Returns
+    -------
+    xp, yp : jnp.ndarray
+        Coordinates in cen plane.
+    """
+    return x - x0, y - y0
 
-        xp, yp = _obs2cen(pars, x, y)
 
-        return cls._eval_in_cen_plane(pars, xp, yp, **kwargs)
+def cen2source(
+    g1: float, g2: float, x: jnp.ndarray, y: jnp.ndarray
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Transform from cen to source plane (inverse lensing shear).
 
-    @classmethod
-    def _eval_in_cen_plane(cls, pars, x, y, **kwargs):
-        '''
-        pars: dict
-            Holds the model & transformation parameters
-        x,y: np.ndarray
-            The position coordintates in the cen plane
+    Parameters
+    ----------
+    g1, g2 : float
+        Shear components.
+    x, y : jnp.ndarray
+        Coordinates in cen plane.
 
-        kwargs holds any additional params that might be needed
-        in subclass evaluations, such as using speed instead of
-        velocity
-        '''
+    Returns
+    -------
+    xp, yp : jnp.ndarray
+        Coordinates in source plane.
+    """
 
-        xp, yp = _cen2source(pars, x, y)
+    norm = 1.0 / (1.0 - (g1**2 + g2**2))
+    transform = norm * jnp.array([[1.0 + g1, g2], [g2, 1.0 - g1]])
 
-        return cls._eval_in_source_plane(pars, xp, yp, **kwargs)
+    return _multiply(transform, x, y)
 
-    @classmethod
-    def _eval_in_source_plane(cls, pars, x, y, **kwargs):
-        '''
-        pars: dict
-            Holds the model & transformation parameters
-        x,y: np.ndarray
-            The position coordintates in the source plane
 
-        kwargs holds any additional params that might be needed
-        in subclass evaluations, such as using speed instead of
-        velocity
-        '''
+def source2gal(
+    theta_int: float, x: jnp.ndarray, y: jnp.ndarray
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Transform from source to gal plane (remove intrinsic rotation).
 
-        xp, yp = _source2gal(pars, x, y)
+    Parameters
+    ----------
+    theta_int : float
+        Intrinsic position angle.
+    x, y : jnp.ndarray
+        Coordinates in source plane.
 
-        return cls._eval_in_gal_plane(pars, xp, yp, **kwargs)
+    Returns
+    -------
+    xp, yp : jnp.ndarray
+        Coordinates in gal plane.
+    """
 
-    @classmethod
-    def _eval_in_gal_plane(cls, pars, x, y, **kwargs):
-        '''
-        pars: dict
-            Holds the model & transformation parameters
-        x,y: np.ndarray
-            The position coordintates in the gal plane
+    c = jnp.cos(-theta_int)
+    s = jnp.sin(-theta_int)
+    transform = jnp.array([[c, -s], [s, c]])
 
-        kwargs holds any additional params that might be needed
-        in subclass evaluations, such as using speed instead of
-        velocity
-        '''
+    return _multiply(transform, x, y)
 
-        xp, yp = _gal2disk(pars, x, y)
 
-        return cls._eval_in_disk_plane(pars, xp, yp, **kwargs)
+def gal2disk(
+    sini: float, x: jnp.ndarray, y: jnp.ndarray
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Transform from gal to disk plane (remove inclination).
 
-    @abstractmethod
-    def _eval_in_disk_plane(pars, x, y, **kwargs):
-        pass
+    Parameters
+    ----------
+    sini : float
+        Sine of inclination angle.
+    x, y : jnp.ndarray
+        Coordinates in gal plane.
 
-def transform_coords(x, y, plane1, plane2, pars):
-    '''
-    Transform coords (x,y) defined in plane1 into plane2
+    Returns
+    -------
+    xp, yp : jnp.ndarray
+        Coordinates in disk plane.
+    """
 
-    pars: dict holding model information
-    '''
+    cosi = jnp.sqrt(1.0 - sini**2)
+    transform = jnp.array([[1.0, 0.0], [0.0, 1.0 / cosi]])
 
-    # each plane assigned an index in order from
-    # simplest disk plane to most complex obs plane
-    planes = ['disk', 'gal', 'source', 'cen', 'obs']
-    plane_map = dict(zip(planes, range(len(planes))))
+    return _multiply(transform, x, y)
 
-    for plane in [plane1, plane2]:
-        if plane not in planes:
-            raise ValueError(f'{plane} not a valid plane!')
 
-    # get start & end indices
-    start = plane_map[plane1]
-    end   = plane_map[plane2]
+def transform_to_disk_plane(
+    x: jnp.ndarray,
+    y: jnp.ndarray,
+    plane: str,
+    x0: float,
+    y0: float,
+    g1: float,
+    g2: float,
+    theta_int: float,
+    sini: float,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Transform coordinates from specified plane to disk plane.
 
-    if start == end:
+    The disk plane is the face-on, intrinsic coordinate system where
+    models are naturally evaluated.
+
+    Parameters
+    ----------
+    x, y : jnp.ndarray
+        Coordinates in the starting plane.
+    plane : str
+        Starting plane name ('obs', 'cen', 'source', 'gal', or 'disk').
+    x0, y0 : float
+        Centroid offsets (obs plane).
+    g1, g2 : float
+        Lensing shear components.
+    theta_int : float
+        Intrinsic position angle (radians).
+    sini : float
+        Sine of inclination angle.
+
+    Returns
+    -------
+    x_disk, y_disk : jnp.ndarray
+        Coordinates in the disk plane.
+    """
+
+    if plane not in SUPPORTED_PLANES:
+        raise ValueError(
+            f"Plane '{plane}' not supported. Must be one of {SUPPORTED_PLANES}"
+        )
+
+    if plane == 'disk':
         return x, y
 
-    # transforms in direction from disk to obs
-    if start < end:
-        transforms = [_disk2gal, _gal2source, _source2cen, _cen2obs]
-        step = 1
+    xp, yp = x, y
 
-    # transforms in direction from obs to disk
-    else:
-        transforms = [_gal2disk, _source2gal, _cen2source, _obs2cen]
-        step = -1
+    if plane == 'obs':
+        xp, yp = obs2cen(x0, y0, xp, yp)
+        plane = 'cen'
 
-        # Account for different starting point for inv transforms
-        start -= 1
-        end -= 1
+    if plane == 'cen':
+        xp, yp = cen2source(g1, g2, xp, yp)
+        plane = 'source'
 
-    # there is no transform starting with the end indx
-    for i in range(start, end, step):
-        transform = transforms[i]
-        x, y = transform(pars, x, y)
+    if plane == 'source':
+        xp, yp = source2gal(theta_int, xp, yp)
+        plane = 'gal'
 
-    return x, y
-
-def _multiply(transform, x, y):
-    '''
-    transform: a (2x2) coordinate transformation matrix
-    x: np array of x position
-    y: np array of y position
-
-    returns: (x', y')
-    '''
-
-    # TODO: We can generalize this by just reshaping an arbitrary ndarray
-    #       into a 2xNx*Ny*.... array
-    # Can't just do a matrix multiplication because we can't assume
-    # structure of pos; e.g. it might be a meshgrid array
-
-    assert x.shape == y.shape
-
-    # x,y are vectors
-    if len(x.shape) == 1:
-        pos = np.array([x, y])
-
-        out = np.matmul(transform, pos)
-        xp, yp = out[0], out[1]
-
-    # x,y are matrices
-    elif len(x.shape) == 2:
-        # gotta do it the slow way
-        # out = np.zeros((2, x.shape[0], x.shape[1]))
-        xp = np.zeros(x.shape)
-        yp = np.zeros(y.shape)
-
-        N1, N2 = x.shape
-        for i in range(N1):
-            pos = np.array([x[i,:], y[i,:]])
-            out = np.matmul(transform, pos)
-            xp[i,:] = out[0]
-            yp[i,:] = out[1]
-
-    else:
-        raise ValueError('Plane transformations are not yet implemented ' +\
-                         f'for input positions of shape {x.shape}!')
+    if plane == 'gal':
+        xp, yp = gal2disk(sini, xp, yp)
 
     return xp, yp
-
-# The following transformation definitions require basic knowledge
-# of the source shear, intrinsic orientation, profile inclination
-# angle, and centroid offset
-
-def _transform_obs2cen(pars):
-    '''
-    Lensing transformation from obs to cen plane
-
-    pars is a dict
-    (x,y) is position in obs plane
-
-    NOTE: we don't do the usual as we would have to
-    setup a 3x3 matrix to do the translation
-    '''
-    raise NotImplementedError('obs2cen not currently handled by a matrix!')
-
-def _transform_cen2obs(pars):
-    '''
-    Lensing transformation from cen to obs plane
-
-    pars is a dict
-    (x,y) is position in cen plane
-
-    NOTE: we don't do the usual as we would have to
-    setup a 3x3 matrix to do the translation
-    '''
-    raise NotImplementedError('cen2obs not currently handled by a matrix!')
-
-def _transform_cen2source(pars):
-    '''
-    Lensing transformation from cen to source plane
-
-    pars is a dict
-    (x,y) is position in cen plane
-    '''
-
-    g1, g2 = pars['g1'], pars['g2']
-
-    # Lensing transformation
-    # NOTE: ignoring kappa for now
-    transform = np.array([
-        [1.-g1, -g2],
-        [-g2, 1.+g1]
-    ])
-
-    return transform
-
-def _transform_source2cen(pars):
-    '''
-    Inverse lensing transformation from source to cen plane
-
-    pars is a dict
-    (x,y) is position in source plane
-    '''
-
-    g1, g2 = pars['g1'], pars['g2']
-
-    # NOTE: ignoring kappa for now
-    norm = 1. / (1. - (g1**2 + g2**2))
-    transform = norm * np.array([
-        [1.+g1, g2],
-        [g2, 1.-g1]
-    ])
-
-    return transform
-
-def _transform_source2gal(pars):
-    '''
-    Rotation by intrinsic angle
-
-    pars is a dict
-    (x,y) is position in source plane
-    '''
-
-    theta_int = pars['theta_int']
-
-    # want to 'subtract' orientation
-    theta = -theta_int
-
-    c, s = np.cos(theta), np.sin(theta)
-
-    transform = np.array([
-        [c, -s],
-        [s,  c]
-    ])
-
-    return transform
-
-def _transform_gal2source(pars):
-    '''
-    Rotation by intrinsic angle
-
-    pars is a dict
-    (x,y) is position in gal plane
-    '''
-
-    theta_int = pars['theta_int']
-
-    c, s = np.cos(theta_int), np.sin(theta_int)
-
-    transform = np.array([
-        [c, -s],
-        [s,  c]
-    ])
-
-    return transform
-
-def _transform_gal2disk(pars):
-    '''
-    Account for inclination angle
-
-    pars is a dict
-    (x,y) is position in galaxy plane
-    '''
-
-    sini = pars['sini']
-    cosi = np.sqrt(1-sini**2)
-
-    transform = np.array([
-        [1., 0],
-        [0, 1. / cosi]
-    ])
-
-    return transform
-
-def _transform_disk2gal(pars):
-    '''
-    Account for inclination angle
-
-    pars is a dict
-    (x,y) is position in disk plane
-    '''
-
-    sini = pars['sini']
-    cosi = np.sqrt(1-sini**2)
-
-    transform = np.array([
-        [1., 0],
-        [0, cosi]
-    ])
-
-    return transform
-
-def _obs2cen(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in obs plane
-
-    returns: (x', y') in cen plane
-    '''
-
-    # NOTE: we don't do the usual as we would have to
-    # setup a 3x3 matrix to do the translation; we
-    # instead use a simpler approach
-    # transform = _transform_obs2cen(pars)
-    # return _multiply(transform, x, y)
-
-    try:
-        x0 = pars['x0']
-        y0 = pars['y0']
-    except KeyError:
-        # no offsets to apply in passed model
-        x0 = 0.
-        y0 = 0.
-
-    xp = x - x0
-    yp = y - y0
-
-    return xp, yp
-
-def _cen2source(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in cenplane
-
-    returns: (x', y') in cen plane
-    '''
-
-    transform = _transform_cen2source(pars)
-
-    return _multiply(transform, x, y)
-
-def _source2gal(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in source plane
-
-    returns: (x', y') in gal plane
-    '''
-
-    transform = _transform_source2gal(pars)
-
-    return _multiply(transform, x, y)
-
-def _gal2disk(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in gal plane
-
-    returns: (x', y') in disk plane
-    '''
-
-    transform = _transform_gal2disk(pars)
-
-    return _multiply(transform, x, y)
-
-def _cen2obs(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in cen plane
-
-    returns: (x', y') in obs plane
-    '''
-
-    # NOTE: we don't do the usual as we would have to
-    # setup a 3x3 matrix to do the translation; we
-    # instead use a simpler approach
-    # transform = _transform_obs2cen(pars)
-    # return _multiply(transform, x, y)
-
-    try:
-        x0 = pars['x0']
-        y0 = pars['y0']
-    except KeyError:
-        # no offsets to apply in passed model
-        x0 = 0.
-        y0 = 0.
-
-    xp = x + x0
-    yp = y + y0
-
-    return xp, yp
-
-def _source2cen(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in source plane
-
-    returns: (x', y') in cen plane
-    '''
-
-    transform = _transform_source2cen(pars)
-
-    return _multiply(transform, x, y)
-
-def _gal2source(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in gal plane
-
-    returns: (x', y') in source plane
-    '''
-
-    transform = _transform_gal2source(pars)
-
-    return _multiply(transform, x, y)
-
-def _disk2gal(pars, x, y):
-    '''
-    pars is a dict
-    (x,y) is position in disk plane
-
-    returns: (x', y') in gal plane
-    '''
-
-    transform = _transform_disk2gal(pars)
-
-    return _multiply(transform, x, y)

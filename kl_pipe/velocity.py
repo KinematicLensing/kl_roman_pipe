@@ -1,180 +1,209 @@
-import numpy as np
-from abc import abstractmethod, ABC
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+from typing import Optional, Tuple
 
-from kl_pipe.parameters import ImagePars
+from kl_pipe.model import VelocityModel
+from kl_pipe.transformation import transform_to_disk_plane
 
-# NOTE: Current descope
-# class VelocityPars(ABC):
-#     '''
-#     The parameters needed for a given velocity model.
-#     '''
 
-#     def __init__(self, pars: dict | np.ndarray) -> None:
+class CenteredVelocityModel(VelocityModel):
+    """
+    Velocity model with no spatial offset from the origin.
 
-#         if isinstance(pars, dict):
-#             # initialize from dictionary
-#             # ...
-#             pass
-#         elif isinstance(pars, np.ndarray):
-#             # initialize from numpy array
-#             # ...
-#             pass
-#         else:
-#             raise TypeError("pars must be of type dict or np.ndarray")
+    Parameters
+    ----------
+    v0 : float
+        Systemic velocity.
+    vcirc : float
+        Circular velocity.
+    rscale : float
+        Scale radius.
+    sini : float
+        Sine of inclination angle.
+    theta_int : float
+        Intrinsic position angle.
+    g1 : float
+        First component of the shear.
+    g2 : float
+        Second component of the shear.
+    """
 
-#         # self._pars = ...
-#         # self._theta = ...
-
-#         return
-
-#     @property
-#     @abstractmethod
-#     def pars(self) -> dict:
-#         '''
-#         The parameters stored as a dictionary.
-#         '''
-#         pass
-
-#     @property
-#     @abstractmethod
-#     def theta(self) -> np.ndarray:
-#         '''
-#         The parameters stored as a 1D numpy array.
-#         '''
-#         pass
-
-class VelcocityModel(ABC):
-    '''
-    The velocity model itself.
-    '''
-
-    def __init__(
-            self,
-            pars: dict = None,
-            theta: np.array = None
-            ) -> None:
-
-        if (pars is not None) and (theta is not None):
-            raise ValueError('Only one of pars or theta should be provided.')
-
-        if (pars is None) and (theta is None):
-            raise ValueError('One of pars or theta must be provided.')
-
-        if pars is not None:
-            theta = self.pars2theta(pars)
-
-        self.theta = theta
-
-        return
+    PARAMETER_NAMES = ('v0', 'vcirc', 'rscale', 'sini', 'theta_int', 'g1', 'g2')
 
     @property
-    @abstractmethod
     def name(self) -> str:
-        '''
-        The name of the velocity model.
-        '''
-        pass
+        return 'centered'
 
-    @abstractmethod
-    def theta2pars(self, theta: np.array) -> dict:
-        '''
-        The parameters of the velocity model, stored as a dictionary indexed by 
-        parameter names.
-        '''
-        pass
-
-    @abstractmethod
-    def pars2theta(self, pars: dict) -> np.ndarray:
-        '''
-        The parameters of the velocity model, stored as an ordered 1D numpy array.
-        '''
-        pass
-
-    def update_parameters(self, new_parameters: np.ndarray | dict) -> None:
-        '''
-        '''
-
-        if isinstance(new_parameters, np.ndarray):
-            self.theta = new_parameters
-        elif isinstance(new_parameters, dict):
-            # update parameters object
-            self.theta = self.pars2theta(new_parameters)
-        else:
-            raise TypeError(
-                'new_parameters must be of type np.ndarray or dict'
-                )
-
-        return
-
-    def render(self, render_type: str) -> VelocityMap | VelocityCube:
-        '''
-        High level function for endering the velocity model.
-        Calls the relevant functions depending on the requested `render_type`
-        '''
-
-        if render_type == 'map':
-            return self.render_map()
-        elif render_type == 'cube':
-            return self.render_cube()
-
-        pass
-
-    def render_map(self, image_pars: ImagePars) -> VelocityMap:
-        '''
-        Render the velocity model onto a discretized 2D image.
-        '''
-        # return VelocityMap(...)
-        pass
-
-    def render_cube(self, cube_pars) -> VelocityCube:
-        '''
-        Render the velocity model onto a discretized 3D spectral cube.
-        '''
-        # return VelocityCube(...)
-        pass
-
-    @abstractmethod
     def __call__(
-            self,
-            plane: str,
-            X: np.ndarray,
-            Y: np.ndarray,
-            Z: np.ndarray = None,
-            ) -> np.ndarray:
-        '''
-        Evaluate the velocity model at given positions.
-        '''
-        # return np.ndarray
-        pass
-
-class VelocityCube:
-    '''
-    The rendering of a velocity model onto a 3D spectral cube.
-    '''
-    pass
-
-class VelocityMap(object):
-    '''
-    Container for  rendered velocity map and the necessary meta data
-    '''
-
-    def __init__(
         self,
-        vmap: np.ndarray,
-        image_pars: ImagePars,
-        truth_pars: VelocityPars = None
-        ) -> None:
-        # ...
-        # self._truth_pars = truth_pars
-        pass
+        theta: jnp.ndarray,
+        plane: str,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate intensity at coordinates in the specified plane.
+
+        NOTE: we have to override the parent method to eliminate the need for the
+        x0/y0 centroid transformation, since this model has no offsets.
+        """
+
+        # extract transformation parameters
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        theta_int = self.get_param('theta_int', theta)
+        sini = self.get_param('sini', theta)
+
+        # hard-coded, as no offsets
+        x0 = 0.0
+        y0 = 0.0
+
+        # transform to disk plane
+        x_disk, y_disk = transform_to_disk_plane(
+            x, y, plane, x0, y0, g1, g2, theta_int, sini
+        )
+
+        # evaluate in disk plane
+        return self.evaluate_in_disk_plane(theta, x_disk, y_disk, z)
+
+    def evaluate_circular_velocity(
+        self,
+        theta: jnp.ndarray,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate arctant rotation curve in disk plane.
+
+        v_circ(r) = (2/π) * vcirc * arctan(r / rscale)
+        """
+        vcirc = self.get_param('vcirc', theta)
+        rscale = self.get_param('rscale', theta)
+
+        # circular radius in (centered) disk plane
+        r = jnp.sqrt(x**2 + y**2)
+
+        # arctan rotation curve
+        v_circ = (2.0 / jnp.pi) * vcirc * jnp.arctan(r / rscale)
+
+        return v_circ
+
+
+class OffsetVelocityModel(VelocityModel):
+    """
+    Velocity model with spatial offset from the origin.
+
+    Parameters
+    ----------
+    v0 : float
+        Systemic velocity.
+    vcirc : float
+        Circular velocity.
+    rscale : float
+        Scale radius.
+    sini : float
+        Sine of inclination angle.
+    theta_int : float
+        Intrinsic position angle.
+    g1 : float
+        First component of the shear
+    g2 : float
+        Second component of the shear
+    vel_x0 : float
+        X-coordinate offset for the velocity image.
+    vel_y0 : float
+        Y-coordinate offset for the velocity image.
+    """
+
+    PARAMETER_NAMES = (
+        'v0',
+        'vcirc',
+        'rscale',
+        'sini',
+        'theta_int',
+        'g1',
+        'g2',
+        'vel_x0',
+        'vel_y0',
+    )
+
+    @property
+    def name(self) -> str:
+        return 'offset'
+
+    def evaluate_circular_velocity(
+        self,
+        theta: jnp.ndarray,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate arctan rotation curve in disk plane.
+
+        v_circ(r) = (2/π) * vcirc * arctan(r / rscale)
+        """
+        vcirc = self.get_param('vcirc', theta)
+        rscale = self.get_param('rscale', theta)
+
+        # circular radius in (centered) disk plane
+        r = jnp.sqrt(x**2 + y**2)
+
+        # arctan rotation curve
+        v_circ = (2.0 / jnp.pi) * vcirc * jnp.arctan(r / rscale)
+
+        return v_circ
+
+
+VELOCITY_MODEL_TYPES = {
+    'default': OffsetVelocityModel,
+    'centered': CenteredVelocityModel,
+    'offset': OffsetVelocityModel,
+}
+
+
+def get_velocity_model_types():
+    """
+    Get dictionary of registered velocity model types.
+
+    Returns
+    -------
+    dict
+        Mapping from model name strings to velocity model classes.
+    """
+    return VELOCITY_MODEL_TYPES
+
 
 def build_velocity_model(
-        name: str,
-        pars: VelocityPars
-        ) -> VelcocityModel:
-    '''
-    A factory function to build velocity models.
-    '''
-    pass
+    name: str,
+    meta_pars: dict = None,
+) -> VelocityModel:
+    """
+    Factory function for constructing velocity models by name.
 
-# ...
+    Parameters
+    ----------
+    name : str
+        Name of the model to construct (case-insensitive).
+    meta_pars : dict, optional
+        Fixed metadata for the model.
+
+    Returns
+    -------
+    VelocityModel
+        Instantiated velocity model.
+
+    Raises
+    ------
+    ValueError
+        If the specified model name is not registered.
+    """
+
+    name = name.lower()
+
+    if name not in VELOCITY_MODEL_TYPES:
+        raise ValueError(f'{name} is not a registered velocity model!')
+
+    return VELOCITY_MODEL_TYPES[name](meta_pars=meta_pars)
