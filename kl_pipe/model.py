@@ -56,11 +56,11 @@ class Model(ABC):
         data_type: str,
         data_pars: Any,
         plane: str = 'obs',
-        **kwargs
+        **kwargs,
     ) -> jnp.ndarray:
         """
         High-level rendering interface for different data products.
-        
+
         Parameters
         ----------
         theta : jnp.ndarray
@@ -73,7 +73,7 @@ class Model(ABC):
             Coordinate plane for evaluation. Default is 'obs'.
         **kwargs
             Additional arguments passed to specific render methods.
-            
+
         Returns
         -------
         jnp.ndarray
@@ -101,18 +101,14 @@ class Model(ABC):
             )
 
     def render_image(
-        self,
-        theta: jnp.ndarray,
-        image_pars: ImagePars,
-        plane: str = 'obs',
-        **kwargs
+        self, theta: jnp.ndarray, image_pars: ImagePars, plane: str = 'obs', **kwargs
     ) -> jnp.ndarray:
         """
         Render model as a 2D image.
 
-        NOTE: Some model subclasses may override this method due to special rendering 
+        NOTE: Some model subclasses may override this method due to special rendering
         needs.
-        
+
         Parameters
         ----------
         theta : jnp.ndarray
@@ -123,7 +119,7 @@ class Model(ABC):
             Coordinate plane for evaluation. Default is 'obs'.
         **kwargs
             Additional model-specific arguments.
-            
+
         Returns
         -------
         jnp.ndarray
@@ -132,7 +128,7 @@ class Model(ABC):
 
         # build coordinate grids from ImagePars
         X, Y = build_map_grid_from_image_pars(image_pars)
-        
+
         # evaluate model on grid
         return self(theta, plane, X, Y)
 
@@ -177,7 +173,7 @@ class VelocityModel(Model):
         2. Evaluate circular velocity (speed) in disk plane
         3. If return_speed=False: Project to line-of-sight based on viewing geometry
         4. Add systemic velocity (only if return_speed=False)
-        
+
         Parameters
         ----------
         theta : jnp.ndarray
@@ -191,7 +187,7 @@ class VelocityModel(Model):
         return_speed : bool
             If True, return circular speed (scalar). If False, return line-of-sight
             velocity (projected). Default is False.
-            
+
         Returns
         -------
         jnp.ndarray
@@ -264,7 +260,7 @@ class VelocityModel(Model):
     ) -> jnp.ndarray:
         """
         Render velocity model as a 2D image.
-        
+
         Parameters
         ----------
         theta : jnp.ndarray
@@ -276,7 +272,7 @@ class VelocityModel(Model):
         return_speed : bool
             If True, return speed map. If False, return line-of-sight velocity map.
             Default is False.
-            
+
         Returns
         -------
         jnp.ndarray
@@ -285,7 +281,7 @@ class VelocityModel(Model):
 
         # build coordinate grids from ImagePars
         X, Y = build_map_grid_from_image_pars(image_pars)
-        
+
         # evaluate model on grid
         return self(theta, plane, X, Y, return_speed=return_speed)
 

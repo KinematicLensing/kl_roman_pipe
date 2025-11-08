@@ -554,15 +554,17 @@ def test_single_point_evaluation(offset_theta):
     assert v_map.shape == (1, 1)
     assert jnp.isfinite(v_map[0, 0])
 
+
 # ----------------------------------------------------------------------
 # Render method tests
+
 
 def test_render_image_centered(centered_theta, test_image_pars):
     """Test render_image method for centered model."""
     model = CenteredVelocityModel()
-    
+
     image = model.render_image(centered_theta, test_image_pars, plane='obs')
-    
+
     assert image.shape == test_image_pars.shape
     assert jnp.isfinite(image).all()
     assert jnp.abs(jnp.mean(image) - 10.0) < 50.0  # Near v0
@@ -571,9 +573,9 @@ def test_render_image_centered(centered_theta, test_image_pars):
 def test_render_image_offset(offset_theta, test_image_pars):
     """Test render_image method for offset model."""
     model = OffsetVelocityModel()
-    
+
     image = model.render_image(offset_theta, test_image_pars, plane='obs')
-    
+
     assert image.shape == test_image_pars.shape
     assert jnp.isfinite(image).all()
 
@@ -581,20 +583,20 @@ def test_render_image_offset(offset_theta, test_image_pars):
 def test_render_image_speed(centered_theta, test_image_pars):
     """Test render_image with return_speed=True."""
     model = CenteredVelocityModel()
-    
+
     speed_map = model.render_image(
         centered_theta, test_image_pars, plane='disk', return_speed=True
     )
     velocity_map = model.render_image(
         centered_theta, test_image_pars, plane='disk', return_speed=False
     )
-    
+
     assert speed_map.shape == test_image_pars.shape
     assert velocity_map.shape == test_image_pars.shape
-    
+
     # Speed should be non-negative
     assert jnp.all(speed_map >= 0)
-    
+
     # In disk plane with return_speed=False, should be mostly v0
     assert jnp.abs(jnp.mean(velocity_map) - 10.0) < 5.0
 
@@ -602,9 +604,9 @@ def test_render_image_speed(centered_theta, test_image_pars):
 def test_render_dispatcher_image(offset_theta, test_image_pars):
     """Test render() dispatcher with data_type='image'."""
     model = OffsetVelocityModel()
-    
+
     image = model.render(offset_theta, 'image', test_image_pars, plane='obs')
-    
+
     assert image.shape == test_image_pars.shape
     assert jnp.isfinite(image).all()
 
@@ -612,7 +614,7 @@ def test_render_dispatcher_image(offset_theta, test_image_pars):
 def test_render_dispatcher_cube(offset_theta, test_image_pars):
     """Test render() dispatcher with data_type='cube' (should raise NotImplementedError)."""
     model = OffsetVelocityModel()
-    
+
     with pytest.raises(NotImplementedError, match="Cube rendering"):
         model.render(offset_theta, 'cube', test_image_pars)
 
@@ -620,7 +622,7 @@ def test_render_dispatcher_cube(offset_theta, test_image_pars):
 def test_render_dispatcher_slit(offset_theta, test_image_pars):
     """Test render() dispatcher with data_type='slit' (should raise NotImplementedError)."""
     model = OffsetVelocityModel()
-    
+
     with pytest.raises(NotImplementedError, match="Slit rendering"):
         model.render(offset_theta, 'slit', test_image_pars)
 
@@ -628,7 +630,7 @@ def test_render_dispatcher_slit(offset_theta, test_image_pars):
 def test_render_dispatcher_grism(offset_theta, test_image_pars):
     """Test render() dispatcher with data_type='grism' (should raise NotImplementedError)."""
     model = OffsetVelocityModel()
-    
+
     with pytest.raises(NotImplementedError, match="Grism rendering"):
         model.render(offset_theta, 'grism', test_image_pars)
 
@@ -636,7 +638,7 @@ def test_render_dispatcher_grism(offset_theta, test_image_pars):
 def test_render_dispatcher_invalid_type(offset_theta, test_image_pars):
     """Test render() dispatcher with invalid data_type."""
     model = OffsetVelocityModel()
-    
+
     with pytest.raises(ValueError, match="Unknown data_type"):
         model.render(offset_theta, 'invalid', test_image_pars)
 
@@ -644,7 +646,7 @@ def test_render_dispatcher_invalid_type(offset_theta, test_image_pars):
 def test_render_dispatcher_wrong_pars_type(offset_theta):
     """Test render() dispatcher with wrong data_pars type for 'image'."""
     model = OffsetVelocityModel()
-    
+
     with pytest.raises(TypeError, match="must be ImagePars"):
         model.render(offset_theta, 'image', {'not': 'ImagePars'})
 
@@ -653,7 +655,7 @@ def test_render_image_different_planes(centered_theta, test_image_pars):
     """Test render_image in different planes."""
     model = CenteredVelocityModel()
     planes = ['disk', 'gal', 'source', 'obs']
-    
+
     for plane in planes:
         image = model.render_image(centered_theta, test_image_pars, plane=plane)
         assert image.shape == test_image_pars.shape
@@ -663,39 +665,39 @@ def test_render_image_different_planes(centered_theta, test_image_pars):
 def test_render_image_vs_call_consistency(offset_theta, test_image_pars):
     """Test that render_image produces same result as manual __call__."""
     from kl_pipe.utils import build_map_grid_from_image_pars
-    
+
     model = OffsetVelocityModel()
-    
+
     # Method 1: render_image
     image1 = model.render_image(offset_theta, test_image_pars, plane='obs')
-    
+
     # Method 2: manual __call__
     X, Y = build_map_grid_from_image_pars(test_image_pars, unit='arcsec', centered=True)
     image2 = model(offset_theta, 'obs', X, Y)
-    
+
     assert jnp.allclose(image1, image2)
 
 
 def test_return_speed_parameter(centered_theta):
     """Test return_speed parameter in __call__ method."""
     model = CenteredVelocityModel()
-    
+
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
     X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
-    
+
     # Get velocity (default)
     v_map = model(centered_theta, 'obs', X_grid, Y_grid, return_speed=False)
-    
+
     # Get speed
     speed_map = model(centered_theta, 'obs', X_grid, Y_grid, return_speed=True)
-    
+
     # Speed should be non-negative
     assert jnp.all(speed_map >= 0)
-    
+
     # Velocity can be negative (redshifted/blueshifted)
     assert not jnp.all(v_map >= 0)
-    
+
     # They should be different
     assert not jnp.allclose(v_map, speed_map)
 
@@ -703,20 +705,20 @@ def test_return_speed_parameter(centered_theta):
 def test_disk_plane_velocity_vs_speed(centered_theta):
     """Test that disk plane returns ~v0 for velocity but non-zero speed."""
     model = CenteredVelocityModel()
-    
+
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
     X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
-    
+
     # Velocity in disk plane should be ~v0 (no line-of-sight component)
     v_map = model(centered_theta, 'disk', X_grid, Y_grid, return_speed=False)
-    
+
     # Speed should be non-zero at non-zero radii
     speed_map = model(centered_theta, 'disk', X_grid, Y_grid, return_speed=True)
-    
+
     # Velocity should be mostly v0
     assert jnp.abs(jnp.mean(v_map) - 10.0) < 2.0
-    
+
     # Speed should have significant variation
     assert speed_map.max() > 50.0  # Should have high speeds at large radii
     assert jnp.all(speed_map >= 0)
@@ -725,12 +727,12 @@ def test_disk_plane_velocity_vs_speed(centered_theta):
 # Plotting tests with new render methods
 def test_plot_rendered_image(offset_theta, test_image_pars, output_dir):
     """Test plotting a rendered image."""
-    
+
     model = OffsetVelocityModel()
-    
+
     # Render image
     image = model.render_image(offset_theta, test_image_pars, plane='obs')
-    
+
     # Plot
     fig, ax = plt.subplots(figsize=(8, 6))
     im = ax.imshow(image.T, origin='lower', cmap='RdBu_r')
@@ -738,18 +740,20 @@ def test_plot_rendered_image(offset_theta, test_image_pars, output_dir):
     ax.set_title('Rendered Velocity Image')
     ax.set_xlabel('x (pixels)')
     ax.set_ylabel('y (pixels)')
-    
-    plt.savefig(output_dir / "rendered_velocity_image.png", dpi=150, bbox_inches='tight')
+
+    plt.savefig(
+        output_dir / "rendered_velocity_image.png", dpi=150, bbox_inches='tight'
+    )
     plt.close()
-    
+
     assert fig is not None
 
 
 def test_plot_speed_vs_velocity_comparison(centered_theta, test_image_pars, output_dir):
     """Test plotting speed vs velocity side-by-side."""
-    
+
     model = CenteredVelocityModel()
-    
+
     # Render both
     velocity_map = model.render_image(
         centered_theta, test_image_pars, plane='obs', return_speed=False
@@ -757,22 +761,24 @@ def test_plot_speed_vs_velocity_comparison(centered_theta, test_image_pars, outp
     speed_map = model.render_image(
         centered_theta, test_image_pars, plane='obs', return_speed=True
     )
-    
+
     # Plot side by side
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
+
     im1 = ax1.imshow(velocity_map.T, origin='lower', cmap='RdBu_r')
     plt.colorbar(im1, ax=ax1, label='km/s')
     ax1.set_title('Line-of-sight Velocity')
-    
+
     im2 = ax2.imshow(speed_map.T, origin='lower', cmap='viridis')
     plt.colorbar(im2, ax=ax2, label='km/s')
     ax2.set_title('Circular Speed')
-    
+
     plt.tight_layout()
-    plt.savefig(output_dir / "speed_vs_velocity_comparison.png", dpi=150, bbox_inches='tight')
+    plt.savefig(
+        output_dir / "speed_vs_velocity_comparison.png", dpi=150, bbox_inches='tight'
+    )
     plt.close()
-    
+
     assert fig is not None
 
 
