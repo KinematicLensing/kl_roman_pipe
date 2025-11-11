@@ -216,8 +216,13 @@ class VelocityModel(Model):
         if return_speed:
             return v_circ
         else:
-            # project to line-of-sight velocity
             v0 = self.get_param('v0', theta)
+
+            # SPECIAL CASE: In disk plane, we're viewing face-on (no LOS projection)
+            if plane == 'disk':
+                return jnp.full_like(v_circ, v0)
+
+            # project to line-of-sight velocity
             phi = jnp.arctan2(y_disk, x_disk)
             v_los = sini * jnp.cos(phi) * v_circ
 
