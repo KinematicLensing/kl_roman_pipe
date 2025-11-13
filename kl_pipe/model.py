@@ -198,7 +198,7 @@ class VelocityModel(Model):
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         theta_int = self.get_param('theta_int', theta)
-        sini = self.get_param('sini', theta)
+        cosi = self.get_param('cosi', theta)
 
         # centroid offsets are not present in all models, so check first
         x0 = self.get_param('vel_x0', theta) if 'vel_x0' in self._param_indices else 0.0
@@ -206,7 +206,7 @@ class VelocityModel(Model):
 
         # transform to disk plane
         x_disk, y_disk = transform_to_disk_plane(
-            x, y, plane, x0, y0, g1, g2, theta_int, sini
+            x, y, plane, x0, y0, g1, g2, theta_int, cosi
         )
 
         # always evaluate circular velocity (speed) in disk plane first
@@ -224,7 +224,7 @@ class VelocityModel(Model):
 
             # project to line-of-sight velocity
             phi = jnp.arctan2(y_disk, x_disk)
-            v_los = sini * jnp.cos(phi) * v_circ
+            v_los = jnp.sqrt(1 - jnp.square(cosi)) * jnp.cos(phi) * v_circ
 
             return v0 + v_los
 
@@ -318,11 +318,11 @@ class IntensityModel(Model):
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         theta_int = self.get_param('theta_int', theta)
-        sini = self.get_param('sini', theta)
+        cosi = self.get_param('cosi', theta)
 
         # transform to disk plane
         x_disk, y_disk = transform_to_disk_plane(
-            x, y, plane, x0, y0, g1, g2, theta_int, sini
+            x, y, plane, x0, y0, g1, g2, theta_int, cosi
         )
 
         # evaluate in disk plane

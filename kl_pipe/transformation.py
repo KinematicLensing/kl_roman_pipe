@@ -9,7 +9,7 @@ Definition of each plane:
           This will be cylindrically symmetric for most models
 
     gal:  Galaxy major/minor axis frame with inclination angle same as
-          source plane. Will now be ~ellipsoidal for sini!=0
+          source plane. Will now be ~ellipsoidal for cosi!=0
 
     source: View from the lensing source plane, rotated version of gal
             plane with theta = theta_intrinsic
@@ -126,15 +126,15 @@ def source2gal(
 
 
 def gal2disk(
-    sini: float, x: jnp.ndarray, y: jnp.ndarray
+    cosi: float, x: jnp.ndarray, y: jnp.ndarray
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Transform from gal to disk plane (remove inclination).
 
     Parameters
     ----------
-    sini : float
-        Sine of inclination angle.
+    cosi : float
+        Cosine of inclination angle.
     x, y : jnp.ndarray
         Coordinates in gal plane.
 
@@ -144,7 +144,7 @@ def gal2disk(
         Coordinates in disk plane.
     """
 
-    cosi = jnp.sqrt(1.0 - sini**2)
+    cosi = jnp.sqrt(1.0 - cosi**2)
     transform = jnp.array([[1.0, 0.0], [0.0, 1.0 / cosi]])
 
     return _multiply(transform, x, y)
@@ -159,7 +159,7 @@ def transform_to_disk_plane(
     g1: float,
     g2: float,
     theta_int: float,
-    sini: float,
+    cosi: float,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Transform coordinates from specified plane to disk plane.
@@ -179,9 +179,8 @@ def transform_to_disk_plane(
         Lensing shear components.
     theta_int : float
         Intrinsic position angle (radians).
-    sini : float
-        Sine of inclination angle.
-
+    cosi : float
+        Cosine of inclination angle.
     Returns
     -------
     x_disk, y_disk : jnp.ndarray
@@ -211,6 +210,6 @@ def transform_to_disk_plane(
         plane = 'gal'
 
     if plane == 'gal':
-        xp, yp = gal2disk(sini, xp, yp)
+        xp, yp = gal2disk(cosi, xp, yp)
 
     return xp, yp

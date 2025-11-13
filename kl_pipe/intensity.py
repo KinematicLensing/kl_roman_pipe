@@ -5,13 +5,24 @@ from kl_pipe.model import IntensityModel
 
 class InclinedExponentialModel(IntensityModel):
     """
-    Exponential intensity profile.
+    Exponential intensity profile viewed at an inclination.
+
+    NOTE: This model is incomplete as it does not yet implement the inclination. To be
+    handled in a future PR
 
     Parameters
     ----------
+    cosi : float
+        Cosine of inclination angle.
+    theta_int : float
+        Intrinsic position angle.
+    g1 : float
+        First component of the shear.
+    g2 : float
+        Second component of the shear.
     I0 : float
         Central intensity.
-    rscale : float
+    int_rscale : float
         Exponential scale length.
     int_x0 : float
         X-coordinate offset for the intensity image.
@@ -20,12 +31,12 @@ class InclinedExponentialModel(IntensityModel):
     """
 
     PARAMETER_NAMES = (
-        'I0',
-        'rscale',
-        'sini',
+        'cosi',
         'theta_int',
         'g1',
         'g2',
+        'I0',
+        'int_rscale',
         'int_x0',
         'int_y0',
     )
@@ -46,7 +57,7 @@ class InclinedExponentialModel(IntensityModel):
         """
 
         I0 = self.get_param('I0', theta)
-        scale = self.get_param('rscale', theta)
+        scale = self.get_param('int_rscale', theta)
 
         r = jnp.sqrt(x**2 + y**2)
         intensity_map = I0 * jnp.exp(-r / scale)

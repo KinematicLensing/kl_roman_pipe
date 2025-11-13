@@ -12,23 +12,23 @@ class CenteredVelocityModel(VelocityModel):
 
     Parameters
     ----------
-    v0 : float
-        Systemic velocity.
-    vcirc : float
-        Circular velocity.
-    rscale : float
-        Scale radius.
-    sini : float
-        Sine of inclination angle.
+    cosi : float
+        Cosine of inclination angle.
     theta_int : float
         Intrinsic position angle.
     g1 : float
         First component of the shear.
     g2 : float
         Second component of the shear.
+    v0 : float
+        Systemic velocity.
+    vcirc : float
+        Circular velocity.
+    vel_rscale : float
+        Scale radius.
     """
 
-    PARAMETER_NAMES = ('v0', 'vcirc', 'rscale', 'sini', 'theta_int', 'g1', 'g2')
+    PARAMETER_NAMES = ('cosi', 'theta_int', 'g1', 'g2', 'v0', 'vcirc', 'vel_rscale')
 
     @property
     def name(self) -> str:
@@ -47,7 +47,7 @@ class CenteredVelocityModel(VelocityModel):
         v_circ(r) = (2/π) * vcirc * arctan(r / rscale)
         """
         vcirc = self.get_param('vcirc', theta)
-        rscale = self.get_param('rscale', theta)
+        rscale = self.get_param('vel_rscale', theta)
 
         # circular radius in (centered) disk plane
         r = jnp.sqrt(x**2 + y**2)
@@ -64,20 +64,20 @@ class OffsetVelocityModel(VelocityModel):
 
     Parameters
     ----------
-    v0 : float
-        Systemic velocity.
-    vcirc : float
-        Circular velocity.
-    rscale : float
-        Scale radius.
-    sini : float
-        Sine of inclination angle.
+    cosi : float
+        Cosine of inclination angle.
     theta_int : float
         Intrinsic position angle.
     g1 : float
         First component of the shear
     g2 : float
         Second component of the shear
+    v0 : float
+        Systemic velocity.
+    vcirc : float
+        Circular velocity.
+    vel_rscale : float
+        Scale radius.
     vel_x0 : float
         X-coordinate offset for the velocity image.
     vel_y0 : float
@@ -85,13 +85,13 @@ class OffsetVelocityModel(VelocityModel):
     """
 
     PARAMETER_NAMES = (
-        'v0',
-        'vcirc',
-        'rscale',
-        'sini',
+        'cosi',
         'theta_int',
         'g1',
         'g2',
+        'v0',
+        'vcirc',
+        'vel_rscale',
         'vel_x0',
         'vel_y0',
     )
@@ -113,7 +113,7 @@ class OffsetVelocityModel(VelocityModel):
         v_circ(r) = (2/π) * vcirc * arctan(r / rscale)
         """
         vcirc = self.get_param('vcirc', theta)
-        rscale = self.get_param('rscale', theta)
+        rscale = self.get_param('vel_rscale', theta)
 
         # circular radius in (centered) disk plane
         r = jnp.sqrt(x**2 + y**2)

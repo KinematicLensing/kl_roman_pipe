@@ -46,15 +46,15 @@ def basic_meta_pars():
 @pytest.fixture
 def centered_theta():
     """Standard theta array for CenteredVelocityModel."""
-    # (v0, vcirc, rscale, sini, theta_int, g1, g2)
-    return jnp.array([10.0, 200.0, 5.0, 0.6, 0.785, 0.05, -0.03])
+    # (cosi, theta_int, g1, g2, v0, vcirc, vel_rscale)
+    return jnp.array([0.6, 0.785, 0.05, -0.03, 10.0, 200.0, 5.0])
 
 
 @pytest.fixture
 def offset_theta():
     """Standard theta array for OffsetVelocityModel."""
-    # (v0, vcirc, rscale, sini, theta_int, g1, g2, vel_x0, vel_y0)
-    return jnp.array([10.0, 200.0, 5.0, 0.6, 0.785, 0.05, -0.03, 5.0, -3])
+    # (cosi, theta_int, g1, g2, v0, vcirc, vel_rscale, vel_x0, vel_y0)
+    return jnp.array([0.6, 0.785, 0.05, -0.03, 10.0, 200.0, 5.0, 5.0, -3.0])
 
 
 @pytest.fixture
@@ -125,32 +125,32 @@ def test_offset_theta2pars(offset_theta):
 def test_centered_pars2theta():
     """Test pars to theta conversion for centered model."""
     pars = {
-        'v0': 10.0,
-        'vcirc': 200.0,
-        'rscale': 5.0,
-        'sini': 0.6,
+        'cosi': 0.6,
         'theta_int': 0.785,
         'g1': 0.05,
         'g2': -0.03,
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'vel_rscale': 5.0,
     }
     theta = CenteredVelocityModel.pars2theta(pars)
 
     assert isinstance(theta, jnp.ndarray)
     assert len(theta) == 7
-    assert theta[0] == 10.0
-    assert theta[1] == 200.0
+    assert theta[4] == 10.0
+    assert theta[5] == 200.0
 
 
 def test_offset_pars2theta():
     """Test pars to theta conversion for offset model."""
     pars = {
-        'v0': 10.0,
-        'vcirc': 200.0,
-        'rscale': 5.0,
-        'sini': 0.6,
+        'cosi': 0.6,
         'theta_int': 0.785,
         'g1': 0.05,
         'g2': -0.03,
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'vel_rscale': 5.0,
         'vel_x0': 2.0,
         'vel_y0': -1.5,
     }
@@ -470,7 +470,7 @@ def test_plot_high_inclination(output_dir):
     """Test plotting with high inclination (edge-on)."""
     model = OffsetVelocityModel()
 
-    # High inclination: sini ~ 1 (nearly edge-on)
+    # High inclination: cosi ~ 1 (nearly edge-on)
     theta = jnp.array([10.0, 200.0, 5.0, 0.95, 0.785, 0.0, 0.0, 0.0, 0.0])
 
     fig, ax = plotting.plot_velocity_map(
@@ -490,7 +490,7 @@ def test_plot_low_inclination(output_dir):
     """Test plotting with low inclination (face-on)."""
     model = CenteredVelocityModel()
 
-    # Low inclination: sini ~ 0 (nearly face-on)
+    # Low inclination: cosi ~ 0 (nearly face-on)
     theta = jnp.array([10.0, 200.0, 5.0, 0.1, 0.785, 0.0, 0.0])
 
     fig, ax = plotting.plot_velocity_map(
@@ -530,7 +530,7 @@ def test_plot_with_shear(output_dir):
 def test_zero_circular_velocity():
     """Test model with zero circular velocity."""
     model = CenteredVelocityModel()
-    theta = jnp.array([10.0, 0.0, 5.0, 0.6, 0.785, 0.0, 0.0])
+    theta = jnp.array([0.6, 0.785, 0.05, -0.03, 10.0, 0.0, 5.0])
 
     X = jnp.linspace(-5, 5, 10)
     Y = jnp.linspace(-5, 5, 10)

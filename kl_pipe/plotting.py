@@ -100,7 +100,7 @@ def plot_velocity_map(
     # create ImagePars if not provided
     if image_pars is None:
         if rmax is None:
-            rscale = model.get_param('rscale', theta)
+            rscale = model.get_param('vel_rscale', theta)
             rmax = 5.0 * float(rscale)
 
         image_pars = create_default_image_pars(rmax, Ngrid)
@@ -185,7 +185,7 @@ def plot_all_planes(
     # Create ImagePars if not provided
     if image_pars is None:
         if rmax is None:
-            rscale = model.get_param('rscale', theta)
+            rscale = model.get_param('vel_rscale', theta)
             rmax = 5.0 * float(rscale)
 
         image_pars = create_default_image_pars(rmax, Ngrid)
@@ -311,8 +311,8 @@ def plot_rotation_curve(
 
     # Get model parameters
     vcirc = float(model.get_param('vcirc', theta))
-    rscale = float(model.get_param('rscale', theta))
-    sini = float(model.get_param('sini', theta))
+    rscale = float(model.get_param('vel_rscale', theta))
+    cosi = float(model.get_param('cosi', theta))
     theta_int = float(model.get_param('theta_int', theta))
 
     x0 = float(model.get_param('x0', theta)) if 'x0' in model._param_indices else 0.0
@@ -352,8 +352,8 @@ def plot_rotation_curve(
 
         if np.any(combined_mask):
             # Deproject to circular velocity
-            avg_vcirc = np.mean(vmap[combined_mask] / sini)
-            std_vcirc = np.std(vmap[combined_mask] / sini)
+            avg_vcirc = np.mean(vmap[combined_mask] / cosi)
+            std_vcirc = np.std(vmap[combined_mask] / cosi)
             rotation_curve.append(avg_vcirc)
             rotation_curve_err.append(std_vcirc)
         else:
@@ -422,7 +422,7 @@ def plot_rotation_curve(
     ax2.axhline(-vcirc, c='k', ls='--')
 
     rscale_pix = rscale / image_pars.pixel_scale
-    ax2.axvline(rscale_pix, c='g', ls=':', label='r_scale')
+    ax2.axvline(rscale_pix, c='g', ls=':', label='vel_rscale')
     ax2.axvline(-rscale_pix, c='g', ls=':')
 
     ax2.set_xlabel('Radial Distance (pixels)')
