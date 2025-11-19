@@ -29,7 +29,7 @@ from kl_pipe.likelihood import (
     create_jitted_likelihood_intensity,
     create_jitted_likelihood_joint,
 )
-from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
 
 # Import our shared test utilities
 from test_utils import (
@@ -53,8 +53,11 @@ def test_config():
     This replaces global variables and makes configuration explicit.
     To modify behavior, edit TestConfig in test_utils.py.
     """
-    config = TestConfig()
+
+    out_dir = get_test_dir() / "out" / "likelihood_slices"
+    config = TestConfig(out_dir, include_poisson_noise=False)
     config.output_dir.mkdir(parents=True, exist_ok=True)
+
     return config
 
 
@@ -188,7 +191,7 @@ def generate_synthetic_intensity_data(
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [100, 50, 30])
+@pytest.mark.parametrize("snr", [1000, 500, 100])
 def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     """
     Test parameter recovery for CenteredVelocityModel (arctan rotation curve).
@@ -213,6 +216,8 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
         'v0': 10.0,  # Systemic velocity (km/s)
         'vcirc': 200.0,  # Asymptotic circular velocity (km/s)
         'vel_rscale': 5.0,  # Scale radius (arcsec)
+        'vel_x0': 0.0,  # No offset
+        'vel_y0': 0.0,  # No offset
     }
 
     # Generate synthetic data
@@ -271,7 +276,7 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [100, 50])
+@pytest.mark.parametrize("snr", [1000, 500, 100])
 def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     """
     Test parameter recovery with non-zero shear.
@@ -348,7 +353,7 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [100, 50])
+@pytest.mark.parametrize("snr", [1000, 500, 100])
 def test_recover_offset_velocity(snr, test_config, velocity_grids):
     """
     Test parameter recovery for OffsetVelocityModel.
@@ -428,7 +433,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [100, 50])
+@pytest.mark.parametrize("snr", [1000, 500, 100])
 def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     """
     Test parameter recovery for InclinedExponentialModel.

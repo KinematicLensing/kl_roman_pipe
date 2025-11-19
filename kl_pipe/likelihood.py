@@ -45,6 +45,8 @@ Using the helper functions:
 >>> gradient = grad_fn(theta)
 """
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from functools import partial

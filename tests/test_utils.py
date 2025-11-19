@@ -28,16 +28,21 @@ class TestConfig:
     rather than using global variables.
     """
 
-    def __init__(self):
-        # Output directory
-        self.output_dir = get_test_dir() / "out" / "parameter_recovery"
+    __test__ = False  # tell pytest this is not a test class
 
+    def __init__(
+        self,
+        output_dir: Path,
+        enable_plots: bool = True,
+        include_poisson_noise: bool = True,
+        seed: int = 42,
+    ):
+        self.output_dir = output_dir
         # Plotting control
-        self.enable_plots = True
-
+        self.enable_plots = enable_plots
         # Synthetic data generation
-        self.include_poisson_noise = True  # Whether to add shot noise
-        self.seed = 42
+        self.include_poisson_noise = include_poisson_noise  # Whether to add shot noise
+        self.seed = seed
 
         # SNR tolerance maps (can differ for velocity vs intensity)
         self.snr_tolerance_velocity = {
