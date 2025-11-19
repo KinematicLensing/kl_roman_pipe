@@ -101,18 +101,16 @@ def generate_arctan_velocity_2d(
     Y: np.ndarray,
     v0: float,
     vcirc: float,
-    vel_rscale: float,  # UPDATED: was 'rscale'
+    vel_rscale: float,
     cosi: float,
     theta_int: float,
     g1: float = 0.0,
     g2: float = 0.0,
-    vel_x0: float = 0.0,  # UPDATED: was 'x0'
-    vel_y0: float = 0.0,  # UPDATED: was 'y0'
+    vel_x0: float = 0.0,
+    vel_y0: float = 0.0,
 ) -> np.ndarray:
     """
     Generate arctan rotation curve velocity field.
-
-    UPDATED: Parameter names now match VelocityModel classes.
 
     Parameters
     ----------
@@ -143,8 +141,8 @@ def generate_arctan_velocity_2d(
     sini = np.sqrt(1.0 - cosi**2)
 
     # Step 1: recenter
-    X_c = X - vel_x0  # UPDATED: was x0
-    Y_c = Y - vel_y0  # UPDATED: was y0
+    X_c = X - vel_x0
+    Y_c = Y - vel_y0
 
     # Step 2: apply shear
     X_shear = X_c + g1 * X_c - g2 * Y_c
@@ -164,9 +162,7 @@ def generate_arctan_velocity_2d(
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
 
     # Evaluate arctan rotation curve
-    v_circ = (
-        (2.0 / np.pi) * vcirc * np.arctan(r_disk / vel_rscale)
-    )  # UPDATED: was rscale
+    v_circ = (2.0 / np.pi) * vcirc * np.arctan(r_disk / vel_rscale)
 
     # Project to line-of-sight
     phi = np.arctan2(Y_disk, X_disk)
@@ -189,20 +185,18 @@ def generate_sersic_intensity_2d(
     X: np.ndarray,
     Y: np.ndarray,
     I0: float,
-    int_rscale: float,  # UPDATED: was 'rscale'
+    int_rscale: float,
     n_sersic: float,
     cosi: float,
     theta_int: float,
     g1: float = 0.0,
     g2: float = 0.0,
-    int_x0: float = 0.0,  # UPDATED: was 'x0'
-    int_y0: float = 0.0,  # UPDATED: was 'y0'
+    int_x0: float = 0.0,
+    int_y0: float = 0.0,
     backend: str = 'scipy',
 ) -> np.ndarray:
     """
     Generate Sersic intensity profile.
-
-    UPDATED: Parameter names now match IntensityModel classes.
 
     Parameters
     ----------
@@ -245,22 +239,22 @@ def _generate_sersic_scipy(
     X: np.ndarray,
     Y: np.ndarray,
     I0: float,
-    int_rscale: float,  # UPDATED
+    int_rscale: float,
     n_sersic: float,
     cosi: float,
     theta_int: float,
     g1: float,
     g2: float,
-    int_x0: float,  # UPDATED
-    int_y0: float,  # UPDATED
+    int_x0: float,
+    int_y0: float,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy (simple implementation)."""
 
     sini = np.sqrt(1.0 - cosi**2)
 
     # Step 1: recenter
-    X_c = X - int_x0  # UPDATED
-    Y_c = Y - int_y0  # UPDATED
+    X_c = X - int_x0
+    Y_c = Y - int_y0
 
     # Step 2: apply shear
     X_shear = X_c + g1 * X_c - g2 * Y_c
@@ -280,7 +274,7 @@ def _generate_sersic_scipy(
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
 
     # Evaluate Sersic profile
-    intensity = I0 * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))  # UPDATED
+    intensity = I0 * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))
 
     return intensity
 
@@ -560,8 +554,6 @@ class SyntheticObservation(ABC):
 class SyntheticVelocity:
     """
     Synthetic velocity field observations.
-
-    UPDATED: Now uses model-matching parameter names and supports Poisson noise.
     """
 
     def __init__(
@@ -607,12 +599,10 @@ class SyntheticVelocity:
         Y: np.ndarray,
         snr: float,
         seed: Optional[int] = None,
-        include_poisson: bool = True,  # UPDATED: new parameter
+        include_poisson: bool = True,
     ) -> np.ndarray:
         """
         Generate synthetic velocity data.
-
-        UPDATED: Now supports optional Poisson noise.
 
         Parameters
         ----------
@@ -659,8 +649,6 @@ class SyntheticVelocity:
 class SyntheticIntensity:
     """
     Synthetic intensity/surface brightness observations.
-
-    UPDATED: Now uses model-matching parameter names and supports Poisson noise.
     """
 
     def __init__(
@@ -708,12 +696,10 @@ class SyntheticIntensity:
         Y: np.ndarray,
         snr: float,
         seed: Optional[int] = None,
-        include_poisson: bool = True,  # UPDATED: new parameter
+        include_poisson: bool = True,
     ) -> np.ndarray:
         """
         Generate synthetic intensity data.
-
-        UPDATED: Now supports optional Poisson noise.
 
         Parameters
         ----------
