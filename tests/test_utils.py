@@ -69,24 +69,24 @@ class TestConfig:
             'g1': {
                 1000: 1.0,  # Well-constrained at high SNR
                 500: 1.0,
-                100: 1.5,  # 50% more lenient
-                50: 2.0,  # 2x more lenient
-                10: 5.0,  # 5x more lenient (shear SNR << 1)
+                100: 1.0,  # 50% more lenient
+                50: 1.5,  # 2x more lenient
+                10: 1.0,  # 5x more lenient (shear SNR << 1)
             },
             'g2': {
                 1000: 1.0,
                 500: 1.0,
-                100: 1.5,
-                50: 2.0,
-                10: 5.0,
+                100: 1.0,
+                50: 1.5,
+                10: 1.0,
             },
             # v0 is well constrainted but also small
             'v0': {
                 1000: 1.0,
                 500: 1.0,
-                100: 1.5,
-                50: 1.5,
-                10: 2.5,
+                100: 1.0,
+                50: 1.0,
+                10: 1.5,
             },
             # could add other weak parameters here
             # ...
@@ -297,7 +297,7 @@ def compute_parameter_bounds(
     """
     Compute scan bounds for a parameter.
 
-    Uses ±fraction around true value by default, respecting physical boundaries.
+    Uses +/-fraction around true value by default, respecting physical boundaries.
 
     Parameters
     ----------
@@ -309,6 +309,7 @@ def compute_parameter_bounds(
         Test configuration containing parameter bounds.
     image_pars : ImagePars, optional
         Image parameters (needed for x0, y0 bounds).
+        If None for centroid params, uses conservative default bounds.
     fraction : float, optional
         Fractional range around true value. Default is 0.25 (±25%).
 
@@ -322,7 +323,7 @@ def compute_parameter_bounds(
     if param_name in config.param_bounds:
         lower_phys, upper_phys = config.param_bounds[param_name]
 
-        # Compute ±fraction range
+        # Compute +/-fraction range
         delta = fraction * abs(true_value)
         lower_pct = true_value - delta
         upper_pct = true_value + delta
@@ -340,19 +341,35 @@ def compute_parameter_bounds(
 
     # Special case: centroid offsets (bounded by image)
     elif param_name in ['x0', 'y0', 'vel_x0', 'vel_y0', 'int_x0', 'int_y0']:
-        if image_pars is None:
-            raise ValueError(f"image_pars required for bounds on {param_name}")
+        if image_pars is not None:
+            # Use image extent
+            extent = image_pars.shape[0] * image_pars.pixel_scale / 2
+        else:
+            # Use conservative default based on typical config values
+            # For joint models, use the larger of the two grids
+            extent_vel = (
+                config.image_pars_velocity.shape[0]
+                * config.image_pars_velocity.pixel_scale
+                / 2
+            )
+            extent_int = (
+                config.image_pars_intensity.shape[0]
+                * config.image_pars_intensity.pixel_scale
+                / 2
+            )
+            extent = max(extent_vel, extent_int)
 
-        # Image spans from -extent/2 to +extent/2 in arcsec
-        extent = image_pars.shape[0] * image_pars.pixel_scale / 2
-
-        delta = fraction * abs(true_value)
+        delta = (
+            fraction * abs(true_value) if true_value != 0 else 1.0
+        )  # Default to 1 arcsec if centered
         lower = max(true_value - delta, -extent)
         upper = min(true_value + delta, extent)
 
-    # Default: ±fraction
+    # Default: +/-fraction
     else:
-        delta = fraction * abs(true_value)
+        delta = (
+            fraction * abs(true_value) if true_value != 0 else 0.1
+        )  # Small default for zero values
         lower = true_value - delta
         upper = true_value + delta
 
@@ -781,6 +798,7 @@ def plot_likelihood_slices(
         f'{test_name} - Likelihood Slices '
         f'(SNR={snr}, base tolerance={base_tolerance*100:.1f}%)',
         fontsize=14,
+        y=1.01,
     )
     plt.tight_layout()
 

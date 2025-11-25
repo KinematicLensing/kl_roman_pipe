@@ -227,8 +227,8 @@ def _log_likelihood_separate_images(
     """
 
     # extract component parameters from composite theta
-    theta_vel = kl_model.get_velocity_params(theta)
-    theta_int = kl_model.get_intensity_params(theta)
+    theta_vel = kl_model.get_velocity_pars(theta)
+    theta_int = kl_model.get_intensity_pars(theta)
 
     # compute log-likelihood for each component
     log_prob_vel = _log_likelihood_velocity_only(
@@ -485,8 +485,8 @@ def create_jitted_likelihood_joint(
     Notes
     -----
     The composite theta array should follow the order defined in
-    kl_model.PARAMETER_NAMES. Use kl_model.get_velocity_params(theta) and
-    kl_model.get_intensity_params(theta) to extract component parameters
+    kl_model.PARAMETER_NAMES. Use kl_model.get_velocity_pars(theta) and
+    kl_model.get_intensity_pars(theta) to extract component parameters
     if needed for inspection.
 
     This function is particularly useful for joint kinematic-lensing analysis
@@ -519,7 +519,7 @@ def create_jitted_likelihood_joint(
 # This was the first implementation for simple JAX testing; now replaced by above
 # should be removed when ready
 # def log_likelihood(
-#     theta: jnp.ndarray, kl_model: KLModel, datavector: jnp.ndarray, meta_params: dict
+#     theta: jnp.ndarray, kl_model: KLModel, datavector: jnp.ndarray, meta_pars: dict
 # ) -> float:
 #     """
 #     Compute log-likelihood for kinematic lensing model.
@@ -532,7 +532,7 @@ def create_jitted_likelihood_joint(
 #         Combined velocity and intensity model.
 #     datavector : jnp.ndarray
 #         Observed data vector.
-#     meta_params : dict
+#     meta_pars : dict
 #         Fixed metadata including coordinate grids.
 
 #     Returns
@@ -542,7 +542,7 @@ def create_jitted_likelihood_joint(
 #     """
 
 #     velocity_map, intensity_map = kl_model(
-#         theta, plane='obs', X=meta_params['X'], Y=meta_params['Y']
+#         theta, plane='obs', X=meta_pars['X'], Y=meta_pars['Y']
 #     )
 
 #     model_prediction = velocity_map * intensity_map

@@ -612,7 +612,7 @@ class KLModel(object):
             Dictionary mapping parameter names to values.
         """
 
-        return {name: float(theta[i]) for i, name in enumerate(self.PARAM_NAMES)}
+        return {name: float(theta[i]) for i, name in enumerate(self.PARAMETER_NAMES)}
 
     def pars2theta(self, pars: dict) -> jnp.ndarray:
         """
@@ -621,12 +621,12 @@ class KLModel(object):
         Parameters
         ----------
         pars : dict
-            Dictionary with keys matching self.PARAM_NAMES.
+            Dictionary with keys matching self.PARAMETER_NAMES.
 
         Returns
         -------
         jnp.ndarray
-            Composite parameter array ordered according to self.PARAM_NAMES.
+            Composite parameter array ordered according to self.PARAMETER_NAMES.
         """
 
-        return jnp.array([pars[name] for name in self.PARAM_NAMES])
+        return jnp.array([pars[name] for name in self.PARAMETER_NAMES])

@@ -102,6 +102,7 @@ def generate_synthetic_velocity_data(
         Velocity model class (e.g., CenteredVelocityModel).
     true_pars : dict
         True parameter values (using model's parameter names).
+        Can contain extra parameters that will be filtered out (e.g. joint models).
     X, Y : jnp.ndarray
         Coordinate grids.
     snr : float
@@ -119,13 +120,17 @@ def generate_synthetic_velocity_data(
         Noise variance used.
     """
 
-    # Generate true model
     model = model_class()
-    theta_true = model.pars2theta(true_pars)
+
+    # filter parameters to only include those needed by velocity model
+    # this is relevant for joint models
+    vel_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
+
+    theta_true = model.pars2theta(vel_pars)
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
-    synth = SyntheticVelocity(true_pars, model_type='arctan', seed=config.seed)
+    synth = SyntheticVelocity(vel_pars, model_type='arctan', seed=config.seed)
     data_noisy = synth.generate(
         X, Y, snr=snr, seed=config.seed, include_poisson=config.include_poisson_noise
     )
@@ -152,6 +157,7 @@ def generate_synthetic_intensity_data(
         Intensity model class (e.g., InclinedExponentialModel).
     true_pars : dict
         True parameter values (using model's parameter names).
+        Can contain extra parameters that will be filtered out (e.g. joint models).
     X, Y : jnp.ndarray
         Coordinate grids.
     snr : float
@@ -169,13 +175,17 @@ def generate_synthetic_intensity_data(
         Noise variance used.
     """
 
-    # Generate true model
     model = model_class()
-    theta_true = model.pars2theta(true_pars)
+
+    # filter parameters to only include those needed by intensity model
+    # this is relevant for joint models
+    int_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
+
+    theta_true = model.pars2theta(int_pars)
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
-    synth = SyntheticIntensity(true_pars, model_type='exponential', seed=config.seed)
+    synth = SyntheticIntensity(int_pars, model_type='exponential', seed=config.seed)
     data_noisy = synth.generate(
         X, Y, snr=snr, seed=config.seed, include_poisson=config.include_poisson_noise
     )
@@ -406,7 +416,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 
 
 # ==============================================================================
-# Test: Inclined Exponential Intensity Model
+# Test: Inclined Exponential Intensity Model (Base Case)
 # ==============================================================================
 
 
@@ -469,6 +479,299 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     )
 
     assert_parameter_recovery(recovery_stats, snr, 'Inclined exponential (base)')
+
+
+# ==============================================================================
+# Test: Inclined Exponential with Shear
+# ==============================================================================
+
+
+@pytest.mark.parametrize("snr", [1000, 50, 10])
+def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedExponentialModel with shear."""
+
+    X, Y = intensity_grids
+
+    # True parameters with non-zero shear
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.03,  # Non-zero shear
+        'g2': -0.02,  # Non-zero shear
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedExponentialModel()
+    theta_true = model.pars2theta(true_pars)
+
+    # Generate synthetic data
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedExponentialModel, true_pars, X, Y, snr, test_config
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    # Diagnostic plots
+    test_name = f"inclined_exponential_with_shear_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy,
+        data_true,
+        model_eval,
+        test_name,
+        test_config,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+    )
+
+    # Likelihood slicing
+    log_like = create_jitted_likelihood_intensity(
+        model, test_config.image_pars_intensity, variance, data_noisy
+    )
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined exponential (w/ shear)')
+
+
+# ==============================================================================
+# Test: Joint Model (Base Case)
+# ==============================================================================
+
+
+@pytest.mark.parametrize("snr", [1000, 50, 10])
+def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
+    """
+    Test parameter recovery for joint velocity + intensity model.
+
+    Base case: no shear, centered galaxy. This tests the ability to
+    simultaneously constrain kinematic and morphological parameters.
+    """
+
+    X_vel, Y_vel = velocity_grids
+    X_int, Y_int = intensity_grids
+
+    # Define true parameters for both models
+    # Shared parameters: cosi, theta_int, g1, g2
+    true_pars = {
+        # Shared geometry
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.0,  # No shear
+        'g2': 0.0,
+        # Velocity parameters
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'vel_rscale': 5.0,
+        'vel_x0': 0.0,
+        'vel_y0': 0.0,
+        # Intensity parameters
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    # Create joint model
+    vel_model = OffsetVelocityModel()
+    int_model = InclinedExponentialModel()
+    joint_model = KLModel(
+        vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
+    )
+    theta_true = joint_model.pars2theta(true_pars)
+
+    # Generate synthetic data for both components
+    data_vel_true, data_vel_noisy, variance_vel = generate_synthetic_velocity_data(
+        OffsetVelocityModel, true_pars, X_vel, Y_vel, snr, test_config
+    )
+
+    data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
+        InclinedExponentialModel, true_pars, X_int, Y_int, snr, test_config
+    )
+
+    # Evaluate models at true parameters
+    theta_vel_true = vel_model.pars2theta(true_pars)
+    theta_int_true = int_model.pars2theta(true_pars)
+    model_vel_eval = vel_model(theta_vel_true, 'obs', X_vel, Y_vel)
+    model_int_eval = int_model(theta_int_true, 'obs', X_int, Y_int)
+
+    # Diagnostic plots for both data types
+    test_name = f"joint_base_snr{snr}"
+    plot_data_comparison_panels(
+        data_vel_noisy,
+        data_vel_true,
+        model_vel_eval,
+        test_name,
+        test_config,
+        data_type='velocity',
+        variance=variance_vel,
+        n_params=len(vel_model.PARAMETER_NAMES),
+    )
+
+    plot_data_comparison_panels(
+        data_int_noisy,
+        data_int_true,
+        model_int_eval,
+        test_name,
+        test_config,
+        data_type='intensity',
+        variance=variance_int,
+        n_params=len(int_model.PARAMETER_NAMES),
+    )
+
+    # Create joint likelihood
+    log_like = create_jitted_likelihood_joint(
+        joint_model,
+        test_config.image_pars_velocity,
+        test_config.image_pars_intensity,
+        variance_vel,
+        variance_int,
+        data_vel_noisy,
+        data_int_noisy,
+    )
+
+    # Slice all joint parameters
+    # Note: for joint models, we can't easily determine which ImagePars to use
+    # for bounds, so we pass None and let default behavior handle it
+    slices = slice_all_parameters(
+        log_like,
+        joint_model,
+        theta_true,
+        test_config,
+        image_pars=None,  # Will use default bounds
+    )
+
+    # Plot likelihood slices
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'joint'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Joint model (base)')
+
+
+# ==============================================================================
+# Test: Joint Model with Shear
+# ==============================================================================
+
+
+@pytest.mark.parametrize("snr", [1000, 50, 10])
+def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_grids):
+    """
+    Test parameter recovery for joint model with non-zero shear.
+
+    This is the most comprehensive test, combining kinematic and morphological
+    information to constrain shear along with all other parameters.
+    """
+
+    X_vel, Y_vel = velocity_grids
+    X_int, Y_int = intensity_grids
+
+    # Define true parameters with shear
+    true_pars = {
+        # Shared geometry (including shear)
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,  # Non-zero shear
+        'g2': -0.02,
+        # Velocity parameters
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'vel_rscale': 5.0,
+        'vel_x0': 1.0,  # Slight offset
+        'vel_y0': -0.5,
+        # Intensity parameters
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_x0': 1.0,  # Same offset (aligned)
+        'int_y0': -0.5,
+    }
+
+    # Create joint model
+    vel_model = OffsetVelocityModel()
+    int_model = InclinedExponentialModel()
+    joint_model = KLModel(
+        vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
+    )
+    theta_true = joint_model.pars2theta(true_pars)
+
+    # Generate synthetic data
+    data_vel_true, data_vel_noisy, variance_vel = generate_synthetic_velocity_data(
+        OffsetVelocityModel, true_pars, X_vel, Y_vel, snr, test_config
+    )
+
+    data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
+        InclinedExponentialModel, true_pars, X_int, Y_int, snr, test_config
+    )
+
+    # Evaluate models at true parameters
+    theta_vel_true = vel_model.pars2theta(true_pars)
+    theta_int_true = int_model.pars2theta(true_pars)
+    model_vel_eval = vel_model(theta_vel_true, 'obs', X_vel, Y_vel)
+    model_int_eval = int_model(theta_int_true, 'obs', X_int, Y_int)
+
+    # Diagnostic plots
+    test_name = f"joint_with_shear_snr{snr}"
+    plot_data_comparison_panels(
+        data_vel_noisy,
+        data_vel_true,
+        model_vel_eval,
+        test_name,
+        test_config,
+        data_type='velocity',
+        variance=variance_vel,
+        n_params=len(vel_model.PARAMETER_NAMES),
+    )
+
+    plot_data_comparison_panels(
+        data_int_noisy,
+        data_int_true,
+        model_int_eval,
+        test_name,
+        test_config,
+        data_type='intensity',
+        variance=variance_int,
+        n_params=len(int_model.PARAMETER_NAMES),
+    )
+
+    # Create joint likelihood
+    log_like = create_jitted_likelihood_joint(
+        joint_model,
+        test_config.image_pars_velocity,
+        test_config.image_pars_intensity,
+        variance_vel,
+        variance_int,
+        data_vel_noisy,
+        data_int_noisy,
+    )
+
+    # Slice all joint parameters
+    slices = slice_all_parameters(
+        log_like,
+        joint_model,
+        theta_true,
+        test_config,
+        image_pars=None,
+    )
+
+    # Plot likelihood slices
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'joint'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Joint model (w/ shear)')
 
 
 if __name__ == "__main__":
