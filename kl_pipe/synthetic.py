@@ -152,13 +152,13 @@ def generate_arctan_velocity_2d(
     norm = 1.0 / (1.0 - (g1**2 + g2**2))
     X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
     Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
-    
+
     # Step 3: 4otate
     cos_pa = np.cos(-theta_int)
     sin_pa = np.sin(-theta_int)
     X_rot = cos_pa * X_shear - sin_pa * Y_shear
     Y_rot = sin_pa * X_shear + cos_pa * Y_shear
-    
+
     # Step 4: deproject (gal2disk)
     X_disk = X_rot
     Y_disk = Y_rot / sini if sini > 0 else Y_rot
@@ -254,31 +254,31 @@ def _generate_sersic_scipy(
     int_y0: float,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy."""
-    
+
     sini = np.sqrt(1.0 - cosi**2)
-    
+
     # Step 1: Recenter (obs -> cen)
     X_c = X - int_x0
     Y_c = Y - int_y0
-    
+
     # Step 2: Apply inverse lensing shear (cen -> source)
     norm = 1.0 / (1.0 - (g1**2 + g2**2))
     X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
     Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
-    
+
     # Step 3: Rotate by position angle (source -> gal)
     cos_pa = np.cos(-theta_int)
     sin_pa = np.sin(-theta_int)
     X_rot = cos_pa * X_shear - sin_pa * Y_shear
     Y_rot = sin_pa * X_shear + cos_pa * Y_shear
-    
+
     # Step 4: Deproject inclination (gal -> disk)
     X_disk = X_rot
     Y_disk = Y_rot / sini if sini > 0 else Y_rot
-    
+
     # Compute radius in disk plane
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
-    
+
     # Convert flux to central surface brightness
     # For exponential (n=1): F = 2π * I0 * r_scale²
     #                   →  I0 = F / (2π * r_scale²)
@@ -291,16 +291,16 @@ def _generate_sersic_scipy(
         # General Sersic case
         norm_factor = int_rscale**2 * 2.0 * np.pi * n_sersic * gamma(2.0 * n_sersic)
         I0_disk = flux / norm_factor
-    
+
     # Evaluate Sersic profile in disk plane
     #   For exponential (n=1): I(r) = I0 * exp(-r/r_scale)
     #   For general Sersic: I(r) = I0 * exp(-(r/r_scale)^(1/n))
     intensity_disk = I0_disk * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))
-    
+
     # Step 5: Project surface brightness to observer frame
     #  (same flux in smaller solid angle -> brighter by 1/cos(i))
     intensity_obs = intensity_disk / cosi if cosi > 0 else intensity_disk
-    
+
     return intensity_obs
 
 

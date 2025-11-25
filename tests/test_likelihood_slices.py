@@ -37,6 +37,7 @@ from test_utils import (
     slice_all_parameters,
     plot_data_comparison_panels,
     plot_likelihood_slices,
+    assert_parameter_recovery,
 )
 
 
@@ -203,7 +204,6 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     """
 
     X, Y = velocity_grids
-    tolerance = test_config.get_tolerance(snr, 'velocity')
 
     # Define true parameters using dict (robust to reordering)
     true_pars = {
@@ -239,6 +239,7 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
         test_config,
         data_type='velocity',
         variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
     )
 
     # Create JIT-compiled likelihood
@@ -257,21 +258,10 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
 
     # Plot likelihood slices and get recovery stats
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars, test_name, test_config, snr, tolerance
+        slices, true_pars, test_name, test_config, snr, 'velocity'
     )
 
-    # Assert all parameters recovered within tolerance
-    failed_params = []
-    for param_name, stats in recovery_stats.items():
-        if not stats['passed']:
-            failed_params.append(
-                f"{param_name}: {stats['pct_error']*100:.2f}% error "
-                f"(recovered {stats['recovered']:.4f}, true {stats['true']:.4f})"
-            )
-
-    if failed_params:
-        msg = f"Parameter recovery failed for SNR={snr}:\n" + "\n".join(failed_params)
-        pytest.fail(msg)
+    assert_parameter_recovery(recovery_stats, snr, 'Centered velocity (base)')
 
 
 # ==============================================================================
@@ -288,7 +278,6 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     """
 
     X, Y = velocity_grids
-    tolerance = test_config.get_tolerance(snr, 'velocity')
 
     # True parameters with significant shear
     true_pars = {
@@ -321,6 +310,7 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
         test_config,
         data_type='velocity',
         variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
     )
 
     # Likelihood slicing
@@ -337,23 +327,10 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     )
 
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars, test_name, test_config, snr, tolerance
+        slices, true_pars, test_name, test_config, snr, 'velocity'
     )
 
-    # Assert recovery
-    failed_params = []
-    for param_name, stats in recovery_stats.items():
-        if not stats['passed']:
-            failed_params.append(
-                f"{param_name}: {stats['pct_error']*100:.2f}% error "
-                f"(recovered {stats['recovered']:.4f}, true {stats['true']:.4f})"
-            )
-
-    if failed_params:
-        msg = f"Parameter recovery with shear failed for SNR={snr}:\n" + "\n".join(
-            failed_params
-        )
-        pytest.fail(msg)
+    assert_parameter_recovery(recovery_stats, snr, 'Centered velocity (w/ shear)')
 
 
 # ==============================================================================
@@ -371,7 +348,6 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
     """
 
     X, Y = velocity_grids
-    tolerance = test_config.get_tolerance(snr, 'velocity')
 
     # True parameters with centroid offset
     true_pars = {
@@ -406,6 +382,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
         test_config,
         data_type='velocity',
         variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
     )
 
     # Likelihood slicing
@@ -422,23 +399,10 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
     )
 
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars, test_name, test_config, snr, tolerance
+        slices, true_pars, test_name, test_config, snr, 'velocity'
     )
 
-    # Assert recovery
-    failed_params = []
-    for param_name, stats in recovery_stats.items():
-        if not stats['passed']:
-            failed_params.append(
-                f"{param_name}: {stats['pct_error']*100:.2f}% error "
-                f"(recovered {stats['recovered']:.4f}, true {stats['true']:.4f})"
-            )
-
-    if failed_params:
-        msg = f"Offset velocity recovery failed for SNR={snr}:\n" + "\n".join(
-            failed_params
-        )
-        pytest.fail(msg)
+    assert_parameter_recovery(recovery_stats, snr, 'Offset velocity')
 
 
 # ==============================================================================
@@ -448,18 +412,9 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 
 @pytest.mark.parametrize("snr", [1000, 50, 10])
 def test_recover_inclined_exponential(snr, test_config, intensity_grids):
-    """
-    Test parameter recovery for InclinedExponentialModel.
-
-    NOTE: This test is expected to fail initially because the inclination
-    is not yet properly implemented in the model. The test should reveal
-    that cosi cannot be recovered, indicating the bug.
-
-    Once the model is fixed to properly apply inclination, this test should pass.
-    """
+    """Test parameter recovery for InclinedExponentialModel."""
 
     X, Y = intensity_grids
-    tolerance = test_config.get_tolerance(snr, 'intensity')
 
     # True parameters
     true_pars = {
@@ -493,6 +448,7 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
         test_config,
         data_type='intensity',
         variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
     )
 
     # Likelihood slicing
@@ -509,26 +465,10 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     )
 
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars, test_name, test_config, snr, tolerance
+        slices, true_pars, test_name, test_config, snr, 'intensity'
     )
 
-    # Assert recovery
-    # NOTE: We expect cosi to fail if inclination is not implemented
-    failed_params = []
-    for param_name, stats in recovery_stats.items():
-        if not stats['passed']:
-            failed_params.append(
-                f"{param_name}: {stats['pct_error']*100:.2f}% error "
-                f"(recovered {stats['recovered']:.4f}, true {stats['true']:.4f})"
-            )
-
-    if failed_params:
-        msg = f"Inclined exponential recovery failed for SNR={snr}:\n" + "\n".join(
-            failed_params
-        )
-        msg += "\n\nNOTE: If only 'cosi' failed, this likely indicates the inclination "
-        msg += "is not yet properly implemented in InclinedExponentialModel."
-        pytest.fail(msg)
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined exponential (base)')
 
 
 if __name__ == "__main__":
