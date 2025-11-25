@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Callable
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir
@@ -34,7 +35,7 @@ class TestConfig:
         self,
         output_dir: Path,
         enable_plots: bool = True,
-        include_poisson_noise: bool = True,
+        include_poisson_noise: bool = False,
         seed: int = 42,
     ):
         self.output_dir = output_dir
@@ -46,17 +47,17 @@ class TestConfig:
 
         # SNR tolerance maps (can differ for velocity vs intensity)
         self.snr_tolerance_velocity = {
+            1000: 0.001,  # 0.1% tolerance
             100: 0.01,  # 1% tolerance
             50: 0.02,  # 2% tolerance
-            30: 0.05,  # 5% tolerance
-            10: 0.10,  # 10% tolerance
+            10: 0.05,  # 5% tolerance
         }
 
         self.snr_tolerance_intensity = {
+            1000: 0.001,  # 0.1% tolerance
             100: 0.01,  # 1% tolerance
             50: 0.02,  # 2% tolerance
-            30: 0.05,  # 5% tolerance
-            10: 0.10,  # 10% tolerance
+            10: 0.05,  # 5% tolerance
         }
 
         # Physical parameter boundaries
@@ -65,17 +66,26 @@ class TestConfig:
             'theta_int': (0.0, np.pi),
             'g1': (-0.1, 0.1),
             'g2': (-0.1, 0.1),
-            'I0': (1e-6, None),  # Strictly positive
+            'flux': (1e-8, None),  # Strictly positive
         }
 
-        # Image parameters
+        # Image parameters - specified in (Nx, Ny) for easy verification
+        Nx_vel, Ny_vel = 40, 30
         self.image_pars_velocity = ImagePars(
-            shape=(32, 32), pixel_scale=0.3, indexing='ij'  # arcsec/pixel
+            shape=(Nx_vel, Ny_vel),
+            pixel_scale=0.3, # arcsec/pixel
+            indexing='xy'
+        )
+        
+        # Intensity: taller than wide (Ny > Nx) - opposite orientation
+        Nx_int, Ny_int = 60, 80
+        self.image_pars_intensity = ImagePars(
+            shape=(Nx_int, Ny_int),
+            pixel_scale=0.3,  # arcsec/pixel
+            indexing='xy'
         )
 
-        self.image_pars_intensity = ImagePars(
-            shape=(64, 64), pixel_scale=0.3, indexing='ij'  # arcsec/pixel
-        )
+        return
 
     def get_tolerance(self, snr: float, data_type: str = 'velocity') -> float:
         """Get tolerance threshold for given SNR and data type."""
@@ -170,7 +180,7 @@ def slice_likelihood_1d(
     param_idx: int,
     param_name: str,
     config: TestConfig,
-    n_points: int = 50,
+    n_points: int = 201,
     image_pars: Optional[ImagePars] = None,
     scan_fraction: float = 0.25,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -190,7 +200,7 @@ def slice_likelihood_1d(
     config : TestConfig
         Test configuration.
     n_points : int, optional
-        Number of points in slice. Default is 50.
+        Number of points in slice. Default is 100.
     image_pars : ImagePars, optional
         Image parameters (for x0, y0 bounds).
     scan_fraction : float, optional
@@ -227,7 +237,7 @@ def slice_all_parameters(
     model,
     theta_true: jnp.ndarray,
     config: TestConfig,
-    n_points: int = 50,
+    n_points: int = 201,
     image_pars: Optional[ImagePars] = None,
     scan_fraction: float = 0.25,
 ) -> Dict[str, Tuple[jnp.ndarray, jnp.ndarray]]:
@@ -245,7 +255,7 @@ def slice_all_parameters(
     config : TestConfig
         Test configuration.
     n_points : int, optional
-        Number of points per slice. Default is 50.
+        Number of points per slice. Default is 100.
     image_pars : ImagePars, optional
         Image parameters.
     scan_fraction : float, optional
@@ -287,6 +297,7 @@ def plot_data_comparison_panels(
     test_name: str,
     config: TestConfig,
     data_type: str = 'velocity',
+    variance: Optional[float] = None,
 ) -> None:
     """
     Create 2x3 panel diagnostic plot.
@@ -308,6 +319,8 @@ def plot_data_comparison_panels(
         Test configuration (for output dir and plot enable flag).
     data_type : str, optional
         Type of data ('velocity' or 'intensity'). Default is 'velocity'.
+    variance : float, optional
+        Variance of noise, if you want to report reduced chi-squared.
     """
 
     if not config.enable_plots:
@@ -320,6 +333,7 @@ def plot_data_comparison_panels(
     # Compute residuals
     residual_true = np.array(data_noisy - data_true)
     residual_model = np.array(data_noisy - model_eval)
+    residual_model_true = np.array(model_eval - data_true)
 
     # Set up figure
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
@@ -337,57 +351,84 @@ def plot_data_comparison_panels(
 
     # Row 1: noisy | true | noisy - true
     im00 = axes[0, 0].imshow(
-        np.array(data_noisy).T,
+        np.array(data_noisy),
         origin='lower',
         cmap='RdBu_r',
         vmin=vmin_data,
         vmax=vmax_data,
     )
     axes[0, 0].set_title('Noisy Data')
-    plt.colorbar(im00, ax=axes[0, 0])
+    divider = make_axes_locatable(axes[0, 0])
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im00, cax=cax)
 
     im01 = axes[0, 1].imshow(
-        np.array(data_true).T,
+        np.array(data_true),
         origin='lower',
         cmap='RdBu_r',
         vmin=vmin_data,
         vmax=vmax_data,
     )
     axes[0, 1].set_title('True (Noiseless)')
-    plt.colorbar(im01, ax=axes[0, 1])
+    divider = make_axes_locatable(axes[0, 1])
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im01, cax=cax)
 
     im02 = axes[0, 2].imshow(
-        residual_true.T, origin='lower', cmap='RdBu_r', vmin=vmin_res, vmax=vmax_res
+        residual_true, origin='lower', cmap='RdBu_r', vmin=vmin_res, vmax=vmax_res
     )
     axes[0, 2].set_title('Noisy - True')
-    plt.colorbar(im02, ax=axes[0, 2])
+    divider = make_axes_locatable(axes[0, 2])
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im02, cax=cax)
+    if variance is not None:
+        chi2 = np.sum(residual_true**2 / variance)
+        axes[0, 2].text(
+            0.02, 0.98, f'χ² = {chi2:.1f}',
+            transform=axes[0, 2].transAxes,
+            fontsize=10, color='white',
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+        )
 
-    # Row 2: noisy | model | noisy - model
+    # Row 2: model - true | model | noisy - model
     im10 = axes[1, 0].imshow(
-        np.array(data_noisy).T,
-        origin='lower',
-        cmap='RdBu_r',
-        vmin=vmin_data,
-        vmax=vmax_data,
+        residual_model_true, origin='lower', cmap='RdBu_r',
+        vmin=vmin_res, vmax=vmax_res  # Use residual colormap
     )
-    axes[1, 0].set_title('Noisy Data')
-    plt.colorbar(im10, ax=axes[1, 0])
+    axes[1, 0].set_title('Model - True')
+    divider = make_axes_locatable(axes[1, 0])
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im10, cax=cax)
 
     im11 = axes[1, 1].imshow(
-        np.array(model_eval).T,
+        np.array(model_eval),
         origin='lower',
         cmap='RdBu_r',
         vmin=vmin_data,
         vmax=vmax_data,
     )
     axes[1, 1].set_title('Model at True Params')
-    plt.colorbar(im11, ax=axes[1, 1])
+    divider = make_axes_locatable(axes[1, 1])
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im11, cax=cax)
 
     im12 = axes[1, 2].imshow(
-        residual_model.T, origin='lower', cmap='RdBu_r', vmin=vmin_res, vmax=vmax_res
+        residual_model, origin='lower', cmap='RdBu_r', vmin=vmin_res, vmax=vmax_res
     )
     axes[1, 2].set_title('Noisy - Model')
-    plt.colorbar(im12, ax=axes[1, 2])
+    divider = make_axes_locatable(axes[1, 2])
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(im12, cax=cax)
+    if variance is not None:
+        chi2 = np.sum(residual_model**2 / variance)
+        axes[1, 2].text(
+            0.02, 0.98, f'χ² = {chi2:.1f}',
+            transform=axes[1, 2].transAxes,
+            fontsize=10, color='white',
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+        )
 
     # Labels
     for ax in axes.flat:
@@ -440,6 +481,7 @@ def plot_likelihood_slices(
     recovery_stats = {}
     for param_name, (param_values, log_probs) in slices.items():
         true_val = true_pars[param_name]
+
         best_idx = jnp.argmax(log_probs)
         recovered_val = float(param_values[best_idx])
         error = recovered_val - true_val
@@ -457,11 +499,11 @@ def plot_likelihood_slices(
     if not config.enable_plots:
         return recovery_stats
 
-    # Create output directory
+    # create output directory
     test_dir = config.output_dir / test_name
     test_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine grid layout
+    # determine grid layout
     n_params = len(slices)
     ncols = 3
     nrows = int(np.ceil(n_params / ncols))
@@ -473,7 +515,17 @@ def plot_likelihood_slices(
         ax = axes[idx]
         stats = recovery_stats[param_name]
 
-        # Plot likelihood slice
+        # compute acceptance bounds (+/- tolerance around true value)
+        true_val = stats['true']
+        if true_val != 0:
+            lower_bound = true_val * (1 - tolerance)
+            upper_bound = true_val * (1 + tolerance)
+        else:
+            # For parameters where true value is 0, use absolute tolerance
+            lower_bound = -tolerance
+            upper_bound = tolerance
+
+        # plot likelihood slice
         ax.plot(param_values, log_probs, 'b-', linewidth=2)
         ax.axvline(stats['true'], color='k', linestyle='--', linewidth=2, label='True')
         ax.axvline(
@@ -481,32 +533,42 @@ def plot_likelihood_slices(
             color='r',
             linestyle=':',
             linewidth=2,
-            label=f'Peak: {stats["recovered"]:.4f} ({stats["pct_error"]*100:.1f}%)',
+            label=f'Peak: {stats["recovered"]:.4f} ({stats["pct_error"]*100:.3f}%)',
         )
 
-        # Styling
+        # styling
         ax.set_xlabel(param_name)
         ax.set_ylabel('Log-Likelihood')
         ax.set_title(f'{param_name} - {"PASS" if stats["passed"] else "FAIL"}')
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
-        # Color title based on pass/fail
+        # add grey acceptance region
+        ax.axvspan(
+            lower_bound, 
+            upper_bound,
+            alpha=0.15,  # Low opacity
+            color='grey',
+            label=f'±{tolerance*100:.1f}% tolerance',
+            zorder=1
+        )
+
+        # color title based on pass/fail
         title_color = 'green' if stats['passed'] else 'red'
         ax.title.set_color(title_color)
 
-    # Hide unused subplots
+    # hide unused subplots
     for idx in range(n_params, len(axes)):
         axes[idx].axis('off')
 
-    # Overall title
+    # overall title
     fig.suptitle(
         f'{test_name} - Likelihood Slices (SNR={snr}, tolerance={tolerance*100:.1f}%)',
         fontsize=14,
     )
     plt.tight_layout()
 
-    # Save
+    # save figure
     outfile = test_dir / f"{test_name}_likelihood_slices.png"
     plt.savefig(outfile, dpi=150, bbox_inches='tight')
     plt.close()

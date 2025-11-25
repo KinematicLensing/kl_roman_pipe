@@ -124,7 +124,6 @@ def generate_synthetic_velocity_data(
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
-    # Note: synthetic.py now uses same parameter names after update
     synth = SyntheticVelocity(true_pars, model_type='arctan', seed=config.seed)
     data_noisy = synth.generate(
         X, Y, snr=snr, seed=config.seed, include_poisson=config.include_poisson_noise
@@ -175,7 +174,6 @@ def generate_synthetic_intensity_data(
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
-    # Note: synthetic.py now uses same parameter names after update
     synth = SyntheticIntensity(true_pars, model_type='exponential', seed=config.seed)
     data_noisy = synth.generate(
         X, Y, snr=snr, seed=config.seed, include_poisson=config.include_poisson_noise
@@ -191,7 +189,7 @@ def generate_synthetic_intensity_data(
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 500, 100])
+@pytest.mark.parametrize("snr", [1000, 50, 10])
 def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     """
     Test parameter recovery for CenteredVelocityModel (arctan rotation curve).
@@ -234,7 +232,13 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     # Create diagnostic panels
     test_name = f"centered_velocity_base_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy, data_true, model_eval, test_name, test_config, data_type='velocity'
+        data_noisy,
+        data_true,
+        model_eval,
+        test_name,
+        test_config,
+        data_type='velocity',
+        variance=variance,
     )
 
     # Create JIT-compiled likelihood
@@ -248,7 +252,6 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
         model,
         theta_true,
         test_config,
-        n_points=50,
         image_pars=test_config.image_pars_velocity,
     )
 
@@ -276,7 +279,7 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 500, 100])
+@pytest.mark.parametrize("snr", [1000, 50, 10])
 def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     """
     Test parameter recovery with non-zero shear.
@@ -311,7 +314,13 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     # Diagnostic plots
     test_name = f"centered_velocity_with_shear_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy, data_true, model_eval, test_name, test_config, data_type='velocity'
+        data_noisy,
+        data_true,
+        model_eval,
+        test_name,
+        test_config,
+        data_type='velocity',
+        variance=variance,
     )
 
     # Likelihood slicing
@@ -324,7 +333,6 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
         model,
         theta_true,
         test_config,
-        n_points=50,
         image_pars=test_config.image_pars_velocity,
     )
 
@@ -353,7 +361,7 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 500, 100])
+@pytest.mark.parametrize("snr", [1000, 50, 10])
 def test_recover_offset_velocity(snr, test_config, velocity_grids):
     """
     Test parameter recovery for OffsetVelocityModel.
@@ -391,7 +399,13 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
     # Diagnostic plots
     test_name = f"offset_velocity_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy, data_true, model_eval, test_name, test_config, data_type='velocity'
+        data_noisy,
+        data_true,
+        model_eval,
+        test_name,
+        test_config,
+        data_type='velocity',
+        variance=variance,
     )
 
     # Likelihood slicing
@@ -404,7 +418,6 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
         model,
         theta_true,
         test_config,
-        n_points=50,
         image_pars=test_config.image_pars_velocity,
     )
 
@@ -433,7 +446,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 500, 100])
+@pytest.mark.parametrize("snr", [1000, 50, 10])
 def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     """
     Test parameter recovery for InclinedExponentialModel.
@@ -454,7 +467,7 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
         'theta_int': 0.785,
         'g1': 0.0,
         'g2': 0.0,
-        'I0': 1.0,  # Central intensity
+        'flux': 1.0,  # total flux
         'int_rscale': 3.0,  # Scale length (arcsec)
         'int_x0': 0.0,  # No offset (arcsec)
         'int_y0': 0.0,  # No offset (arcsec)
@@ -473,7 +486,13 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     # Diagnostic plots
     test_name = f"inclined_exponential_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy, data_true, model_eval, test_name, test_config, data_type='intensity'
+        data_noisy,
+        data_true,
+        model_eval,
+        test_name,
+        test_config,
+        data_type='intensity',
+        variance=variance,
     )
 
     # Likelihood slicing
@@ -486,7 +505,6 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
         model,
         theta_true,
         test_config,
-        n_points=50,
         image_pars=test_config.image_pars_intensity,
     )
 

@@ -39,7 +39,7 @@ Generate synthetic intensity data:
 >>> from kl_pipe.synthetic import SyntheticIntensity
 >>>
 >>> true_params = {
-...     'I0': 1.0, 'vel_rscale': 3.0, 'n_sersic': 1.0,
+...     'flux': 1.0, 'int_rscale': 3.0, 'n_sersic': 1.0,
 ...     'cosi': 0.8, 'theta_int': 0.785,
 ...     'g1': 0.0, 'g2': 0.0, 'int_x0': 0.0, 'int_y0': 0.0
 ... }
@@ -52,6 +52,7 @@ import numpy as np
 import jax.numpy as jnp
 from abc import ABC, abstractmethod
 from typing import Tuple, Dict, Optional
+from scipy.special import gamma
 
 # Required parameters for each model type
 
@@ -64,29 +65,32 @@ REQUIRED_PARAMS = {
         'theta_int',
         'g1',
         'g2',
-        'vel_x0',
-        'vel_y0',
+        # TODO: we could add support for optional parameters later
+        # 'vel_x0',
+        # 'vel_y0',
     },
     'sersic': {
-        'I0',
+        'flux',
         'int_rscale',
         'n_sersic',
         'cosi',
         'theta_int',
         'g1',
         'g2',
-        'int_x0',
-        'int_y0',
+        # TODO: we could add support for optional parameters later
+        # 'int_x0',
+        # 'int_y0',
     },
     'exponential': {
-        'I0',
+        'flux',
         'int_rscale',
         'cosi',
         'theta_int',
         'g1',
         'g2',
-        'int_x0',
-        'int_y0',
+        # TODO: we could add support for optional parameters later
+        # 'int_x0',
+        # 'int_y0',
     },
 }
 
@@ -145,16 +149,17 @@ def generate_arctan_velocity_2d(
     Y_c = Y - vel_y0
 
     # Step 2: apply shear
-    X_shear = X_c + g1 * X_c - g2 * Y_c
-    Y_shear = Y_c + g2 * X_c + g1 * Y_c
-
-    # Step 3: rotate by position angle
-    cos_pa = np.cos(theta_int)
-    sin_pa = np.sin(theta_int)
-    X_rot = X_shear * cos_pa + Y_shear * sin_pa
-    Y_rot = -X_shear * sin_pa + Y_shear * cos_pa
-
-    # Step 4: deproject inclination to get disk-plane coordinates
+    norm = 1.0 / (1.0 - (g1**2 + g2**2))
+    X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
+    Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
+    
+    # Step 3: 4otate
+    cos_pa = np.cos(-theta_int)
+    sin_pa = np.sin(-theta_int)
+    X_rot = cos_pa * X_shear - sin_pa * Y_shear
+    Y_rot = sin_pa * X_shear + cos_pa * Y_shear
+    
+    # Step 4: deproject (gal2disk)
     X_disk = X_rot
     Y_disk = Y_rot / sini if sini > 0 else Y_rot
 
@@ -184,7 +189,7 @@ def generate_arctan_velocity_3d():
 def generate_sersic_intensity_2d(
     X: np.ndarray,
     Y: np.ndarray,
-    I0: float,
+    flux: float,
     int_rscale: float,
     n_sersic: float,
     cosi: float,
@@ -202,8 +207,8 @@ def generate_sersic_intensity_2d(
     ----------
     X, Y : ndarray
         Coordinate grids.
-    I0 : float
-        Central intensity.
+    flux : float
+        Total flux.
     int_rscale : float
         Scale radius.
     n_sersic : float
@@ -227,18 +232,18 @@ def generate_sersic_intensity_2d(
 
     if backend == 'galsim':
         return _generate_sersic_galsim(
-            X, Y, I0, int_rscale, n_sersic, cosi, theta_int, g1, g2, int_x0, int_y0
+            X, Y, flux, int_rscale, n_sersic, cosi, theta_int, g1, g2, int_x0, int_y0
         )
     else:
         return _generate_sersic_scipy(
-            X, Y, I0, int_rscale, n_sersic, cosi, theta_int, g1, g2, int_x0, int_y0
+            X, Y, flux, int_rscale, n_sersic, cosi, theta_int, g1, g2, int_x0, int_y0
         )
 
 
 def _generate_sersic_scipy(
     X: np.ndarray,
     Y: np.ndarray,
-    I0: float,
+    flux: float,
     int_rscale: float,
     n_sersic: float,
     cosi: float,
@@ -248,79 +253,55 @@ def _generate_sersic_scipy(
     int_x0: float,
     int_y0: float,
 ) -> np.ndarray:
-    """Generate Sersic profile using scipy (simple implementation)."""
-
+    """Generate Sersic profile using scipy."""
+    
     sini = np.sqrt(1.0 - cosi**2)
-
-    # Step 1: recenter
+    
+    # Step 1: Recenter (obs -> cen)
     X_c = X - int_x0
     Y_c = Y - int_y0
-
-    # Step 2: apply shear
-    X_shear = X_c + g1 * X_c - g2 * Y_c
-    Y_shear = Y_c + g2 * X_c + g1 * Y_c
-
-    # Step 3: rotate by position angle
-    cos_pa = np.cos(theta_int)
-    sin_pa = np.sin(theta_int)
-    X_rot = X_shear * cos_pa + Y_shear * sin_pa
-    Y_rot = -X_shear * sin_pa + Y_shear * cos_pa
-
-    # Step 4: deproject inclination to get disk-plane coordinates
+    
+    # Step 2: Apply inverse lensing shear (cen -> source)
+    norm = 1.0 / (1.0 - (g1**2 + g2**2))
+    X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
+    Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
+    
+    # Step 3: Rotate by position angle (source -> gal)
+    cos_pa = np.cos(-theta_int)
+    sin_pa = np.sin(-theta_int)
+    X_rot = cos_pa * X_shear - sin_pa * Y_shear
+    Y_rot = sin_pa * X_shear + cos_pa * Y_shear
+    
+    # Step 4: Deproject inclination (gal -> disk)
     X_disk = X_rot
     Y_disk = Y_rot / sini if sini > 0 else Y_rot
-
+    
     # Compute radius in disk plane
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
-
-    # Evaluate Sersic profile
-    intensity = I0 * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))
-
-    return intensity
-
-
-def _generate_sersic_scipy(
-    X: np.ndarray,
-    Y: np.ndarray,
-    I0: float,
-    rscale: float,
-    n_sersic: float,
-    cosi: float,
-    theta_int: float,
-    g1: float,
-    g2: float,
-    x0: float,
-    y0: float,
-) -> np.ndarray:
-    """Generate Sersic profile using scipy/numpy."""
-
-    sini = np.sqrt(1.0 - cosi**2)
-
-    # step 1: recenter
-    X_c = X - x0
-    Y_c = Y - y0
-
-    # step 2: apply shear
-    X_shear = X_c + g1 * X_c - g2 * Y_c
-    Y_shear = Y_c + g2 * X_c + g1 * Y_c
-
-    # step 3: rotate by position angle
-    cos_pa = np.cos(theta_int)
-    sin_pa = np.sin(theta_int)
-    X_rot = X_shear * cos_pa + Y_shear * sin_pa
-    Y_rot = -X_shear * sin_pa + Y_shear * cos_pa
-
-    # step 4: deproject inclination to get disk-plane coordinates
-    X_disk = X_rot
-    Y_disk = Y_rot / sini if sini > 0 else Y_rot
-
-    # compute radius in disk plane
-    r_disk = np.sqrt(X_disk**2 + Y_disk**2)
-
-    # evaluate Sersic profile: I(r) = I0 * exp(-(r/rscale)^(1/n))
-    intensity = I0 * np.exp(-np.power(r_disk / rscale, 1.0 / n_sersic))
-
-    return intensity
+    
+    # Convert flux to central surface brightness
+    # For exponential (n=1): F = 2π * I0 * r_scale²
+    #                   →  I0 = F / (2π * r_scale²)
+    # For general Sersic: F = I0 * r_scale² * 2π * n * Γ(2n)
+    #                   →  I0 = F / (r_scale² * 2π * n * Γ(2n))
+    if n_sersic == 1.0:
+        # Exponential case (optimized, no gamma function call)
+        I0_disk = flux / (2.0 * np.pi * int_rscale**2)
+    else:
+        # General Sersic case
+        norm_factor = int_rscale**2 * 2.0 * np.pi * n_sersic * gamma(2.0 * n_sersic)
+        I0_disk = flux / norm_factor
+    
+    # Evaluate Sersic profile in disk plane
+    #   For exponential (n=1): I(r) = I0 * exp(-r/r_scale)
+    #   For general Sersic: I(r) = I0 * exp(-(r/r_scale)^(1/n))
+    intensity_disk = I0_disk * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))
+    
+    # Step 5: Project surface brightness to observer frame
+    #  (same flux in smaller solid angle -> brighter by 1/cos(i))
+    intensity_obs = intensity_disk / cosi if cosi > 0 else intensity_disk
+    
+    return intensity_obs
 
 
 def _generate_sersic_galsim(

@@ -87,7 +87,7 @@ def kl_theta():
             5.0,  # vel_rscale
             1.0,  # vel_x0
             -0.5,  # vel_y0
-            1.0,  # I0
+            1.0,  # flux
             3.0,  # int_rscale
             1.0,  # int_x0
             -0.5,  # int_y0

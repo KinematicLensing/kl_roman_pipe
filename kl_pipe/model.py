@@ -325,8 +325,15 @@ class IntensityModel(Model):
             x, y, plane, x0, y0, g1, g2, theta_int, cosi
         )
 
-        # evaluate in disk plane
-        return self.evaluate_in_disk_plane(theta, x_disk, y_disk, z)
+        I_disk = self.evaluate_in_disk_plane(theta, x_disk, y_disk, z)
+
+        # surface brightness projection depends on whether we're in the disk plane
+        # or not
+        if plane == 'disk':
+            return I_disk
+        else:
+            # apply cos(i) brightening factor for projected intensity
+            return I_disk / cosi
 
     @abstractmethod
     def evaluate_in_disk_plane(
@@ -374,17 +381,17 @@ class KLModel(object):
     --------
     >>> # Models with independent parameters
     >>> vel_model = OffsetVelocityModel(meta)  # params: v0, vcirc, vel_x0, ve_y0
-    >>> int_model = ExponentialIntensity(meta)  # params: I0, scale
+    >>> int_model = ExponentialIntensity(meta)  # params: flux, scale
     >>> kl_model = KLModel(vel_model, int_model)
     >>> kl_model.PARAMETER_NAMES
-    ('v0', 'vcirc', 'vel_x0', 'vel_y0', 'I0', 'scale')
+    ('v0', 'vcirc', 'vel_x0', 'vel_y0', 'flux', 'scale')
     >>>
     >>> # Models with shared parameters
     >>> vel_model = OffsetVelocityModel(meta_pars)  # params: v0, vcirc, x0, y0
-    >>> int_model = OffsetIntensity(meta_pars)      # params: I0, x0, y0
+    >>> int_model = OffsetIntensity(meta_pars)      # params: flux, x0, y0
     >>> kl_model = KLModel(vel_model, int_model, shared_pars={'x0', 'y0'})
     >>> kl_model.PARAMETER_NAMES
-    ('v0', 'vcirc', 'x0', 'y0', 'I0')
+    ('v0', 'vcirc', 'x0', 'y0', 'flux')
     """
 
     def __init__(
