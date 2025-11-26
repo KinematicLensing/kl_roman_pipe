@@ -20,6 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 from typing import Dict, Tuple
 
+from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
 from kl_pipe.model import KLModel
@@ -88,8 +89,7 @@ def intensity_grids(test_config):
 def generate_synthetic_velocity_data(
     model_class,
     true_pars: Dict[str, float],
-    X: jnp.ndarray,
-    Y: jnp.ndarray,
+    image_pars: ImagePars,
     snr: float,
     config: TestConfig,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, float]:
@@ -103,8 +103,8 @@ def generate_synthetic_velocity_data(
     true_pars : dict
         True parameter values (using model's parameter names).
         Can contain extra parameters that will be filtered out (e.g. joint models).
-    X, Y : jnp.ndarray
-        Coordinate grids.
+    image_pars : ImagePars
+        Image parameters defining the grid.
     snr : float
         Target signal-to-noise ratio.
     config : TestConfig
@@ -127,12 +127,16 @@ def generate_synthetic_velocity_data(
     vel_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
 
     theta_true = model.pars2theta(vel_pars)
+    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
     synth = SyntheticVelocity(vel_pars, model_type='arctan', seed=config.seed)
     data_noisy = synth.generate(
-        X, Y, snr=snr, seed=config.seed, include_poisson=config.include_poisson_noise
+        image_pars,
+        snr=snr,
+        seed=config.seed,
+        include_poisson=config.include_poisson_noise,
     )
     variance = synth.variance
     data_true = synth.data_true  # Use synthetic's version for consistency
@@ -143,8 +147,7 @@ def generate_synthetic_velocity_data(
 def generate_synthetic_intensity_data(
     model_class,
     true_pars: Dict[str, float],
-    X: jnp.ndarray,
-    Y: jnp.ndarray,
+    image_pars: ImagePars,
     snr: float,
     config: TestConfig,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, float]:
@@ -158,8 +161,8 @@ def generate_synthetic_intensity_data(
     true_pars : dict
         True parameter values (using model's parameter names).
         Can contain extra parameters that will be filtered out (e.g. joint models).
-    X, Y : jnp.ndarray
-        Coordinate grids.
+    image_pars : ImagePars
+        Image parameters defining the grid.
     snr : float
         Target signal-to-noise ratio.
     config : TestConfig
@@ -182,12 +185,17 @@ def generate_synthetic_intensity_data(
     int_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
 
     theta_true = model.pars2theta(int_pars)
+    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
     synth = SyntheticIntensity(int_pars, model_type='exponential', seed=config.seed)
     data_noisy = synth.generate(
-        X, Y, snr=snr, seed=config.seed, include_poisson=config.include_poisson_noise
+        image_pars,
+        snr=snr,
+        seed=config.seed,
+        include_poisson=config.include_poisson_noise,
+        sersic_backend=config.sersic_backend,
     )
     variance = synth.variance
     data_true = synth.data_true
@@ -233,7 +241,11 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     theta_true = model.pars2theta(true_pars)
 
     data_true, data_noisy, variance = generate_synthetic_velocity_data(
-        CenteredVelocityModel, true_pars, X, Y, snr, test_config
+        CenteredVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
     )
 
     # Evaluate model at true parameters (for diagnostic plot)
@@ -305,7 +317,11 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
 
     # Generate synthetic data
     data_true, data_noisy, variance = generate_synthetic_velocity_data(
-        CenteredVelocityModel, true_pars, X, Y, snr, test_config
+        CenteredVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
     )
 
     model_eval = model(theta_true, 'obs', X, Y)
@@ -377,7 +393,11 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 
     # Generate synthetic data
     data_true, data_noisy, variance = generate_synthetic_velocity_data(
-        OffsetVelocityModel, true_pars, X, Y, snr, test_config
+        OffsetVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
     )
 
     model_eval = model(theta_true, 'obs', X, Y)
@@ -443,7 +463,11 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
 
     # Generate synthetic data
     data_true, data_noisy, variance = generate_synthetic_intensity_data(
-        InclinedExponentialModel, true_pars, X, Y, snr, test_config
+        InclinedExponentialModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
     )
 
     model_eval = model(theta_true, 'obs', X, Y)
@@ -509,7 +533,11 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
 
     # Generate synthetic data
     data_true, data_noisy, variance = generate_synthetic_intensity_data(
-        InclinedExponentialModel, true_pars, X, Y, snr, test_config
+        InclinedExponentialModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
     )
 
     model_eval = model(theta_true, 'obs', X, Y)
@@ -595,11 +623,19 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
 
     # Generate synthetic data for both components
     data_vel_true, data_vel_noisy, variance_vel = generate_synthetic_velocity_data(
-        OffsetVelocityModel, true_pars, X_vel, Y_vel, snr, test_config
+        OffsetVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
     )
 
     data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
-        InclinedExponentialModel, true_pars, X_int, Y_int, snr, test_config
+        InclinedExponentialModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
     )
 
     # Evaluate models at true parameters
@@ -709,11 +745,19 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
 
     # Generate synthetic data
     data_vel_true, data_vel_noisy, variance_vel = generate_synthetic_velocity_data(
-        OffsetVelocityModel, true_pars, X_vel, Y_vel, snr, test_config
+        OffsetVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
     )
 
     data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
-        InclinedExponentialModel, true_pars, X_int, Y_int, snr, test_config
+        InclinedExponentialModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
     )
 
     # Evaluate models at true parameters

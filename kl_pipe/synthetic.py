@@ -27,8 +27,8 @@ Generate synthetic velocity data:
 >>> synth_vel = SyntheticVelocity(true_params, model_type='arctan', seed=42)
 >>>
 >>> # Generate data on a grid
->>> X, Y = np.meshgrid(np.linspace(-10, 10, 64), np.linspace(-10, 10, 64))
->>> data_noisy = synth_vel.generate(X, Y, snr=50)
+>>> image_pars = ImagePars(shape=(64, 64), pixel_scale=0.3125, indexing='ij')
+>>> data_noisy = synth_vel.generate(image_pars, snr=50)
 >>>
 >>> # Access results
 >>> print(synth_vel.data_true)  # Noiseless data
@@ -50,9 +50,13 @@ Generate synthetic intensity data:
 
 import numpy as np
 import jax.numpy as jnp
+import galsim as gs
 from abc import ABC, abstractmethod
 from typing import Tuple, Dict, Optional
 from scipy.special import gamma
+
+from kl_pipe.parameters import ImagePars
+from kl_pipe.utils import build_map_grid_from_image_pars
 
 # Required parameters for each model type
 
@@ -101,8 +105,7 @@ REQUIRED_PARAMS = {
 
 
 def generate_arctan_velocity_2d(
-    X: np.ndarray,
-    Y: np.ndarray,
+    image_pars: ImagePars,
     v0: float,
     vcirc: float,
     vel_rscale: float,
@@ -118,8 +121,8 @@ def generate_arctan_velocity_2d(
 
     Parameters
     ----------
-    X, Y : ndarray
-        Coordinate grids in consistent units (e.g., arcsec, kpc, pixels).
+    image_pars : ImagePars
+        Image parameters defining the coordinate grids.
     v0 : float
         Systemic velocity in km/s.
     vcirc : float
@@ -141,7 +144,9 @@ def generate_arctan_velocity_2d(
         Line-of-sight velocity map in km/s, same shape as X and Y.
     """
 
-    # Implementation same as before, just using new parameter names
+    # Build coordinate grids from image parameters
+    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
+
     sini = np.sqrt(1.0 - cosi**2)
 
     # Step 1: recenter
@@ -153,7 +158,7 @@ def generate_arctan_velocity_2d(
     X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
     Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
 
-    # Step 3: 4otate
+    # Step 3: rotate
     cos_pa = np.cos(-theta_int)
     sin_pa = np.sin(-theta_int)
     X_rot = cos_pa * X_shear - sin_pa * Y_shear
@@ -187,8 +192,7 @@ def generate_arctan_velocity_3d():
 
 
 def generate_sersic_intensity_2d(
-    X: np.ndarray,
-    Y: np.ndarray,
+    image_pars: ImagePars,
     flux: float,
     int_rscale: float,
     n_sersic: float,
@@ -205,8 +209,8 @@ def generate_sersic_intensity_2d(
 
     Parameters
     ----------
-    X, Y : ndarray
-        Coordinate grids.
+    image_pars : ImagePars
+        Image parameters defining the coordinate grids.
     flux : float
         Total flux.
     int_rscale : float
@@ -232,17 +236,34 @@ def generate_sersic_intensity_2d(
 
     if backend == 'galsim':
         return _generate_sersic_galsim(
-            X, Y, flux, int_rscale, n_sersic, cosi, theta_int, g1, g2, int_x0, int_y0
+            image_pars,
+            flux,
+            int_rscale,
+            n_sersic,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
         )
     else:
         return _generate_sersic_scipy(
-            X, Y, flux, int_rscale, n_sersic, cosi, theta_int, g1, g2, int_x0, int_y0
+            image_pars,
+            flux,
+            int_rscale,
+            n_sersic,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
         )
 
 
 def _generate_sersic_scipy(
-    X: np.ndarray,
-    Y: np.ndarray,
+    image_pars: ImagePars,
     flux: float,
     int_rscale: float,
     n_sersic: float,
@@ -254,6 +275,9 @@ def _generate_sersic_scipy(
     int_y0: float,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy."""
+
+    # Build coordinate grids from ImagePars
+    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
 
     sini = np.sqrt(1.0 - cosi**2)
 
@@ -305,24 +329,92 @@ def _generate_sersic_scipy(
 
 
 def _generate_sersic_galsim(
-    X: np.ndarray,
-    Y: np.ndarray,
-    I0: float,
-    rscale: float,
+    image_pars: ImagePars,
+    flux: float,
+    int_rscale: float,
     n_sersic: float,
     cosi: float,
     theta_int: float,
     g1: float,
     g2: float,
-    x0: float,
-    y0: float,
+    int_x0: float,
+    int_y0: float,
+    gsparams: gs.GSParams = None,
 ) -> np.ndarray:
-    """Generate Sersic profile using GalSim."""
+    """
+    Generate Sersic profile using GalSim backend.
 
-    raise NotImplementedError(
-        "GalSim backend for Sersic profile not yet implemented. "
-        "Use backend='scipy' instead."
-    )
+    This uses GalSim's native InclinedExponential and InclinedSersic classes,
+    which properly handle surface brightness projection effects.
+
+    Parameters
+    ----------
+    image_pars : ImagePars
+        Image parameters defining grid geometry, pixel scale, WCS.
+    flux : float
+        Total integrated flux.
+    int_rscale : float
+        Scale radius in arcsec.
+    n_sersic : float
+        Sersic index.
+    cosi : float
+        Cosine of inclination angle.
+    theta_int : float
+        Position angle in radians (measured E of N).
+    g1, g2 : float
+        Reduced shear components.
+    int_x0, int_y0 : float
+        Centroid offsets in arcsec.
+    gsparams : galsim.GSParams, optional
+        GalSim parameters for profile generation.
+
+    Returns
+    -------
+    ndarray
+        Surface brightness map matching image_pars shape.
+    """
+
+    inclination = gs.Angle(np.arccos(cosi), gs.radians)
+
+    # Create the inclined profile
+    if n_sersic == 1.0:
+        # Use InclinedExponential for speed
+        profile = gs.InclinedExponential(
+            inclination=inclination,
+            scale_radius=int_rscale,
+            flux=flux,
+            gsparams=gsparams,
+        )
+    else:
+        # General Sersic profile
+        profile = gs.InclinedSersic(
+            n=n_sersic,
+            inclination=inclination,
+            scale_radius=int_rscale,
+            flux=flux,
+            gsparams=gsparams,
+        )
+
+    # Apply position angle rotation
+    # GalSim rotation is CCW from +x axis, same as our theta_int convention
+    profile = profile.rotate(theta_int * gs.radians)
+
+    # Apply shear and centroid offset
+    profile = profile.shear(g1=g1, g2=g2)
+    profile = profile.shift(int_x0, int_y0)
+
+    # Setup GalSim image from ImagePars
+    # GalSim needs bounds and pixel scale
+    nx, ny = image_pars.Nx, image_pars.Ny
+    pixel_scale = image_pars.pixel_scale
+
+    # Draw the profile
+    image = profile.drawImage(nx=nx, ny=ny, scale=pixel_scale, method='auto')
+
+    # GalSim array indexing matches numpy (y, x) = (row, col)
+    intensity = image.array
+
+    return intensity
 
 
 # ==============================================================================
@@ -437,7 +529,6 @@ def add_noise(
             variance = poisson_var
 
     else:
-        # Original behavior: Gaussian noise only
         total_signal = np.sqrt(np.sum(image**2))
         target_noise_power = total_signal / target_snr
 
@@ -502,8 +593,6 @@ class SyntheticObservation(ABC):
         self.seed = seed
 
         # storage for last generated data
-        self.X = None
-        self.Y = None
         self.data_true = None
         self.data_noisy = None
         self.variance = None
@@ -548,8 +637,6 @@ class SyntheticVelocity:
         self.seed = seed
 
         # Storage for last generated data
-        self.X = None
-        self.Y = None
         self.data_true = None
         self.data_noisy = None
         self.variance = None
@@ -576,8 +663,7 @@ class SyntheticVelocity:
 
     def generate(
         self,
-        X: np.ndarray,
-        Y: np.ndarray,
+        image_pars: ImagePars,
         snr: float,
         seed: Optional[int] = None,
         include_poisson: bool = True,
@@ -587,8 +673,8 @@ class SyntheticVelocity:
 
         Parameters
         ----------
-        X, Y : ndarray
-            Coordinate grids in consistent units.
+        image_pars : ImagePars
+            Image parameters defining the coordinate grids.
         snr : float
             Target signal-to-noise ratio (total S/N).
         seed : int, optional
@@ -607,7 +693,7 @@ class SyntheticVelocity:
 
         # Generate true velocity field
         if self.model_type == 'arctan':
-            self.data_true = generate_arctan_velocity_2d(X, Y, **self.true_params)
+            self.data_true = generate_arctan_velocity_2d(image_pars, **self.true_params)
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
@@ -619,10 +705,6 @@ class SyntheticVelocity:
             include_poisson=include_poisson,
             return_variance=True,
         )
-
-        # Store grids
-        self.X = X
-        self.Y = Y
 
         return self.data_noisy
 
@@ -636,17 +718,13 @@ class SyntheticIntensity:
         self,
         true_params: Dict[str, float],
         model_type: str = 'sersic',
-        sersic_backend: str = 'scipy',
         seed: Optional[int] = None,
     ):
         self.true_params = true_params
         self.model_type = model_type
-        self.sersic_backend = sersic_backend
         self.seed = seed
 
         # Storage for last generated data
-        self.X = None
-        self.Y = None
         self.data_true = None
         self.data_noisy = None
         self.variance = None
@@ -673,25 +751,28 @@ class SyntheticIntensity:
 
     def generate(
         self,
-        X: np.ndarray,
-        Y: np.ndarray,
+        image_pars: ImagePars,
         snr: float,
         seed: Optional[int] = None,
         include_poisson: bool = True,
+        sersic_backend: str = 'scipy',
     ) -> np.ndarray:
         """
         Generate synthetic intensity data.
 
         Parameters
         ----------
-        X, Y : ndarray
-            Coordinate grids in consistent units.
+        image_pars : ImagePars
+            Image parameters defining the coordinate grids.
         snr : float
             Target signal-to-noise ratio (total S/N).
         seed : int, optional
             Random seed for noise generation. If None, uses self.seed.
         include_poisson : bool, optional
             Whether to include Poisson (shot) noise. Default is True.
+        sersic_backend : str, optional
+            Backend for Sersic profile generation ('scipy' or 'galsim'). Default is
+            'scipy'.
 
         Returns
         -------
@@ -705,14 +786,14 @@ class SyntheticIntensity:
         # Generate true intensity field
         if self.model_type == 'sersic':
             self.data_true = generate_sersic_intensity_2d(
-                X, Y, backend=self.sersic_backend, **self.true_params
+                image_pars, backend=sersic_backend, **self.true_params
             )
         elif self.model_type == 'exponential':
             # Exponential is Sersic with n=1
             params = self.true_params.copy()
             params['n_sersic'] = 1.0
             self.data_true = generate_sersic_intensity_2d(
-                X, Y, backend='scipy', **params
+                image_pars, backend=sersic_backend, **params
             )
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
@@ -725,10 +806,6 @@ class SyntheticIntensity:
             include_poisson=include_poisson,
             return_variance=True,
         )
-
-        # Store grids
-        self.X = X
-        self.Y = Y
 
         return self.data_noisy
 
@@ -763,10 +840,10 @@ class SyntheticKLObservation:
     >>> kl_obs = SyntheticKLObservation(vel_obs, int_obs)
     >>>
     >>> # Generate both on same or different grids
-    >>> X_v, Y_v = ...
-    >>> X_i, Y_i = ...
-    >>> kl_obs.velocity.generate(X_v, Y_v, snr=50)
-    >>> kl_obs.intensity.generate(X_i, Y_i, snr=100)
+    >>> image_pars_vel = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
+    >>> image_pars_int = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
+    >>> kl_obs.velocity.generate(image_pars_vel, snr=50)
+    >>> kl_obs.intensity.generate(image_pars_int, snr=100)
     """
 
     def __init__(

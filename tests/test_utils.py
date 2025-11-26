@@ -38,6 +38,7 @@ class TestConfig:
         enable_plots: bool = True,
         include_poisson_noise: bool = False,
         seed: int = 42,
+        sersic_backend: str = 'scipy',
     ):
         self.output_dir = output_dir
         # plotting control
@@ -45,6 +46,7 @@ class TestConfig:
         # synthetic data generation
         self.include_poisson_noise = include_poisson_noise
         self.seed = seed
+        self.sersic_backend = sersic_backend
 
         # base tolerances (for well-constrained parameters)
         self.base_tolerance_velocity = {
