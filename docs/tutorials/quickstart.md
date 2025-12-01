@@ -4,7 +4,7 @@ A (hopefully) practical introduction to the Roman kinematic lensing pipeline. Fo
 
 **NOTE:** If you'd like to read this tutorial as a Jupyter Notebook, just run the following locally:
 ```bash
-jupytext --to ipynb path/to/your-notebook.md
+jupytext --to ipynb .../kl_roman_pipe/docs/tutorials/quickstart.md
 ```
 
 ## Design Philosophy
