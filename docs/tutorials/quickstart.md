@@ -392,10 +392,10 @@ This technique is used extensively in the test suite (`tests/test_likelihood_sli
 
 ---
 
-## TODOs:
-
-- Add eample for MCMC inference
-
 **For more detailed examples:**
 - `tests/test_likelihood_slices.py` - Comprehensive parameter recovery tests
 - `tests/test_optimizer_recovery.py` - Gradient-based fitting examples
+
+## TODOs:
+
+- Add eample for MCMC inference
