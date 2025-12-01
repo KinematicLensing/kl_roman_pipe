@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - pytest
+  - pytest-xdist
   - astropy
   - corner
   - emcee
