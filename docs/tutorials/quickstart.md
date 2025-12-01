@@ -2,6 +2,11 @@
 
 A (hopefully) practical introduction to the Roman kinematic lensing pipeline. For now, the emphasis is largely on the velocity and intensity map modeling of disky, rotationally-supported galaxies, as well as the available likelihood functions to use.
 
+**NOTE:** If you'd like to read this tutorial as a Jupyter Notebook, just run the following locally:
+```bash
+jupytext --to ipynb path/to/your-notebook.md
+```
+
 ## Design Philosophy
 
 The `kl_pipe` library is built around three key principles:

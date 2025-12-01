@@ -4,6 +4,7 @@ channels:
 dependencies:
   - pytest
   - pytest-xdist
+  - jupytext
   - astropy
   - corner
   - emcee
