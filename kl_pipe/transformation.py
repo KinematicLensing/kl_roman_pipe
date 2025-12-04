@@ -131,6 +131,10 @@ def gal2disk(
     """
     Transform from gal to disk plane (remove inclination).
 
+    The minor axis (y) is foreshortened by cos(i) when viewing an inclined disk,
+    so to deproject we divide by cos(i). At face-on (cosi=1), this is identity.
+    At edge-on (cosi=0), this is a singularity (infinitely compressed).
+
     Parameters
     ----------
     cosi : float
@@ -144,8 +148,9 @@ def gal2disk(
         Coordinates in disk plane.
     """
 
-    cosi = jnp.sqrt(1.0 - cosi**2)
-    transform = jnp.array([[1.0, 0.0], [0.0, 1.0 / cosi]])
+    # Add small epsilon to prevent division by zero at edge-on (cosi=0)
+    cosi_safe = jnp.maximum(cosi, 1e-10)
+    transform = jnp.array([[1.0, 0.0], [0.0, 1.0 / cosi_safe]])
 
     return _multiply(transform, x, y)
 

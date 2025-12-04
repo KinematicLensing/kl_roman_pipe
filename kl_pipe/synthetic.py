@@ -166,7 +166,7 @@ def generate_arctan_velocity_2d(
 
     # Step 4: deproject (gal2disk)
     X_disk = X_rot
-    Y_disk = Y_rot / sini if sini > 0 else Y_rot
+    Y_disk = Y_rot / cosi if cosi > 0 else Y_rot
 
     # Compute radius in disk plane
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
@@ -296,9 +296,9 @@ def _generate_sersic_scipy(
     X_rot = cos_pa * X_shear - sin_pa * Y_shear
     Y_rot = sin_pa * X_shear + cos_pa * Y_shear
 
-    # Step 4: Deproject inclination (gal -> disk)
+    # Step 4: Deproject inclination (gal -> disk) - divide by cosi
     X_disk = X_rot
-    Y_disk = Y_rot / sini if sini > 0 else Y_rot
+    Y_disk = Y_rot / cosi if cosi > 0 else Y_rot
 
     # Compute radius in disk plane
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
