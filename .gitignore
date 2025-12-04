@@ -1,6 +1,11 @@
 kl_pipe/__pycache__/*
 data/*
+!data/cyverse/*.conf
+!data/cyverse/README.md
 tests/__pycache__/*
 tests/out/*
 .vscode/*
+
+# macOS
+.DS_Store
 
