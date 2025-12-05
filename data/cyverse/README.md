@@ -4,10 +4,26 @@ This directory contains configuration for downloading large test data files from
 
 ## Quick Start
 
-1. **Edit `cyverse_data.conf`** to add the CyVerse URLs for any additional files you need, if not the default set
-2. **Run:** `make download-cyverse-data`
-- The script will automatically prompt for CyVerse credentials if needed
-3. **Run TNG50 tests:** `make test-tng50`
+1. **Download TNG50 mock data:** `make download-cyverse-data`
+2. **Run TNG50 tests:** `make test-tng50`
+
+To use the data in your code:
+```python
+from kl_pipe.tng import TNG50MockData
+
+# Load all TNG50 mock data
+mock_data = TNG50MockData()
+gas = mock_data.gas
+stellar = mock_data.stellar
+subhalo = mock_data.subhalo
+
+# Or load individual datasets
+from kl_pipe.tng import load_gas_data, load_stellar_data
+gas = load_gas_data()
+stellar = load_stellar_data()
+```
+
+To add more files, edit `cyverse_data.conf` with additional URLs.
 
 ## Configuration Format
 

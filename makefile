@@ -51,6 +51,15 @@ check-format:
 	@$(FORMATTER) --check
 
 #-------------------------------------------------------------------------------
+# documentation targets
+
+.PHONY: tutorials
+tutorials:
+	@echo "Converting tutorial markdown files to Jupyter notebooks..."
+	@conda run -n klpipe jupytext --to ipynb docs/tutorials/*.md
+	@echo "Notebooks created in docs/tutorials/"
+
+#-------------------------------------------------------------------------------
 # data file downloads
 
 .PHONY: download-cyverse-data
