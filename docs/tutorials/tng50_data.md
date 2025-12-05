@@ -21,7 +21,7 @@ This tutorial demonstrates how to download and work with TNG50 mock observations
 Before running this tutorial, you need to download the TNG50 mock data from CyVerse:
 
 ```bash
-make download-cyverse-data
+# make download-cyverse-data
 ```
 
 This will download three data files (~340 MB total):
@@ -140,28 +140,6 @@ for dataset_name, keys in available.items():
         print(f"\n{dataset_name.upper()}:")
         for key in keys:
             print(f"  - {key}")
-```
-
-## Example: Basic Data Analysis
-
-Here's a simple example of working with the loaded data:
-
-```python
-# Example: Plot distribution of some quantity from gas data
-# (Replace 'example_key' with an actual key from your data)
-if 'example_key' in mock_data.gas:
-    data = mock_data.gas['example_key']
-    
-    plt.figure(figsize=(10, 6))
-    plt.hist(data.flatten(), bins=50, alpha=0.7, edgecolor='black')
-    plt.xlabel('Value')
-    plt.ylabel('Frequency')
-    plt.title('Distribution of Gas Data')
-    plt.grid(True, alpha=0.3)
-    plt.show()
-else:
-    print("Replace 'example_key' with an actual key from the gas data")
-    print(f"Available keys: {list(mock_data.gas.keys())}")
 ```
 
 ## Custom Data Directory
