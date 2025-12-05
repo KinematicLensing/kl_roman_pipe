@@ -137,4 +137,4 @@ See [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for det
 
 ## Citation
 
-*Citation information will be added when available.*
+One day!
