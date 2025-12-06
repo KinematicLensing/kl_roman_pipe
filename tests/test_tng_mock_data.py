@@ -41,11 +41,11 @@ def test_load_subhalo_data():
 def test_tng50_mock_data_all():
     """Test loading all data via TNG50MockData class."""
     mock_data = TNG50MockData()
-    
+
     assert mock_data.gas is not None
     assert mock_data.stellar is not None
     assert mock_data.subhalo is not None
-    
+
     assert isinstance(mock_data.gas, dict)
     assert isinstance(mock_data.stellar, dict)
     assert isinstance(mock_data.subhalo, dict)
@@ -55,7 +55,7 @@ def test_tng50_mock_data_all():
 def test_tng50_mock_data_selective():
     """Test selective loading of data."""
     mock_data = TNG50MockData(load_gas=True, load_stellar=False, load_subhalo=False)
-    
+
     assert mock_data.gas is not None
     assert mock_data.stellar is None
     assert mock_data.subhalo is None
@@ -65,11 +65,11 @@ def test_tng50_mock_data_selective():
 def test_get_available_keys():
     """Test getting available data keys."""
     keys = get_available_keys()
-    
+
     assert 'gas' in keys
     assert 'stellar' in keys
     assert 'subhalo' in keys
-    
+
     # All should be lists (or None if files not found)
     assert isinstance(keys['gas'], (list, type(None)))
     assert isinstance(keys['stellar'], (list, type(None)))
@@ -79,12 +79,12 @@ def test_get_available_keys():
 def test_missing_files_raise_error():
     """Test that missing files raise FileNotFoundError."""
     fake_dir = Path("/nonexistent/directory")
-    
+
     with pytest.raises(FileNotFoundError, match="Run 'make download-cyverse-data'"):
         load_gas_data(fake_dir)
-    
+
     with pytest.raises(FileNotFoundError, match="Run 'make download-cyverse-data'"):
         load_stellar_data(fake_dir)
-    
+
     with pytest.raises(FileNotFoundError, match="Run 'make download-cyverse-data'"):
         load_subhalo_data(fake_dir)
