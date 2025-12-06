@@ -111,30 +111,32 @@ test-data: $(UNIT_TEST_FILES)
 
 
 .PHONY: test
-test:
+test: $(CYVERSE_DATA_MARKER)
+	@echo "Running all tests..."
 	@conda run -n klpipe pytest tests/ -v
 
 .PHONY: test-tng50
 test-tng50: $(CYVERSE_DATA_MARKER)
-	@echo "Running TNG50 tests with CyVerse data..."
+	@echo "Running TNG50 tests only..."
 	@conda run -n klpipe pytest tests/ -v -m tng50
 
-.PHONY: test-all
-test-all: $(CYVERSE_DATA_MARKER)
-	@echo "Running all tests (basic + TNG50)..."
-	@conda run -n klpipe pytest tests/ -v
+.PHONY: test-basic
+test-basic:
+	@echo "Running tests (excluding TNG50, no download required)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng50"
 
 .PHONY: test-coverage
-test-coverage:
+test-coverage: $(CYVERSE_DATA_MARKER)
+	@echo "Running coverage on all tests..."
 	@conda run -n klpipe pytest tests/ -v --cov=kl_pipe --cov-report=html --cov-report=term-missing
 
 .PHONY: test-fast
-test-fast:
-	@conda run -n klpipe && pytest tests/ -v -x
+test-fast: $(CYVERSE_DATA_MARKER)
+	@conda run -n klpipe pytest tests/ -v -x
 
 .PHONY: test-verbose
-test-verbose:
-	@conda run -n klpipe && pytest tests/ -v -s
+test-verbose: $(CYVERSE_DATA_MARKER)
+	@conda run -n klpipe pytest tests/ -v -s
 
 .PHONY: test-clean
 clean-test:

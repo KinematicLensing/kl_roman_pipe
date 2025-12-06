@@ -9,20 +9,21 @@ This library provides modular tools for modeling galaxy velocity fields and surf
 ## Quick Start
 
 ```bash
-# 0. Prerequisites (one-time setup)
+# Prerequisites (one-time setup)
 conda install -n base conda-lock  # If not already installed
 
-# 1. Install (requires conda)
+# Install
 make install
+```
 
-# 2. Run basic tests
-make test
+**Option 1: Run all tests (recommended, requires ~340 MB download)**
+```bash
+make test  # Downloads TNG50 data automatically on first run
+```
 
-# 3. Download TNG50 mock data (optional, for advanced tests)
-make download-cyverse-data
-
-# 4. Run TNG50 tests
-make test-tng50
+**Option 2: Run only basic tests (no download required)**
+```bash
+make test-basic  # Skips TNG50 tests
 ```
 
 ## Repository Structure
@@ -63,11 +64,17 @@ This installs the package in editable mode with all dependencies via `conda-lock
 ## Makefile Targets
 
 ### Testing
-- `make test` - Run all basic tests
-- `make test-tng50` - Run tests requiring TNG50 data (downloads if needed)
-- `make test-all` - Run everything (basic + TNG50)
+- `make test` - Run all tests (downloads TNG50 data if needed, ~340 MB)
+- `make test-basic` - Run only basic tests (no download required)
+- `make test-tng50` - Run only TNG50-specific tests
 - `make test-fast` - Stop on first failure
 - `make test-coverage` - Generate coverage report
+
+**To run tests without downloading data:**
+```bash
+conda run -n klpipe pytest tests/ -v -m "not tng50"
+# Or use: make test-basic
+```
 
 ### Data Management
 - `make download-cyverse-data` - Download TNG50 mock data from CyVerse
@@ -82,7 +89,7 @@ This installs the package in editable mode with all dependencies via `conda-lock
 
 ## Working with TNG50 Data
 
-The pipeline includes utilities for working with TNG50 mock observations:
+The pipeline includes utilities for working with TNG50 mock observations (~340 MB):
 
 ```python
 from kl_pipe.tng import TNG50MockData
@@ -94,7 +101,7 @@ stellar = mock_data.stellar
 subhalo = mock_data.subhalo
 ```
 
-**First-time setup:** Run `make download-cyverse-data` and follow the prompts to set up CyVerse authentication (stored securely in `~/.netrc`).
+**Data download:** The data downloads automatically when you run `make test` or `make download-cyverse-data`. On first download, you'll be prompted to set up CyVerse authentication (credentials stored securely in `~/.netrc`).
 
 See [`docs/tutorials/tng50_data.md`](docs/tutorials/tng50_data.md) for details.
 
