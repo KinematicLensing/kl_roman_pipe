@@ -112,11 +112,13 @@ jobs:
 
     - name: Run Tests
       # Set a non interactive backend for matplotlib to avoid display issues
+      # TODO: Change to 'make test' once we setup GitHub secrets for CyVerse authentication
+      # This will enable running TNG50 tests in CI
       run: |
         source $HOME/miniforge3/etc/profile.d/conda.sh
         conda activate klpipe
         export MPLBACKEND=Agg
-        make test
+        make test-basic
       shell: bash
 
     - name: Upload Test Logs as Artifacts

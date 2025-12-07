@@ -12,6 +12,12 @@ GENERATE_CONDA_LOCK = cd "$(shell dirname "$(1)")"; conda-lock -f "$(shell basen
 UNIT_TEST_FILES = 
 # UNIT_TEST_FILES = .../unit_test_file1 .../unit_test_file2
 
+# CyVerse data configuration
+CYVERSE_DATA_DIR = $(DATA_DIR)/cyverse
+CYVERSE_CONFIG = $(CYVERSE_DATA_DIR)/cyverse_data.conf
+CYVERSE_DOWNLOAD_SCRIPT = scripts/download_cyverse_data.sh
+CYVERSE_DATA_MARKER = $(CYVERSE_DATA_DIR)/.cyverse_data_downloaded
+
 TNG50_DATA_DIR = $(DATA_DIR)/tng50
 
 # NOTE: I cannot currently get this to automatically download due to
@@ -45,7 +51,46 @@ check-format:
 	@$(FORMATTER) --check
 
 #-------------------------------------------------------------------------------
+# documentation targets
+
+.PHONY: tutorials
+tutorials:
+	@echo "Converting tutorial markdown files to Jupyter notebooks..."
+	@conda run -n klpipe jupytext --to ipynb docs/tutorials/*.md
+	@echo "Notebooks created in docs/tutorials/"
+
+#-------------------------------------------------------------------------------
 # data file downloads
+
+.PHONY: download-cyverse-data
+download-cyverse-data:
+	@echo "Downloading CyVerse data files..."
+	@mkdir -p $(CYVERSE_DATA_DIR)
+	@bash $(CYVERSE_DOWNLOAD_SCRIPT) $(CYVERSE_CONFIG)
+	@touch $(CYVERSE_DATA_MARKER)
+	@echo "CyVerse data download complete."
+
+# Target for checking if CyVerse data has been downloaded
+$(CYVERSE_DATA_MARKER): $(CYVERSE_CONFIG)
+	@$(MAKE) download-cyverse-data
+
+.PHONY: clean-cyverse-data
+clean-cyverse-data:
+	@echo "Removing downloaded CyVerse data files..."
+	@if [ -f "$(CYVERSE_CONFIG)" ]; then \
+		while IFS='|' read -r public_path local_path || [ -n "$$public_path" ]; do \
+			[ -z "$$public_path" ] && continue; \
+			echo "$$public_path" | grep -q "^[[:space:]]*#" && continue; \
+			local_path=$$(echo "$$local_path" | xargs); \
+			local_file="$(DATA_DIR)/$$local_path"; \
+			if [ -f "$$local_file" ]; then \
+				echo "Removing: $$local_file"; \
+				rm -f "$$local_file"; \
+			fi; \
+		done < "$(CYVERSE_CONFIG)"; \
+	fi
+	@rm -f $(CYVERSE_DATA_MARKER)
+	@echo "CyVerse data removed."
 
 .PHONY: download-tng50
 download-tng50:
@@ -67,20 +112,32 @@ test-data: $(UNIT_TEST_FILES)
 
 
 .PHONY: test
-test:
+test: $(CYVERSE_DATA_MARKER)
+	@echo "Running all tests..."
 	@conda run -n klpipe pytest tests/ -v
 
+.PHONY: test-tng50
+test-tng50: $(CYVERSE_DATA_MARKER)
+	@echo "Running TNG50 tests only..."
+	@conda run -n klpipe pytest tests/ -v -m tng50
+
+.PHONY: test-basic
+test-basic:
+	@echo "Running tests (excluding TNG50, no download required)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng50"
+
 .PHONY: test-coverage
-test-coverage:
+test-coverage: $(CYVERSE_DATA_MARKER)
+	@echo "Running coverage on all tests..."
 	@conda run -n klpipe pytest tests/ -v --cov=kl_pipe --cov-report=html --cov-report=term-missing
 
 .PHONY: test-fast
-test-fast:
-	@conda run -n klpipe && pytest tests/ -v -x
+test-fast: $(CYVERSE_DATA_MARKER)
+	@conda run -n klpipe pytest tests/ -v -x
 
 .PHONY: test-verbose
-test-verbose:
-	@conda run -n klpipe && pytest tests/ -v -s
+test-verbose: $(CYVERSE_DATA_MARKER)
+	@conda run -n klpipe pytest tests/ -v -s
 
 .PHONY: test-clean
 clean-test:
