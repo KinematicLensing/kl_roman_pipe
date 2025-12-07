@@ -79,7 +79,8 @@ clean-cyverse-data:
 	@echo "Removing downloaded CyVerse data files..."
 	@if [ -f "$(CYVERSE_CONFIG)" ]; then \
 		while IFS='|' read -r public_path local_path || [ -n "$$public_path" ]; do \
-			[ -z "$$public_path" ] || echo "$$public_path" | grep -q "^[[:space:]]*#" && continue; \
+			[ -z "$$public_path" ] && continue; \
+			echo "$$public_path" | grep -q "^[[:space:]]*#" && continue; \
 			local_path=$$(echo "$$local_path" | xargs); \
 			local_file="$(DATA_DIR)/$$local_path"; \
 			if [ -f "$$local_file" ]; then \

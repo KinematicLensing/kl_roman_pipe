@@ -27,8 +27,8 @@ NC='\033[0m' # No Color
 has_private_urls() {
     grep -v "^[[:space:]]*#" "$CONFIG_FILE" 2>/dev/null | \
         grep -v "^[[:space:]]*$" | \
-        grep -q "https://data.cyverse.org/dav/iplant" && \
-        ! grep -q "dav-anon"
+        grep "https://data.cyverse.org/dav/iplant" | \
+        grep -qv "dav-anon"
     return $?
 }
 
@@ -104,7 +104,7 @@ setup_netrc_if_needed() {
             if [ -f "$netrc_file" ]; then
                 echo "" >> "$netrc_file"
             fi
-            echo "machine data.cyverse.org login $username password $password" >> "$netrc_file"
+            printf "machine data.cyverse.org login %s password %s\n" "$username" "$password" >> "$netrc_file"
             chmod 600 "$netrc_file"
             
             echo -e "${GREEN}Credentials saved to ~/.netrc${NC}"
