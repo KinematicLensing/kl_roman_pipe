@@ -14,170 +14,368 @@ jupyter:
 
 # Working with TNG50 Mock Data
 
-This tutorial demonstrates how to download and work with TNG50 mock observations for the kinematic lensing pipeline.
+This tutorial demonstrates how to load TNG50 mock galaxy data and render it as 2D intensity and velocity maps for kinematic lensing analysis.
 
 ## Prerequisites
 
-Before running this tutorial, you need to download the TNG50 mock data from CyVerse:
+Before running this tutorial, download the TNG50 mock data from CyVerse:
 
 ```bash
-# make download-cyverse-data
+make download-cyverse-data
 ```
 
-This will download three data files (~340 MB total):
-- `gas_data_analysis.npz` (62 MB)
-- `stellar_data_analysis.npz` (230 MB)
-- `subhalo_data_analysis.npz` (48 MB)
+This downloads three data files (~340 MB total) to `data/tng50/`:
+- `gas_data_analysis.npz` - Gas particle data (coordinates, velocities, masses)
+- `stellar_data_analysis.npz` - Stellar particle data (coordinates, velocities, luminosities)
+- `subhalo_data_analysis.npz` - Galaxy metadata (inclination, PA, distance, angular momentum)
 
-## Loading TNG50 Data
-
-The `kl_pipe.tng` module provides convenient functions for loading the mock data.
+## 1. Loading TNG50 Data
 
 ```python
-from kl_pipe.tng import TNG50MockData, load_gas_data, load_stellar_data, load_subhalo_data
 import numpy as np
 import matplotlib.pyplot as plt
+from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
+from kl_pipe.parameters import ImagePars
 ```
 
-### Loading All Data at Once
-
-The easiest way to access all TNG50 mock data is through the `TNG50MockData` class:
+### Load all galaxies
 
 ```python
-# Load all three datasets
-mock_data = TNG50MockData()
+# Load all TNG50 mock data
+tng_data = TNG50MockData()
 
-print(mock_data)
-print(f"\nGas data keys: {list(mock_data.gas.keys())}")
-print(f"Stellar data keys: {list(mock_data.stellar.keys())}")
-print(f"Subhalo data keys: {list(mock_data.subhalo.keys())}")
+print(f"Number of galaxies: {len(tng_data)}")
+print(f"Available SubhaloIDs: {tng_data.subhalo_ids}")
 ```
 
-### Loading Individual Datasets
-
-You can also load datasets individually if you only need specific data:
+### Access individual galaxies
 
 ```python
-# Load only gas data
-gas = load_gas_data()
-print(f"Gas data contains: {list(gas.keys())}")
+# Access by index
+galaxy = tng_data[0]
+
+# Or by SubhaloID
+galaxy = tng_data.get_galaxy(subhalo_id=8)
+
+# Galaxy contains three components
+print(f"Keys: {list(galaxy.keys())}")
+print(f"Stellar particles: {len(galaxy['stellar']['Coordinates']):,}")
+print(f"Gas particles: {len(galaxy['gas']['Coordinates']):,}")
 ```
 
+## 2. Creating a Data Vector Generator
+
+The `TNGDataVectorGenerator` handles coordinate transformations and map rendering:
+
 ```python
-# Load only stellar data
-stellar = load_stellar_data()
-print(f"Stellar data contains: {list(stellar.keys())}")
+gen = TNGDataVectorGenerator(galaxy)
+
+print(f"Galaxy distance: {gen.distance_mpc:.1f} Mpc")
+print(f"Native inclination: {gen.native_inclination_deg:.1f}°")
+print(f"Native PA: {gen.native_pa_deg:.1f}°")
+print(f"Gas-stellar angular momentum offset: {gen._gas_stellar_L_angle_deg:.1f}°")
 ```
 
-```python
-# Load only subhalo data
-subhalo = load_subhalo_data()
-print(f"Subhalo data contains: {list(subhalo.keys())}")
-```
+## 3. Rendering at Native Orientation
 
-### Selective Loading
-
-For memory efficiency, you can selectively load only the datasets you need:
+The simplest approach renders the galaxy as it appears in the TNG simulation:
 
 ```python
-# Load only gas and stellar data, skip subhalo
-mock_data_partial = TNG50MockData(
-    load_gas=True,
-    load_stellar=True,
-    load_subhalo=False
+# Define image parameters
+# TNG galaxies at z~0.01 are HUGE (~20 arcmin), so we use target_redshift to scale them
+image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
+
+# Configure rendering
+config = TNGRenderConfig(
+    image_pars=image_pars,
+    band='r',                      # Photometric band for intensity
+    use_native_orientation=True,   # Use TNG's native orientation
+    target_redshift=0.7,           # Scale to z=0.7 (Roman-like distance)
 )
 
-print(f"Gas loaded: {mock_data_partial.gas is not None}")
-print(f"Stellar loaded: {mock_data_partial.stellar is not None}")
-print(f"Subhalo loaded: {mock_data_partial.subhalo is not None}")
+# Generate maps
+intensity, int_var = gen.generate_intensity_map(config, snr=50, seed=42)
+velocity, vel_var = gen.generate_velocity_map(config, snr=50, seed=42)
+
+print(f"Intensity map shape: {intensity.shape}")
+print(f"Velocity range: {velocity.min():.1f} to {velocity.max():.1f} km/s")
 ```
 
-## Exploring the Data
-
-Let's examine the structure of the loaded data:
+### Visualize the maps
 
 ```python
-# Check shapes and types of gas data arrays
-print("Gas Data Structure:")
-for key, value in mock_data.gas.items():
-    if isinstance(value, np.ndarray):
-        print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# Intensity (log scale)
+ax = axes[0]
+int_log = np.log10(np.clip(intensity, 1e-10, None))
+im = ax.imshow(int_log, origin='lower', cmap='viridis')
+ax.set_title(f'Intensity (log scale)\ninc={gen.native_inclination_deg:.1f}°, PA={gen.native_pa_deg:.1f}°')
+plt.colorbar(im, ax=ax, label='log₁₀(Flux)')
+
+# Velocity (diverging colormap centered on zero)
+ax = axes[1]
+vmax = np.nanmax(np.abs(velocity))
+im = ax.imshow(velocity, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+ax.set_title('Line-of-Sight Velocity')
+plt.colorbar(im, ax=ax, label='v_LOS [km/s]')
+
+plt.tight_layout()
+plt.show()
+```
+
+## 4. Custom Orientation
+
+You can render at any orientation by specifying geometric parameters:
+
+```python
+# Define custom orientation
+pars = {
+    'cosi': np.cos(np.radians(60)),  # 60° inclination
+    'theta_int': np.radians(45),      # 45° position angle
+    'x0': 0.0, 'y0': 0.0,             # No centroid offset
+    'g1': 0.0, 'g2': 0.0,             # No shear
+}
+
+config_custom = TNGRenderConfig(
+    image_pars=image_pars,
+    use_native_orientation=False,
+    pars=pars,
+    target_redshift=0.7,
+    preserve_gas_stellar_offset=True,  # Keep realistic gas-stellar misalignment
+)
+
+intensity_custom, _ = gen.generate_intensity_map(config_custom, snr=None)
+velocity_custom, _ = gen.generate_velocity_map(config_custom, snr=None)
+```
+
+### Gas-Stellar Offset Preservation
+
+TNG galaxies have real physical misalignment between gas and stellar disks (typically 30-40°). The `preserve_gas_stellar_offset` parameter controls this:
+
+```python
+# Compare with and without offset preservation
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+for idx, preserve_offset in enumerate([True, False]):
+    config = TNGRenderConfig(
+        image_pars=image_pars,
+        use_native_orientation=False,
+        pars={'cosi': 0.5, 'theta_int': 0.0, 'x0': 0, 'y0': 0, 'g1': 0, 'g2': 0},
+        target_redshift=0.7,
+        preserve_gas_stellar_offset=preserve_offset,
+    )
+    velocity, _ = gen.generate_velocity_map(config, snr=None)
+    
+    vmax = np.nanmax(np.abs(velocity))
+    axes[idx].imshow(velocity, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    title = "Offset Preserved\n(Realistic)" if preserve_offset else "Aligned\n(Synthetic)"
+    axes[idx].set_title(title)
+
+plt.suptitle(f'Gas-Stellar L offset: {gen._gas_stellar_L_angle_deg:.1f}°')
+plt.tight_layout()
+plt.show()
+```
+
+## 5. Inclination Sweep
+
+Demonstrate how the galaxy appearance changes with viewing angle:
+
+```python
+fig, axes = plt.subplots(2, 5, figsize=(15, 6))
+cosi_vals = [1.0, 0.8, 0.6, 0.4, 0.2]  # Face-on to nearly edge-on
+
+for idx, cosi in enumerate(cosi_vals):
+    inc_deg = np.degrees(np.arccos(cosi))
+    
+    pars = {'cosi': cosi, 'theta_int': 0.0, 'x0': 0, 'y0': 0, 'g1': 0, 'g2': 0}
+    config = TNGRenderConfig(
+        image_pars=image_pars,
+        use_native_orientation=False,
+        pars=pars,
+        target_redshift=0.7,
+    )
+    
+    intensity, _ = gen.generate_intensity_map(config, snr=None)
+    velocity, _ = gen.generate_velocity_map(config, snr=None)
+    
+    # Intensity
+    int_log = np.log10(np.clip(intensity, 1e-10, None))
+    axes[0, idx].imshow(int_log, origin='lower', cmap='viridis')
+    axes[0, idx].set_title(f'inc={inc_deg:.0f}°')
+    axes[0, idx].axis('off')
+    
+    # Velocity
+    vmax = 150  # Fixed scale for comparison
+    axes[1, idx].imshow(velocity, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[1, idx].axis('off')
+
+axes[0, 0].set_ylabel('Intensity', fontsize=12)
+axes[1, 0].set_ylabel('Velocity', fontsize=12)
+plt.suptitle('Inclination Sweep (Face-on → Edge-on)')
+plt.tight_layout()
+plt.show()
+```
+
+## 6. Adding Lensing Shear
+
+Apply weak lensing shear to the galaxy:
+
+```python
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+shear_configs = [
+    {'g1': 0.0, 'g2': 0.0, 'label': 'No shear'},
+    {'g1': 0.1, 'g2': 0.0, 'label': 'g₁=0.1'},
+    {'g1': 0.0, 'g2': 0.1, 'label': 'g₂=0.1'},
+]
+
+for idx, shear_cfg in enumerate(shear_configs):
+    pars = {
+        'cosi': 0.7, 'theta_int': 0.0, 'x0': 0, 'y0': 0,
+        'g1': shear_cfg['g1'], 'g2': shear_cfg['g2']
+    }
+    config = TNGRenderConfig(
+        image_pars=image_pars,
+        use_native_orientation=False,
+        pars=pars,
+        target_redshift=0.7,
+    )
+    
+    intensity, _ = gen.generate_intensity_map(config, snr=None)
+    int_log = np.log10(np.clip(intensity, 1e-10, None))
+    
+    axes[idx].imshow(int_log, origin='lower', cmap='viridis')
+    axes[idx].set_title(shear_cfg['label'])
+    axes[idx].axis('off')
+
+plt.suptitle('Effect of Weak Lensing Shear')
+plt.tight_layout()
+plt.show()
+```
+
+## 7. Redshift Scaling
+
+TNG galaxies are at z~0.01 (~50 Mpc), spanning ~20 arcminutes on sky. Use `target_redshift` to scale to Roman-like observations:
+
+```python
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+redshifts = [None, 0.5, 1.0]  # None = native z~0.01
+
+for idx, z in enumerate(redshifts):
+    # Adjust image size based on expected angular size
+    if z is None:
+        # Native: galaxy is ~1200 arcsec, use large pixels
+        img_pars = ImagePars(shape=(64, 64), pixel_scale=20.0, indexing='ij')
+        z_label = "z~0.01 (native)"
     else:
-        print(f"  {key}: type={type(value)}")
+        # Scaled: galaxy fits in ~10 arcsec
+        img_pars = ImagePars(shape=(64, 64), pixel_scale=0.15, indexing='ij')
+        z_label = f"z={z}"
+    
+    config = TNGRenderConfig(
+        image_pars=img_pars,
+        use_native_orientation=True,
+        target_redshift=z,
+    )
+    
+    intensity, _ = gen.generate_intensity_map(config, snr=None)
+    int_log = np.log10(np.clip(intensity, 1e-10, None))
+    
+    axes[idx].imshow(int_log, origin='lower', cmap='viridis')
+    axes[idx].set_title(z_label)
+    axes[idx].axis('off')
+
+plt.suptitle('Redshift Scaling')
+plt.tight_layout()
+plt.show()
 ```
 
+## 8. Noise and SNR
+
+Control the signal-to-noise ratio of generated maps:
+
 ```python
-# Check shapes and types of stellar data arrays
-print("Stellar Data Structure:")
-for key, value in mock_data.stellar.items():
-    if isinstance(value, np.ndarray):
-        print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
-    else:
-        print(f"  {key}: type={type(value)}")
+fig, axes = plt.subplots(2, 4, figsize=(14, 7))
+snr_vals = [None, 100, 50, 20]
+
+config = TNGRenderConfig(
+    image_pars=image_pars,
+    use_native_orientation=True,
+    target_redshift=0.7,
+)
+
+for idx, snr in enumerate(snr_vals):
+    intensity, _ = gen.generate_intensity_map(config, snr=snr, seed=42)
+    velocity, _ = gen.generate_velocity_map(config, snr=snr, seed=42)
+    
+    # Intensity
+    int_log = np.log10(np.clip(intensity, 1e-10, None))
+    axes[0, idx].imshow(int_log, origin='lower', cmap='viridis')
+    snr_label = "No noise" if snr is None else f"SNR={snr}"
+    axes[0, idx].set_title(snr_label)
+    axes[0, idx].axis('off')
+    
+    # Velocity
+    vmax = 150
+    axes[1, idx].imshow(velocity, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[1, idx].axis('off')
+
+axes[0, 0].set_ylabel('Intensity', fontsize=12)
+axes[1, 0].set_ylabel('Velocity', fontsize=12)
+plt.suptitle('Effect of SNR on Maps')
+plt.tight_layout()
+plt.show()
 ```
 
-```python
-# Check shapes and types of subhalo data arrays
-print("Subhalo Data Structure:")
-for key, value in mock_data.subhalo.items():
-    if isinstance(value, np.ndarray):
-        print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
-    else:
-        print(f"  {key}: type={type(value)}")
-```
+## 9. Photometric Bands
 
-## Discovering Available Keys
-
-Use the `get_available_keys()` function to see what data is available without loading everything:
+Render intensity in different photometric bands:
 
 ```python
-from kl_pipe.tng import get_available_keys
+fig, axes = plt.subplots(1, 5, figsize=(15, 3))
+bands = ['u', 'g', 'r', 'i', 'z']
 
-available = get_available_keys()
-print("Available data keys:")
-for dataset_name, keys in available.items():
-    if keys is not None:
-        print(f"\n{dataset_name.upper()}:")
-        for key in keys:
-            print(f"  - {key}")
-```
+for idx, band in enumerate(bands):
+    config = TNGRenderConfig(
+        image_pars=image_pars,
+        band=band,
+        use_native_orientation=True,
+        target_redshift=0.7,
+    )
+    
+    intensity, _ = gen.generate_intensity_map(config, snr=None)
+    int_log = np.log10(np.clip(intensity, 1e-10, None))
+    
+    axes[idx].imshow(int_log, origin='lower', cmap='viridis')
+    axes[idx].set_title(f'{band}-band')
+    axes[idx].axis('off')
 
-## Custom Data Directory
-
-By default, the data is loaded from `data/tng50/`. You can specify a custom location:
-
-```python
-from pathlib import Path
-
-# Load from custom directory
-custom_dir = Path("/path/to/custom/tng50/data")
-# mock_data_custom = TNG50MockData(data_dir=custom_dir)
-
-# Or with individual loaders
-# gas_custom = load_gas_data(data_dir=custom_dir)
+plt.suptitle('Photometric Bands (Dust-attenuated)')
+plt.tight_layout()
+plt.show()
 ```
 
 ## Summary
 
 The `kl_pipe.tng` module provides:
 
-- **`TNG50MockData`**: Convenient class for loading all data
-- **`load_gas_data()`**: Load gas mock data
-- **`load_stellar_data()`**: Load stellar mock data  
-- **`load_subhalo_data()`**: Load subhalo mock data
-- **`get_available_keys()`**: Discover available data without loading
+| Class/Function | Purpose |
+|---------------|---------|
+| `TNG50MockData` | Load all TNG50 galaxy data |
+| `TNGDataVectorGenerator` | Transform particles to 2D maps |
+| `TNGRenderConfig` | Configure rendering parameters |
 
-All functions support:
-- Custom data directories
-- Memory-efficient selective loading
+Key parameters in `TNGRenderConfig`:
+- `use_native_orientation`: Use TNG's intrinsic orientation (True) or custom (False)
+- `pars`: Custom orientation dict with `cosi`, `theta_int`, `g1`, `g2`, `x0`, `y0`
+- `target_redshift`: Scale angular size to this redshift (default: native z~0.01)
+- `preserve_gas_stellar_offset`: Keep physical gas-stellar misalignment (default: True)
+- `band`: Photometric band ('u', 'g', 'r', 'i', 'z')
+- `use_cic_gridding`: Cloud-in-Cell smoothing (default: True)
 
 ## Next Steps
 
-Now that you can load TNG50 mock data, you can:
-
-1. Integrate it with the kinematic lensing models in `kl_pipe.model`
-2. Generate synthetic observations for testing
-3. Validate pipeline performance against realistic mock data
-4. Develop new analysis techniques using the mock observations
-
-See the main quickstart tutorial (`docs/tutorials/quickstart.md`) for examples of using the kinematic lensing pipeline with your data.
+1. See `kl_pipe/tng/README.md` for detailed documentation
+2. Use TNG maps with the kinematic lensing likelihood in `kl_pipe.likelihood`
+3. Run diagnostic tests: `pytest tests/test_tng_data_vectors.py -v`
+4. View diagnostic plots in `tests/out/tng_diagnostics/`

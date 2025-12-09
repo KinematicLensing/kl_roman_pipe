@@ -14,6 +14,20 @@ This directory contains comprehensive tests for the `kl_pipe` kinematic lensing 
 - **`test_likelihood_slices.py`**: Brute-force likelihood slicing for parameter recovery
 - **`test_optimizer_recovery.py`**: Gradient-based optimization for parameter recovery
 
+### TNG50 Tests
+- **`test_tng_loaders.py`**: TNG50 data loading, galaxy access, particle data validation
+- **`test_tng_data_vectors.py`**: Rendering, orientation transforms, gridding, diagnostic plots (40 tests)
+- **`test_tng_mock_data.py`**: Mock data structure validation
+- **`test_tng_likelihood.py`**: Model fitting with TNG truth data
+
+TNG tests require data files in `data/tng50/` (see `data/cyverse/README.md` for download).
+
+**Diagnostic plots** are saved to `tests/out/tng_diagnostics/` including:
+- Inclination and PA sweeps (both with/without gas-stellar offset preservation)
+- Resolution and SNR grids
+- Symmetry-breaking demonstrations
+- All-galaxy high-resolution native orientation views
+
 ---
 
 ## Test Regimes: Likelihood Slicing vs Optimization
