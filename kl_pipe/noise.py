@@ -45,7 +45,7 @@ def add_intensity_noise(
     - Poisson noise is sqrt(N) where N is the photon count
     - Gaussian noise is added to reach target SNR
     - Total variance = poisson_variance + gaussian_variance
-    
+
     Examples
     --------
     >>> intensity = model.generate_intensity_map()
@@ -61,14 +61,14 @@ def add_intensity_noise(
 
     # Initialize with original data
     noisy_data = intensity.copy()
-    
+
     # Add Poisson noise
     poisson_variance = 0.0
     if include_poisson:
         # Ensure non-negative
         if intensity.min() < 0:
             raise ValueError("Intensity must be non-negative for Poisson noise")
-        
+
         # For very large values, use Gaussian approximation
         max_lambda = 1e9
         if intensity.max() > max_lambda:
@@ -80,7 +80,7 @@ def add_intensity_noise(
             poisson_counts = np.random.poisson(intensity)
             poisson_noise = poisson_counts - intensity
             poisson_variance = intensity.mean()
-            
+
         noisy_data += poisson_noise
 
     # Calculate Gaussian noise needed to reach target SNR
@@ -132,7 +132,7 @@ def add_velocity_noise(
     - Velocity measurements have Gaussian uncertainties, not Poisson
     - Signal is defined as max(velocity) - min(velocity)
     - This is appropriate for spectroscopic velocity measurements
-    
+
     Examples
     --------
     >>> velocity = model.generate_velocity_map()
@@ -151,7 +151,7 @@ def add_velocity_noise(
 
     # Calculate Gaussian noise std to achieve target SNR
     noise_std = velocity_range / target_snr
-    
+
     # Add Gaussian noise
     gaussian_noise = np.random.normal(0, noise_std, velocity.shape)
     noisy_velocity = velocity + gaussian_noise
@@ -172,7 +172,7 @@ def add_noise(
     Add noise to data to achieve target signal-to-noise ratio.
 
     DEPRECATED: Use add_intensity_noise() or add_velocity_noise() instead.
-    
+
     This function adds Gaussian read noise (and optionally Poisson photon noise)
     to synthetic data to simulate realistic observations. The noise level is
     calibrated to achieve a specified SNR.
@@ -205,16 +205,16 @@ def add_noise(
     New code should use:
     - add_intensity_noise() for flux/intensity maps
     - add_velocity_noise() for velocity maps
-    
+
     Examples
     --------
     Add noise to intensity map with Poisson:
-    
+
     >>> intensity = model.generate_intensity_map()
     >>> noisy, var = add_noise(intensity, target_snr=50, include_poisson=True)
-    
+
     Add noise to velocity map (Gaussian only):
-    
+
     >>> velocity = model.generate_velocity_map()
     >>> noisy, var = add_noise(velocity, target_snr=100, include_poisson=False)
     """

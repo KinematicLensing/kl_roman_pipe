@@ -288,7 +288,9 @@ def load_subhalo_data(data_dir: Optional[Path] = None) -> np.ndarray:
         return data['arr_0']
 
 
-def get_available_keys(data_dir: Optional[Path] = None) -> Dict[str, Union[List[str], None]]:
+def get_available_keys(
+    data_dir: Optional[Path] = None,
+) -> Dict[str, Union[List[str], None]]:
     """
     Get available data keys from all TNG50 mock data files.
 

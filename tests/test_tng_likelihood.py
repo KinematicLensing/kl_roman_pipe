@@ -74,7 +74,9 @@ def test_tng_velocity_map_with_noise(test_galaxy, image_pars_small):
 def test_tng_intensity_map_generation(test_galaxy, image_pars_small):
     """Test basic intensity map generation from TNG galaxy."""
     gen = TNGDataVectorGenerator(test_galaxy)
-    config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_small, band='r', use_dusted=True)
+    config = TNGRenderConfig(
+        target_redshift=0.6, image_pars=image_pars_small, band='r', use_dusted=True
+    )
 
     # Generate without noise
     intensity, variance = gen.generate_intensity_map(config, snr=None)
@@ -96,7 +98,9 @@ def test_tng_model_fitting_high_snr(test_galaxy, image_pars_medium):
     """
     # Generate TNG velocity map at high SNR
     gen = TNGDataVectorGenerator(test_galaxy)
-    config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_medium, band='r')
+    config = TNGRenderConfig(
+        target_redshift=0.6, image_pars=image_pars_medium, band='r'
+    )
     data_vel, variance = gen.generate_velocity_map(config, snr=100)
 
     # For now, just test that we can create a likelihood
@@ -140,7 +144,9 @@ def test_tng_parameter_recovery_grid_search(test_galaxy, image_pars_medium):
     """
     # Generate data at high SNR
     gen = TNGDataVectorGenerator(test_galaxy)
-    config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_medium, band='r')
+    config = TNGRenderConfig(
+        target_redshift=0.6, image_pars=image_pars_medium, band='r'
+    )
     data_vel, variance = gen.generate_velocity_map(config, snr=100)
 
     # Setup model and baseline parameters
@@ -178,7 +184,9 @@ def test_tng_parameter_recovery_grid_search(test_galaxy, image_pars_medium):
 
     # Check that likelihood varies (not all invalid)
     valid_count = np.sum(np.isfinite(log_likes) & (log_likes > -1e9))
-    assert valid_count > 5, f"Should have at least 5 valid likelihood evaluations, got {valid_count}"
+    assert (
+        valid_count > 5
+    ), f"Should have at least 5 valid likelihood evaluations, got {valid_count}"
 
     # Check that likelihood has some variation
     if valid_count > 10:

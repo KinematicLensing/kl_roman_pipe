@@ -53,7 +53,7 @@ def test_tng50_mock_data_all():
     assert isinstance(mock_data.gas, np.ndarray)
     assert isinstance(mock_data.stellar, np.ndarray)
     assert isinstance(mock_data.subhalo, np.ndarray)
-    
+
     # Test new features
     assert mock_data.n_galaxies == len(mock_data.gas)
     assert mock_data.subhalo_ids is not None
