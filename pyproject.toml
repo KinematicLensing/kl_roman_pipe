@@ -27,5 +27,6 @@ packages = ["kl_pipe"]
 [tool.pytest.ini_options]
 markers = [
     "tng50: tests that require TNG50 mock data from CyVerse",
+    "tng_diagnostics: TNG diagnostic plotting tests (slow, large output files)",
     "slow: tests that take significant time to run",
 ]

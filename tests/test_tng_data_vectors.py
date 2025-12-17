@@ -894,8 +894,13 @@ class TestInclinationSymmetry:
         print(f"✓ Face-on intensity median_rel_diff = {int_median_rel_diff:.3f}")
 
 
+@pytest.mark.tng_diagnostics
 class TestDiagnosticPlots:
-    """Generate diagnostic plots for visual validation of TNG rendering."""
+    """Generate diagnostic plots for visual validation of TNG rendering.
+
+    These tests are marked with 'tng_diagnostics' and can be run separately
+    from unit tests as they are slower and generate large plot files.
+    """
 
     @pytest.fixture(scope="class")
     def output_dir(self):
@@ -2103,10 +2108,8 @@ class TestDiagnosticPlots:
         target_z = 0.5  # Slightly closer for larger apparent size
         snr = None
 
-        # Inclination sweep: native + cosi from 1 to 0 (face-on to edge-on)
-        cosi_vals = np.array(
-            [1.0, 0.8, 0.6, 0.4, 0.2, 0.0]
-        )  # Fewer steps for cleaner plot
+        # Inclination sweep: native + cosi from 1.0 to 0.0 in steps of 0.1
+        cosi_vals = np.arange(1.0, -0.05, -0.1)  # [1.0, 0.9, 0.8, ..., 0.1, 0.0]
         n_inc = len(cosi_vals)
         inc_deg_vals = np.rad2deg(np.arccos(cosi_vals))
         n_cols = n_inc + 1  # +1 for native
@@ -2136,7 +2139,8 @@ class TestDiagnosticPlots:
             vel_native, _ = gen.generate_velocity_map(config_native, snr=snr, seed=42)
             all_intensities.append(int_native)
             all_velocities.append(vel_native)
-            titles_int.append(f'Native\ninc={gen.native_inclination_deg:.1f}°')
+            native_cosi = np.cos(np.deg2rad(gen.native_inclination_deg))
+            titles_int.append(f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}')
             titles_vel.append('')
 
             # Custom orientations
@@ -2162,12 +2166,13 @@ class TestDiagnosticPlots:
                 velocity, _ = gen.generate_velocity_map(config, snr=snr, seed=42)
                 all_intensities.append(intensity)
                 all_velocities.append(velocity)
-                titles_int.append(f'inc={inc_deg:.0f}°')
+                titles_int.append(f'inc={inc_deg:.0f}°\ncos(i)={cosi:.1f}')
                 titles_vel.append('')
 
             # Compute global colorbar ranges
+            # Use np.clip to avoid log10 of negative/zero values
             int_log_all = np.concatenate(
-                [np.log10(im + 1e-10).flatten() for im in all_intensities]
+                [np.log10(np.clip(im, 1e-10, None)).flatten() for im in all_intensities]
             )
             vmin_int, vmax_int = self.compute_robust_intensity_bounds(
                 int_log_all, log=True
@@ -2195,7 +2200,7 @@ class TestDiagnosticPlots:
             )
 
             for idx, (intensity, title) in enumerate(zip(all_intensities, titles_int)):
-                int_log = np.log10(intensity + 1e-10)
+                int_log = np.log10(np.clip(intensity, 1e-10, None))
                 im = grid_int[idx].imshow(
                     int_log,
                     origin='lower',
@@ -2264,6 +2269,310 @@ class TestDiagnosticPlots:
             plt.close()
 
             print(f"✓ Saved inclination sweep ({mode_label}): {out_path}")
+
+    def test_orientation_sweep_inclination_multi_galaxy(self, output_dir):
+        """
+        Generate inclination sweeps for multiple galaxies to check consistency.
+
+        This helps diagnose whether the inc=90° behavior is systematic or galaxy-specific.
+        Creates one plot per galaxy showing intensity and velocity at different inclinations.
+
+        Also generates a summary CSV with orientation diagnostics for all galaxies.
+        """
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.axes_grid1 import ImageGrid
+        import csv
+
+        # Test first 5 galaxies (indices 0-4)
+        # These correspond to different SubhaloIDs with varying properties
+        tng_data = TNG50MockData()
+        galaxy_indices = range(min(5, len(tng_data)))
+
+        # Common parameters
+        image_pars = ImagePars(
+            shape=(80, 80), pixel_scale=0.05, indexing='ij'
+        )
+        target_z = 0.5
+        snr = None
+        preserve_offset = True  # Use gas offset preserved mode
+
+        # Inclination sweep
+        cosi_vals = np.arange(1.0, -0.05, -0.1)
+        n_inc = len(cosi_vals)
+        inc_deg_vals = np.rad2deg(np.arccos(cosi_vals))
+        n_cols = n_inc + 1  # +1 for native
+
+        # Collect orientation diagnostics for summary CSV
+        orientation_summary = []
+
+        for gal_idx in galaxy_indices:
+            galaxy = tng_data[gal_idx]
+            gen = TNGDataVectorGenerator(galaxy)
+            subhalo_id = galaxy['subhalo']['SubhaloID']
+
+            print(f"Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})...")
+
+            # Collect orientation diagnostics for summary
+            orientation_summary.append({
+                'SubhaloID': subhalo_id,
+                'Catalog_Inc_deg': gen.native_inclination_deg,
+                'Kinematic_Inc_deg': getattr(gen, '_kinematic_inc_stellar_deg', 0.0),
+                'Catalog_vs_Kinematic_Offset_deg': getattr(gen, '_catalog_vs_kinematic_offset_deg', 0.0),
+                'Gas_Stellar_L_Offset_deg': getattr(gen, '_gas_stellar_L_angle_deg', 0.0),
+                'Kinematic_Inc_Gas_deg': getattr(gen, '_kinematic_inc_gas_deg', 0.0),
+            })
+
+            # Generate maps
+            all_intensities = []
+            all_velocities = []
+            titles_int = []
+            titles_vel = []
+
+            # Native orientation
+            config_native = TNGRenderConfig(
+                image_pars=image_pars,
+                band='r',
+                use_native_orientation=True,
+                use_cic_gridding=True,
+                target_redshift=target_z,
+            )
+            int_native, _ = gen.generate_intensity_map(config_native, snr=snr, seed=42)
+            vel_native, _ = gen.generate_velocity_map(config_native, snr=snr, seed=42)
+            all_intensities.append(int_native)
+            all_velocities.append(vel_native)
+            native_cosi = np.cos(np.deg2rad(gen.native_inclination_deg))
+            titles_int.append(f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}')
+            titles_vel.append('')
+
+            # Custom orientations
+            for cosi, inc_deg in zip(cosi_vals, inc_deg_vals):
+                pars = {
+                    'cosi': cosi,
+                    'theta_int': np.deg2rad(gen.native_pa_deg),
+                    'g1': 0.0,
+                    'g2': 0.0,
+                    'x0': 0.0,
+                    'y0': 0.0,
+                }
+                config = TNGRenderConfig(
+                    image_pars=image_pars,
+                    band='r',
+                    use_native_orientation=False,
+                    use_cic_gridding=True,
+                    target_redshift=target_z,
+                    pars=pars,
+                    preserve_gas_stellar_offset=preserve_offset,
+                )
+                intensity, _ = gen.generate_intensity_map(config, snr=snr, seed=42)
+                velocity, _ = gen.generate_velocity_map(config, snr=snr, seed=42)
+                all_intensities.append(intensity)
+                all_velocities.append(velocity)
+                titles_int.append(f'inc={inc_deg:.0f}°\ncos(i)={cosi:.1f}')
+                titles_vel.append('')
+
+            # Compute colorbar ranges
+            # Use np.clip to avoid log10 of negative/zero values
+            int_log_all = np.concatenate(
+                [np.log10(np.clip(im, 1e-10, None)).flatten() for im in all_intensities]
+            )
+            vmin_int, vmax_int = self.compute_robust_intensity_bounds(
+                int_log_all, log=True
+            )
+            vmax_vel = max(np.nanmax(np.abs(v)) for v in all_velocities)
+
+            # Calculate extent
+            fov = image_pars.shape[0] * image_pars.pixel_scale
+            extent = [-fov / 2, fov / 2, -fov / 2, fov / 2]
+
+            # Create figure
+            fig = plt.figure(figsize=(2.0 * n_cols + 1.5, 5))
+
+            # Intensity row
+            grid_int = ImageGrid(
+                fig,
+                211,
+                nrows_ncols=(1, n_cols),
+                axes_pad=0.05,
+                share_all=True,
+                cbar_location="right",
+                cbar_mode="single",
+                cbar_size="3%",
+                cbar_pad=0.1,
+            )
+
+            for idx, (intensity, title) in enumerate(zip(all_intensities, titles_int)):
+                int_log = np.log10(np.clip(intensity, 1e-10, None))
+                im = grid_int[idx].imshow(
+                    int_log,
+                    extent=extent,
+                    origin='lower',
+                    cmap='viridis',
+                    vmin=vmin_int,
+                    vmax=vmax_int,
+                    interpolation='nearest',
+                )
+                grid_int[idx].set_title(title, fontsize=8)
+                if idx == 0:
+                    grid_int[idx].set_ylabel('Intensity', fontsize=10)
+                grid_int[idx].tick_params(labelsize=6)
+
+            grid_int.cbar_axes[0].colorbar(im)
+            grid_int.cbar_axes[0].set_ylabel('log(Flux)', fontsize=8)
+
+            # Velocity row
+            grid_vel = ImageGrid(
+                fig,
+                212,
+                nrows_ncols=(1, n_cols),
+                axes_pad=0.05,
+                share_all=True,
+                cbar_location="right",
+                cbar_mode="single",
+                cbar_size="3%",
+                cbar_pad=0.1,
+            )
+
+            for idx, (velocity, title) in enumerate(zip(all_velocities, titles_vel)):
+                im = grid_vel[idx].imshow(
+                    velocity,
+                    extent=extent,
+                    origin='lower',
+                    cmap='RdBu_r',
+                    vmin=-vmax_vel,
+                    vmax=vmax_vel,
+                    interpolation='nearest',
+                )
+                grid_vel[idx].set_title(title, fontsize=8)
+                if idx == 0:
+                    grid_vel[idx].set_ylabel('Velocity', fontsize=10)
+                grid_vel[idx].tick_params(labelsize=6)
+
+            grid_vel.cbar_axes[0].colorbar(im)
+            grid_vel.cbar_axes[0].set_ylabel('v [km/s]', fontsize=8)
+
+            # Quantitative diagnostic: compute vertical extent at each inclination
+            print(f"\n  SubhaloID={subhalo_id} Vertical Extent Analysis:")
+            print(f"  {'Inclination':<12} {'cos(i)':<8} {'RMS Height':<12} {'90th Pct':<12}")
+            print(f"  {'-'*50}")
+
+            vertical_extents_rms = []
+            vertical_extents_90 = []
+            inc_labels = []
+
+            # Analyze native
+            int_native_nonzero = all_intensities[0] > np.percentile(all_intensities[0], 10)
+            y_coords = np.arange(all_intensities[0].shape[0]) - all_intensities[0].shape[0] / 2
+            y_coords_2d = y_coords[:, None] * np.ones((1, all_intensities[0].shape[1]))
+            y_weighted = y_coords_2d[int_native_nonzero]
+            rms_height_native = np.std(y_weighted) * image_pars.pixel_scale
+            p90_height_native = np.percentile(np.abs(y_weighted), 90) * image_pars.pixel_scale
+            vertical_extents_rms.append(rms_height_native)
+            vertical_extents_90.append(p90_height_native)
+            native_cosi_val = np.cos(np.deg2rad(gen.native_inclination_deg))
+            inc_labels.append(f"Native ({gen.native_inclination_deg:.1f}°)")
+            print(f"  {'Native':<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}")
+
+            # Analyze custom orientations
+            for idx, (cosi, inc_deg) in enumerate(zip(cosi_vals, inc_deg_vals)):
+                intensity = all_intensities[idx + 1]
+                int_nonzero = intensity > np.percentile(intensity, 10)
+                y_weighted = y_coords_2d[int_nonzero]
+                rms_height = np.std(y_weighted) * image_pars.pixel_scale
+                p90_height = np.percentile(np.abs(y_weighted), 90) * image_pars.pixel_scale
+                vertical_extents_rms.append(rms_height)
+                vertical_extents_90.append(p90_height)
+                inc_labels.append(f"{inc_deg:.0f}°")
+                print(f"  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}")
+
+            # Find minimum
+            min_idx_rms = np.argmin(vertical_extents_rms)
+            min_idx_90 = np.argmin(vertical_extents_90)
+            print(f"\n  Minimum RMS height at: {inc_labels[min_idx_rms]}")
+            print(f"  Minimum 90th pct height at: {inc_labels[min_idx_90]}\n")
+
+            # Save diagnostic data to CSV
+            csv_path = output_dir / f'vertical_extent_diagnostic_subhalo{subhalo_id}.csv'
+            import csv
+            with open(csv_path, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['SubhaloID', 'Inclination_deg', 'cos_i', 'RMS_Height_arcsec', 'P90_Height_arcsec', 'is_native'])
+
+                # Write native
+                writer.writerow([
+                    subhalo_id,
+                    gen.native_inclination_deg,
+                    native_cosi_val,
+                    vertical_extents_rms[0],
+                    vertical_extents_90[0],
+                    True
+                ])
+
+                # Write custom orientations
+                for idx, (cosi, inc_deg) in enumerate(zip(cosi_vals, inc_deg_vals)):
+                    writer.writerow([
+                        subhalo_id,
+                        inc_deg,
+                        cosi,
+                        vertical_extents_rms[idx + 1],
+                        vertical_extents_90[idx + 1],
+                        False
+                    ])
+
+            print(f"  ✓ Saved diagnostic CSV: {csv_path}")
+
+            # Title with enhanced diagnostics
+            gas_stellar_angle = getattr(gen, '_gas_stellar_L_angle_deg', 0.0)
+            kinematic_inc = getattr(gen, '_kinematic_inc_stellar_deg', 0.0)
+            catalog_kinematic_offset = getattr(gen, '_catalog_vs_kinematic_offset_deg', 0.0)
+
+            fig.suptitle(
+                f'TNG50 SubhaloID={subhalo_id}: Inclination Sweep (Gas offset preserved)\n'
+                f'Gas-stellar L offset: {gas_stellar_angle:.1f}°, '
+                f'Catalog inc: {gen.native_inclination_deg:.1f}° vs Kinematic inc: {kinematic_inc:.1f}° '
+                f'(Δ={catalog_kinematic_offset:.1f}°), z={target_z}',
+                fontsize=10,
+                y=0.98,
+            )
+
+            out_path = output_dir / f'orientation_sweep_inclination_subhalo{subhalo_id}.png'
+            plt.savefig(out_path, dpi=150, bbox_inches='tight')
+            plt.close()
+
+            # Print diagnostic summary
+            print(f"\n  Orientation Diagnostics:")
+            print(f"    Catalog (morphological) inc: {gen.native_inclination_deg:.1f}°")
+            print(f"    Kinematic (from L) inc: {kinematic_inc:.1f}°")
+            print(f"    Catalog vs Kinematic offset: {catalog_kinematic_offset:.1f}°")
+            print(f"    Gas-stellar L angle: {gas_stellar_angle:.1f}°")
+
+            print(f"\n  ✓ Saved: {out_path}")
+
+        # Write summary CSV with orientation diagnostics for all galaxies
+        summary_csv_path = output_dir / 'orientation_diagnostics_summary.csv'
+        with open(summary_csv_path, 'w', newline='') as csvfile:
+            fieldnames = [
+                'SubhaloID', 'Catalog_Inc_deg', 'Kinematic_Inc_deg',
+                'Catalog_vs_Kinematic_Offset_deg', 'Gas_Stellar_L_Offset_deg',
+                'Kinematic_Inc_Gas_deg'
+            ]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in orientation_summary:
+                writer.writerow(row)
+
+        print(f"\n✓ Saved orientation diagnostics summary: {summary_csv_path}")
+
+        # Print summary table
+        print("\n" + "=" * 80)
+        print("ORIENTATION DIAGNOSTICS SUMMARY")
+        print("=" * 80)
+        print(f"{'SubhaloID':<12} {'Cat. Inc':<10} {'Kin. Inc':<10} {'Cat-Kin Δ':<12} {'Gas-Star Δ':<12}")
+        print("-" * 80)
+        for row in orientation_summary:
+            print(f"{row['SubhaloID']:<12} {row['Catalog_Inc_deg']:<10.1f} "
+                  f"{row['Kinematic_Inc_deg']:<10.1f} {row['Catalog_vs_Kinematic_Offset_deg']:<12.1f} "
+                  f"{row['Gas_Stellar_L_Offset_deg']:<12.1f}")
+        print("=" * 80)
 
     def test_orientation_sweep_pa(self, output_dir):
         """

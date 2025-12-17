@@ -302,47 +302,96 @@ class TNGDataVectorGenerator:
         Computes SEPARATE rotation matrices for stellar and gas because they can have
         significantly different angular momentum directions (37° difference is common!).
 
-        - Stellar: Uses SubhaloSpin (angular momentum) from TNG
-        - Gas: Computes angular momentum from gas particle coordinates and velocities
+        - Stellar: Computed from stellar particle positions, velocities, and luminosities
+        - Gas: Computed from gas particle positions, velocities, and masses
 
         Each matrix aligns the respective angular momentum with the +Z axis.
+
+        Also computes and stores diagnostic information comparing our kinematic inclinations
+        with the TNG catalog's morphological inclinations.
         """
-        # === Stellar rotation matrix from SubhaloSpin ===
-        spin = np.array(self.subhalo['SubhaloSpin'])
-        L_stellar = spin / np.linalg.norm(spin)
+        # === Stellar rotation matrix from stellar particles ===
+        # Use luminosity-weighted angular momentum for stellar particles
+        # This is more physical than SubhaloSpin (which includes all particle types)
+        coords_stellar = self.stellar['Coordinates']
+        vel_stellar = self.stellar['Velocities']
+
+        # Use r-band luminosity as weights (or masses if not available)
+        if 'Dusted_Luminosity_r' in self.stellar:
+            weights_stellar = self.stellar['Dusted_Luminosity_r']
+        elif 'Masses' in self.stellar:
+            weights_stellar = self.stellar['Masses']
+        else:
+            weights_stellar = np.ones(len(coords_stellar))
+
+        # Center on luminosity-weighted centroid
+        center_stellar = np.average(coords_stellar, axis=0, weights=weights_stellar)
+        coords_stellar_cen = coords_stellar - center_stellar
+
+        # Subtract luminosity-weighted mean velocity
+        vel_stellar_mean = np.average(vel_stellar, axis=0, weights=weights_stellar)
+        vel_stellar_cen = vel_stellar - vel_stellar_mean
+
+        # Compute luminosity-weighted angular momentum: L = Σ w_i * (r_i × v_i)
+        L_stellar_vec = np.sum(
+            weights_stellar[:, None] * np.cross(coords_stellar_cen, vel_stellar_cen),
+            axis=0
+        )
+        L_stellar = L_stellar_vec / np.linalg.norm(L_stellar_vec)
         self._R_to_disk_stellar = self._rodrigues_rotation(L_stellar)
+
+        # Store stellar L direction for diagnostics
+        self._L_stellar = L_stellar
+
+        # Compute kinematic inclination from L_stellar (angle from +Z axis)
+        # This is the "true" kinematic inclination
+        self._kinematic_inc_stellar_deg = np.rad2deg(np.arccos(np.abs(L_stellar[2])))
 
         # === Gas rotation matrix from particle angular momentum ===
         if self.gas is not None and len(self.gas.get('Coordinates', [])) > 0:
-            # Compute gas angular momentum: L = Σ m_i * (r_i × v_i)
-            # We approximate with equal mass particles (or could use actual masses)
             coords_gas = self.gas['Coordinates']
             vel_gas = self.gas['Velocities']
+            masses_gas = self.gas['Masses']
 
-            # Center coordinates on gas centroid
-            center_gas = np.mean(coords_gas, axis=0)
-            coords_cen = coords_gas - center_gas
+            # Center on mass-weighted centroid
+            center_gas = np.average(coords_gas, axis=0, weights=masses_gas)
+            coords_gas_cen = coords_gas - center_gas
 
-            # Subtract mean velocity
-            vel_cen = vel_gas - np.mean(vel_gas, axis=0)
+            # Subtract mass-weighted mean velocity
+            vel_gas_mean = np.average(vel_gas, axis=0, weights=masses_gas)
+            vel_gas_cen = vel_gas - vel_gas_mean
 
-            # Total angular momentum (sum of cross products)
-            L_gas_vec = np.sum(np.cross(coords_cen, vel_cen), axis=0)
+            # Mass-weighted angular momentum: L = Σ m_i * (r_i × v_i)
+            L_gas_vec = np.sum(
+                masses_gas[:, None] * np.cross(coords_gas_cen, vel_gas_cen),
+                axis=0
+            )
             L_gas = L_gas_vec / np.linalg.norm(L_gas_vec)
 
             self._R_to_disk_gas = self._rodrigues_rotation(L_gas)
+            self._L_gas = L_gas
 
             # Store angle between stellar and gas L for diagnostics
             self._gas_stellar_L_angle_deg = np.rad2deg(
                 np.arccos(np.clip(np.dot(L_stellar, L_gas), -1, 1))
             )
+
+            # Compute kinematic inclination for gas
+            self._kinematic_inc_gas_deg = np.rad2deg(np.arccos(np.abs(L_gas[2])))
         else:
             # No gas data - use stellar rotation
             self._R_to_disk_gas = self._R_to_disk_stellar.copy()
+            self._L_gas = L_stellar.copy()
             self._gas_stellar_L_angle_deg = 0.0
+            self._kinematic_inc_gas_deg = self._kinematic_inc_stellar_deg
 
         # For backwards compatibility, _R_to_disk is the stellar one
         self._R_to_disk = self._R_to_disk_stellar
+
+        # Diagnostic: compare catalog morphological inclination with our kinematic inclination
+        self._catalog_vs_kinematic_offset_deg = abs(
+            self.native_inclination_deg - self._kinematic_inc_stellar_deg
+        )
 
     def _rodrigues_rotation(self, L: np.ndarray) -> np.ndarray:
         """
@@ -506,7 +555,15 @@ class TNGDataVectorGenerator:
         """
         Transform from face-on disk plane to new obs frame with desired orientation.
 
-        Uses manual inverse transforms since transform.py only has disk←obs direction.
+        Uses proper 3D rotations for inclination to preserve realistic galaxy structure
+        and thickness at all viewing angles. This is critical for realistic edge-on views.
+
+        Physical procedure:
+        1. Start with face-on disk frame (disk in xy-plane, disk normal along z)
+        2. Apply 3D rotation around x-axis by inclination angle (tilts the disk)
+        3. Project tilted 3D structure onto observer's x-y plane
+        4. Apply PA rotation in the sky plane
+        5. Apply weak lensing shear and position offsets
 
         Parameters
         ----------
@@ -541,21 +598,56 @@ class TNGDataVectorGenerator:
                 f"Shear too large: |g|={gamma:.3f} >= 1.0. Weak lensing requires |g| < 1."
             )
 
-        # Manual inverse transform: disk → gal → source → cen → obs
-        # (transform.py only has forward direction, so we implement inverses)
+        # ===================================================================
+        # Step 1: Apply 3D rotation for inclination
+        # ===================================================================
+        # Rotate particle distribution around x-axis by angle = arccos(cosi)
+        # This tilts the disk from face-on (angle=0) to edge-on (angle=90°)
+        # Preserves realistic 3D thickness and structure at all viewing angles
+        #
+        # Rotation matrix around x-axis:
+        #   R_x(θ) = [[1,    0,         0     ],
+        #             [0, cos(θ), -sin(θ)],
+        #             [0, sin(θ),  cos(θ)]]
 
-        # disk → gal: Apply inclination (y *= cosi, foreshorten)
-        x_gal = coords_disk[:, 0]
-        y_gal = coords_disk[:, 1] * cosi
-        z_gal = coords_disk[:, 2]  # Not used for 2D projection
+        angle = np.arccos(np.clip(cosi, -1, 1))  # Clip for numerical stability
+        cos_angle = np.cos(angle)
+        sin_angle = np.sin(angle)
 
-        # gal → source: Apply PA rotation (positive rotation)
+        # Build rotation matrix
+        R_incl = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, cos_angle, -sin_angle],
+            [0.0, sin_angle, cos_angle]
+        ])
+
+        # Apply 3D rotation to coordinates and velocities
+        # This properly transforms the full 3D particle distribution
+        coords_inclined = (R_incl @ coords_disk.T).T
+        velocities_inclined = (R_incl @ velocities_disk.T).T
+
+        # ===================================================================
+        # Step 2: Project onto observer's sky plane and apply PA rotation
+        # ===================================================================
+        # After inclination tilt:
+        #   - x is horizontal on sky (along major axis before PA rotation)
+        #   - y is vertical on sky (foreshortened by inclination)
+        #   - z is depth along line-of-sight
+
+        # Extract sky-plane coordinates and depth
+        x_gal = coords_inclined[:, 0]
+        y_gal = coords_inclined[:, 1]
+        z_los = coords_inclined[:, 2]  # Depth (used for diagnostics)
+
+        # Apply PA rotation in the sky plane (rotate around observer's LOS)
         cos_pa = np.cos(theta_int)
         sin_pa = np.sin(theta_int)
         x_source = x_gal * cos_pa - y_gal * sin_pa
         y_source = x_gal * sin_pa + y_gal * cos_pa
 
-        # source → cen: Apply shear
+        # ===================================================================
+        # Step 3: Apply weak lensing shear
+        # ===================================================================
         if g1 != 0 or g2 != 0:
             # Shear matrix (inverse of cen2source)
             norm = 1.0 / (1.0 - (g1**2 + g2**2))
@@ -565,29 +657,28 @@ class TNGDataVectorGenerator:
             x_cen = x_source
             y_cen = y_source
 
-        # cen → obs: Apply offsets
+        # ===================================================================
+        # Step 4: Apply position offsets
+        # ===================================================================
         x_obs = x_cen + x0
         y_obs = y_cen + y0
 
         coords_2d = np.column_stack([x_obs, y_obs])
 
-        # Compute LOS velocity
-        # The disk is tilted by inclination i around the x-axis (before PA rotation).
-        # The LOS is along the observer's z-axis.
+        # ===================================================================
+        # Step 5: Compute line-of-sight velocity
+        # ===================================================================
+        # After the 3D inclination rotation, the observer's LOS is along the
+        # z-axis of the rotated frame. So LOS velocity is simply the z-component
+        # of the rotated velocity vector.
         #
-        # In disk frame: rotation velocity is primarily in xy-plane (tangential)
-        # After tilting by i around x-axis:
-        #   - v_x stays in sky plane (no LOS contribution)
-        #   - v_y gets projected: v_y * sin(i) contributes to LOS
-        #   - v_z gets projected: v_z * cos(i) contributes to LOS
-        #
-        # PA rotation only affects where on the sky things appear, not the LOS direction.
-        # So we use the DISK frame velocities, not PA-rotated velocities.
-        sini = np.sqrt(1 - cosi**2)
-        vel_los = velocities_disk[:, 1] * sini + velocities_disk[:, 2] * cosi
+        # This is equivalent to the formula:
+        #   vel_los = v_y * sin(i) + v_z * cos(i)
+        # where v_y, v_z are in the original disk frame.
+        vel_los = velocities_inclined[:, 2]
 
-        # Store 3D coords for diagnostics (z is just carried through)
-        coords_3d_obs = np.column_stack([x_obs, y_obs, coords_disk[:, 2]])
+        # Store 3D coords for diagnostics (includes depth information)
+        coords_3d_obs = np.column_stack([x_obs, y_obs, z_los])
 
         return coords_2d, vel_los, coords_3d_obs
 

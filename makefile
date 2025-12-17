@@ -113,13 +113,28 @@ test-data: $(UNIT_TEST_FILES)
 
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
-	@echo "Running all tests..."
+	@echo "Running all tests (excluding slow diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+
+.PHONY: test-all
+test-all: $(CYVERSE_DATA_MARKER)
+	@echo "Running ALL tests (including slow diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v
 
 .PHONY: test-tng50
 test-tng50: $(CYVERSE_DATA_MARKER)
 	@echo "Running TNG50 tests only..."
 	@conda run -n klpipe pytest tests/ -v -m tng50
+
+.PHONY: test-tng-unit
+test-tng-unit: $(CYVERSE_DATA_MARKER)
+	@echo "Running TNG50 unit tests (excluding slow diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "tng50 and not tng_diagnostics"
+
+.PHONY: test-tng-diagnostics
+test-tng-diagnostics: $(CYVERSE_DATA_MARKER)
+	@echo "Running TNG50 diagnostic plotting tests (slow)..."
+	@conda run -n klpipe pytest tests/ -v -m tng_diagnostics
 
 .PHONY: test-basic
 test-basic:
