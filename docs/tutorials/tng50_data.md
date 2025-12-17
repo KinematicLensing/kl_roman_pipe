@@ -355,6 +355,108 @@ plt.tight_layout()
 plt.show()
 ```
 
+## 10. Star Formation Rate Maps
+
+The generator can also create star formation rate (SFR) maps from gas particles:
+
+```python
+config = TNGRenderConfig(
+    image_pars=image_pars,
+    use_native_orientation=True,
+    target_redshift=0.7,
+)
+
+# Generate SFR map (uses gas particle SFR data)
+sfr_map = gen.generate_sfr_map(config, snr=None)
+
+fig, ax = plt.subplots(figsize=(6, 5))
+im = ax.imshow(np.log10(np.clip(sfr_map, 1e-10, None)), origin='lower', cmap='magma')
+ax.set_title('Star Formation Rate\n(log scale)')
+plt.colorbar(im, ax=ax, label='log₁₀(SFR proxy)')
+plt.tight_layout()
+plt.show()
+
+print(f"Total SFR: {sfr_map.sum():.2e} (proxy units)")
+```
+
+## 11. Accessing Diagnostic Information
+
+The generator computes useful diagnostic quantities about galaxy orientation:
+
+```python
+# Create generator for a galaxy
+gen = TNGDataVectorGenerator(galaxy)
+
+print("=== TNG Catalog Values (Morphological) ===")
+print(f"Inclination (stellar): {gen.native_inclination_deg:.2f}°")
+print(f"Position Angle: {gen.native_pa_deg:.2f}°")
+print()
+
+print("=== Kinematic Values (from Angular Momentum) ===")
+print(f"Stellar kinematic inc: {gen._kinematic_inc_stellar_deg:.2f}°")
+print(f"Gas kinematic inc: {gen._kinematic_inc_gas_deg:.2f}°")
+print(f"Stellar L vector: {gen._L_stellar}")
+print(f"Gas L vector: {gen._L_gas}")
+print()
+
+print("=== Gas-Stellar Coupling ===")
+print(f"L offset angle: {gen._gas_stellar_L_angle_deg:.2f}°")
+print(f"Catalog vs kinematic offset: {gen._catalog_vs_kinematic_offset_deg:.2f}°")
+print()
+
+# Physical interpretation
+if gen._gas_stellar_L_angle_deg < 10:
+    print("→ Well-aligned gas and stellar disks")
+elif gen._gas_stellar_L_angle_deg < 30:
+    print("→ Moderate misalignment (typical)")
+else:
+    print("→ Significant misalignment (merger remnant?)")
+```
+
+Diagnostic quantities:
+- Kinematic inclination: Derived from angular momentum direction (rotation axis)
+- Catalog inclination: From TNG's morphological analysis (shape-based)
+- L offset: 3D angle between gas and stellar angular momentum vectors
+- Typical values: Gas-stellar offset of 30-40° is common in TNG galaxies
+
+## 12. Understanding 3D Transformations
+
+This module uses proper 3D rotations, not simple 2D projections.
+
+```python
+# The 3D approach preserves realistic galaxy structure at all angles
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+for idx, (cosi, label) in enumerate([(1.0, "Face-on\n(i=0°)"), 
+                                       (0.7, "Intermediate\n(i=45°)"), 
+                                       (0.1, "Edge-on\n(i=84°)")]):
+    pars = {'cosi': cosi, 'theta_int': 0.0, 'x0': 0, 'y0': 0, 'g1': 0, 'g2': 0}
+    config = TNGRenderConfig(
+        image_pars=image_pars,
+        use_native_orientation=False,
+        pars=pars,
+        target_redshift=0.7,
+    )
+    
+    intensity, _ = gen.generate_intensity_map(config, snr=None)
+    int_log = np.log10(np.clip(intensity, 1e-10, None))
+    
+    axes[idx].imshow(int_log, origin='lower', cmap='viridis')
+    axes[idx].set_title(label)
+    axes[idx].axis('off')
+
+plt.suptitle('3D Rotation Preserves Disk Thickness\n(Note visible vertical extent at edge-on)')
+plt.tight_layout()
+plt.show()
+```
+
+**Why 3D matters:**
+- Preserves realistic disk scale height visible in edge-on views
+- Maintains proper velocity dispersion in all three dimensions  
+- Essential for accurate modeling of thick disk galaxies
+
+See `experiments/sweverett/tng/offset_exploration.ipynb` to visualize how 3D structure is preserved through coordinate transformations.
+
 ## Summary
 
 The `kl_pipe.tng` module provides:

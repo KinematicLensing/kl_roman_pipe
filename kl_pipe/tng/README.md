@@ -105,7 +105,35 @@ When `use_native_orientation=False`, we apply:
 1. **Undo native**: obs→disk (deproject TNG's native orientation to face-on)
 2. **Apply new**: disk→obs (project to desired orientation from `pars`)
 
-Uses `kl_pipe.transformation` functions following: obs→cen→source→gal→disk
+Follows the same mathematical pipeline as `kl_pipe.transformation` (obs→cen→source→gal→disk), but implements the transformations directly using 3D rotations optimized for particle data.
+
+### 3D Transformation Approach
+
+This implementation uses proper 3D rotations to transform galaxy orientation, not simple 2D projections.
+
+**Why this matters**:
+- Preserves realistic galaxy thickness and vertical structure at all viewing angles
+- Essential for accurate edge-on views where disk scale height is visible
+- Maintains physical velocity dispersion in all three dimensions
+
+**Implementation details**:
+1. **Undoing native orientation** (line 511-550 in data_vectors.py):
+   - Uses Rodrigues formula to compute rotation matrix aligning angular momentum L with +Z
+   - Applies full 3D rotation to both particle coordinates and velocities
+   - Separate matrices for stellar (from SubhaloSpin/computed L) and gas (from particle data)
+
+2. **Applying new inclination** (line 608-631 in data_vectors.py):
+   ```python
+   # 3D rotation matrix around x-axis by angle = arccos(cosi)
+   R_incl = [[1,    0,         0     ],
+             [0, cos(θ), -sin(θ)],
+             [0, sin(θ),  cos(θ)]]
+   ```
+   - Tilts the entire 3D particle distribution (not just 2D projection)
+   - Projects the tilted 3D structure onto observer's 2D sky plane
+   - Realistic disk thickness visible at all inclinations
+
+Run `experiments/sweverett/tng/offset_exploration.ipynb` to visualize 3D structure preservation through rotations.
 
 ## Inclination >90° Handling
 
@@ -184,6 +212,46 @@ intensity, _ = gen.generate_intensity_map(config, snr=None)  # No noise
 velocity, _ = gen.generate_velocity_map(config, snr=None)
 ```
 
+## Diagnostic Attributes
+
+The `TNGDataVectorGenerator` computes and stores several diagnostic quantities after initialization:
+
+```python
+gen = TNGDataVectorGenerator(galaxy)
+
+# Kinematic inclinations (from angular momentum vectors)
+print(f"Stellar kinematic inc: {gen._kinematic_inc_stellar_deg:.2f}°")
+print(f"Gas kinematic inc: {gen._kinematic_inc_gas_deg:.2f}°")
+
+# Angular momentum vectors (unit vectors)
+print(f"Stellar L: {gen._L_stellar}")
+print(f"Gas L: {gen._L_gas}")
+
+# Gas-stellar misalignment
+print(f"L offset angle: {gen._gas_stellar_L_angle_deg:.2f}°")
+
+# Catalog vs kinematic comparison
+print(f"Catalog inc (morphological): {gen.native_inclination_deg:.2f}°")
+print(f"Kinematic inc (from L): {gen._kinematic_inc_stellar_deg:.2f}°")
+print(f"Difference: {gen._catalog_vs_kinematic_offset_deg:.2f}°")
+```
+
+Diagnostic quantities:
+- `_kinematic_inc_stellar_deg`: Inclination derived from stellar angular momentum (angle from +Z)
+- `_kinematic_inc_gas_deg`: Inclination derived from gas angular momentum
+- `_gas_stellar_L_angle_deg`: 3D angle between gas and stellar L vectors (typically 30-40°)
+- `_catalog_vs_kinematic_offset_deg`: Difference between TNG catalog morphological inclination and our kinematic inclination
+- `_L_stellar`, `_L_gas`: Unit vectors of angular momentum in TNG simulation frame
+- `_R_to_disk_stellar`, `_R_to_disk_gas`: 3D rotation matrices (Rodrigues) for transforming to disk frame
+
+Physical interpretation:
+- Kinematic inclination (from L) measures rotation axis orientation
+- Catalog inclination (morphological) measures apparent shape from moment of inertia tensor
+- Differences of 5-15° are common and physically realistic
+- Large gas-stellar L offsets (>30°) suggest recent accretion or merger activity
+
+These diagnostics validate angular momentum computations, diagnose unusual galaxies, and characterize gas-stellar coupling.
+
 ## Testing
 
 Run TNG tests with:
@@ -196,10 +264,38 @@ Key test files:
 - `test_tng_data_vectors.py`: Rendering, transforms, gridding, diagnostic plots (40 tests)
 - `test_tng_likelihood.py`: Model fitting with TNG truth data
 
-Diagnostic plots are saved to `tests/out/tng_diagnostics/` including:
-- Inclination and PA sweep comparisons (with/without gas-stellar offset preservation)
-- Resolution and SNR grids
-- Symmetry-breaking demonstration plots
+### Running Diagnostic Tests
+
+Generate comprehensive diagnostic plots:
+```bash
+make test-tng-diagnostics
+```
+
+This creates 11 diagnostic plot types in `tests/out/tng_diagnostics/`:
+1. **High-res native orientation**: All 5 galaxies at native TNG orientation (1024x1024)
+2. **CIC vs NGP gridding**: Side-by-side comparison with particle scatter overlay
+3. **Symmetry breaking**: Complementary inclinations (i vs 180°-i) showing asymmetry
+4. **Resolution grid**: 16, 32, 64, 128 pixels per side comparison
+5. **SNR grid**: Clean, SNR=100, 50, 20 comparison
+6. **Glamour shot**: SubhaloID=8 at high resolution
+7. **Inclination sweep (offset preserved)**: Face-on to edge-on with gas-stellar offset
+8. **Inclination sweep (aligned)**: Same but forcing perfect gas-stellar alignment
+9. **PA sweep**: 0°, 45°, 90°, 135° position angles
+10. **Multi-galaxy inclination sweep**: All 5 galaxies across inclinations
+11. **Vertical extent analysis**: CSV output showing disk thickness vs inclination
+
+**CSV outputs** (also in `tests/out/tng_diagnostics/`):
+- `vertical_extent_*.csv`: Disk thickness measurements vs inclination for each galaxy
+- `inclination_sweep_summary_*.csv`: Quantitative metrics (flux, velocity range, non-zero pixels) vs orientation
+
+These diagnostics validate:
+- 3D structure preservation through transformations
+- Gas-stellar offset preservation mechanism
+- Coordinate transformation correctness
+- Gridding algorithm accuracy
+- Physical realism of rendered maps
+
+See `tests/README.md` for detailed interpretation of diagnostic outputs.
 
 ## Data Provenance
 
@@ -275,6 +371,12 @@ v_LOS = v_y * sin(i) + v_z * cos(i)
 where (v_x, v_y, v_z) are velocity components in the face-on disk frame after PA rotation. This accounts for:
 - In-plane rotational motion (v_y term, dominant for rotating disks)
 - Vertical motion from disk thickness (v_z term, captures dispersion)
+
+**Implementation note**: The code computes this via 3D rotation followed by taking the z-component:
+```python
+vel_los = velocities_inclined[:, 2]  # After 3D rotation by inclination angle
+```
+This is mathematically equivalent to the formula above. The 3D rotation matrix naturally encodes the sin(i) and cos(i) projection, but operates on the full 3D velocity vector, preserving all velocity components during the transformation.
 
 ## Known Limitations
 

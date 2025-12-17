@@ -14,7 +14,7 @@ noise and observational effects.
 
 **Observer Frame (after rendering):**
 - Origin: Centered on galaxy (subhalo position or luminosity peak)
-- Units: Arcseconds (angular separation on sky)
+- Units: arcseconds (angular separation on sky)
 - Orientation: Either native TNG or user-specified (theta_int, cosi)
 
 ## Coordinate Transformations
@@ -45,13 +45,13 @@ For TNG galaxies:
 **Rendered Maps:**
 - Intensity: Original luminosity units (not normalized)
 - Velocity: km/s (line-of-sight component)
-- Pixel scale: Arcseconds per pixel
+- Pixel scale: arcseconds per pixel
 
 ## Particle Types
 
 - **Intensity maps**: Use stellar particles (PartType4) with photometric luminosities
 - **Velocity maps**: Use gas particles (PartType0) with mass weighting
-  - Gas represents ionized ISM (observable via Hα, [OII], etc.)
+  - Gas represents ionized ISM (observable via Halpha, [OII], etc.)
   - Stellar kinematics would use PartType4 but less commonly observed
 
 ## TNG Inclination Convention
@@ -70,7 +70,7 @@ This avoids negative cos(i) in projection math.
 ## Key Features
 
 - Proper 3D rotation using angular momentum vectors (SubhaloSpin for stellar, computed L for gas)
-- Separate rotation matrices for stellar and gas (preserves physical misalignment ~30-40°)
+- Separate rotation matrices for stellar and gas (preserves physical misalignments)
 - Coordinate conversion from comoving kpc/h to arcsec with optional redshift scaling
 - Cloud-in-Cell (CIC) gridding for smooth maps
 - LOS velocity projection: v_LOS = v_y*sin(i) + v_z*cos(i) (matches arXiv:2201.00739)
@@ -78,11 +78,11 @@ This avoids negative cos(i) in projection math.
 
 ## Known Limitations
 
-1. **Sparse gas**: Velocity maps may have empty pixels where no gas particles fall
-2. **SNR calibration**: Less accurate for very large flux values (>10^9)
-3. **Absolute calibration**: Luminosity units preserved but may need external validation
-4. **No PSF**: Point-spread function convolution not implemented
-5. **Gaussian noise**: Poisson noise available but can cause visualization issues
+1. Sparse gas: Velocity maps may have empty pixels where no gas particles fall
+2. SNR calibration: Less accurate for very large flux values (>10^9)
+3. Absolute calibration: Luminosity units preserved but may need external validation
+4. No PSF: Point-spread function convolution not implemented
+5. Gaussian noise: Poisson noise available but is not working well yet
 
 ## References
 
@@ -146,23 +146,29 @@ def convert_tng_to_arcsec(
     coords_arcsec : np.ndarray
         Angular coordinates in arcsec
     """
-    # Convert comoving to physical kpc
-    coords_physical_kpc = coords_kpc / h
+    # Step 1: Convert comoving to physical coordinates
+    # TNG stores coordinates in comoving kpc/h, need to convert to physical kpc
+    # Physical distance = (comoving distance / h) * a, where a = 1/(1+z) is scale factor
+    coords_comoving_kpc = coords_kpc / h  # Remove h factor
+    scale_factor_a = 1.0 / (1.0 + native_redshift)  # Scale factor a = 1/(1+z)
+    coords_physical_kpc = coords_comoving_kpc * scale_factor_a
 
-    # Convert to arcsec: theta = d / D_A
-    # 1 rad = 206265 arcsec, D_A in Mpc, d in kpc
-    # theta [arcsec] = (d [kpc] / D_A [Mpc]) * 206.265
-    scale_factor = 206.265 / distance_mpc  # arcsec per kpc
+    # Step 2: Convert physical kpc to angular separation at native redshift
+    # theta = d_phys / D_A, where D_A is angular diameter distance
+    arcsec_per_radian = 180.0 * 3600.0 / np.pi  # 180 deg/rad * 3600 arcsec/deg / pi
+    kpc_per_mpc = 1000.0
+    d_a_native_mpc = distance_mpc  # Angular diameter distance at native redshift
+    scale_factor = arcsec_per_radian / (d_a_native_mpc * kpc_per_mpc)  # arcsec per kpc
     coords_arcsec = coords_physical_kpc * scale_factor
 
-    # Optionally rescale to target redshift
-    # Angular size scales roughly as D_A(z), which grows then decreases
-    # Approximation for z<1: D_A(z) ≈ (c/H0) * z / (1+z)
-    # For small z: D_A ∝ z, so theta ∝ 1/z
+    # Step 3: Optionally rescale to target redshift using proper cosmology
     if target_redshift is not None and target_redshift != native_redshift:
-        # Scale angular size inversely with redshift ratio
-        # Higher z → smaller angular size (more distant)
-        scale_ratio = native_redshift / target_redshift
+        # Use astropy cosmology for accurate angular diameter distance scaling
+        # Angular size scales as theta ∝ d_phys / D_A(z)
+        d_a_native = TNG_COSMOLOGY.angular_diameter_distance(native_redshift)
+        d_a_target = TNG_COSMOLOGY.angular_diameter_distance(target_redshift)
+        # Larger D_A → smaller angular size (more distant)
+        scale_ratio = (d_a_native / d_a_target).value  # ratio of D_A values
         coords_arcsec *= scale_ratio
 
     return coords_arcsec
@@ -222,10 +228,11 @@ class TNGRenderConfig:
             g1 = self.pars.get('g1', 0.0)
             g2 = self.pars.get('g2', 0.0)
             gamma = np.sqrt(g1**2 + g2**2)
-            if gamma >= 1.0:
+            weak_lensing_limit = 1.0
+            if gamma >= weak_lensing_limit:
                 raise ValueError(
-                    f"Shear too large: |g|={gamma:.3f} >= 1.0. "
-                    f"Weak lensing requires |g| < 1."
+                    f"Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. "
+                    f"Weak lensing requires |g| < {weak_lensing_limit}."
                 )
 
 
@@ -411,7 +418,9 @@ class TNGDataVectorGenerator:
         cos_angle = np.dot(L, z_axis)
 
         # Handle edge cases where L is already aligned with Z
-        if np.abs(cos_angle) > 0.9999:
+        # Tolerance: 1 - cos(0.01°) ≈ 0.0001, so use 0.9999 to catch angles < 0.01°
+        alignment_tolerance = 1.0 - np.cos(np.radians(0.01))  # Near-perfect alignment threshold
+        if np.abs(cos_angle) > (1.0 - alignment_tolerance):
             if cos_angle < 0:
                 # L points in -Z, flip Z
                 return np.diag([1.0, 1.0, -1.0])
@@ -593,9 +602,11 @@ class TNGDataVectorGenerator:
 
         # Validate shear parameters
         gamma = np.sqrt(g1**2 + g2**2)
-        if gamma >= 1.0:
+        weak_lensing_limit = 1.0
+        if gamma >= weak_lensing_limit:
             raise ValueError(
-                f"Shear too large: |g|={gamma:.3f} >= 1.0. Weak lensing requires |g| < 1."
+                f"Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. "
+                f"Weak lensing requires |g| < {weak_lensing_limit}."
             )
 
         # ===================================================================
@@ -992,14 +1003,24 @@ class TNGDataVectorGenerator:
 
         coords = self.gas['Coordinates'].copy()
         velocities = self.gas['Velocities'].copy()
-
-        # Subtract systemic velocity (median to be robust to outliers)
-        # This centers the velocity field at v=0 in the galaxy rest frame
-        v_systemic = np.median(velocities, axis=0)
-        velocities -= v_systemic
-
-        # Use gas masses as weights (no luminosity for gas)
         masses = self.gas['Masses'].copy()
+
+        # Subtract systemic velocity using mass-weighted mean of inner region
+        # Use only inner particles to avoid bias from distant satellites/CGM
+        # This centers the velocity field at v=0 in the galaxy rest frame
+        center = self._get_reference_center(
+            config.center_on_peak, config.band, config.use_dusted
+        )
+        coords_cen = self._center_coordinates(coords, center)
+        radii = np.sqrt(np.sum(coords_cen**2, axis=1))
+        inner_mask = radii < np.percentile(radii, 50)  # Inner 50% by radius
+        if inner_mask.sum() > 0:
+            # Mass-weighted mean of inner particles
+            v_systemic = np.average(velocities[inner_mask], axis=0, weights=masses[inner_mask])
+        else:
+            # Fallback to simple median if no inner particles (shouldn't happen)
+            v_systemic = np.median(velocities, axis=0)
+        velocities -= v_systemic
 
         # Normalize to avoid overflow
         mass_scale = masses.max()
