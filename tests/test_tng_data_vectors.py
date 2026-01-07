@@ -2140,7 +2140,9 @@ class TestDiagnosticPlots:
             all_intensities.append(int_native)
             all_velocities.append(vel_native)
             native_cosi = np.cos(np.deg2rad(gen.native_inclination_deg))
-            titles_int.append(f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}')
+            titles_int.append(
+                f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}'
+            )
             titles_vel.append('')
 
             # Custom orientations
@@ -2289,9 +2291,7 @@ class TestDiagnosticPlots:
         galaxy_indices = range(min(5, len(tng_data)))
 
         # Common parameters
-        image_pars = ImagePars(
-            shape=(80, 80), pixel_scale=0.05, indexing='ij'
-        )
+        image_pars = ImagePars(shape=(80, 80), pixel_scale=0.05, indexing='ij')
         target_z = 0.5
         snr = None
         preserve_offset = True  # Use gas offset preserved mode
@@ -2310,17 +2310,29 @@ class TestDiagnosticPlots:
             gen = TNGDataVectorGenerator(galaxy)
             subhalo_id = galaxy['subhalo']['SubhaloID']
 
-            print(f"Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})...")
+            print(
+                f"Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})..."
+            )
 
             # Collect orientation diagnostics for summary
-            orientation_summary.append({
-                'SubhaloID': subhalo_id,
-                'Catalog_Inc_deg': gen.native_inclination_deg,
-                'Kinematic_Inc_deg': getattr(gen, '_kinematic_inc_stellar_deg', 0.0),
-                'Catalog_vs_Kinematic_Offset_deg': getattr(gen, '_catalog_vs_kinematic_offset_deg', 0.0),
-                'Gas_Stellar_L_Offset_deg': getattr(gen, '_gas_stellar_L_angle_deg', 0.0),
-                'Kinematic_Inc_Gas_deg': getattr(gen, '_kinematic_inc_gas_deg', 0.0),
-            })
+            orientation_summary.append(
+                {
+                    'SubhaloID': subhalo_id,
+                    'Catalog_Inc_deg': gen.native_inclination_deg,
+                    'Kinematic_Inc_deg': getattr(
+                        gen, '_kinematic_inc_stellar_deg', 0.0
+                    ),
+                    'Catalog_vs_Kinematic_Offset_deg': getattr(
+                        gen, '_catalog_vs_kinematic_offset_deg', 0.0
+                    ),
+                    'Gas_Stellar_L_Offset_deg': getattr(
+                        gen, '_gas_stellar_L_angle_deg', 0.0
+                    ),
+                    'Kinematic_Inc_Gas_deg': getattr(
+                        gen, '_kinematic_inc_gas_deg', 0.0
+                    ),
+                }
+            )
 
             # Generate maps
             all_intensities = []
@@ -2341,7 +2353,9 @@ class TestDiagnosticPlots:
             all_intensities.append(int_native)
             all_velocities.append(vel_native)
             native_cosi = np.cos(np.deg2rad(gen.native_inclination_deg))
-            titles_int.append(f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}')
+            titles_int.append(
+                f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}'
+            )
             titles_vel.append('')
 
             # Custom orientations
@@ -2452,7 +2466,9 @@ class TestDiagnosticPlots:
 
             # Quantitative diagnostic: compute vertical extent at each inclination
             print(f"\n  SubhaloID={subhalo_id} Vertical Extent Analysis:")
-            print(f"  {'Inclination':<12} {'cos(i)':<8} {'RMS Height':<12} {'90th Pct':<12}")
+            print(
+                f"  {'Inclination':<12} {'cos(i)':<8} {'RMS Height':<12} {'90th Pct':<12}"
+            )
             print(f"  {'-'*50}")
 
             vertical_extents_rms = []
@@ -2460,17 +2476,25 @@ class TestDiagnosticPlots:
             inc_labels = []
 
             # Analyze native
-            int_native_nonzero = all_intensities[0] > np.percentile(all_intensities[0], 10)
-            y_coords = np.arange(all_intensities[0].shape[0]) - all_intensities[0].shape[0] / 2
+            int_native_nonzero = all_intensities[0] > np.percentile(
+                all_intensities[0], 10
+            )
+            y_coords = (
+                np.arange(all_intensities[0].shape[0]) - all_intensities[0].shape[0] / 2
+            )
             y_coords_2d = y_coords[:, None] * np.ones((1, all_intensities[0].shape[1]))
             y_weighted = y_coords_2d[int_native_nonzero]
             rms_height_native = np.std(y_weighted) * image_pars.pixel_scale
-            p90_height_native = np.percentile(np.abs(y_weighted), 90) * image_pars.pixel_scale
+            p90_height_native = (
+                np.percentile(np.abs(y_weighted), 90) * image_pars.pixel_scale
+            )
             vertical_extents_rms.append(rms_height_native)
             vertical_extents_90.append(p90_height_native)
             native_cosi_val = np.cos(np.deg2rad(gen.native_inclination_deg))
             inc_labels.append(f"Native ({gen.native_inclination_deg:.1f}°)")
-            print(f"  {'Native':<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}")
+            print(
+                f"  {'Native':<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}"
+            )
 
             # Analyze custom orientations
             for idx, (cosi, inc_deg) in enumerate(zip(cosi_vals, inc_deg_vals)):
@@ -2478,11 +2502,15 @@ class TestDiagnosticPlots:
                 int_nonzero = intensity > np.percentile(intensity, 10)
                 y_weighted = y_coords_2d[int_nonzero]
                 rms_height = np.std(y_weighted) * image_pars.pixel_scale
-                p90_height = np.percentile(np.abs(y_weighted), 90) * image_pars.pixel_scale
+                p90_height = (
+                    np.percentile(np.abs(y_weighted), 90) * image_pars.pixel_scale
+                )
                 vertical_extents_rms.append(rms_height)
                 vertical_extents_90.append(p90_height)
                 inc_labels.append(f"{inc_deg:.0f}°")
-                print(f"  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}")
+                print(
+                    f"  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}"
+                )
 
             # Find minimum
             min_idx_rms = np.argmin(vertical_extents_rms)
@@ -2491,39 +2519,57 @@ class TestDiagnosticPlots:
             print(f"  Minimum 90th pct height at: {inc_labels[min_idx_90]}\n")
 
             # Save diagnostic data to CSV
-            csv_path = output_dir / f'vertical_extent_diagnostic_subhalo{subhalo_id}.csv'
+            csv_path = (
+                output_dir / f'vertical_extent_diagnostic_subhalo{subhalo_id}.csv'
+            )
             import csv
+
             with open(csv_path, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(['SubhaloID', 'Inclination_deg', 'cos_i', 'RMS_Height_arcsec', 'P90_Height_arcsec', 'is_native'])
+                writer.writerow(
+                    [
+                        'SubhaloID',
+                        'Inclination_deg',
+                        'cos_i',
+                        'RMS_Height_arcsec',
+                        'P90_Height_arcsec',
+                        'is_native',
+                    ]
+                )
 
                 # Write native
-                writer.writerow([
-                    subhalo_id,
-                    gen.native_inclination_deg,
-                    native_cosi_val,
-                    vertical_extents_rms[0],
-                    vertical_extents_90[0],
-                    True
-                ])
+                writer.writerow(
+                    [
+                        subhalo_id,
+                        gen.native_inclination_deg,
+                        native_cosi_val,
+                        vertical_extents_rms[0],
+                        vertical_extents_90[0],
+                        True,
+                    ]
+                )
 
                 # Write custom orientations
                 for idx, (cosi, inc_deg) in enumerate(zip(cosi_vals, inc_deg_vals)):
-                    writer.writerow([
-                        subhalo_id,
-                        inc_deg,
-                        cosi,
-                        vertical_extents_rms[idx + 1],
-                        vertical_extents_90[idx + 1],
-                        False
-                    ])
+                    writer.writerow(
+                        [
+                            subhalo_id,
+                            inc_deg,
+                            cosi,
+                            vertical_extents_rms[idx + 1],
+                            vertical_extents_90[idx + 1],
+                            False,
+                        ]
+                    )
 
             print(f"  ✓ Saved diagnostic CSV: {csv_path}")
 
             # Title with enhanced diagnostics
             gas_stellar_angle = getattr(gen, '_gas_stellar_L_angle_deg', 0.0)
             kinematic_inc = getattr(gen, '_kinematic_inc_stellar_deg', 0.0)
-            catalog_kinematic_offset = getattr(gen, '_catalog_vs_kinematic_offset_deg', 0.0)
+            catalog_kinematic_offset = getattr(
+                gen, '_catalog_vs_kinematic_offset_deg', 0.0
+            )
 
             fig.suptitle(
                 f'TNG50 SubhaloID={subhalo_id}: Inclination Sweep (Gas offset preserved)\n'
@@ -2534,7 +2580,9 @@ class TestDiagnosticPlots:
                 y=0.98,
             )
 
-            out_path = output_dir / f'orientation_sweep_inclination_subhalo{subhalo_id}.png'
+            out_path = (
+                output_dir / f'orientation_sweep_inclination_subhalo{subhalo_id}.png'
+            )
             plt.savefig(out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
@@ -2551,9 +2599,12 @@ class TestDiagnosticPlots:
         summary_csv_path = output_dir / 'orientation_diagnostics_summary.csv'
         with open(summary_csv_path, 'w', newline='') as csvfile:
             fieldnames = [
-                'SubhaloID', 'Catalog_Inc_deg', 'Kinematic_Inc_deg',
-                'Catalog_vs_Kinematic_Offset_deg', 'Gas_Stellar_L_Offset_deg',
-                'Kinematic_Inc_Gas_deg'
+                'SubhaloID',
+                'Catalog_Inc_deg',
+                'Kinematic_Inc_deg',
+                'Catalog_vs_Kinematic_Offset_deg',
+                'Gas_Stellar_L_Offset_deg',
+                'Kinematic_Inc_Gas_deg',
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
@@ -2566,12 +2617,16 @@ class TestDiagnosticPlots:
         print("\n" + "=" * 80)
         print("ORIENTATION DIAGNOSTICS SUMMARY")
         print("=" * 80)
-        print(f"{'SubhaloID':<12} {'Cat. Inc':<10} {'Kin. Inc':<10} {'Cat-Kin Δ':<12} {'Gas-Star Δ':<12}")
+        print(
+            f"{'SubhaloID':<12} {'Cat. Inc':<10} {'Kin. Inc':<10} {'Cat-Kin Δ':<12} {'Gas-Star Δ':<12}"
+        )
         print("-" * 80)
         for row in orientation_summary:
-            print(f"{row['SubhaloID']:<12} {row['Catalog_Inc_deg']:<10.1f} "
-                  f"{row['Kinematic_Inc_deg']:<10.1f} {row['Catalog_vs_Kinematic_Offset_deg']:<12.1f} "
-                  f"{row['Gas_Stellar_L_Offset_deg']:<12.1f}")
+            print(
+                f"{row['SubhaloID']:<12} {row['Catalog_Inc_deg']:<10.1f} "
+                f"{row['Kinematic_Inc_deg']:<10.1f} {row['Catalog_vs_Kinematic_Offset_deg']:<12.1f} "
+                f"{row['Gas_Stellar_L_Offset_deg']:<12.1f}"
+            )
         print("=" * 80)
 
     def test_orientation_sweep_pa(self, output_dir):

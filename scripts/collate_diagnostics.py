@@ -56,6 +56,7 @@ from PIL import Image
 # REMOTE_HOST = 'user@host'
 # REMOTE_DIR = '/path/to/remote/diagnostics'
 
+
 def parse_args() -> argparse.Namespace:
     """
     Parse command line arguments.
@@ -149,9 +150,7 @@ def get_git_metadata() -> Dict[str, any]:
     if diff_unstaged and diff_unstaged != 'unknown':
         dirty_files.extend(diff_unstaged.split('\n'))
     if diff_staged and diff_staged != 'unknown':
-        dirty_files.extend(
-            ['(staged) ' + f for f in diff_staged.split('\n') if f]
-        )
+        dirty_files.extend(['(staged) ' + f for f in diff_staged.split('\n') if f])
 
     return {
         'branch': branch,
@@ -491,14 +490,14 @@ def generate_html_report(
 
     dirty_files_html = ''
     if git_metadata['dirty'] and git_metadata['dirty_files']:
-        dirty_files_html = '<ul style="margin-left: 2rem; margin-top: 0.5rem; font-size: 0.85rem;">'
+        dirty_files_html = (
+            '<ul style="margin-left: 2rem; margin-top: 0.5rem; font-size: 0.85rem;">'
+        )
         for f in git_metadata['dirty_files'][:10]:  # limit to 10 files
             dirty_files_html += f'<li>{f}</li>'
         if len(git_metadata['dirty_files']) > 10:
             remaining = len(git_metadata['dirty_files']) - 10
-            dirty_files_html += (
-                f'<li><em>... and {remaining} more files</em></li>'
-            )
+            dirty_files_html += f'<li><em>... and {remaining} more files</em></li>'
         dirty_files_html += '</ul>'
 
     html_parts.append(
@@ -874,9 +873,7 @@ def main() -> int:
         html_path = output_dir / f'diagnostics_{timestamp}.html'
         print(f'\nGenerating HTML report: {html_path}')
         generate_html_report(images, git_meta, html_path)
-        print(
-            f'HTML report saved ({html_path.stat().st_size / (1024**2):.1f} MB)'
-        )
+        print(f'HTML report saved ({html_path.stat().st_size / (1024**2):.1f} MB)')
 
         if args.open:
             print('Opening HTML report in browser...')
@@ -886,14 +883,14 @@ def main() -> int:
         pdf_path = output_dir / f'diagnostics_{timestamp}.pdf'
         print(f'\nGenerating PDF report: {pdf_path}')
         generate_pdf_report(images, git_meta, pdf_path)
-        print(
-            f'PDF report saved ({pdf_path.stat().st_size / (1024**2):.1f} MB)'
-        )
+        print(f'PDF report saved ({pdf_path.stat().st_size / (1024**2):.1f} MB)')
 
     # sync to remote if requested
     if args.sync:
         # TODO: Enable if useful
-        print('\nSyncing to remote server is not configured. Please set REMOTE_HOST and REMOTE_DIR in the script.')
+        print(
+            '\nSyncing to remote server is not configured. Please set REMOTE_HOST and REMOTE_DIR in the script.'
+        )
         # files_to_sync = []
         # if html_path:
         #     files_to_sync.append(html_path)

@@ -354,7 +354,7 @@ class TNGDataVectorGenerator:
         # Compute luminosity-weighted angular momentum: L = Σ w_i * (r_i × v_i)
         L_stellar_vec = np.sum(
             weights_stellar[:, None] * np.cross(coords_stellar_cen, vel_stellar_cen),
-            axis=0
+            axis=0,
         )
         L_stellar = L_stellar_vec / np.linalg.norm(L_stellar_vec)
         self._R_to_disk_stellar = self._rodrigues_rotation(L_stellar)
@@ -382,8 +382,7 @@ class TNGDataVectorGenerator:
 
             # Mass-weighted angular momentum: L = Σ m_i * (r_i × v_i)
             L_gas_vec = np.sum(
-                masses_gas[:, None] * np.cross(coords_gas_cen, vel_gas_cen),
-                axis=0
+                masses_gas[:, None] * np.cross(coords_gas_cen, vel_gas_cen), axis=0
             )
             L_gas = L_gas_vec / np.linalg.norm(L_gas_vec)
 
@@ -431,7 +430,9 @@ class TNGDataVectorGenerator:
 
         # Handle edge cases where L is already aligned with Z
         # Tolerance: 1 - cos(0.01°) ≈ 0.0001, so use 0.9999 to catch angles < 0.01°
-        alignment_tolerance = 1.0 - np.cos(np.radians(0.01))  # Near-perfect alignment threshold
+        alignment_tolerance = 1.0 - np.cos(
+            np.radians(0.01)
+        )  # Near-perfect alignment threshold
         if np.abs(cos_angle) > (1.0 - alignment_tolerance):
             if cos_angle < 0:
                 # L points in -Z, flip Z
@@ -638,11 +639,9 @@ class TNGDataVectorGenerator:
         sin_angle = np.sin(angle)
 
         # Build rotation matrix
-        R_incl = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, cos_angle, -sin_angle],
-            [0.0, sin_angle, cos_angle]
-        ])
+        R_incl = np.array(
+            [[1.0, 0.0, 0.0], [0.0, cos_angle, -sin_angle], [0.0, sin_angle, cos_angle]]
+        )
 
         # Apply 3D rotation to coordinates and velocities
         # This properly transforms the full 3D particle distribution
@@ -1037,7 +1036,9 @@ class TNGDataVectorGenerator:
         inner_mask = radii < np.percentile(radii, 50)  # Inner 50% by radius
         if inner_mask.sum() > 0:
             # Mass-weighted mean of inner particles
-            v_systemic = np.average(velocities[inner_mask], axis=0, weights=masses[inner_mask])
+            v_systemic = np.average(
+                velocities[inner_mask], axis=0, weights=masses[inner_mask]
+            )
         else:
             # Fallback to simple median if no inner particles (shouldn't happen)
             v_systemic = np.median(velocities, axis=0)
