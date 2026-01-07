@@ -108,13 +108,16 @@ TNG_COSMOLOGY = FlatLambdaCDM(
     H0=67.74 * u.km / u.s / u.Mpc, Om0=0.3089, Tcmb0=2.725 * u.K
 )
 
+# TNG50 snapshot 99 redshift (all galaxies in our dataset)
+TNG50_SNAPSHOT_99_REDSHIFT = 0.0108
+
 
 def convert_tng_to_arcsec(
     coords_kpc: np.ndarray,
     distance_mpc: float,
     h: float = 0.6774,
     target_redshift: Optional[float] = None,
-    native_redshift: float = 0.011,
+    native_redshift: float = TNG50_SNAPSHOT_99_REDSHIFT,
 ) -> np.ndarray:
     """
     Convert TNG comoving coordinates to angular separation in arcsec.
@@ -138,8 +141,8 @@ def convert_tng_to_arcsec(
         If provided, scale angular size to this redshift.
         Good values: 0.5-1.0 for Roman-like sub-arcsec resolution.
         If None, use native TNG redshift (~0.011).
-    native_redshift : float, default=0.011
-        Native redshift of TNG50 galaxies
+    native_redshift : float, default=TNG50_SNAPSHOT_99_REDSHIFT
+        Native redshift of TNG50 galaxies (snapshot 99)
 
     Returns
     -------
@@ -209,6 +212,13 @@ class TNGRenderConfig:
         (~30-40° typical in TNG). This is the physically realistic behavior.
         If False, both gas and stellar are forced to the exact same orientation
         (useful for synthetic tests where perfect alignment is desired).
+    apply_cosmological_dimming : bool, default=False
+        If True, apply cosmological surface brightness dimming (Tolman effect)
+        to intensity and SFR maps: I_obs = I_rest * (1+z)^-4. This accounts for
+        the combined effect of photon energy redshift (1+z)^-1, photon rate
+        redshift (1+z)^-1, angular size (1+z)^-2, giving total (1+z)^-4.
+        Default False for backward compatibility and "truth" mock generation.
+        Set True for mission-planning or realistic observation simulations.
     """
 
     image_pars: ImagePars
@@ -220,6 +230,7 @@ class TNGRenderConfig:
     use_cic_gridding: bool = True
     target_redshift: Optional[float] = None
     preserve_gas_stellar_offset: bool = True
+    apply_cosmological_dimming: bool = False
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -274,6 +285,7 @@ class TNGDataVectorGenerator:
 
         # Store key properties
         self.distance_mpc = float(self.subhalo['DistanceMpc'])
+        self.native_redshift = TNG50_SNAPSHOT_99_REDSHIFT  # Snapshot 99
         self.native_inclination_deg = float(self.subhalo['Inclination_star'])
         self.native_pa_deg = float(self.subhalo['Position_Angle_star'])
 
@@ -958,6 +970,15 @@ class TNGDataVectorGenerator:
         # Rescale back to original units
         intensity *= lum_scale
 
+        # Apply cosmological surface brightness dimming if requested
+        if config.apply_cosmological_dimming:
+            # Tolman dimming: I_obs = I_rest * (1+z)^-4
+            # Accounts for: photon energy (1+z)^-1, rate (1+z)^-1, area (1+z)^-2
+            z_native = self.native_redshift
+            z_target = config.target_redshift if config.target_redshift else z_native
+            dimming_factor = ((1.0 + z_native) / (1.0 + z_target)) ** 4
+            intensity *= dimming_factor
+
         # Add noise if requested
         if snr is not None:
             # For TNG: use Gaussian noise only (flux already in physical units)
@@ -1178,6 +1199,14 @@ class TNGDataVectorGenerator:
             sfr_map = self._grid_particles_ngp(
                 coords_arcsec, sfr, np.ones_like(sfr), config.image_pars, mode='sum'
             )
+
+        # Apply cosmological surface brightness dimming if requested
+        # SFR maps represent Hα emission (observable flux), so dimming applies
+        if config.apply_cosmological_dimming:
+            z_native = self.native_redshift
+            z_target = config.target_redshift if config.target_redshift else z_native
+            dimming_factor = ((1.0 + z_native) / (1.0 + z_target)) ** 4
+            sfr_map *= dimming_factor
 
         # Add noise if requested
         if snr is not None:

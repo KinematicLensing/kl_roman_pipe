@@ -161,6 +161,46 @@ clean-test:
 	#rm -rf htmlcov/
 	rm -rf .coverage
 
+# =============================================================================
+# Diagnostic Image Collation
+# =============================================================================
+
+DIAGNOSTICS_DIR = $(TEST_DIR)/out/diagnostics
+COLLATE_SCRIPT = scripts/collate_diagnostics.py
+# NOTE: Turn on if useful
+# DIAGNOSTICS_REMOTE_HOST = user@host
+# DIAGNOSTICS_REMOTE_DIR = /path/to/remote/diagnostics
+
+# generate HTML report and open in browser
+.PHONY: show-diagnostics
+show-diagnostics:
+	@echo "Generating HTML diagnostic report..."
+	@conda run -n klpipe python $(COLLATE_SCRIPT) --html --open
+	@echo "HTML report opened in browser"
+
+# generate timestamped PDF report
+.PHONY: diagnostics-pdf
+diagnostics-pdf:
+	@echo "Generating PDF diagnostic report..."
+	@conda run -n klpipe python $(COLLATE_SCRIPT) --pdf
+	@echo "PDF report saved to $(DIAGNOSTICS_DIR)/"
+
+# generate HTML + PDF and sync both to remote server (with confirmation)
+# NOTE: Turn on if useful
+# .PHONY: sync-diagnostics
+# sync-diagnostics:
+# 	@echo "Generating HTML + PDF and syncing to rigel..."
+# 	@conda run --no-capture-output -n klpipe python $(COLLATE_SCRIPT) --html --pdf --sync
+# 	@echo "HTML + PDF synced to $(DIAGNOSTICS_REMOTE_HOST):$(DIAGNOSTICS_REMOTE_DIR)"
+
+# generate HTML only and sync to remote server (with confirmation)
+# NOTE: Turn on if useful
+# .PHONY: sync-diagnostics-html
+# sync-diagnostics-html:
+# 	@echo "Generating HTML and syncing to rigel..."
+# 	@conda run --no-capture-output -n klpipe python $(COLLATE_SCRIPT) --html --sync
+# 	@echo "HTML synced to $(DIAGNOSTICS_REMOTE_HOST):$(DIAGNOSTICS_REMOTE_DIR)"
+
 #-------------------------------------------------------------------------------
 # NOTE: These may be useful in the future if we use git submodules
 
