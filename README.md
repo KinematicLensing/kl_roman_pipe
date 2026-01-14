@@ -16,6 +16,8 @@ conda install -n base conda-lock  # If not already installed
 make install
 ```
 
+**Note for HPC Users:** If you do not have write access to your base environment, install conda-lock into a custom environment (e.g., `mybase`) and run: `BASE_ENV=mybase make install`
+
 **Option 1: Run all tests (recommended, requires ~340 MB download)**
 ```bash
 make test  # Downloads TNG50 data automatically on first run

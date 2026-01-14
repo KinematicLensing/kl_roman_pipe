@@ -400,7 +400,8 @@ def _generate_sersic_galsim(
     profile = profile.rotate(theta_int * gs.radians)
 
     # Apply shear and centroid offset
-    profile = profile.shear(g1=g1, g2=g2)
+    mu = 1.0 / (1.0 - (g1**2 + g2**2))  # magnification factor
+    profile = profile.lens(g1=g1, g2=g2, mu=mu)
     profile = profile.shift(int_x0, int_y0)
 
     # Setup GalSim image from ImagePars

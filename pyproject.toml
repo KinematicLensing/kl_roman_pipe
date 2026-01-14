@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SPHEREx/SPHEREx-L4-Cosmology-Pipeline"
+Homepage = "https://github.com/sweverett/kl_roman_test"
 Repository = "https://github.com/sweverett/kl_roman_test"
 
 [tool.setuptools]

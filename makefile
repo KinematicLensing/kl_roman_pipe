@@ -32,7 +32,7 @@ WGET ?= wget
 .PHONY: install
 install:
 	@echo "Installing kl_roman_test repository..."
-	@bash install.sh
+	@BASE_ENV=$(BASE_ENV) bash install.sh
 	@echo "kl_roman_test environment installed."
 
 # Regenerate the conda-lock.yml file
