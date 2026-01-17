@@ -17,7 +17,7 @@ then
 fi
 
 . "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate kltest
+conda activate klpipe
 
 
 # Only include python files in the current repo (excluding submodules):

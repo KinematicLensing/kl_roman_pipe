@@ -1,12 +1,16 @@
-name: kltest
+name: klpipe
 channels:
   - conda-forge
 dependencies:
+  - pytest
+  - pytest-xdist
+  - jupytext
   - astropy
   - corner
   - emcee
   - fitsio
   - galsim
+  - jax
   - ipdb
   - pudb
   - jupyter

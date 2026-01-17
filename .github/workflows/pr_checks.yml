@@ -93,7 +93,7 @@ jobs:
     #  with:
     #    ssh-private-key: ${{secrets.RIGEL_KEY}}
 
-    - name: Install kltest environment
+    - name: Install klpipe environment
       run: |
         source $HOME/miniforge3/etc/profile.d/conda.sh
         conda activate base
@@ -105,18 +105,20 @@ jobs:
     - name: Run Format Checker
       run: |
         source $HOME/miniforge3/etc/profile.d/conda.sh
-        conda activate kltest
+        conda activate klpipe
         make check-format
       # set to true if you want to continue even if the format is not correct
       continue-on-error: false
 
     - name: Run Tests
       # Set a non interactive backend for matplotlib to avoid display issues
+      # TODO: Change to 'make test' once we setup GitHub secrets for CyVerse authentication
+      # This will enable running TNG50 tests in CI
       run: |
         source $HOME/miniforge3/etc/profile.d/conda.sh
-        conda activate kltest
+        conda activate klpipe
         export MPLBACKEND=Agg
-        make test
+        make test-basic
       shell: bash
 
     - name: Upload Test Logs as Artifacts

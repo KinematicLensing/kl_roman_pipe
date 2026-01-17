@@ -18,8 +18,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SPHEREx/SPHEREx-L4-Cosmology-Pipeline"
+Homepage = "https://github.com/sweverett/kl_roman_test"
 Repository = "https://github.com/sweverett/kl_roman_test"
 
 [tool.setuptools]
 packages = ["kl_pipe"]
+
+[tool.pytest.ini_options]
+markers = [
+    "tng50: tests that require TNG50 mock data from CyVerse",
+]
