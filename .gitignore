@@ -1,12 +1,25 @@
-kl_pipe/__pycache__/*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Data (keep config and readme)
 data/*
 !data/cyverse/*.conf
 !data/cyverse/README.md
-tests/__pycache__/*
-tests/out/*
-.vscode/*
+
+# Test outputs
+tests/out/
+
+# IDE
+.vscode/
+
+# Docs (generated notebooks)
 docs/tutorials/*.ipynb
 
 # macOS
 .DS_Store
-
