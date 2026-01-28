@@ -36,10 +36,10 @@ from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
 from test_utils import (
     TestConfig,
     slice_all_parameters,
-    plot_data_comparison_panels,
     plot_likelihood_slices,
     assert_parameter_recovery,
 )
+from kl_pipe.diagnostics import plot_data_comparison_panels
 
 
 # ==============================================================================
@@ -254,14 +254,15 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     # Create diagnostic panels
     test_name = f"centered_velocity_base_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Create JIT-compiled likelihood
@@ -329,14 +330,15 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     # Diagnostic plots
     test_name = f"centered_velocity_with_shear_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Likelihood slicing
@@ -405,14 +407,15 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
     # Diagnostic plots
     test_name = f"offset_velocity_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Likelihood slicing
@@ -475,14 +478,15 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     # Diagnostic plots
     test_name = f"inclined_exponential_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='intensity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Likelihood slicing
@@ -545,14 +549,15 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
     # Diagnostic plots
     test_name = f"inclined_exponential_with_shear_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='intensity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Likelihood slicing
@@ -647,25 +652,27 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
     # Diagnostic plots for both data types
     test_name = f"joint_base_snr{snr}"
     plot_data_comparison_panels(
-        data_vel_noisy,
-        data_vel_true,
-        model_vel_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_vel_noisy),
+        data_true=np.asarray(data_vel_true),
+        model_eval=np.asarray(model_vel_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance_vel,
         n_params=len(vel_model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     plot_data_comparison_panels(
-        data_int_noisy,
-        data_int_true,
-        model_int_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_int_noisy),
+        data_true=np.asarray(data_int_true),
+        model_eval=np.asarray(model_int_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='intensity',
         variance=variance_int,
         n_params=len(int_model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Create joint likelihood
@@ -769,25 +776,27 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
     # Diagnostic plots
     test_name = f"joint_with_shear_snr{snr}"
     plot_data_comparison_panels(
-        data_vel_noisy,
-        data_vel_true,
-        model_vel_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_vel_noisy),
+        data_true=np.asarray(data_vel_true),
+        model_eval=np.asarray(model_vel_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance_vel,
         n_params=len(vel_model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     plot_data_comparison_panels(
-        data_int_noisy,
-        data_int_true,
-        model_int_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_int_noisy),
+        data_true=np.asarray(data_int_true),
+        model_eval=np.asarray(model_int_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='intensity',
         variance=variance_int,
         n_params=len(int_model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Create joint likelihood

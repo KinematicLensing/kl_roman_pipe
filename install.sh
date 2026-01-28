@@ -4,6 +4,10 @@ set -e
 REPO_DIR="$(realpath "$(dirname "$0")")"
 CWD=$(pwd)
 
+# not all users can control their conda base environment (e.g. at HPCs), so we
+# allow the user to specify a different conda environment to use for the base
+BASE_ENV=${BASE_ENV:-base}
+
 ENVFILE="$(dirname "$0")"/environment.yaml
 ENVNAME="$(grep '^name:' "$ENVFILE" | cut -d' ' -f2)"
 
@@ -28,7 +32,7 @@ fi
 
 # install environment fresh
 echo "Installing '$ENVNAME' from reproducible conda-lock.yml..."
-conda run -n base conda-lock install --name "$ENVNAME" "$REPO_DIR/conda-lock.yml"
+conda run -n ${BASE_ENV} conda-lock install --name "$ENVNAME" "$REPO_DIR/conda-lock.yml"
 
 # activate conda environment
 conda activate "$ENVNAME"

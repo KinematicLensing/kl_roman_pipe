@@ -20,6 +20,9 @@ CYVERSE_DATA_MARKER = $(CYVERSE_DATA_DIR)/.cyverse_data_downloaded
 
 TNG50_DATA_DIR = $(DATA_DIR)/tng50
 
+DIAGNOSTICS_DIR = $(TEST_DIR)/out/diagnostics
+
+
 # NOTE: I cannot currently get this to automatically download due to
 # issues with sharepoint; easiest solution is to move this somewhere
 # easier to access, such as a UA server
@@ -113,16 +116,16 @@ test-data: $(UNIT_TEST_FILES)
 
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
-	@echo "Running all tests (excluding slow diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics"
 
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
 	@echo "Running ALL tests (including slow diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v
 
-.PHONY: test-tng50
-test-tng50: $(CYVERSE_DATA_MARKER)
+.PHONY: test-tng
+test-tng: $(CYVERSE_DATA_MARKER)
 	@echo "Running TNG50 tests only..."
 	@conda run -n klpipe pytest tests/ -v -m tng50
 
@@ -136,10 +139,20 @@ test-tng-diagnostics: $(CYVERSE_DATA_MARKER)
 	@echo "Running TNG50 diagnostic plotting tests (slow)..."
 	@conda run -n klpipe pytest tests/ -v -m tng_diagnostics
 
+.PHONY: test-sampling
+test-sampling:
+	@echo "Running MCMC sampling tests (excluding nautilus)..."
+	@conda run -n klpipe pytest tests/test_sampling_diagnostics.py -v
+
+.PHONY: test-sampling-all
+test-sampling-all:
+	@echo "Running ALL MCMC sampling tests (including nautilus - slow)..."
+	@INCLUDE_NAUTILUS=1 conda run -n klpipe pytest tests/test_sampling_diagnostics.py -v
+
 .PHONY: test-basic
 test-basic:
-	@echo "Running tests (excluding TNG50, no download required)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng50"
+	@echo "Running fast tests (excluding TNG50 and slow, no download required)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow"
 
 .PHONY: test-coverage
 test-coverage: $(CYVERSE_DATA_MARKER)
@@ -172,11 +185,30 @@ COLLATE_SCRIPT = scripts/collate_diagnostics.py
 # DIAGNOSTICS_REMOTE_DIR = /path/to/remote/diagnostics
 
 # generate HTML report and open in browser
-.PHONY: show-diagnostics
-show-diagnostics:
+.PHONY: diagnostics
+diagnostics:
 	@echo "Generating HTML diagnostic report..."
 	@conda run -n klpipe python $(COLLATE_SCRIPT) --html --open
 	@echo "HTML report opened in browser"
+
+# open most recent existing HTML report (no generation)
+.PHONY: show-diagnostics
+show-diagnostics:
+	@if [ -d "$(DIAGNOSTICS_DIR)" ]; then \
+                LATEST=$$(ls -t $(DIAGNOSTICS_DIR)/diagnostics_*.html 2>/dev/null | head -n 1); \
+                if [ -n "$$LATEST" ]; then \
+                        echo "Opening most recent diagnostic report: $$(basename $$LATEST)"; \
+                        open "$$LATEST"; \
+                else \
+                        echo "ERROR: No diagnostic reports found in $(DIAGNOSTICS_DIR)"; \
+                        echo "Run 'make diagnostics' to generate a new report"; \
+                        exit 1; \
+                fi; \
+        else \
+                echo "ERROR: Diagnostics directory does not exist: $(DIAGNOSTICS_DIR)"; \
+                echo "Run 'make diagnostics' to generate a new report"; \
+                exit 1; \
+        fi
 
 # generate timestamped PDF report
 .PHONY: diagnostics-pdf

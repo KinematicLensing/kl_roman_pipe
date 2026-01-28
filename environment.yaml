@@ -23,9 +23,13 @@ dependencies:
   - scipy
   - snakeviz
   - zeus-mcmc
+  - blackjax
+  - numpyro
+  - pip
+  - pip:
+    - nautilus-sampler
   - cython
   - sep
   - reproject
   - black
   - ffmpeg
-  - pip

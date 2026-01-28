@@ -33,10 +33,10 @@ from kl_pipe.likelihood import (
     create_jitted_likelihood_joint,
 )
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
+from kl_pipe.diagnostics import plot_data_comparison_panels
 
 from test_utils import (
     TestConfig,
-    plot_data_comparison_panels,
     check_parameter_recovery,
     assert_parameter_recovery,
     plot_parameter_comparison,
@@ -217,14 +217,15 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     model_eval = model(theta_true, 'obs', X, Y)
     test_name = f"opt_centered_vel_base_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Create likelihood with gradients
@@ -259,15 +260,16 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     # Evaluate model at optimized parameters for diagnostic plots
     model_eval_opt = model(theta_opt, 'obs', X, Y)
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval_opt,
-        f"{test_name}_optimized",
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval_opt),
+        test_name=f"{test_name}_optimized",
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
         model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
     )
 
     # Check parameter recovery
@@ -355,14 +357,15 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
     model_eval = model(theta_true, 'obs', X, Y)
     test_name = f"opt_offset_vel_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Create likelihood
@@ -399,15 +402,16 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
     # Evaluate model at optimized parameters
     model_eval_opt = model(theta_opt, 'obs', X, Y)
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval_opt,
-        f"{test_name}_optimized",
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval_opt),
+        test_name=f"{test_name}_optimized",
+        output_dir=test_config.output_dir / test_name,
         data_type='velocity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
         model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
     )
 
     # Check recovery
@@ -498,14 +502,15 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
     model_eval = model(theta_true, 'obs', X, Y)
     test_name = f"opt_inclined_exp_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval,
-        test_name,
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
         data_type='intensity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
     )
 
     # Create likelihood
@@ -540,17 +545,17 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
 
     # Evaluate model at optimized parameters
     model_eval_opt = model(theta_opt, 'obs', X, Y)
-    test_name = f"opt_inclined_exp_snr{snr}"
     plot_data_comparison_panels(
-        data_noisy,
-        data_true,
-        model_eval_opt,
-        f"{test_name}_optimized",
-        test_config,
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval_opt),
+        test_name=f"{test_name}_optimized",
+        output_dir=test_config.output_dir / test_name,
         data_type='intensity',
         variance=variance,
         n_params=len(model.PARAMETER_NAMES),
         model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
     )
 
     # Check recovery

@@ -3,9 +3,16 @@ Shared test utilities for parameter recovery tests.
 
 This module contains common functions used by both likelihood slicing tests
 and gradient-based optimizer tests. May expand further in the future.
+
+Note: plot_data_comparison_panels and plot_combined_data_comparison have been
+moved to kl_pipe.diagnostics. The versions in this file are deprecated wrappers
+for backward compatibility.
 """
 
 import pytest
+import sys
+import contextlib
+import warnings
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,6 +22,66 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.plotting import MidpointNormalize
+
+
+# ==============================================================================
+# Output Redirection Utilities
+# ==============================================================================
+
+
+class TeeWriter:
+    """Write to both a file and optionally to terminal."""
+
+    def __init__(self, file_handle, also_terminal: bool = False, original_stdout=None):
+        self.file_handle = file_handle
+        self.also_terminal = also_terminal
+        self.original_stdout = original_stdout or sys.__stdout__
+
+    def write(self, message):
+        self.file_handle.write(message)
+        if self.also_terminal:
+            self.original_stdout.write(message)
+
+    def flush(self):
+        self.file_handle.flush()
+        if self.also_terminal:
+            self.original_stdout.flush()
+
+
+@contextlib.contextmanager
+def redirect_sampler_output(log_path: Path, also_terminal: bool = False):
+    """
+    Redirect stdout to a file, optionally also writing to terminal.
+
+    Sampler output is ALWAYS written to the log file. If also_terminal=True,
+    output is also displayed in the terminal (useful for debugging).
+
+    Parameters
+    ----------
+    log_path : Path
+        Path to the output log file.
+    also_terminal : bool
+        If True, output goes to both file and terminal.
+        If False (default), output goes to file only.
+
+    Examples
+    --------
+    >>> with redirect_sampler_output(Path("sampler.log")):
+    ...     sampler.run()  # Output captured to file only
+
+    >>> with redirect_sampler_output(Path("sampler.log"), also_terminal=True):
+    ...     sampler.run()  # Output to file AND terminal
+    """
+    # Ensure parent directory exists
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    original_stdout = sys.stdout
+    with open(log_path, 'w') as f:
+        sys.stdout = TeeWriter(f, also_terminal=also_terminal, original_stdout=original_stdout)
+        try:
+            yield
+        finally:
+            sys.stdout = original_stdout
 
 
 # ==============================================================================
@@ -39,6 +106,7 @@ class TestConfig:
         include_poisson_noise: bool = False,
         seed: int = 42,
         sersic_backend: str = 'scipy',
+        verbose_terminal: bool = False,
     ):
         self.output_dir = output_dir
         # plotting control
@@ -47,6 +115,8 @@ class TestConfig:
         self.include_poisson_noise = include_poisson_noise
         self.seed = seed
         self.sersic_backend = sersic_backend
+        # sampler output control
+        self.verbose_terminal = verbose_terminal
 
         # =========================================================================
         # LIKELIHOOD SLICE TEST TOLERANCES
@@ -153,6 +223,28 @@ class TestConfig:
         )
 
         return
+
+    def get_sampler_log_path(self, test_name: str, sampler_name: str) -> Path:
+        """
+        Get path for sampler output log file.
+
+        Sampler output is always written to files in the test output directory.
+
+        Parameters
+        ----------
+        test_name : str
+            Name of the test (used as subdirectory).
+        sampler_name : str
+            Name of the sampler (e.g., 'emcee', 'nautilus', 'blackjax').
+
+        Returns
+        -------
+        Path
+            Path to the log file.
+        """
+        test_dir = self.output_dir / test_name
+        test_dir.mkdir(parents=True, exist_ok=True)
+        return test_dir / f"{sampler_name}_output.txt"
 
     def get_tolerance(
         self,
@@ -624,7 +716,7 @@ def slice_all_parameters(
 
 
 # ==============================================================================
-# Diagnostic Plotting
+# Diagnostic Plotting (DEPRECATED - use kl_pipe.diagnostics instead)
 # ==============================================================================
 
 
@@ -641,6 +733,10 @@ def plot_data_comparison_panels(
 ) -> None:
     """
     Create 2x3 panel diagnostic plot.
+
+    .. deprecated::
+        Use kl_pipe.diagnostics.plot_data_comparison_panels instead.
+        This function is kept for backward compatibility.
 
     Row 1: noisy | true | noisy - true
     Row 2: model - true | model | noisy - model
@@ -666,6 +762,12 @@ def plot_data_comparison_panels(
     model_label : str, optional
         Label for model panel ('Model' or 'Optimized Model'). Default is 'Model'.
     """
+    warnings.warn(
+        "plot_data_comparison_panels in test_utils.py is deprecated. "
+        "Use kl_pipe.diagnostics.plot_data_comparison_panels instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     if not config.enable_plots:
         return
@@ -1186,6 +1288,192 @@ def plot_parameter_comparison(
 
     # Save
     outfile = test_dir / f"{test_name}_parameter_comparison.png"
+    plt.savefig(outfile, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def plot_combined_data_comparison(
+    data_vel_noisy: jnp.ndarray,
+    data_vel_true: jnp.ndarray,
+    model_vel: jnp.ndarray,
+    data_int_noisy: jnp.ndarray,
+    data_int_true: jnp.ndarray,
+    model_int: jnp.ndarray,
+    test_name: str,
+    config: TestConfig,
+    variance_vel: Optional[float] = None,
+    variance_int: Optional[float] = None,
+    n_params: Optional[int] = None,
+    model_label: str = 'MAP Model',
+) -> None:
+    """
+    Create combined 4x3 panel diagnostic plot for velocity + intensity.
+
+    .. deprecated::
+        Use kl_pipe.diagnostics.plot_combined_data_comparison instead.
+        This function is kept for backward compatibility.
+
+    Stacks velocity (top 2 rows) and intensity (bottom 2 rows) comparisons
+    into a single output figure.
+
+    Layout:
+        Row 0: Velocity - noisy | true | noisy - true
+        Row 1: Velocity - model - true | model | noisy - model
+        Row 2: Intensity - noisy | true | noisy - true
+        Row 3: Intensity - model - true | model | noisy - model
+
+    Parameters
+    ----------
+    data_vel_noisy, data_vel_true, model_vel : jnp.ndarray
+        Velocity data arrays.
+    data_int_noisy, data_int_true, model_int : jnp.ndarray
+        Intensity data arrays.
+    test_name : str
+        Name of test (for title and filename).
+    config : TestConfig
+        Test configuration.
+    variance_vel, variance_int : float, optional
+        Variances for chi-squared computation.
+    n_params : int, optional
+        Number of fitted parameters (for reduced chi-squared).
+    model_label : str, optional
+        Label for model panels. Default is 'MAP Model'.
+    """
+    warnings.warn(
+        "plot_combined_data_comparison in test_utils.py is deprecated. "
+        "Use kl_pipe.diagnostics.plot_combined_data_comparison instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    if not config.enable_plots:
+        return
+
+    # Create output directory for this test
+    test_dir = config.output_dir / test_name
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set up figure with 4 rows x 3 cols
+    fig, axes = plt.subplots(4, 3, figsize=(15, 18))
+
+    # Helper function to plot a 2x3 block
+    def plot_data_block(
+        axes_block,
+        data_noisy,
+        data_true,
+        model_eval,
+        variance,
+        data_type,
+    ):
+        # Compute residuals & chi2
+        residual_true = np.array(data_noisy - data_true)
+        residual_model = np.array(data_noisy - model_eval)
+        residual_model_true = np.array(model_eval - data_true)
+
+        chi2_true = None
+        chi2_model = None
+        if variance is not None:
+            chi2_true = np.sum(residual_true**2 / variance)
+            chi2_model = np.sum(residual_model**2 / variance)
+            if n_params is not None:
+                dof = data_noisy.size - n_params
+                chi2_true /= dof
+                chi2_model /= dof
+
+        # Common colorbar limits for data
+        data_arrays = [data_noisy, data_true, model_eval]
+        vmin_data = min(np.percentile(arr, 1) for arr in data_arrays)
+        vmax_data = max(np.percentile(arr, 99) for arr in data_arrays)
+        norm_data = MidpointNormalize(vmin=vmin_data, vmax=vmax_data, midpoint=0)
+
+        # Common colorbar limits for residuals
+        residual_arrays = [residual_true, residual_model]
+        abs_max = max(np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays)
+        norm_resid = MidpointNormalize(vmin=-abs_max, vmax=abs_max, midpoint=0)
+
+        # Row 0: noisy | true | noisy - true
+        im00 = axes_block[0, 0].imshow(
+            np.array(data_noisy), origin='lower', cmap='RdBu_r', norm=norm_data
+        )
+        axes_block[0, 0].set_title(f'{data_type}: Noisy Data')
+        divider = make_axes_locatable(axes_block[0, 0])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im00, cax=cax)
+
+        im01 = axes_block[0, 1].imshow(
+            np.array(data_true), origin='lower', cmap='RdBu_r', norm=norm_data
+        )
+        axes_block[0, 1].set_title(f'{data_type}: True')
+        divider = make_axes_locatable(axes_block[0, 1])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im01, cax=cax)
+
+        im02 = axes_block[0, 2].imshow(
+            residual_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
+        axes_block[0, 2].set_title(f'{data_type}: Noisy - True')
+        divider = make_axes_locatable(axes_block[0, 2])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im02, cax=cax)
+        if variance is not None:
+            axes_block[0, 2].text(
+                0.02, 0.98, f'χ²={chi2_true:.1f}',
+                transform=axes_block[0, 2].transAxes, fontsize=9,
+                color='white', verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+            )
+
+        # Row 1: model - true | model | noisy - model
+        im10 = axes_block[1, 0].imshow(
+            residual_model_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
+        axes_block[1, 0].set_title(f'{data_type}: {model_label} - True')
+        divider = make_axes_locatable(axes_block[1, 0])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im10, cax=cax)
+
+        im11 = axes_block[1, 1].imshow(
+            np.array(model_eval), origin='lower', cmap='RdBu_r', norm=norm_data
+        )
+        axes_block[1, 1].set_title(f'{data_type}: {model_label}')
+        divider = make_axes_locatable(axes_block[1, 1])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im11, cax=cax)
+
+        im12 = axes_block[1, 2].imshow(
+            residual_model, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
+        axes_block[1, 2].set_title(f'{data_type}: Noisy - {model_label}')
+        divider = make_axes_locatable(axes_block[1, 2])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im12, cax=cax)
+        if variance is not None:
+            axes_block[1, 2].text(
+                0.02, 0.98, f'χ²={chi2_model:.1f}',
+                transform=axes_block[1, 2].transAxes, fontsize=9,
+                color='white', verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+            )
+
+        # Labels
+        for ax in axes_block.flat:
+            ax.set_xlabel('x (pixels)')
+            ax.set_ylabel('y (pixels)')
+
+    # Plot velocity block (rows 0-1)
+    plot_data_block(axes[0:2, :], data_vel_noisy, data_vel_true, model_vel,
+                    variance_vel, 'Velocity')
+
+    # Plot intensity block (rows 2-3)
+    plot_data_block(axes[2:4, :], data_int_noisy, data_int_true, model_int,
+                    variance_int, 'Intensity')
+
+    # Overall title
+    fig.suptitle(f'{test_name} - Combined Data Comparison', fontsize=14, y=1.01)
+    plt.tight_layout()
+
+    # Save
+    outfile = test_dir / f"{test_name}_combined_panels.png"
     plt.savefig(outfile, dpi=150, bbox_inches='tight')
     plt.close(fig)
 

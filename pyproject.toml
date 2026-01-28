@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SPHEREx/SPHEREx-L4-Cosmology-Pipeline"
-Repository = "https://github.com/sweverett/kl_roman_test"
+Homepage = "https://github.com/KinematicLensing/kl_roman_pipe/"
+Repository = "https://github.com/KinematicLensing/kl_roman_pipe/"
 
 [tool.setuptools]
 packages = ["kl_pipe"]
@@ -29,4 +29,8 @@ markers = [
     "tng50: tests that require TNG50 mock data from CyVerse",
     "tng_diagnostics: TNG diagnostic plotting tests (slow, large output files)",
     "slow: tests that take significant time to run",
+]
+filterwarnings = [
+    # Ignore ArviZ FutureWarning about upcoming refactor
+    "ignore:.*ArviZ is undergoing a major refactor.*:FutureWarning",
 ]
