@@ -167,7 +167,9 @@ class GradientSamplerConfig(BaseSamplerConfig):
 
     def __post_init__(self):
         if self.algorithm not in ('nuts', 'hmc'):
-            raise ValueError(f"algorithm must be 'nuts' or 'hmc', got '{self.algorithm}'")
+            raise ValueError(
+                f"algorithm must be 'nuts' or 'hmc', got '{self.algorithm}'"
+            )
         if not 0 < self.target_acceptance < 1:
             raise ValueError("target_acceptance must be in (0, 1)")
 

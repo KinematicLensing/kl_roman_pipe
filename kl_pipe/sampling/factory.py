@@ -112,9 +112,7 @@ def build_sampler(
 
     if name_lower not in _SAMPLER_REGISTRY:
         available = ', '.join(get_available_samplers())
-        raise ValueError(
-            f"Unknown sampler '{name}'. Available: {available}"
-        )
+        raise ValueError(f"Unknown sampler '{name}'. Available: {available}")
 
     sampler_class = _SAMPLER_REGISTRY[name_lower]
 

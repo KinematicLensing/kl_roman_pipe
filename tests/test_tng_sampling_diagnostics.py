@@ -68,8 +68,8 @@ TARGET_REDSHIFT = 0.3  # Closer redshift for larger apparent size and better sam
 # Sampling configuration - balance between speed and convergence
 # TNG has model mismatch so we can't expect perfect posteriors
 N_SAMPLES = 2000  # More samples for better posterior estimation
-N_WARMUP = 1000   # Longer warmup for adaptation with 11 params
-N_CHAINS = 4      # 4 chains for proper R-hat convergence diagnostics
+N_WARMUP = 1000  # Longer warmup for adaptation with 11 params
+N_CHAINS = 4  # 4 chains for proper R-hat convergence diagnostics
 
 # Moderate SNR - allows more noise to reduce sensitivity to model mismatch
 # while still resolving structure
@@ -246,8 +246,8 @@ def create_tng_joint_inference_task(
     true_pars: Dict[str, float],
     data_vel: jnp.ndarray,
     data_int: jnp.ndarray,
-    var_vel: float,
-    var_int: float,
+    var_vel: np.ndarray,
+    var_int: np.ndarray,
     image_pars_vel: ImagePars,
     image_pars_int: ImagePars,
 ) -> InferenceTask:
@@ -263,8 +263,8 @@ def create_tng_joint_inference_task(
         Estimated true parameter values (geometry from TNG, model params estimated).
     data_vel, data_int : jnp.ndarray
         TNG velocity and intensity data vectors.
-    var_vel, var_int : float
-        Variance values.
+    var_vel, var_int : np.ndarray
+        Variance arrays (same shape as data).
     image_pars_vel, image_pars_int : ImagePars
         Image parameters for each map.
 
@@ -294,9 +294,7 @@ def create_tng_joint_inference_task(
         'vcirc': TruncatedNormal(
             true_pars.get('vcirc', 150.0), 100.0, 30, 500
         ),  # Very wide
-        'vel_rscale': TruncatedNormal(
-            true_pars.get('vel_rscale', 0.5), 0.5, 0.05, 3.0
-        ),
+        'vel_rscale': TruncatedNormal(true_pars.get('vel_rscale', 0.5), 0.5, 0.05, 3.0),
         'vel_x0': TruncatedNormal(
             true_pars.get('vel_x0', 0.0), 0.5, -offset_bound, offset_bound
         ),
@@ -305,12 +303,8 @@ def create_tng_joint_inference_task(
         ),
         # Intensity params - wide priors
         # After normalization, flux ~0.01 gives unit integrated flux in model
-        'flux': TruncatedNormal(
-            true_pars.get('flux', 0.01), 0.02, 0.001, 0.1
-        ),
-        'int_rscale': TruncatedNormal(
-            true_pars.get('int_rscale', 0.5), 0.5, 0.05, 3.0
-        ),
+        'flux': TruncatedNormal(true_pars.get('flux', 0.01), 0.02, 0.001, 0.1),
+        'int_rscale': TruncatedNormal(true_pars.get('int_rscale', 0.5), 0.5, 0.05, 3.0),
         'int_x0': TruncatedNormal(
             true_pars.get('int_x0', 0.0), 0.5, -offset_bound, offset_bound
         ),
@@ -318,9 +312,7 @@ def create_tng_joint_inference_task(
             true_pars.get('int_y0', 0.0), 0.5, -offset_bound, offset_bound
         ),
         # Shared geometric params - centered on known TNG values
-        'cosi': TruncatedNormal(
-            true_pars['cosi'], 0.2, 0.01, 0.99
-        ),
+        'cosi': TruncatedNormal(true_pars['cosi'], 0.2, 0.01, 0.99),
         'theta_int': TruncatedNormal(
             true_pars['theta_int'], 0.5, 0.0, 2 * np.pi  # Full 0-2pi range
         ),
@@ -439,29 +431,17 @@ def run_tng_sampling_test(
     )
     intensity_norm, norm_factor = normalize_intensity_map(intensity_raw)
 
-    # Calculate variance from data characteristics rather than TNG noise model
-    # This ensures sensible likelihood values since TNG doesn't match analytic models
-    # We inflate variance significantly to account for model mismatch
-    
-    # Velocity variance: TNG rotation curves don't follow arctan profiles
-    # Use much larger variance to allow for systematic model mismatch
-    vel_nonzero = velocity_raw[velocity_raw != 0]
-    if len(vel_nonzero) > 10:
-        vel_range = np.percentile(vel_nonzero, 95) - np.percentile(vel_nonzero, 5)
-        # Use 20% of the range as 1-sigma - this is ~10x larger than SNR=100 would give
-        var_vel_scalar = (0.2 * vel_range) ** 2
-    else:
-        var_vel_scalar = 100.0 ** 2  # Default 100 km/s
-    
-    # Intensity variance: TNG particle distributions don't match exponential profiles
-    # Use variance based on data RMS, inflated for model mismatch
-    int_rms = np.std(intensity_norm[intensity_norm > 0]) if (intensity_norm > 0).sum() > 0 else 0.01
-    # Allow model to be off by ~10x data RMS (very conservative for TNG mismatch)
-    var_int_scalar = (10.0 * int_rms) ** 2
-    
-    # Ensure minimum variance floors for numerical stability
-    var_vel_scalar = max(var_vel_scalar, 100.0)  # At least 100 (km/s)^2
-    var_int_scalar = max(var_int_scalar, 1e-4)  # Reasonable floor for intensity
+    # Velocity: use TNG variance array directly
+    # (uniform array from SNR-based Gaussian noise)
+    var_vel_array = var_vel
+
+    # Intensity: propagate variance through normalization
+    # If I_norm = I_raw / norm_factor, then Var(I_norm) = Var(I_raw) / norm_factor^2
+    var_int_array = var_int_raw / (norm_factor**2)
+
+    # For logging, compute mean variance
+    var_vel_mean = float(np.mean(var_vel_array))
+    var_int_mean = float(np.mean(var_int_array))
 
     # Estimate velocity parameters from data
     vel_params = estimate_velocity_params(velocity_raw, image_pars)
@@ -473,11 +453,17 @@ def run_tng_sampling_test(
     print(f"\n{'='*60}")
     print(f"TNG Sampling: SubhaloID {subhalo_id} - {test_name}")
     print(f"{'='*60}")
-    print(f"Geometric params: cosi={true_pars['cosi']:.3f}, theta_int={true_pars['theta_int']:.3f}")
-    print(f"Estimated velocity: v0={vel_params['v0']:.1f}, vcirc={vel_params['vcirc']:.1f}, "
-          f"vel_rscale={vel_params['vel_rscale']:.2f}")
-    print(f"Estimated intensity: flux={int_params['flux']:.2f}, int_rscale={int_params['int_rscale']:.2f}")
-    print(f"Variance: vel={var_vel_scalar:.2e}, int={var_int_scalar:.2e}")
+    print(
+        f"Geometric params: cosi={true_pars['cosi']:.3f}, theta_int={true_pars['theta_int']:.3f}"
+    )
+    print(
+        f"Estimated velocity: v0={vel_params['v0']:.1f}, vcirc={vel_params['vcirc']:.1f}, "
+        f"vel_rscale={vel_params['vel_rscale']:.2f}"
+    )
+    print(
+        f"Estimated intensity: flux={int_params['flux']:.2f}, int_rscale={int_params['int_rscale']:.2f}"
+    )
+    print(f"Variance (mean): vel={var_vel_mean:.2e}, int={var_int_mean:.2e}")
 
     # Create inference task
     data_vel = jnp.array(velocity_raw)
@@ -487,8 +473,8 @@ def run_tng_sampling_test(
         full_true_pars,
         data_vel,
         data_int,
-        var_vel_scalar,
-        var_int_scalar,
+        var_vel_array,
+        var_int_array,
         image_pars,
         image_pars,
     )
@@ -525,9 +511,7 @@ def run_tng_sampling_test(
     map_pars = get_map_from_samples(result)
 
     # Evaluate model at MAP
-    model_vel, model_int = evaluate_model_at_map(
-        task, map_pars, image_pars, image_pars
-    )
+    model_vel, model_int = evaluate_model_at_map(task, map_pars, image_pars, image_pars)
 
     # Save corner plot
     sampler_info = {
@@ -543,7 +527,9 @@ def run_tng_sampling_test(
     }
 
     # Only include sampled params in true_values for corner plot
-    corner_true_values = {k: full_true_pars[k] for k in result.param_names if k in full_true_pars}
+    corner_true_values = {
+        k: full_true_pars[k] for k in result.param_names if k in full_true_pars
+    }
 
     fig = plot_corner(
         result,
@@ -567,8 +553,8 @@ def run_tng_sampling_test(
         model_int=np.asarray(model_int),
         test_name=f"{test_name}_subhalo{subhalo_id}",
         output_dir=output_dir,
-        variance_vel=var_vel_scalar,
-        variance_int=var_int_scalar,
+        variance_vel=var_vel_mean,
+        variance_int=var_int_mean,
         n_params=task.n_params,
         model_label='MAP Model',
     )
@@ -621,8 +607,10 @@ class TestTNGNativeSampling:
             'g2': 0.0,
         }
 
-        print(f"\nNative orientation: inc={gen.native_inclination_deg:.1f}°, "
-              f"PA={gen.native_pa_deg:.1f}°")
+        print(
+            f"\nNative orientation: inc={gen.native_inclination_deg:.1f}°, "
+            f"PA={gen.native_pa_deg:.1f}°"
+        )
         print(f"  -> cosi={gen.native_cosi:.3f}, theta_int={gen.native_pa_rad:.3f} rad")
 
         # Create render config for native orientation
@@ -689,8 +677,10 @@ class TestTNGCustomSampling:
             'y0': 0.0,
         }
 
-        print(f"\nCustom orientation: inc={np.degrees(np.arccos(self.CUSTOM_COSI)):.1f}°, "
-              f"PA={self.CUSTOM_PA_DEG:.1f}°")
+        print(
+            f"\nCustom orientation: inc={np.degrees(np.arccos(self.CUSTOM_COSI)):.1f}°, "
+            f"PA={self.CUSTOM_PA_DEG:.1f}°"
+        )
         print(f"  -> cosi={self.CUSTOM_COSI:.3f}, theta_int={theta_int:.3f} rad")
         print(f"  -> preserve_gas_stellar_offset=False (aligned geometry)")
 
@@ -728,8 +718,10 @@ class TestTNGCustomSampling:
         # (with aligned geometry, model should fit better)
         map_cosi = results['map_pars'].get('cosi', 0)
         cosi_error = abs(map_cosi - self.CUSTOM_COSI)
-        print(f"cosi recovery: true={self.CUSTOM_COSI:.3f}, MAP={map_cosi:.3f}, "
-              f"error={cosi_error:.3f}")
+        print(
+            f"cosi recovery: true={self.CUSTOM_COSI:.3f}, MAP={map_cosi:.3f}, "
+            f"error={cosi_error:.3f}"
+        )
 
         # Warn if recovery is poor (not fail - TNG doesn't match model exactly)
         if cosi_error > 0.3:

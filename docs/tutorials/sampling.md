@@ -262,8 +262,8 @@ The key feature is **Z-score reparameterization**, which automatically normalize
 from kl_pipe.sampling import NumpyroSamplerConfig, ReparamStrategy
 
 config_numpyro = NumpyroSamplerConfig(
-    n_samples=1000,               # Samples per chain
-    n_warmup=500,                 # Warmup iterations
+    n_samples=1250,               # Samples per chain
+    n_warmup=625,                 # Warmup iterations
     n_chains=4,                   # Number of chains (for R-hat)
     dense_mass=True,              # Dense mass matrix for correlations
     reparam_strategy='prior',     # Z-score using prior mean/std
@@ -499,8 +499,8 @@ For joint models, NumPyro is recommended due to its Z-score reparameterization:
 ```{code-cell} python
 # NumPyro handles multi-scale gradients automatically
 config_joint = NumpyroSamplerConfig(
-    n_samples=2000,
-    n_warmup=1000,
+    n_samples=2500,
+    n_warmup=1250,
     n_chains=4,
     dense_mass=True,
     seed=42,
@@ -666,16 +666,18 @@ task_tng = InferenceTask.from_joint_model(
     priors=priors_tng,
     data_vel=jnp.array(velocity_map),
     data_int=jnp.array(intensity_normalized),
-    variance_vel=jnp.array(var_vel_tng),                    # per-pixel variance array
-    variance_int=jnp.array(var_int_tng) / flux_estimate**2, # rescaled for normalization
+    # Use actual TNG variance -- don't inflate to hide model mismatch!
+    # Proper propagation: Var(I_norm) = Var(I_raw) / flux_estimate^2
+    variance_vel=var_vel_tng,
+    variance_int=var_int_tng / flux_estimate**2,
     image_pars_vel=image_pars_tng,
     image_pars_int=image_pars_tng,
 )
 
 # Run with NumPyro
 config_tng = NumpyroSamplerConfig(
-    n_samples=1000,
-    n_warmup=500,
+    n_samples=1250,
+    n_warmup=625,
     n_chains=4,
     dense_mass=True,
     seed=42,

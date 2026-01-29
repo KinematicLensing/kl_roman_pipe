@@ -236,11 +236,7 @@ class LogUniform(Prior):
     def log_prob(self, value: jnp.ndarray) -> jnp.ndarray:
         log_range = jnp.log(self.high / self.low)
         in_bounds = (value >= self.low) & (value <= self.high)
-        return jnp.where(
-            in_bounds,
-            -jnp.log(value) - jnp.log(log_range),
-            -jnp.inf
-        )
+        return jnp.where(in_bounds, -jnp.log(value) - jnp.log(log_range), -jnp.inf)
 
     def sample(self, rng_key: jax.Array, shape: Tuple[int, ...] = ()) -> jnp.ndarray:
         log_low = jnp.log(self.low)

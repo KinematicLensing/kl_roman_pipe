@@ -138,6 +138,7 @@ class EmceeSampler(Sampler):
         # Check walker count
         if n_walkers < 2 * n_params:
             import warnings
+
             warnings.warn(
                 f"n_walkers ({n_walkers}) is less than 2 * n_params ({2 * n_params}). "
                 f"emcee recommends at least 2 * n_params walkers for good performance."
@@ -149,11 +150,14 @@ class EmceeSampler(Sampler):
         def log_prob(theta):
             """Wrapper for emcee compatibility."""
             import jax.numpy as jnp
+
             return float(jax_log_prob(jnp.array(theta)))
 
         # Initialize sampler
         sampler = emcee.EnsembleSampler(
-            n_walkers, n_params, log_prob,
+            n_walkers,
+            n_params,
+            log_prob,
             moves=self._moves,
             vectorize=self._vectorize,
         )

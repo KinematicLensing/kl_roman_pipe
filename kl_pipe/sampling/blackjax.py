@@ -199,7 +199,9 @@ class BlackJAXSampler(Sampler):
             log_prob=log_prob_vals,
             param_names=self.task.sampled_names,
             fixed_params=self.task.fixed_params,
-            acceptance_fraction=float(acceptance_rate) if acceptance_rate is not None else None,
+            acceptance_fraction=(
+                float(acceptance_rate) if acceptance_rate is not None else None
+            ),
             converged=True,
             diagnostics={
                 'algorithm': self._algorithm,
@@ -256,7 +258,9 @@ class BlackJAXSampler(Sampler):
 
         # Validate adapted parameters
         step_size = params.get('step_size') if isinstance(params, dict) else None
-        inverse_mass_matrix = params.get('inverse_mass_matrix') if isinstance(params, dict) else None
+        inverse_mass_matrix = (
+            params.get('inverse_mass_matrix') if isinstance(params, dict) else None
+        )
 
         if step_size is None or not np.isfinite(step_size) or step_size <= 0:
             raise ValueError(
@@ -289,16 +293,15 @@ class BlackJAXSampler(Sampler):
 
         key, sample_key = random.split(key)
         _, (samples, acceptance_rates) = jax.lax.scan(
-            one_step,
-            (state, sample_key),
-            None,
-            length=n_samples
+            one_step, (state, sample_key), None, length=n_samples
         )
 
         mean_acceptance = float(jnp.mean(acceptance_rates))
 
         # Extract step size from adapted parameters
-        step_size = float(params.get('step_size', 0.0)) if isinstance(params, dict) else None
+        step_size = (
+            float(params.get('step_size', 0.0)) if isinstance(params, dict) else None
+        )
 
         return samples, mean_acceptance, step_size
 
@@ -341,10 +344,7 @@ class BlackJAXSampler(Sampler):
 
         key, sample_key = random.split(key)
         _, (samples, acceptance_rates) = jax.lax.scan(
-            one_step,
-            (state, sample_key),
-            None,
-            length=n_samples
+            one_step, (state, sample_key), None, length=n_samples
         )
 
         mean_acceptance = float(jnp.mean(acceptance_rates))

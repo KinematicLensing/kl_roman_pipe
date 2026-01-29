@@ -245,12 +245,14 @@ class TestPriorDict:
 
     def test_separation_sampled_fixed(self):
         """Correctly separates sampled and fixed parameters."""
-        priors = PriorDict({
-            'a': Uniform(0, 1),
-            'b': Gaussian(0, 1),
-            'c': 5.0,
-            'd': 10,
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 1),
+                'b': Gaussian(0, 1),
+                'c': 5.0,
+                'd': 10,
+            }
+        )
 
         assert set(priors.sampled_names) == {'a', 'b'}
         assert set(priors.fixed_names) == {'c', 'd'}
@@ -258,11 +260,13 @@ class TestPriorDict:
 
     def test_n_params(self):
         """Counts sampled and fixed correctly."""
-        priors = PriorDict({
-            'a': Uniform(0, 1),
-            'b': Gaussian(0, 1),
-            'c': 5.0,
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 1),
+                'b': Gaussian(0, 1),
+                'c': 5.0,
+            }
+        )
 
         assert priors.n_sampled == 2
         assert priors.n_fixed == 1
@@ -270,10 +274,12 @@ class TestPriorDict:
 
     def test_log_prior(self):
         """Computes correct joint log prior."""
-        priors = PriorDict({
-            'a': Uniform(0, 1),
-            'b': Uniform(0, 1),
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 1),
+                'b': Uniform(0, 1),
+            }
+        )
 
         # Both in bounds: sum of two uniform(0,1) log probs
         theta = jnp.array([0.5, 0.5])
@@ -286,10 +292,12 @@ class TestPriorDict:
 
     def test_sample(self):
         """Samples from all priors."""
-        priors = PriorDict({
-            'a': Uniform(0, 1),
-            'b': Gaussian(0, 1),
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 1),
+                'b': Gaussian(0, 1),
+            }
+        )
 
         key = random.PRNGKey(42)
         samples = priors.sample(key, 100)
@@ -304,11 +312,13 @@ class TestPriorDict:
 
     def test_get_bounds(self):
         """Returns bounds for all sampled parameters."""
-        priors = PriorDict({
-            'a': Uniform(0, 10),
-            'b': Gaussian(0, 1),
-            'c': 5.0,
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 10),
+                'b': Gaussian(0, 1),
+                'c': 5.0,
+            }
+        )
 
         bounds = priors.get_bounds()
         # Sorted order: ['a', 'b']
@@ -317,11 +327,13 @@ class TestPriorDict:
 
     def test_theta_to_full_pars(self):
         """Converts theta to full parameter dict."""
-        priors = PriorDict({
-            'vcirc': Uniform(100, 300),
-            'cosi': Uniform(0.1, 0.9),
-            'v0': 10.0,
-        })
+        priors = PriorDict(
+            {
+                'vcirc': Uniform(100, 300),
+                'cosi': Uniform(0.1, 0.9),
+                'v0': 10.0,
+            }
+        )
 
         theta = jnp.array([0.5, 200.0])  # [cosi, vcirc] in sorted order
         full_pars = priors.theta_to_full_pars(theta, ('vcirc', 'cosi', 'v0'))
@@ -332,11 +344,13 @@ class TestPriorDict:
 
     def test_full_pars_to_theta(self):
         """Extracts theta from full parameter dict."""
-        priors = PriorDict({
-            'vcirc': Uniform(100, 300),
-            'cosi': Uniform(0.1, 0.9),
-            'v0': 10.0,
-        })
+        priors = PriorDict(
+            {
+                'vcirc': Uniform(100, 300),
+                'cosi': Uniform(0.1, 0.9),
+                'v0': 10.0,
+            }
+        )
 
         full_pars = {'vcirc': 200.0, 'cosi': 0.5, 'v0': 10.0}
         theta = priors.full_pars_to_theta(full_pars)
@@ -347,10 +361,12 @@ class TestPriorDict:
 
     def test_get_prior(self):
         """Can retrieve individual priors."""
-        priors = PriorDict({
-            'a': Uniform(0, 10),
-            'b': 5.0,
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 10),
+                'b': 5.0,
+            }
+        )
 
         assert isinstance(priors.get_prior('a'), Uniform)
 
@@ -406,10 +422,12 @@ class TestJAXCompatibility:
 
     def test_prior_dict_log_prior_jit(self):
         """PriorDict.log_prior can be JIT compiled."""
-        priors = PriorDict({
-            'a': Uniform(0, 1),
-            'b': Gaussian(0, 1),
-        })
+        priors = PriorDict(
+            {
+                'a': Uniform(0, 1),
+                'b': Gaussian(0, 1),
+            }
+        )
 
         jit_log_prior = jax.jit(priors.log_prior)
         theta = jnp.array([0.5, 0.0])

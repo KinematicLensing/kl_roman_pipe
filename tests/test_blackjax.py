@@ -77,15 +77,17 @@ def simple_velocity_task():
     # - vel_rscale must be positive and at least ~1 pixel (0.4 arcsec here)
     # Fix g1, g2 to reduce dimensionality for this simple test
     pixel_scale = image_pars.pixel_scale  # 0.4 arcsec/pixel
-    priors = PriorDict({
-        'v0': Gaussian(10.0, 5.0),
-        'vcirc': Gaussian(200.0, 50.0),
-        'vel_rscale': TruncatedNormal(5.0, 2.0, pixel_scale, 20.0),
-        'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
-        'theta_int': Gaussian(0.785, 0.3),
-        'g1': 0.02,  # Fixed
-        'g2': -0.01,  # Fixed
-    })
+    priors = PriorDict(
+        {
+            'v0': Gaussian(10.0, 5.0),
+            'vcirc': Gaussian(200.0, 50.0),
+            'vel_rscale': TruncatedNormal(5.0, 2.0, pixel_scale, 20.0),
+            'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
+            'theta_int': Gaussian(0.785, 0.3),
+            'g1': 0.02,  # Fixed
+            'g2': -0.01,  # Fixed
+        }
+    )
 
     # Create inference task
     task = InferenceTask.from_velocity_model(
@@ -130,15 +132,17 @@ def bounded_velocity_task():
 
     # Use Uniform priors (bounded) - may have gradient issues at boundaries
     # Fix g1, g2 to reduce dimensionality for this simple test
-    priors = PriorDict({
-        'v0': Uniform(-50, 50),
-        'vcirc': Uniform(50, 350),
-        'vel_rscale': Uniform(1.0, 15.0),
-        'cosi': Uniform(0.1, 0.99),
-        'theta_int': Uniform(0.0, 3.14159),
-        'g1': 0.02,  # Fixed
-        'g2': -0.01,  # Fixed
-    })
+    priors = PriorDict(
+        {
+            'v0': Uniform(-50, 50),
+            'vcirc': Uniform(50, 350),
+            'vel_rscale': Uniform(1.0, 15.0),
+            'cosi': Uniform(0.1, 0.99),
+            'theta_int': Uniform(0.0, 3.14159),
+            'g1': 0.02,  # Fixed
+            'g2': -0.01,  # Fixed
+        }
+    )
 
     # Create inference task
     task = InferenceTask.from_velocity_model(
@@ -165,7 +169,9 @@ class TestBlackJAXDiagnostics:
     These tests verify the gradient-based sampling infrastructure is working.
     """
 
-    def test_gradient_computation_gaussian_priors(self, simple_velocity_task, output_dir):
+    def test_gradient_computation_gaussian_priors(
+        self, simple_velocity_task, output_dir
+    ):
         """Verify gradients are finite and non-zero with Gaussian priors."""
         task, true_pars = simple_velocity_task
 
@@ -190,12 +196,14 @@ class TestBlackJAXDiagnostics:
             all_zero = bool(jnp.allclose(grad, 0.0))
             grad_norm = float(jnp.linalg.norm(grad))
 
-            results.append({
-                'has_nan': has_nan,
-                'has_inf': has_inf,
-                'all_zero': all_zero,
-                'grad_norm': grad_norm,
-            })
+            results.append(
+                {
+                    'has_nan': has_nan,
+                    'has_inf': has_inf,
+                    'all_zero': all_zero,
+                    'grad_norm': grad_norm,
+                }
+            )
 
         # Write results to file
         log_path = output_dir / "gradient_test_gaussian.txt"
@@ -203,15 +211,19 @@ class TestBlackJAXDiagnostics:
             f.write("Gradient Computation Test (Gaussian Priors)\n")
             f.write("=" * 60 + "\n\n")
             for i, r in enumerate(results):
-                f.write(f"Point {i}: norm={r['grad_norm']:.4f}, "
-                       f"nan={r['has_nan']}, inf={r['has_inf']}, zero={r['all_zero']}\n")
+                f.write(
+                    f"Point {i}: norm={r['grad_norm']:.4f}, "
+                    f"nan={r['has_nan']}, inf={r['has_inf']}, zero={r['all_zero']}\n"
+                )
 
             # Summary
             n_nan = sum(r['has_nan'] for r in results)
             n_inf = sum(r['has_inf'] for r in results)
             n_zero = sum(r['all_zero'] for r in results)
-            f.write(f"\nSummary: {n_nan}/{n_test_points} NaN, "
-                   f"{n_inf}/{n_test_points} Inf, {n_zero}/{n_test_points} all-zero\n")
+            f.write(
+                f"\nSummary: {n_nan}/{n_test_points} NaN, "
+                f"{n_inf}/{n_test_points} Inf, {n_zero}/{n_test_points} all-zero\n"
+            )
 
         # Check results - warn but don't fail for occasional NaN (can happen at edge cases)
         n_nan = sum(r['has_nan'] for r in results)
@@ -224,17 +236,22 @@ class TestBlackJAXDiagnostics:
         if n_inf > n_test_points // 2:
             pytest.fail(f"Too many Inf gradients: {n_inf}/{n_test_points}")
         if n_zero == n_test_points:
-            pytest.fail("All gradients are zero - log_posterior may not be differentiable")
+            pytest.fail(
+                "All gradients are zero - log_posterior may not be differentiable"
+            )
 
         # Warn if any issues found
         if n_nan > 0 or n_inf > 0:
             import warnings
+
             warnings.warn(
                 f"Gradient issues detected: {n_nan} NaN, {n_inf} Inf out of {n_test_points} samples. "
                 "This may indicate numerical instability at some parameter values."
             )
 
-    def test_gradient_computation_bounded_priors(self, bounded_velocity_task, output_dir):
+    def test_gradient_computation_bounded_priors(
+        self, bounded_velocity_task, output_dir
+    ):
         """Verify gradients with bounded (Uniform) priors - may have issues at boundaries."""
         task, true_pars = bounded_velocity_task
 
@@ -259,14 +276,16 @@ class TestBlackJAXDiagnostics:
             all_zero = bool(jnp.allclose(grad, 0.0))
             grad_norm = float(jnp.linalg.norm(grad))
 
-            results.append({
-                'theta': theta,
-                'grad': grad,
-                'has_nan': has_nan,
-                'has_inf': has_inf,
-                'all_zero': all_zero,
-                'grad_norm': grad_norm,
-            })
+            results.append(
+                {
+                    'theta': theta,
+                    'grad': grad,
+                    'has_nan': has_nan,
+                    'has_inf': has_inf,
+                    'all_zero': all_zero,
+                    'grad_norm': grad_norm,
+                }
+            )
 
         # Write results to file
         log_path = output_dir / "gradient_test_bounded.txt"
@@ -277,8 +296,10 @@ class TestBlackJAXDiagnostics:
             f.write("This is expected behavior for hard-boundary priors.\n\n")
 
             for i, r in enumerate(results):
-                f.write(f"Point {i}: norm={r['grad_norm']:.4f}, "
-                       f"nan={r['has_nan']}, inf={r['has_inf']}, zero={r['all_zero']}\n")
+                f.write(
+                    f"Point {i}: norm={r['grad_norm']:.4f}, "
+                    f"nan={r['has_nan']}, inf={r['has_inf']}, zero={r['all_zero']}\n"
+                )
                 f.write(f"  theta = {np.array(r['theta'])}\n")
                 f.write(f"  grad  = {np.array(r['grad'])}\n\n")
 
@@ -286,11 +307,15 @@ class TestBlackJAXDiagnostics:
             n_nan = sum(r['has_nan'] for r in results)
             n_inf = sum(r['has_inf'] for r in results)
             n_zero = sum(r['all_zero'] for r in results)
-            f.write(f"\nSummary: {n_nan}/{n_test_points} NaN, "
-                   f"{n_inf}/{n_test_points} Inf, {n_zero}/{n_test_points} all-zero\n")
+            f.write(
+                f"\nSummary: {n_nan}/{n_test_points} NaN, "
+                f"{n_inf}/{n_test_points} Inf, {n_zero}/{n_test_points} all-zero\n"
+            )
 
             if n_nan > 0 or n_zero > n_test_points // 2:
-                f.write("\nWARNING: Gradient issues detected. This may cause BlackJAX to fail.\n")
+                f.write(
+                    "\nWARNING: Gradient issues detected. This may cause BlackJAX to fail.\n"
+                )
                 f.write("Consider using parameter transforms or Gaussian priors.\n")
 
         # For bounded priors, we expect some issues - just report them
@@ -335,9 +360,13 @@ class TestBlackJAXDiagnostics:
 
                 # Check if reasonable
                 if step_size < 1e-8:
-                    f.write("WARNING: Step size very small - may indicate gradient issues\n")
+                    f.write(
+                        "WARNING: Step size very small - may indicate gradient issues\n"
+                    )
                 elif step_size > 100:
-                    f.write("WARNING: Step size very large - may indicate flat likelihood\n")
+                    f.write(
+                        "WARNING: Step size very large - may indicate flat likelihood\n"
+                    )
                 else:
                     f.write("Step size appears reasonable\n")
             else:
@@ -380,11 +409,17 @@ class TestBlackJAXDiagnostics:
             if acceptance is None:
                 f.write("WARNING: Acceptance rate is None\n")
             elif acceptance < 0.1:
-                f.write("WARNING: Very low acceptance rate - step size may be too large\n")
+                f.write(
+                    "WARNING: Very low acceptance rate - step size may be too large\n"
+                )
             elif acceptance > 0.99:
-                f.write("WARNING: Very high acceptance rate - step size may be too small\n")
+                f.write(
+                    "WARNING: Very high acceptance rate - step size may be too small\n"
+                )
             else:
-                f.write("Acceptance rate is in healthy range (0.4-0.95 typical for NUTS)\n")
+                f.write(
+                    "Acceptance rate is in healthy range (0.4-0.95 typical for NUTS)\n"
+                )
 
         assert acceptance is not None, "Acceptance rate not returned"
         # NUTS typically has high acceptance (0.6-0.9), but we use loose bounds
@@ -426,13 +461,18 @@ class TestBlackJAXDiagnostics:
                     zero_variance_params.append(name)
 
             if zero_variance_params:
-                f.write(f"\nWARNING: Parameters with zero variance: {zero_variance_params}\n")
-                f.write("This indicates the sampler is not exploring the parameter space.\n")
+                f.write(
+                    f"\nWARNING: Parameters with zero variance: {zero_variance_params}\n"
+                )
+                f.write(
+                    "This indicates the sampler is not exploring the parameter space.\n"
+                )
 
         # Check that at least some parameters have variance
         n_zero = sum(1 for v in variances.values() if v < 1e-10)
-        assert n_zero < len(variances), \
-            f"All {len(variances)} parameters have zero variance - sampler not moving"
+        assert n_zero < len(
+            variances
+        ), f"All {len(variances)} parameters have zero variance - sampler not moving"
 
     def test_bounded_vs_unbounded_comparison(
         self, simple_velocity_task, bounded_velocity_task, output_dir
@@ -495,11 +535,13 @@ class TestBlackJAXDiagnostics:
 
             # Check for zero-variance parameters
             gauss_zero = sum(
-                1 for name in results['gaussian'].param_names
+                1
+                for name in results['gaussian'].param_names
                 if np.var(results['gaussian'].get_chain(name)) < 1e-10
             )
             bound_zero = sum(
-                1 for name in results['bounded'].param_names
+                1
+                for name in results['bounded'].param_names
                 if np.var(results['bounded'].get_chain(name)) < 1e-10
             )
 
@@ -574,19 +616,21 @@ def joint_model_task_bounded():
     )
 
     # TruncatedNormal priors (same as test_sampler_comparison)
-    priors = PriorDict({
-        'v0': Gaussian(true_pars['v0'], 5.0),
-        'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-        'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
-        'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
-        'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
-        'int_x0': 0.0,  # Fixed
-        'int_y0': 0.0,  # Fixed
-        'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),
-        'theta_int': TruncatedNormal(np.pi / 2, 1.0, 0, np.pi),
-        'g1': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
-        'g2': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
-    })
+    priors = PriorDict(
+        {
+            'v0': Gaussian(true_pars['v0'], 5.0),
+            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
+            'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
+            'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
+            'int_x0': 0.0,  # Fixed
+            'int_y0': 0.0,  # Fixed
+            'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),
+            'theta_int': TruncatedNormal(np.pi / 2, 1.0, 0, np.pi),
+            'g1': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
+            'g2': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
+        }
+    )
 
     task = InferenceTask.from_joint_model(
         model=joint_model,
@@ -655,19 +699,21 @@ def joint_model_task_gaussian():
     )
 
     # Gaussian priors (no bounds) - for comparison
-    priors = PriorDict({
-        'v0': Gaussian(10.0, 5.0),
-        'vcirc': Gaussian(200.0, 50.0),
-        'vel_rscale': Gaussian(5.0, 2.0),
-        'flux': Gaussian(1.0, 0.5),
-        'int_rscale': Gaussian(3.0, 2.0),
-        'int_x0': 0.0,  # Fixed
-        'int_y0': 0.0,  # Fixed
-        'cosi': Gaussian(0.6, 0.2),
-        'theta_int': Gaussian(0.785, 0.5),
-        'g1': Gaussian(0.0, 0.05),
-        'g2': Gaussian(0.0, 0.05),
-    })
+    priors = PriorDict(
+        {
+            'v0': Gaussian(10.0, 5.0),
+            'vcirc': Gaussian(200.0, 50.0),
+            'vel_rscale': Gaussian(5.0, 2.0),
+            'flux': Gaussian(1.0, 0.5),
+            'int_rscale': Gaussian(3.0, 2.0),
+            'int_x0': 0.0,  # Fixed
+            'int_y0': 0.0,  # Fixed
+            'cosi': Gaussian(0.6, 0.2),
+            'theta_int': Gaussian(0.785, 0.5),
+            'g1': Gaussian(0.0, 0.05),
+            'g2': Gaussian(0.0, 0.05),
+        }
+    )
 
     task = InferenceTask.from_joint_model(
         model=joint_model,
@@ -716,13 +762,15 @@ class TestBlackJAXJointModel:
             grad_finite = bool(jnp.all(jnp.isfinite(grad)))
             grad_nonzero = bool(jnp.any(jnp.abs(grad) > 1e-10))
 
-            results.append({
-                'position': position,
-                'log_prob': log_prob,
-                'grad': grad,
-                'grad_finite': grad_finite,
-                'grad_nonzero': grad_nonzero,
-            })
+            results.append(
+                {
+                    'position': position,
+                    'log_prob': log_prob,
+                    'grad': grad,
+                    'grad_finite': grad_finite,
+                    'grad_nonzero': grad_nonzero,
+                }
+            )
 
         # Write diagnostic log
         log_path = output_dir / "joint_model_gradient_check.txt"
@@ -740,16 +788,19 @@ class TestBlackJAXJointModel:
 
             n_finite = sum(r['grad_finite'] for r in results)
             n_nonzero = sum(r['grad_nonzero'] for r in results)
-            f.write(f"Summary: {n_finite}/{n_test} finite, {n_nonzero}/{n_test} nonzero\n")
+            f.write(
+                f"Summary: {n_finite}/{n_test} finite, {n_nonzero}/{n_test} nonzero\n"
+            )
 
         # At least some should be finite
-        assert n_finite >= n_test // 2, \
-            f"Too many NaN/Inf gradients: only {n_finite}/{n_test} finite"
+        assert (
+            n_finite >= n_test // 2
+        ), f"Too many NaN/Inf gradients: only {n_finite}/{n_test} finite"
 
     @pytest.mark.xfail(
         reason="Joint model has poor parameter scaling: intensity gradients are ~1000x "
-               "larger than velocity gradients, causing NUTS step size to shrink to ~1e-8. "
-               "This is a known limitation requiring model reparameterization to fix.",
+        "larger than velocity gradients, causing NUTS step size to shrink to ~1e-8. "
+        "This is a known limitation requiring model reparameterization to fix.",
         strict=True,  # Test should fail; if it passes, we want to know!
     )
     def test_joint_model_variance_bounded(self, joint_model_task_bounded, output_dir):
@@ -814,15 +865,16 @@ class TestBlackJAXJointModel:
                 f.write("\nAll parameters have non-zero variance.\n")
 
         # Assert no zero-variance parameters
-        assert len(zero_var_params) == 0, \
-            f"BlackJAX produced zero variance for parameters: {zero_var_params}. " \
-            f"Step size was {step_size}, acceptance was {acceptance:.2%}. " \
+        assert len(zero_var_params) == 0, (
+            f"BlackJAX produced zero variance for parameters: {zero_var_params}. "
+            f"Step size was {step_size}, acceptance was {acceptance:.2%}. "
             f"See {log_path} for details."
+        )
 
     @pytest.mark.xfail(
         reason="Joint model has poor parameter scaling: intensity gradients are ~1000x "
-               "larger than velocity gradients, causing NUTS step size to shrink to ~1e-8. "
-               "This is a known limitation requiring model reparameterization to fix.",
+        "larger than velocity gradients, causing NUTS step size to shrink to ~1e-8. "
+        "This is a known limitation requiring model reparameterization to fix.",
         strict=True,
     )
     def test_joint_model_variance_gaussian(self, joint_model_task_gaussian, output_dir):
@@ -880,9 +932,10 @@ class TestBlackJAXJointModel:
                 f.write("\nAll parameters have non-zero variance.\n")
 
         # Assert no zero-variance parameters
-        assert len(zero_var_params) == 0, \
-            f"BlackJAX produced zero variance for parameters: {zero_var_params}. " \
+        assert len(zero_var_params) == 0, (
+            f"BlackJAX produced zero variance for parameters: {zero_var_params}. "
             f"Step size was {step_size}. See {log_path} for details."
+        )
 
     def test_joint_bounded_vs_gaussian_comparison(
         self, joint_model_task_bounded, joint_model_task_gaussian, output_dir
@@ -940,11 +993,13 @@ class TestBlackJAXJointModel:
             f.write("COMPARISON SUMMARY:\n")
 
             bound_zero = sum(
-                1 for name in results['bounded'].param_names
+                1
+                for name in results['bounded'].param_names
                 if np.var(results['bounded'].get_chain(name)) < 1e-10
             )
             gauss_zero = sum(
-                1 for name in results['gaussian'].param_names
+                1
+                for name in results['gaussian'].param_names
                 if np.var(results['gaussian'].get_chain(name)) < 1e-10
             )
 

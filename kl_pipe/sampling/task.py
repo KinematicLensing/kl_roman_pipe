@@ -94,11 +94,17 @@ class InferenceTask:
 
     # Cached functions (computed lazily)
     _log_posterior_fn: Optional[Callable] = field(default=None, init=False, repr=False)
-    _log_posterior_grad_fn: Optional[Callable] = field(default=None, init=False, repr=False)
+    _log_posterior_grad_fn: Optional[Callable] = field(
+        default=None, init=False, repr=False
+    )
 
     # Pre-computed mapping for JIT-compatible theta building
-    _sampled_to_full_indices: Optional[jnp.ndarray] = field(default=None, init=False, repr=False)
-    _fixed_theta_template: Optional[jnp.ndarray] = field(default=None, init=False, repr=False)
+    _sampled_to_full_indices: Optional[jnp.ndarray] = field(
+        default=None, init=False, repr=False
+    )
+    _fixed_theta_template: Optional[jnp.ndarray] = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self):
         """Pre-compute index mapping for JIT-compatible theta construction."""
@@ -251,11 +257,7 @@ class InferenceTask:
         log_like = self.log_likelihood(theta_sampled)
 
         # Return -inf if prior is -inf, otherwise return sum
-        return jnp.where(
-            jnp.isfinite(log_prior),
-            log_prior + log_like,
-            -jnp.inf
-        )
+        return jnp.where(jnp.isfinite(log_prior), log_prior + log_like, -jnp.inf)
 
     def get_log_posterior_fn(self) -> Callable:
         """
@@ -468,9 +470,12 @@ class InferenceTask:
 
         likelihood_fn = create_jitted_likelihood_joint(
             model,
-            image_pars_vel, image_pars_int,
-            variance_vel, variance_int,
-            data_vel, data_int,
+            image_pars_vel,
+            image_pars_int,
+            variance_vel,
+            variance_int,
+            data_vel,
+            data_int,
         )
 
         return cls(

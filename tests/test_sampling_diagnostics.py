@@ -64,6 +64,7 @@ BASELINE_SAMPLER = 'numpyro'
 
 # Skip nautilus by default (set INCLUDE_NAUTILUS=1 to include)
 import os
+
 INCLUDE_NAUTILUS = os.environ.get('INCLUDE_NAUTILUS', '0') == '1'
 
 
@@ -341,7 +342,9 @@ def save_summary_table(
 
     for sampler_name, result in results.items():
         lines.append(f"\n{sampler_name.upper()}")
-        lines.append(f"Time: {timings[sampler_name]:.1f}s | N samples: {result.n_samples}")
+        lines.append(
+            f"Time: {timings[sampler_name]:.1f}s | N samples: {result.n_samples}"
+        )
         if result.evidence is not None:
             lines.append(f"Log evidence: {result.evidence:.2f}")
         if result.acceptance_fraction is not None:
@@ -510,7 +513,9 @@ class TestJointSamplingDiagnostics:
         )
 
         # Run sampler - use more iterations when sampling shear
-        sampler_config = self.SAMPLER_CONFIG_SHEAR if sample_shear else self.SAMPLER_CONFIG
+        sampler_config = (
+            self.SAMPLER_CONFIG_SHEAR if sample_shear else self.SAMPLER_CONFIG
+        )
         sampler = build_sampler('emcee', task, sampler_config)
         start_time = time.time()
         result = sampler.run()
@@ -536,7 +541,7 @@ class TestJointSamplingDiagnostics:
                 'n_walkers': sampler_config.n_walkers,
                 'n_iterations': sampler_config.n_iterations,
                 'SNR': snr,
-            }
+            },
         }
         fig = plot_corner(
             result,
@@ -565,7 +570,8 @@ class TestJointSamplingDiagnostics:
 
         # 3. Parameter recovery plot with joint Nσ validation
         fig, recovery_stats = plot_recovery(
-            result, true_pars,
+            result,
+            true_pars,
             output_path=test_dir / f"{test_name}_parameter_recovery.png",
             sampler_name='emcee',
         )
@@ -574,8 +580,10 @@ class TestJointSamplingDiagnostics:
         # Print summary and joint Nσ
         print(f"\n{'='*60}")
         print(f"Test: {test_name}")
-        print(f"Joint Nσ: {recovery_stats['joint_nsigma']:.2f} "
-              f"(color: {recovery_stats['title_color']})")
+        print(
+            f"Joint Nσ: {recovery_stats['joint_nsigma']:.2f} "
+            f"(color: {recovery_stats['title_color']})"
+        )
         print(f"{'='*60}")
         print_summary(result, true_values=true_pars)
 
@@ -682,7 +690,9 @@ class TestSamplerComparison:
         )
         sampler = build_sampler('emcee', task, config_emcee)
         emcee_log = test_config.get_sampler_log_path(test_name, 'emcee')
-        with redirect_sampler_output(emcee_log, also_terminal=test_config.verbose_terminal):
+        with redirect_sampler_output(
+            emcee_log, also_terminal=test_config.verbose_terminal
+        ):
             results['emcee'] = sampler.run()
         timings['emcee'] = time.time() - start
         print(f"emcee completed in {timings['emcee']:.1f}s")
@@ -695,15 +705,17 @@ class TestSamplerComparison:
             print("\nRunning nautilus...")
             start = time.time()
             config_nautilus = NestedSamplerConfig(
-                n_live=500,      # ~50x n_params for reliable convergence
-                n_networks=4,    # Default network ensemble size
+                n_live=500,  # ~50x n_params for reliable convergence
+                n_networks=4,  # Default network ensemble size
                 seed=42,
                 progress=False,
                 verbose=False,
             )
             sampler = build_sampler('nautilus', task, config_nautilus)
             nautilus_log = test_config.get_sampler_log_path(test_name, 'nautilus')
-            with redirect_sampler_output(nautilus_log, also_terminal=test_config.verbose_terminal):
+            with redirect_sampler_output(
+                nautilus_log, also_terminal=test_config.verbose_terminal
+            ):
                 results['nautilus'] = sampler.run()
             timings['nautilus'] = time.time() - start
             print(f"nautilus completed in {timings['nautilus']:.1f}s")
@@ -719,8 +731,8 @@ class TestSamplerComparison:
         print("\nRunning numpyro...")
         start = time.time()
         config_numpyro = NumpyroSamplerConfig(
-            n_samples=1000,   # Increase for tighter constraints
-            n_warmup=500,     # Increase for better adaptation
+            n_samples=1000,  # Increase for tighter constraints
+            n_warmup=500,  # Increase for better adaptation
             n_chains=4,
             chain_method='vectorized',  # Run chains in parallel on single device
             seed=42,
@@ -730,7 +742,9 @@ class TestSamplerComparison:
         )
         sampler = build_sampler('numpyro', task, config_numpyro)
         numpyro_log = test_config.get_sampler_log_path(test_name, 'numpyro')
-        with redirect_sampler_output(numpyro_log, also_terminal=test_config.verbose_terminal):
+        with redirect_sampler_output(
+            numpyro_log, also_terminal=test_config.verbose_terminal
+        ):
             results['numpyro'] = sampler.run()
         timings['numpyro'] = time.time() - start
         print(f"numpyro completed in {timings['numpyro']:.1f}s")
@@ -791,7 +805,8 @@ class TestSamplerComparison:
         all_recovery_stats = {}
         for sampler_name, result in results.items():
             fig, recovery_stats = plot_recovery(
-                result, true_pars,
+                result,
+                true_pars,
                 output_path=test_dir / f"{test_name}_{sampler_name}_recovery.png",
                 sampler_name=sampler_name,
             )
@@ -816,13 +831,13 @@ class TestSamplerComparison:
             print(f"{'='*60}")
             print_summary(result, true_values=true_pars)
 
-        # Validate using joint Nσ: 
+        # Validate using joint Nσ:
         # - baseline sampler: 2σ = warning, 3σ = fail (strict, as it's our reference)
         # - other samplers: 2σ = warning, 3σ = loud warning (don't fail, just alert)
         for name, stats in all_recovery_stats.items():
             nsigma = stats['joint_nsigma']
-            is_baseline = (name == BASELINE_SAMPLER)
-            
+            is_baseline = name == BASELINE_SAMPLER
+
             if nsigma > 3.0:
                 if is_baseline:
                     pytest.fail(
@@ -834,11 +849,10 @@ class TestSamplerComparison:
                         f"⚠️ {name}: Joint Nσ = {nsigma:.2f} > 3σ threshold! "
                         f"Non-baseline sampler showing significant deviation. "
                         f"Check sampler configuration or increase samples.",
-                        UserWarning
+                        UserWarning,
                     )
             elif nsigma > 2.0:
                 warnings.warn(
                     f"{name}: Joint Nσ = {nsigma:.2f} > 2σ threshold. "
                     f"May indicate suboptimal convergence."
                 )
-

@@ -152,7 +152,9 @@ def compute_empirical_scales(
 
     # Run short MCMC
     kernel = NUTS(preconditioning_model, dense_mass=False)  # Diagonal for speed
-    mcmc = MCMC(kernel, num_warmup=50, num_samples=n_samples, num_chains=1, progress_bar=False)
+    mcmc = MCMC(
+        kernel, num_warmup=50, num_samples=n_samples, num_chains=1, progress_bar=False
+    )
     mcmc.run(rng_key)
 
     # Extract samples and compute scales
@@ -234,7 +236,9 @@ class NumpyroSampler(Sampler):
         super().__init__(task, config)
         self._reparam_scales: Optional[Dict[str, Tuple[float, float]]] = None
 
-    def _compute_reparam_scales(self, rng_key: jax.Array) -> Dict[str, Tuple[float, float]]:
+    def _compute_reparam_scales(
+        self, rng_key: jax.Array
+    ) -> Dict[str, Tuple[float, float]]:
         """
         Compute reparameterization scales based on config strategy.
 
@@ -264,7 +268,9 @@ class NumpyroSampler(Sampler):
 
         elif strategy == ReparamStrategy.EMPIRICAL:
             # Run short preconditioning phase
-            n_precond = max(50, int(self.config.n_warmup * self.config.empirical_warmup_frac))
+            n_precond = max(
+                50, int(self.config.n_warmup * self.config.empirical_warmup_frac)
+            )
             return compute_empirical_scales(self.task, rng_key, n_samples=n_precond)
 
         else:
@@ -447,23 +453,20 @@ class NumpyroSampler(Sampler):
             # Divergence info
             'diverging': diverging,
             'n_divergences': n_divergences,
-            'divergence_rate': n_divergences / diverging.size if diverging.size > 0 else 0.0,
-
+            'divergence_rate': (
+                n_divergences / diverging.size if diverging.size > 0 else 0.0
+            ),
             # Acceptance
             'accept_prob': accept_prob,
             'mean_accept_prob': mean_accept,
-
             # Tree depth / steps
             'num_steps': num_steps,
             'mean_tree_depth': mean_tree_depth,
-
             # Adaptation
             'step_size': step_size,
-
             # Convergence diagnostics
             'r_hat': r_hat,
             'ess': ess,
-
             # Reparameterization info
             'reparam_strategy': self.config.reparam_strategy.value,
             'reparam_scales': reparam_scales,
@@ -556,10 +559,9 @@ class NumpyroSampler(Sampler):
 
         # Compute log probabilities for samples
         log_posterior_fn = self.task.get_log_posterior_fn()
-        log_probs = np.array([
-            float(log_posterior_fn(jnp.array(theta)))
-            for theta in samples
-        ])
+        log_probs = np.array(
+            [float(log_posterior_fn(jnp.array(theta))) for theta in samples]
+        )
 
         # Collect diagnostics
         diagnostics = self._collect_diagnostics(mcmc, self._reparam_scales)
@@ -570,10 +572,7 @@ class NumpyroSampler(Sampler):
         # Check convergence
         r_hats = diagnostics.get('r_hat', {})
         max_rhat = max(r_hats.values()) if r_hats else 1.0
-        converged = (
-            max_rhat < 1.1 and
-            diagnostics.get('divergence_rate', 0) < 0.1
-        )
+        converged = max_rhat < 1.1 and diagnostics.get('divergence_rate', 0) < 0.1
 
         # Build metadata
         elapsed = time.time() - start_time

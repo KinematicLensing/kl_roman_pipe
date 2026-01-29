@@ -77,7 +77,9 @@ def redirect_sampler_output(log_path: Path, also_terminal: bool = False):
 
     original_stdout = sys.stdout
     with open(log_path, 'w') as f:
-        sys.stdout = TeeWriter(f, also_terminal=also_terminal, original_stdout=original_stdout)
+        sys.stdout = TeeWriter(
+            f, also_terminal=also_terminal, original_stdout=original_stdout
+        )
         try:
             yield
         finally:
@@ -1388,7 +1390,9 @@ def plot_combined_data_comparison(
 
         # Common colorbar limits for residuals
         residual_arrays = [residual_true, residual_model]
-        abs_max = max(np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays)
+        abs_max = max(
+            np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays
+        )
         norm_resid = MidpointNormalize(vmin=-abs_max, vmax=abs_max, midpoint=0)
 
         # Row 0: noisy | true | noisy - true
@@ -1417,10 +1421,14 @@ def plot_combined_data_comparison(
         plt.colorbar(im02, cax=cax)
         if variance is not None:
             axes_block[0, 2].text(
-                0.02, 0.98, f'χ²={chi2_true:.1f}',
-                transform=axes_block[0, 2].transAxes, fontsize=9,
-                color='white', verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+                0.02,
+                0.98,
+                f'χ²={chi2_true:.1f}',
+                transform=axes_block[0, 2].transAxes,
+                fontsize=9,
+                color='white',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
             )
 
         # Row 1: model - true | model | noisy - model
@@ -1449,10 +1457,14 @@ def plot_combined_data_comparison(
         plt.colorbar(im12, cax=cax)
         if variance is not None:
             axes_block[1, 2].text(
-                0.02, 0.98, f'χ²={chi2_model:.1f}',
-                transform=axes_block[1, 2].transAxes, fontsize=9,
-                color='white', verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+                0.02,
+                0.98,
+                f'χ²={chi2_model:.1f}',
+                transform=axes_block[1, 2].transAxes,
+                fontsize=9,
+                color='white',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
             )
 
         # Labels
@@ -1461,12 +1473,19 @@ def plot_combined_data_comparison(
             ax.set_ylabel('y (pixels)')
 
     # Plot velocity block (rows 0-1)
-    plot_data_block(axes[0:2, :], data_vel_noisy, data_vel_true, model_vel,
-                    variance_vel, 'Velocity')
+    plot_data_block(
+        axes[0:2, :], data_vel_noisy, data_vel_true, model_vel, variance_vel, 'Velocity'
+    )
 
     # Plot intensity block (rows 2-3)
-    plot_data_block(axes[2:4, :], data_int_noisy, data_int_true, model_int,
-                    variance_int, 'Intensity')
+    plot_data_block(
+        axes[2:4, :],
+        data_int_noisy,
+        data_int_true,
+        model_int,
+        variance_int,
+        'Intensity',
+    )
 
     # Overall title
     fig.suptitle(f'{test_name} - Combined Data Comparison', fontsize=14, y=1.01)

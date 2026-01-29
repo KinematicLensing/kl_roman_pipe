@@ -79,15 +79,17 @@ def simple_velocity_problem():
     variance = synth.variance
 
     # Define priors (sample only vcirc and cosi for speed)
-    priors = PriorDict({
-        'vcirc': Uniform(100, 300),
-        'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
-        'theta_int': 0.785,  # Fixed
-        'g1': 0.0,  # Fixed
-        'g2': 0.0,  # Fixed
-        'v0': 10.0,  # Fixed
-        'vel_rscale': 5.0,  # Fixed
-    })
+    priors = PriorDict(
+        {
+            'vcirc': Uniform(100, 300),
+            'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
+            'theta_int': 0.785,  # Fixed
+            'g1': 0.0,  # Fixed
+            'g2': 0.0,  # Fixed
+            'v0': 10.0,  # Fixed
+            'vel_rscale': 5.0,  # Fixed
+        }
+    )
 
     # Create model and task
     model = CenteredVelocityModel()
@@ -503,4 +505,5 @@ class TestDiagnostics:
         assert fig is not None
 
         import matplotlib.pyplot as plt
+
         plt.close('all')

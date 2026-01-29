@@ -76,15 +76,17 @@ def simple_velocity_task():
     data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
     var_vel = synth_vel.variance
 
-    priors = PriorDict({
-        'v0': Gaussian(10.0, 5.0),
-        'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-        'vel_rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
-        'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
-        'theta_int': TruncatedNormal(0.785, 0.3, 0, np.pi),
-        'g1': 0.02,  # Fixed
-        'g2': -0.01,  # Fixed
-    })
+    priors = PriorDict(
+        {
+            'v0': Gaussian(10.0, 5.0),
+            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel_rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
+            'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
+            'theta_int': TruncatedNormal(0.785, 0.3, 0, np.pi),
+            'g1': 0.02,  # Fixed
+            'g2': -0.01,  # Fixed
+        }
+    )
 
     task = InferenceTask.from_velocity_model(
         model=vel_model,
@@ -142,19 +144,21 @@ def joint_model_task():
         shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
     )
 
-    priors = PriorDict({
-        'v0': Gaussian(true_pars['v0'], 5.0),
-        'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-        'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
-        'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
-        'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
-        'int_x0': 0.0,  # Fixed
-        'int_y0': 0.0,  # Fixed
-        'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),
-        'theta_int': TruncatedNormal(np.pi / 2, 1.0, 0, np.pi),
-        'g1': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
-        'g2': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
-    })
+    priors = PriorDict(
+        {
+            'v0': Gaussian(true_pars['v0'], 5.0),
+            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
+            'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
+            'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
+            'int_x0': 0.0,  # Fixed
+            'int_y0': 0.0,  # Fixed
+            'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),
+            'theta_int': TruncatedNormal(np.pi / 2, 1.0, 0, np.pi),
+            'g1': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
+            'g2': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
+        }
+    )
 
     task = InferenceTask.from_joint_model(
         model=joint_model,
@@ -302,7 +306,9 @@ class TestGradientScaling:
         with open(log_path, 'w') as f:
             f.write("Gradient Scaling Test (Z-space)\n")
             f.write("=" * 60 + "\n\n")
-            f.write("Gradients evaluated at z=z_true (physical space = true params)\n\n")
+            f.write(
+                "Gradients evaluated at z=z_true (physical space = true params)\n\n"
+            )
 
             f.write("Parameter z-values (true):\n")
             for name in task.sampled_names:
@@ -323,7 +329,9 @@ class TestGradientScaling:
                 f.write("\nWARNING: Large gradient disparity may cause issues\n")
 
         # Assertion: ratio should be much smaller than 10^4 (the BlackJAX failure)
-        assert ratio < 1000, f"Gradient ratio {ratio:.0f} too large - reparameterization not working"
+        assert (
+            ratio < 1000
+        ), f"Gradient ratio {ratio:.0f} too large - reparameterization not working"
 
 
 # ==============================================================================
@@ -369,7 +377,9 @@ class TestNumpyroBasicSampling:
         sampler = build_sampler('numpyro', task, config)
         result = sampler.run()
 
-        assert np.all(np.isfinite(result.log_prob)), "Some log_prob values are not finite"
+        assert np.all(
+            np.isfinite(result.log_prob)
+        ), "Some log_prob values are not finite"
 
     def test_no_divergences(self, simple_velocity_task):
         """No divergent transitions for well-posed problem."""
@@ -408,7 +418,9 @@ class TestNumpyroBasicSampling:
 
         accept = result.acceptance_fraction
         assert accept is not None
-        assert 0.4 < accept < 0.99, f"Acceptance rate {accept:.2%} outside healthy range"
+        assert (
+            0.4 < accept < 0.99
+        ), f"Acceptance rate {accept:.2%} outside healthy range"
 
 
 # ==============================================================================
@@ -471,8 +483,9 @@ class TestNumpyroJointModel:
             else:
                 f.write("\nSUCCESS: All parameters have non-zero variance\n")
 
-        assert len(zero_var_params) == 0, \
-            f"Parameters with zero variance: {zero_var_params}"
+        assert (
+            len(zero_var_params) == 0
+        ), f"Parameters with zero variance: {zero_var_params}"
 
     def test_step_size_reasonable(self, joint_model_task, output_dir):
         """Step size should be O(0.01-1), not 1e-8."""
@@ -736,7 +749,9 @@ class TestNumpyroFactory:
     def test_build_sampler_numpyro(self, simple_velocity_task):
         """build_sampler('numpyro', ...) works."""
         task, _ = simple_velocity_task
-        config = NumpyroSamplerConfig(n_samples=10, n_warmup=10, seed=42, progress=False)
+        config = NumpyroSamplerConfig(
+            n_samples=10, n_warmup=10, seed=42, progress=False
+        )
 
         sampler = build_sampler('numpyro', task, config)
         assert isinstance(sampler, NumpyroSampler)
@@ -744,7 +759,9 @@ class TestNumpyroFactory:
     def test_build_sampler_nuts_alias(self, simple_velocity_task):
         """build_sampler('nuts', ...) returns NumpyroSampler."""
         task, _ = simple_velocity_task
-        config = NumpyroSamplerConfig(n_samples=10, n_warmup=10, seed=42, progress=False)
+        config = NumpyroSamplerConfig(
+            n_samples=10, n_warmup=10, seed=42, progress=False
+        )
 
         sampler = build_sampler('nuts', task, config)
         assert isinstance(sampler, NumpyroSampler)
@@ -752,7 +769,9 @@ class TestNumpyroFactory:
     def test_build_sampler_hmc_alias(self, simple_velocity_task):
         """build_sampler('hmc', ...) returns NumpyroSampler."""
         task, _ = simple_velocity_task
-        config = NumpyroSamplerConfig(n_samples=10, n_warmup=10, seed=42, progress=False)
+        config = NumpyroSamplerConfig(
+            n_samples=10, n_warmup=10, seed=42, progress=False
+        )
 
         sampler = build_sampler('hmc', task, config)
         assert isinstance(sampler, NumpyroSampler)
