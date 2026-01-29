@@ -302,21 +302,29 @@ def plot_data_comparison_panels(
     cax = divider.append_axes("right", size="5%", pad=0.05)
     plt.colorbar(im01, cax=cax)
 
-    im02 = axes[0, 2].imshow(residual_true, origin='lower', cmap='RdBu_r', norm=norm_resid)
+    im02 = axes[0, 2].imshow(
+        residual_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+    )
     axes[0, 2].set_title('Noisy - True')
     divider = make_axes_locatable(axes[0, 2])
     cax = divider.append_axes("right", size="5%", pad=0.05)
     plt.colorbar(im02, cax=cax)
     if variance is not None:
         axes[0, 2].text(
-            0.02, 0.98, f'χ² = {chi2_true:.1f}',
-            transform=axes[0, 2].transAxes, fontsize=10,
-            color='white', verticalalignment='top',
+            0.02,
+            0.98,
+            f'χ² = {chi2_true:.1f}',
+            transform=axes[0, 2].transAxes,
+            fontsize=10,
+            color='white',
+            verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
         )
 
     # Row 2: model - true | model | noisy - model
-    im10 = axes[1, 0].imshow(residual_model_true, origin='lower', cmap='RdBu_r', norm=norm_resid)
+    im10 = axes[1, 0].imshow(
+        residual_model_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+    )
     axes[1, 0].set_title('Model - True')
     divider = make_axes_locatable(axes[1, 0])
     cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -328,16 +336,22 @@ def plot_data_comparison_panels(
     cax = divider.append_axes("right", size="5%", pad=0.05)
     plt.colorbar(im11, cax=cax)
 
-    im12 = axes[1, 2].imshow(residual_model, origin='lower', cmap='RdBu_r', norm=norm_resid)
+    im12 = axes[1, 2].imshow(
+        residual_model, origin='lower', cmap='RdBu_r', norm=norm_resid
+    )
     axes[1, 2].set_title('Noisy - Model')
     divider = make_axes_locatable(axes[1, 2])
     cax = divider.append_axes("right", size="5%", pad=0.05)
     plt.colorbar(im12, cax=cax)
     if variance is not None:
         axes[1, 2].text(
-            0.02, 0.98, f'χ² = {chi2_model:.1f}',
-            transform=axes[1, 2].transAxes, fontsize=10,
-            color='white', verticalalignment='top',
+            0.02,
+            0.98,
+            f'χ² = {chi2_model:.1f}',
+            transform=axes[1, 2].transAxes,
+            fontsize=10,
+            color='white',
+            verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
         )
 
@@ -428,7 +442,9 @@ def plot_combined_data_comparison(
     fig, axes = plt.subplots(4, 3, figsize=(15, 18))
 
     # Helper function to plot a 2x3 block
-    def plot_data_block(axes_block, data_noisy, data_true, model_eval, variance, data_type):
+    def plot_data_block(
+        axes_block, data_noisy, data_true, model_eval, variance, data_type
+    ):
         # Compute residuals & chi2
         residual_true = data_noisy - data_true
         residual_model = data_noisy - model_eval
@@ -452,59 +468,81 @@ def plot_combined_data_comparison(
 
         # Common colorbar limits for residuals
         residual_arrays = [residual_true, residual_model]
-        abs_max = max(np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays)
+        abs_max = max(
+            np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays
+        )
         norm_resid = MidpointNormalize(vmin=-abs_max, vmax=abs_max, midpoint=0)
 
         # Row 0: noisy | true | noisy - true
-        im00 = axes_block[0, 0].imshow(data_noisy, origin='lower', cmap='RdBu_r', norm=norm_data)
+        im00 = axes_block[0, 0].imshow(
+            data_noisy, origin='lower', cmap='RdBu_r', norm=norm_data
+        )
         axes_block[0, 0].set_title(f'{data_type}: Noisy Data')
         divider = make_axes_locatable(axes_block[0, 0])
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im00, cax=cax)
 
-        im01 = axes_block[0, 1].imshow(data_true, origin='lower', cmap='RdBu_r', norm=norm_data)
+        im01 = axes_block[0, 1].imshow(
+            data_true, origin='lower', cmap='RdBu_r', norm=norm_data
+        )
         axes_block[0, 1].set_title(f'{data_type}: True')
         divider = make_axes_locatable(axes_block[0, 1])
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im01, cax=cax)
 
-        im02 = axes_block[0, 2].imshow(residual_true, origin='lower', cmap='RdBu_r', norm=norm_resid)
+        im02 = axes_block[0, 2].imshow(
+            residual_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
         axes_block[0, 2].set_title(f'{data_type}: Noisy - True')
         divider = make_axes_locatable(axes_block[0, 2])
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im02, cax=cax)
         if variance is not None:
             axes_block[0, 2].text(
-                0.02, 0.98, f'χ²={chi2_true:.1f}',
-                transform=axes_block[0, 2].transAxes, fontsize=9,
-                color='white', verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+                0.02,
+                0.98,
+                f'χ²={chi2_true:.1f}',
+                transform=axes_block[0, 2].transAxes,
+                fontsize=9,
+                color='white',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
             )
 
         # Row 1: model - true | model | noisy - model
-        im10 = axes_block[1, 0].imshow(residual_model_true, origin='lower', cmap='RdBu_r', norm=norm_resid)
+        im10 = axes_block[1, 0].imshow(
+            residual_model_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
         axes_block[1, 0].set_title(f'{data_type}: {model_label} - True')
         divider = make_axes_locatable(axes_block[1, 0])
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im10, cax=cax)
 
-        im11 = axes_block[1, 1].imshow(model_eval, origin='lower', cmap='RdBu_r', norm=norm_data)
+        im11 = axes_block[1, 1].imshow(
+            model_eval, origin='lower', cmap='RdBu_r', norm=norm_data
+        )
         axes_block[1, 1].set_title(f'{data_type}: {model_label}')
         divider = make_axes_locatable(axes_block[1, 1])
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im11, cax=cax)
 
-        im12 = axes_block[1, 2].imshow(residual_model, origin='lower', cmap='RdBu_r', norm=norm_resid)
+        im12 = axes_block[1, 2].imshow(
+            residual_model, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
         axes_block[1, 2].set_title(f'{data_type}: Noisy - {model_label}')
         divider = make_axes_locatable(axes_block[1, 2])
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im12, cax=cax)
         if variance is not None:
             axes_block[1, 2].text(
-                0.02, 0.98, f'χ²={chi2_model:.1f}',
-                transform=axes_block[1, 2].transAxes, fontsize=9,
-                color='white', verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+                0.02,
+                0.98,
+                f'χ²={chi2_model:.1f}',
+                transform=axes_block[1, 2].transAxes,
+                fontsize=9,
+                color='white',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
             )
 
         # Labels
@@ -513,12 +551,19 @@ def plot_combined_data_comparison(
             ax.set_ylabel('y (pixels)')
 
     # Plot velocity block (rows 0-1)
-    plot_data_block(axes[0:2, :], data_vel_noisy, data_vel_true, model_vel,
-                    variance_vel, 'Velocity')
+    plot_data_block(
+        axes[0:2, :], data_vel_noisy, data_vel_true, model_vel, variance_vel, 'Velocity'
+    )
 
     # Plot intensity block (rows 2-3)
-    plot_data_block(axes[2:4, :], data_int_noisy, data_int_true, model_int,
-                    variance_int, 'Intensity')
+    plot_data_block(
+        axes[2:4, :],
+        data_int_noisy,
+        data_int_true,
+        model_int,
+        variance_int,
+        'Intensity',
+    )
 
     # Overall title
     fig.suptitle(f'{test_name} - Combined Data Comparison', fontsize=14, y=1.01)
@@ -688,25 +733,46 @@ def plot_parameter_recovery(
 
     # Plot true values as black horizontal lines
     for i in range(len(all_params)):
-        ax1.hlines(true_vals_plot[i], i - 0.3, i + 0.3, colors='black',
-                   linewidth=3, label='True' if i == 0 else None)
+        ax1.hlines(
+            true_vals_plot[i],
+            i - 0.3,
+            i + 0.3,
+            colors='black',
+            linewidth=3,
+            label='True' if i == 0 else None,
+        )
 
     # Plot recovered values as colored circles
-    ax1.scatter(x_pos, rec_vals_plot, s=150, c='C0', edgecolors='black',
-                linewidths=1.5, zorder=5, label='Recovered')
+    ax1.scatter(
+        x_pos,
+        rec_vals_plot,
+        s=150,
+        c='C0',
+        edgecolors='black',
+        linewidths=1.5,
+        zorder=5,
+        label='Recovered',
+    )
 
     # Connect with lines
     for i in range(len(all_params)):
-        ax1.plot([i, i], [true_vals_plot[i], rec_vals_plot[i]],
-                 'k-', alpha=0.3, linewidth=1)
+        ax1.plot(
+            [i, i], [true_vals_plot[i], rec_vals_plot[i]], 'k-', alpha=0.3, linewidth=1
+        )
 
     # Add absolute difference annotations
     for i in range(len(all_params)):
         abs_diff = per_param_stats[all_params[i]]['abs_error']
         y_pos = max(true_vals_plot[i], rec_vals_plot[i]) * 1.5
-        ax1.text(i, y_pos, f'{abs_diff:.4g}', ha='center', va='bottom',
-                 fontsize=9, bbox=dict(boxstyle='round,pad=0.3',
-                                       facecolor='white', alpha=0.8))
+        ax1.text(
+            i,
+            y_pos,
+            f'{abs_diff:.4g}',
+            ha='center',
+            va='bottom',
+            fontsize=9,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
+        )
 
     ax1.set_yscale('log')
     ax1.set_xticks(x_pos)
@@ -736,8 +802,15 @@ def plot_parameter_recovery(
             else:
                 yerr_lower.append(0)
                 yerr_upper.append(0)
-        ax2.bar(x_pos, frac_errors, color='C0', alpha=0.7, edgecolor='black',
-                yerr=[yerr_lower, yerr_upper], capsize=4)
+        ax2.bar(
+            x_pos,
+            frac_errors,
+            color='C0',
+            alpha=0.7,
+            edgecolor='black',
+            yerr=[yerr_lower, yerr_upper],
+            capsize=4,
+        )
     else:
         ax2.bar(x_pos, frac_errors, color='C0', alpha=0.7, edgecolor='black')
 
@@ -760,8 +833,9 @@ def plot_parameter_recovery(
         title_parts[0] += f' ({sampler_name})'
     title_parts.append(nsigma_str)
 
-    fig.suptitle('\n'.join(title_parts), fontsize=14, fontweight='bold',
-                 color=title_color)
+    fig.suptitle(
+        '\n'.join(title_parts), fontsize=14, fontweight='bold', color=title_color
+    )
 
     plt.tight_layout()
 
