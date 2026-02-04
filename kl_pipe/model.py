@@ -29,8 +29,43 @@ class Model(ABC):
     def __init__(self, meta_pars=None) -> None:
         self.meta_pars = meta_pars or {}
         self._param_indices = {name: i for i, name in enumerate(self.PARAMETER_NAMES)}
+        self._psf_data = None
+        self._psf_frozen = False
 
         return
+
+    def configure_psf(self, gsobj, image_shape, pixel_scale, freeze=False):
+        """
+        Configure PSF for rendering. Call BEFORE creating likelihood.
+
+        Parameters
+        ----------
+        gsobj : galsim.GSObject
+            PSF profile.
+        image_shape : tuple
+            (Ny, Nx) of data images.
+        pixel_scale : float
+            arcsec/pixel.
+        freeze : bool
+            If True, prevent reconfiguration (set by factory methods).
+        """
+        if self._psf_frozen:
+            raise ValueError(
+                "PSF is frozen (bound to a likelihood). Call clear_psf() first."
+            )
+        from kl_pipe.psf import precompute_psf_fft
+
+        self._psf_data = precompute_psf_fft(gsobj, image_shape, pixel_scale)
+        self._psf_frozen = freeze
+
+    def clear_psf(self):
+        """Remove PSF config and unfreeze."""
+        self._psf_data = None
+        self._psf_frozen = False
+
+    @property
+    def has_psf(self):
+        return self._psf_data is not None
 
     def get_param(self, name: str, theta: jnp.ndarray) -> float:
         idx = self._param_indices[name]
@@ -303,6 +338,70 @@ class VelocityModel(Model):
             "Subclasses must implement evaluate_circular_velocity method."
         )
 
+    def configure_velocity_psf(
+        self,
+        gsobj,
+        image_shape,
+        pixel_scale,
+        flux_model=None,
+        flux_theta=None,
+        flux_image=None,
+        flux_image_pars=None,
+        freeze=False,
+    ):
+        """
+        Configure velocity PSF with flux weighting.
+
+        Must provide ONE of:
+        - flux_model + flux_theta: IntensityModel + fixed params
+        - flux_image: pre-rendered intensity map
+        In joint mode (KLModel), neither needed -- uses fitted intensity.
+
+        Parameters
+        ----------
+        gsobj : galsim.GSObject
+            PSF profile.
+        image_shape : tuple
+            (Ny, Nx) of velocity data images.
+        pixel_scale : float
+            arcsec/pixel.
+        flux_model : IntensityModel, optional
+            Intensity model for rendering flux on velocity grid.
+        flux_theta : jnp.ndarray, optional
+            Fixed intensity params (used with flux_model).
+        flux_image : ndarray, optional
+            Pre-rendered intensity map for flux weighting.
+        flux_image_pars : ImagePars, optional
+            Image parameters of flux_image (for resampling if shape differs).
+        freeze : bool
+            If True, prevent reconfiguration.
+        """
+        self.configure_psf(gsobj, image_shape, pixel_scale, freeze=freeze)
+        self._psf_flux_model = flux_model
+        self._psf_flux_theta = flux_theta
+
+        if flux_model is None and flux_image is None:
+            raise ValueError(
+                "Velocity PSF requires flux weighting. Provide flux_model + "
+                "flux_theta, or flux_image. For joint inference use KLModel."
+            )
+
+        if flux_image is not None:
+            if flux_image.shape != image_shape:
+                if flux_image_pars is None:
+                    raise ValueError(
+                        f"flux_image shape {flux_image.shape} != velocity grid "
+                        f"{image_shape}. Provide flux_image_pars for resampling."
+                    )
+                from kl_pipe.psf import _resample_to_grid
+
+                flux_image = _resample_to_grid(
+                    flux_image, flux_image_pars, image_shape, pixel_scale
+                )
+            self._psf_flux_image = jnp.asarray(flux_image)
+        else:
+            self._psf_flux_image = None
+
     def render_image(
         self,
         theta: jnp.ndarray,
@@ -527,6 +626,53 @@ class KLModel(object):
         self._build_parameter_structure()
 
         return
+
+    def configure_joint_psf(
+        self,
+        psf_vel=None,
+        psf_int=None,
+        image_shape_vel=None,
+        pixel_scale_vel=None,
+        image_shape_int=None,
+        pixel_scale_int=None,
+        freeze=False,
+    ):
+        """
+        Configure PSF for joint model.
+
+        Velocity PSF: sets flux_model = self.intensity_model (rendered on
+        velocity grid via flux_theta_override in joint likelihood).
+
+        Parameters
+        ----------
+        psf_vel : galsim.GSObject, optional
+            PSF for velocity channel.
+        psf_int : galsim.GSObject, optional
+            PSF for intensity channel.
+        image_shape_vel : tuple, optional
+            (Ny, Nx) of velocity data.
+        pixel_scale_vel : float, optional
+            arcsec/pixel for velocity grid.
+        image_shape_int : tuple, optional
+            (Ny, Nx) of intensity data.
+        pixel_scale_int : float, optional
+            arcsec/pixel for intensity grid.
+        freeze : bool
+            If True, prevent reconfiguration.
+        """
+        if psf_vel is not None:
+            self.velocity_model.configure_psf(
+                psf_vel, image_shape_vel, pixel_scale_vel, freeze=freeze
+            )
+            # in joint mode, intensity model provides flux weighting
+            self.velocity_model._psf_flux_model = self.intensity_model
+            self.velocity_model._psf_flux_theta = None
+            self.velocity_model._psf_flux_image = None
+
+        if psf_int is not None:
+            self.intensity_model.configure_psf(
+                psf_int, image_shape_int, pixel_scale_int, freeze=freeze
+            )
 
     def _build_parameter_structure(self):
         """
