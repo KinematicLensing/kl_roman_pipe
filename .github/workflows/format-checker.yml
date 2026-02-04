@@ -1,25 +1,2 @@
-name: Python Format Checker
-
-# `black` recurses into submodules, which we don't want. Therefore, we need to
-# run it in a separate github action. Every submodule needs to decide
-# themselves whether they want to black or not. There is a bug about this
-# already: https://github.com/psf/black/issues/3040
-
-on:
-  - pull_request
-  # - push
-
-jobs:
-  test:
-    runs-on: [ubuntu-latest]
-    steps:
-    - name: Check out the repository
-      uses: actions/checkout@v4
-
-    # Run the formatter checker (required for a merge into main), but don't
-    # block the prevoius steps like tests & environment setup
-    - name: Run Format Checker
-      uses: psf/black@stable
-      with:
-        options: "--check --verbose --skip-string-normalization"
-        jupyter: false
+- name: Run Format Checker
+      uses: pre-commit/action@v3.0.1
