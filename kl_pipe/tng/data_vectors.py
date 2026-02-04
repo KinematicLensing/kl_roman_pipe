@@ -1071,7 +1071,7 @@ class TNGDataVectorGenerator:
             # - preserve_gas_stellar_offset=True: use STELLAR rotation matrix
             #   This keeps the physical misalignment between gas and stellar disks.
             #   User's (cosi, theta_int) refers to STELLAR disk orientation.
-            # - preserve_gas_stellar_offset=False (default): use GAS rotation matrix
+            # - preserve_gas_stellar_offset=False: use GAS rotation matrix
             #   Both gas and stellar appear at the exact same orientation.
             #   User's (cosi, theta_int) refers to each component independently.
             if config.preserve_gas_stellar_offset:
