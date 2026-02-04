@@ -218,6 +218,7 @@ def test_intensity_with_offset(exponential_theta_offset, test_image_pars):
     assert peak_idx != (25, 25)
 
     # Check approximate shift direction (x0=2.0 means shift right)
+    import ipdb; ipdb.set_trace()
     assert peak_idx[0] > 25  # Shifted in +x direction
 
 

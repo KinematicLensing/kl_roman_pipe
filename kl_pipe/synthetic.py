@@ -115,6 +115,8 @@ def generate_arctan_velocity_2d(
     g2: float = 0.0,
     vel_x0: float = 0.0,
     vel_y0: float = 0.0,
+    psf=None,
+    intensity_for_psf=None,
 ) -> np.ndarray:
     """
     Generate arctan rotation curve velocity field.
@@ -178,7 +180,19 @@ def generate_arctan_velocity_2d(
     phi = np.arctan2(Y_disk, X_disk)
     v_los = sini * np.cos(phi) * v_circ
 
-    return v0 + v_los
+    v_map = v0 + v_los
+
+    if psf is not None:
+        if intensity_for_psf is None:
+            raise ValueError("intensity_for_psf required for velocity PSF")
+        from kl_pipe.psf import gsobj_to_kernel, convolve_flux_weighted_numpy
+
+        kernel, padded_shape = gsobj_to_kernel(psf, v_map.shape, image_pars.pixel_scale)
+        v_map = convolve_flux_weighted_numpy(
+            v_map, intensity_for_psf, kernel, padded_shape
+        )
+
+    return v_map
 
 
 # TODO: when we're ready to test more complex velocity models
@@ -203,6 +217,7 @@ def generate_sersic_intensity_2d(
     int_x0: float = 0.0,
     int_y0: float = 0.0,
     backend: str = 'scipy',
+    psf=None,
 ) -> np.ndarray:
     """
     Generate Sersic intensity profile.
@@ -227,6 +242,8 @@ def generate_sersic_intensity_2d(
         Centroid offsets.
     backend : str, optional
         Backend for computation ('scipy' or 'galsim'). Default is 'scipy'.
+    psf : galsim.GSObject, optional
+        PSF to convolve with. Default is None (no PSF).
 
     Returns
     -------
@@ -246,6 +263,7 @@ def generate_sersic_intensity_2d(
             g2,
             int_x0,
             int_y0,
+            psf=psf,
         )
     else:
         return _generate_sersic_scipy(
@@ -259,6 +277,7 @@ def generate_sersic_intensity_2d(
             g2,
             int_x0,
             int_y0,
+            psf=psf,
         )
 
 
@@ -273,6 +292,7 @@ def _generate_sersic_scipy(
     g2: float,
     int_x0: float,
     int_y0: float,
+    psf=None,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy."""
 
@@ -325,6 +345,14 @@ def _generate_sersic_scipy(
     #  (same flux in smaller solid angle -> brighter by 1/cos(i))
     intensity_obs = intensity_disk / cosi if cosi > 0 else intensity_disk
 
+    if psf is not None:
+        from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
+
+        kernel, padded_shape = gsobj_to_kernel(
+            psf, intensity_obs.shape, image_pars.pixel_scale
+        )
+        intensity_obs = convolve_fft_numpy(intensity_obs, kernel, padded_shape)
+
     return intensity_obs
 
 
@@ -340,6 +368,7 @@ def _generate_sersic_galsim(
     int_x0: float,
     int_y0: float,
     gsparams: gs.GSParams = None,
+    psf=None,
 ) -> np.ndarray:
     """
     Generate Sersic profile using GalSim backend.
@@ -402,6 +431,10 @@ def _generate_sersic_galsim(
     # Apply shear and centroid offset
     profile = profile.shear(g1=g1, g2=g2)
     profile = profile.shift(int_x0, int_y0)
+
+    # Convolve with PSF if provided (GalSim native convolution)
+    if psf is not None:
+        profile = gs.Convolve(profile, psf)
 
     # Setup GalSim image from ImagePars
     # GalSim needs bounds and pixel scale
@@ -631,10 +664,14 @@ class SyntheticVelocity:
         true_params: Dict[str, float],
         model_type: str = 'arctan',
         seed: Optional[int] = None,
+        psf=None,
+        intensity_for_psf=None,
     ):
         self.true_params = true_params
         self.model_type = model_type
         self.seed = seed
+        self.psf = psf
+        self.intensity_for_psf = intensity_for_psf
 
         # Storage for last generated data
         self.data_true = None
@@ -693,7 +730,12 @@ class SyntheticVelocity:
 
         # Generate true velocity field
         if self.model_type == 'arctan':
-            self.data_true = generate_arctan_velocity_2d(image_pars, **self.true_params)
+            self.data_true = generate_arctan_velocity_2d(
+                image_pars,
+                **self.true_params,
+                psf=self.psf,
+                intensity_for_psf=self.intensity_for_psf,
+            )
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
@@ -719,10 +761,12 @@ class SyntheticIntensity:
         true_params: Dict[str, float],
         model_type: str = 'sersic',
         seed: Optional[int] = None,
+        psf=None,
     ):
         self.true_params = true_params
         self.model_type = model_type
         self.seed = seed
+        self.psf = psf
 
         # Storage for last generated data
         self.data_true = None
@@ -786,14 +830,14 @@ class SyntheticIntensity:
         # Generate true intensity field
         if self.model_type == 'sersic':
             self.data_true = generate_sersic_intensity_2d(
-                image_pars, backend=sersic_backend, **self.true_params
+                image_pars, backend=sersic_backend, psf=self.psf, **self.true_params
             )
         elif self.model_type == 'exponential':
             # Exponential is Sersic with n=1
             params = self.true_params.copy()
             params['n_sersic'] = 1.0
             self.data_true = generate_sersic_intensity_2d(
-                image_pars, backend=sersic_backend, **params
+                image_pars, backend=sersic_backend, psf=self.psf, **params
             )
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")

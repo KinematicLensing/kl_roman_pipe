@@ -81,8 +81,7 @@ This avoids negative cos(i) in projection math.
 1. Sparse gas: Velocity maps may have empty pixels where no gas particles fall
 2. SNR calibration: Less accurate for very large flux values (>10^9)
 3. Absolute calibration: Luminosity units preserved but may need external validation
-4. No PSF: Point-spread function convolution not implemented
-5. Gaussian noise: Poisson noise available but is not working well yet
+4. Gaussian noise: Poisson noise available but is not working well yet
 
 ## References
 
@@ -231,6 +230,7 @@ class TNGRenderConfig:
     target_redshift: Optional[float] = None
     preserve_gas_stellar_offset: bool = True
     apply_cosmological_dimming: bool = False
+    psf: Optional[object] = None  # galsim.GSObject for PSF convolution
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -978,6 +978,15 @@ class TNGDataVectorGenerator:
             dimming_factor = ((1.0 + z_native) / (1.0 + z_target)) ** 4
             intensity *= dimming_factor
 
+        # Apply PSF convolution if requested
+        if config.psf is not None:
+            from ..psf import gsobj_to_kernel, convolve_fft_numpy
+
+            kernel, padded_shape = gsobj_to_kernel(
+                config.psf, intensity.shape, config.image_pars.pixel_scale
+            )
+            intensity = convolve_fft_numpy(intensity, kernel, padded_shape)
+
         # Add noise if requested
         if snr is not None:
             # For TNG: use Gaussian noise only (flux already in physical units)
@@ -994,6 +1003,7 @@ class TNGDataVectorGenerator:
         config: TNGRenderConfig,
         snr: Optional[float] = None,
         seed: Optional[int] = None,
+        intensity_map: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Generate 2D line-of-sight velocity map from gas particles.
@@ -1112,6 +1122,27 @@ class TNGDataVectorGenerator:
                 masses_norm,
                 config.image_pars,
                 mode='weighted_average',
+            )
+
+        # Apply flux-weighted PSF convolution if requested
+        if config.psf is not None:
+            from ..psf import gsobj_to_kernel, convolve_flux_weighted_numpy
+
+            if intensity_map is None:
+                import warnings
+
+                warnings.warn(
+                    "PSF set but no intensity_map provided to generate_velocity_map. "
+                    "Generating intensity internally (less efficient).",
+                    stacklevel=2,
+                )
+                intensity_map, _ = self.generate_intensity_map(config, snr=None)
+
+            kernel, padded_shape = gsobj_to_kernel(
+                config.psf, velocity.shape, config.image_pars.pixel_scale
+            )
+            velocity = convolve_flux_weighted_numpy(
+                velocity, intensity_map, kernel, padded_shape
             )
 
         # Add noise if requested
