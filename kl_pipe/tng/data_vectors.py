@@ -1050,9 +1050,6 @@ class TNGDataVectorGenerator:
 
         # Center coordinates using SAME reference as intensity (stellar luminosity peak or subhalo)
         # This ensures intensity and velocity show the same patch of sky
-        center = self._get_reference_center(
-            config.center_on_peak, config.band, config.use_dusted
-        )
         coords_centered = self._center_coordinates(coords, center)
 
         # Handle orientation (gas with stellar-relative offset preservation)
