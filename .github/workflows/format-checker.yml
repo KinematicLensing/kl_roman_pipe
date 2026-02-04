@@ -5,7 +5,8 @@ name: Python Format Checker
 # themselves whether they want to black or not. There is a bug about this
 # already: https://github.com/psf/black/issues/3040
 
-on: [] # NOTE: this is fixed more robustly on the se/psf branch
+on:
+  - workflow_dispatch: # Allows manual run only; disables auto-runs
   # - pull_request
   # - push
 
