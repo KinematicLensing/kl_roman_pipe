@@ -203,6 +203,9 @@ class TestConfig:
             'int_y0': 0.1,
         }
 
+        # PSF tolerance multiplier -- PSF smoothing reduces information content
+        self.psf_tolerance_multiplier = 2.0
+
         # physical parameter boundaries
         self.param_bounds = {
             'cosi': (0.0, 0.99),
@@ -255,6 +258,7 @@ class TestConfig:
         param_value: float,
         data_type: str,
         test_type: str,
+        has_psf: bool = False,
     ) -> Dict[str, float]:
         """
         Get tolerance for parameter at given SNR.
@@ -275,6 +279,8 @@ class TestConfig:
         test_type : str
             'likelihood_slice' or 'optimizer'. Determines which tolerance set to use.
             Optimizer tests use looser tolerances due to local optima & degeneracies.
+        has_psf : bool
+            If True, apply psf_tolerance_multiplier to loosen tolerances.
 
         Returns
         -------
@@ -303,11 +309,18 @@ class TestConfig:
         else:
             relative_tol = base_tol
 
+        # Apply PSF tolerance multiplier
+        if has_psf:
+            relative_tol *= self.psf_tolerance_multiplier
+
         # compute absolute tolerance
         # use the larger of: (relative_tol × |value|) or absolute_floor
         absolute_from_relative = relative_tol * abs(param_value)
         absolute_floor = self.absolute_tolerance_floor.get(param_name, 0.0)
         absolute_tol = max(absolute_from_relative, absolute_floor)
+
+        if has_psf:
+            absolute_tol *= self.psf_tolerance_multiplier
 
         return {
             'relative': relative_tol,

@@ -66,6 +66,7 @@ def _log_likelihood_velocity_only(
     Y_vel: jnp.ndarray,
     variance_vel: jnp.ndarray | float,
     vel_model: VelocityModel,
+    flux_theta_override: jnp.ndarray = None,
 ) -> float:
     """
     Log-likelihood for velocity observations only.
@@ -89,6 +90,8 @@ def _log_likelihood_velocity_only(
         If array, must have same shape as data_vel.
     vel_model : VelocityModel
         Velocity model instance.
+    flux_theta_override : jnp.ndarray, optional
+        Intensity params for joint mode flux weighting (passed to render_image).
 
     Returns
     -------
@@ -102,8 +105,10 @@ def _log_likelihood_velocity_only(
     same formula handles both cases without conditionals.
     """
 
-    # evaluate model
-    model_vel = vel_model(theta, 'obs', X_vel, Y_vel)
+    # evaluate model via render_image (applies PSF if configured)
+    model_vel = vel_model.render_image(
+        theta, X=X_vel, Y=Y_vel, flux_theta_override=flux_theta_override
+    )
 
     # compute chi-squared
     residuals = data_vel - model_vel
@@ -157,8 +162,8 @@ def _log_likelihood_intensity_only(
     same formula handles both cases without conditionals.
     """
 
-    # evaluate model
-    model_int = int_model(theta, 'obs', X_int, Y_int)
+    # evaluate model via render_image (applies PSF if configured)
+    model_int = int_model.render_image(theta, X=X_int, Y=Y_int)
 
     # compute chi-squared
     residuals = data_int - model_int
@@ -231,8 +236,10 @@ def _log_likelihood_separate_images(
     theta_int = kl_model.get_intensity_pars(theta)
 
     # compute log-likelihood for each component
+    # pass theta_int to velocity for joint PSF flux weighting
     log_prob_vel = _log_likelihood_velocity_only(
-        theta_vel, data_vel, X_vel, Y_vel, variance_vel, kl_model.velocity_model
+        theta_vel, data_vel, X_vel, Y_vel, variance_vel, kl_model.velocity_model,
+        flux_theta_override=theta_int,
     )
     log_prob_int = _log_likelihood_intensity_only(
         theta_int, data_int, X_int, Y_int, variance_int, kl_model.intensity_model
