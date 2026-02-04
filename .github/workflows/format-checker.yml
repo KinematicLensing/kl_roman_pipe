@@ -1,0 +1,2 @@
+- name: Run Format Checker
+      uses: pre-commit/action@v3.0.1
