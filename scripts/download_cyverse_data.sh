@@ -183,7 +183,7 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
     # Check if file already exists
     if [ -f "$local_file" ]; then
         echo -e "${YELLOW}Skipping (already exists): $local_path${NC}"
-        ((skipped++))
+        ((++skipped))
         continue
     fi
     
@@ -195,11 +195,11 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
     curl_cmd=$(build_curl_cmd "$remote_url" "$local_file")
     if eval "$curl_cmd" 2>&1; then
         echo -e "${GREEN}Downloaded successfully${NC}"
-        ((downloaded++))
+        ((++downloaded))
     else
         echo -e "${RED}Failed to download: $local_path${NC}"
         rm -f "$local_file"  # Remove partial download
-        ((failed++))
+        ((++failed))
     fi
     echo ""
     
