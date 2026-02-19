@@ -121,6 +121,15 @@ jobs:
         make test-basic
       shell: bash
 
+    - name: Run Tutorial Smoke Tests
+      run: |
+        source $HOME/miniforge3/etc/profile.d/conda.sh
+        conda activate klpipe
+        export MPLBACKEND=Agg
+        export KL_PIPE_CI=1
+        make test-tutorials
+      shell: bash
+
     - name: Upload Test Logs as Artifacts
       # Upload test logs only if tests pass
       if: success()

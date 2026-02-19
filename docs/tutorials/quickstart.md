@@ -88,6 +88,7 @@ print("Model parameters:", int_model.PARAMETER_NAMES)
 **Key parameters:**
 - `flux`: Total integrated flux (conserved quantity)
 - `int_rscale`: Exponential scale length (arcsec)
+- `int_h_over_r`: Disk scale height-to-radius ratio (dimensionless)
 - `cosi`, `theta_int`, `g1`, `g2`: Same as velocity model
 
 ---
@@ -222,18 +223,30 @@ def gradient(theta):
     return -np.array(grad_fn(jnp.array(theta)))
 
 # Initial guess (perturb true values slightly)
-theta_init = theta_true * jnp.array([1.0, 0.9, 1.1, 0.95, 1.05, 1.0, 1.0])
+# Parameter order: cosi, theta_int, g1, g2, v0, vcirc, vel_rscale
+theta_init = theta_true + jnp.array([0.05, -0.1, 0.01, -0.01, 1.0, -20.0, 0.5])
 
 print("Initial guess:")
 print(model.theta2pars(theta_init))
 
-# Optimize using L-BFGS-B with analytical gradients
+# Optimize using L-BFGS-B with analytical gradients and bounds
+bounds = [
+    (0.05, 0.99),    # cosi
+    (0.0, np.pi),    # theta_int
+    (-0.5, 0.5),     # g1
+    (-0.5, 0.5),     # g2
+    (-50, 50),        # v0
+    (50, 500),        # vcirc
+    (0.1, 20.0),      # vel_rscale
+]
+
 result = minimize(
     objective,
     theta_init,
     method='L-BFGS-B',
     jac=gradient,
-    options={'maxiter': 100, 'disp': False}
+    bounds=bounds,
+    options={'maxiter': 200}
 )
 
 print(f"\nOptimization converged: {result.success}")
@@ -247,8 +260,11 @@ print("\nRecovered parameters:")
 for key in true_params.keys():
     true_val = true_params[key]
     fit_val = pars_fit[key]
-    error = 100 * abs(fit_val - true_val) / abs(true_val)
-    print(f"  {key:12s}: {fit_val:8.4f}  (true: {true_val:8.4f}, error: {error:5.2f}%)")
+    if abs(true_val) > 0:
+        error = 100 * abs(fit_val - true_val) / abs(true_val)
+        print(f"  {key:12s}: {fit_val:8.4f}  (true: {true_val:8.4f}, error: {error:5.2f}%)")
+    else:
+        print(f"  {key:12s}: {fit_val:8.4f}  (true: {true_val:8.4f}, abs err: {abs(fit_val - true_val):.4f})")
 ```
 
 ---
@@ -267,6 +283,7 @@ from kl_pipe.likelihood import create_jitted_likelihood_joint
 int_params = {
     'flux': 1.0,
     'int_rscale': 3.0,
+    'int_h_over_r': 0.1,
     'cosi': 0.6,          # Same as velocity
     'theta_int': 0.785,   # Same as velocity
     'g1': 0.0,            # Same as velocity

@@ -342,6 +342,7 @@ class InferenceTask:
         flux_theta: Any = None,
         flux_image: Any = None,
         flux_image_pars: Any = None,
+        psf_gsparams: Any = None,
     ) -> 'InferenceTask':
         """
         Create inference task for velocity-only inference.
@@ -370,6 +371,8 @@ class InferenceTask:
             Pre-rendered intensity map for PSF flux weighting.
         flux_image_pars : ImagePars, optional
             Image parameters of flux_image (for resampling if needed).
+        psf_gsparams : galsim.GSParams, optional
+            GalSim rendering parameters for PSF kernel accuracy.
 
         Returns
         -------
@@ -379,13 +382,13 @@ class InferenceTask:
         if psf is not None:
             model.configure_velocity_psf(
                 psf,
-                data_vel.shape,
-                image_pars.pixel_scale,
+                image_pars=image_pars,
                 flux_model=flux_model,
                 flux_theta=flux_theta,
                 flux_image=flux_image,
                 flux_image_pars=flux_image_pars,
                 freeze=True,
+                gsparams=psf_gsparams,
             )
 
         from kl_pipe.likelihood import create_jitted_likelihood_velocity
@@ -413,6 +416,7 @@ class InferenceTask:
         image_pars: 'ImagePars',
         meta_pars: Optional[Dict] = None,
         psf: Any = None,
+        psf_gsparams: Any = None,
     ) -> 'InferenceTask':
         """
         Create inference task for intensity-only inference.
@@ -433,6 +437,8 @@ class InferenceTask:
             Additional metadata.
         psf : galsim.GSObject, optional
             PSF for intensity channel.
+        psf_gsparams : galsim.GSParams, optional
+            GalSim rendering parameters for PSF kernel accuracy.
 
         Returns
         -------
@@ -440,7 +446,9 @@ class InferenceTask:
             Configured task ready for sampling.
         """
         if psf is not None:
-            model.configure_psf(psf, data_int.shape, image_pars.pixel_scale, freeze=True)
+            model.configure_psf(
+                psf, image_pars=image_pars, freeze=True, gsparams=psf_gsparams
+            )
 
         from kl_pipe.likelihood import create_jitted_likelihood_intensity
 
@@ -471,6 +479,7 @@ class InferenceTask:
         meta_pars: Optional[Dict] = None,
         psf_vel: Any = None,
         psf_int: Any = None,
+        psf_gsparams: Any = None,
     ) -> 'InferenceTask':
         """
         Create inference task for joint velocity + intensity inference.
@@ -499,6 +508,8 @@ class InferenceTask:
             PSF for velocity channel.
         psf_int : galsim.GSObject, optional
             PSF for intensity channel.
+        psf_gsparams : galsim.GSParams, optional
+            GalSim rendering parameters for PSF kernel accuracy.
 
         Returns
         -------
@@ -509,11 +520,10 @@ class InferenceTask:
             model.configure_joint_psf(
                 psf_vel=psf_vel,
                 psf_int=psf_int,
-                image_shape_vel=data_vel.shape,
-                pixel_scale_vel=image_pars_vel.pixel_scale,
-                image_shape_int=data_int.shape,
-                pixel_scale_int=image_pars_int.pixel_scale,
+                image_pars_vel=image_pars_vel,
+                image_pars_int=image_pars_int,
                 freeze=True,
+                gsparams=psf_gsparams,
             )
 
         from kl_pipe.likelihood import create_jitted_likelihood_joint

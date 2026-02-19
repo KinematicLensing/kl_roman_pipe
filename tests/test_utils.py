@@ -201,10 +201,12 @@ class TestConfig:
             'vel_y0': 0.1,
             'int_x0': 0.1,
             'int_y0': 0.1,
+            'int_h_over_r': 0.01,  # low sensitivity at h/r=0.1
         }
 
-        # PSF tolerance multiplier -- PSF smoothing reduces information content
-        self.psf_tolerance_multiplier = 2.0
+        # PSF tolerance multiplier -- with oversampled rendering (N=5), the
+        # forward model mismatch is eliminated; small residual from PSF smoothing
+        self.psf_tolerance_multiplier = 1.5
 
         # physical parameter boundaries
         self.param_bounds = {
@@ -326,6 +328,43 @@ class TestConfig:
             'relative': relative_tol,
             'absolute': absolute_tol,
         }
+
+
+def _quadratic_peak_interp(param_values, log_probs):
+    """Sub-grid-point peak finding via 3-point parabolic interpolation.
+
+    Fits a quadratic to the argmax and its two neighbors, returns the
+    vertex location. Falls back to discrete argmax at boundaries or
+    when curvature is degenerate.
+    """
+    best_idx = int(jnp.argmax(log_probs))
+    n = len(param_values)
+
+    # boundary — can't interpolate
+    if best_idx == 0 or best_idx == n - 1:
+        return float(param_values[best_idx])
+
+    x0 = float(param_values[best_idx - 1])
+    x1 = float(param_values[best_idx])
+    x2 = float(param_values[best_idx + 1])
+    y0 = float(log_probs[best_idx - 1])
+    y1 = float(log_probs[best_idx])
+    y2 = float(log_probs[best_idx + 1])
+
+    denom = 2.0 * (y0 - 2.0 * y1 + y2)
+
+    # flat or degenerate curvature
+    if abs(denom) < 1e-30:
+        return x1
+
+    # vertex of parabola through the 3 points
+    dx = (y0 - y2) / denom
+    peak = x1 + dx * (x2 - x0) / 2.0
+
+    # clamp to the interval [x0, x2]
+    peak = max(x0, min(x2, peak))
+
+    return peak
 
 
 def check_parameter_recovery(
@@ -1517,6 +1556,7 @@ def plot_likelihood_slices(
     config: TestConfig,
     snr: float,
     data_type: str,
+    has_psf: bool = False,
 ) -> Dict[str, Dict[str, float]]:
     """
     Plot likelihood slices for all parameters.
@@ -1547,13 +1587,17 @@ def plot_likelihood_slices(
     for param_name, (param_values, log_probs) in slices.items():
         true_val = true_pars[param_name]
 
-        best_idx = jnp.argmax(log_probs)
-        recovered_val = float(param_values[best_idx])
+        recovered_val = _quadratic_peak_interp(param_values, log_probs)
         true_value = true_pars[param_name]
 
         # Get tolerance (both relative and absolute)
         tolerance = config.get_tolerance(
-            snr, param_name, true_value, data_type, test_type='likelihood_slice'
+            snr,
+            param_name,
+            true_value,
+            data_type,
+            test_type='likelihood_slice',
+            has_psf=has_psf,
         )
 
         # Check recovery
@@ -1657,3 +1701,61 @@ def plot_likelihood_slices(
     plt.close(fig)
 
     return recovery_stats
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _quadratic_peak_interp
+# ---------------------------------------------------------------------------
+
+
+class TestQuadraticPeakInterp:
+    """Tests for sub-grid parabolic peak interpolation."""
+
+    def test_exact_parabola(self):
+        """Exact parabola sampled on integer grid recovers true peak."""
+        import numpy as np
+
+        true_peak = 3.7
+        x = np.arange(7, dtype=float)
+        y = -((x - true_peak) ** 2)
+        result = _quadratic_peak_interp(x, y)
+        assert abs(result - true_peak) < 1e-12, f"got {result}, expected {true_peak}"
+
+    def test_boundary_argmax_left(self):
+        """Peak at idx=0 returns discrete argmax."""
+        import numpy as np
+
+        x = np.array([0.0, 1.0, 2.0, 3.0])
+        y = np.array([10.0, 5.0, 2.0, 1.0])
+        result = _quadratic_peak_interp(x, y)
+        assert result == 0.0
+
+    def test_boundary_argmax_right(self):
+        """Peak at last idx returns discrete argmax."""
+        import numpy as np
+
+        x = np.array([0.0, 1.0, 2.0, 3.0])
+        y = np.array([1.0, 2.0, 5.0, 10.0])
+        result = _quadratic_peak_interp(x, y)
+        assert result == 3.0
+
+    def test_flat_log_probs(self):
+        """All equal values returns discrete argmax without crashing."""
+        import numpy as np
+
+        x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        y = np.full(5, -100.0)
+        result = _quadratic_peak_interp(x, y)
+        assert result in x
+
+    def test_asymmetric_peak(self):
+        """Asymmetric peak returns value between neighbors of argmax."""
+        import numpy as np
+
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        # steeper on left than right — peak should shift right of idx=2
+        y = np.array([-10.0, -2.0, 0.0, -0.5, -5.0])
+        result = _quadratic_peak_interp(x, y)
+        assert 1.0 <= result <= 3.0, f"result {result} outside neighbor range"
+        # peak should be right of center since right side is shallower
+        assert result > 2.0

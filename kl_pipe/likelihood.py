@@ -125,8 +125,7 @@ def _log_likelihood_velocity_only(
 def _log_likelihood_intensity_only(
     theta: jnp.ndarray,
     data_int: jnp.ndarray,
-    X_int: jnp.ndarray,
-    Y_int: jnp.ndarray,
+    image_pars_int: 'ImagePars',
     variance_int: jnp.ndarray | float,
     int_model: IntensityModel,
 ) -> float:
@@ -142,8 +141,8 @@ def _log_likelihood_intensity_only(
         Intensity model parameters.
     data_int : jnp.ndarray
         Observed intensity map (2D array).
-    X_int, Y_int : jnp.ndarray
-        Coordinate grids for intensity map evaluation.
+    image_pars_int : ImagePars
+        Image parameters for intensity map (shape, pixel_scale).
     variance_int : jnp.ndarray or float
         Variance map (2D array) or scalar variance for intensity data.
         If array, must have same shape as data_int.
@@ -163,7 +162,7 @@ def _log_likelihood_intensity_only(
     """
 
     # evaluate model via render_image (applies PSF if configured)
-    model_int = int_model.render_image(theta, X=X_int, Y=Y_int)
+    model_int = int_model.render_image(theta, image_pars=image_pars_int)
 
     # compute chi-squared
     residuals = data_int - model_int
@@ -183,8 +182,7 @@ def _log_likelihood_separate_images(
     data_int: jnp.ndarray,
     X_vel: jnp.ndarray,
     Y_vel: jnp.ndarray,
-    X_int: jnp.ndarray,
-    Y_int: jnp.ndarray,
+    image_pars_int: 'ImagePars',
     variance_vel: jnp.ndarray | float,
     variance_int: jnp.ndarray | float,
     kl_model: KLModel,
@@ -207,8 +205,8 @@ def _log_likelihood_separate_images(
         Observed intensity map (2D array).
     X_vel, Y_vel : jnp.ndarray
         Coordinate grids for velocity map evaluation.
-    X_int, Y_int : jnp.ndarray
-        Coordinate grids for intensity map evaluation.
+    image_pars_int : ImagePars
+        Image parameters for intensity map (shape, pixel_scale).
     variance_vel : jnp.ndarray or float
         Variance for velocity data.
     variance_int : jnp.ndarray or float
@@ -238,11 +236,16 @@ def _log_likelihood_separate_images(
     # compute log-likelihood for each component
     # pass theta_int to velocity for joint PSF flux weighting
     log_prob_vel = _log_likelihood_velocity_only(
-        theta_vel, data_vel, X_vel, Y_vel, variance_vel, kl_model.velocity_model,
+        theta_vel,
+        data_vel,
+        X_vel,
+        Y_vel,
+        variance_vel,
+        kl_model.velocity_model,
         flux_theta_override=theta_int,
     )
     log_prob_int = _log_likelihood_intensity_only(
-        theta_int, data_int, X_int, Y_int, variance_int, kl_model.intensity_model
+        theta_int, data_int, image_pars_int, variance_int, kl_model.intensity_model
     )
 
     # independent observations: joint likelihood is sum of log-likelihoods
@@ -396,15 +399,11 @@ def create_jitted_likelihood_intensity(
     performance considerations.
     """
 
-    # pre-compute coordinate grids from ImagePars
-    X_int, Y_int = build_map_grid_from_image_pars(image_pars_int)
-
     return jax.jit(
         partial(
             _log_likelihood_intensity_only,
             data_int=data_int,
-            X_int=X_int,
-            Y_int=Y_int,
+            image_pars_int=image_pars_int,
             variance_int=variance_int,
             int_model=int_model,
         )
@@ -501,9 +500,8 @@ def create_jitted_likelihood_joint(
     fields of view.
     """
 
-    # pre-compute coordinate grids from ImagePars
+    # pre-compute coordinate grids from ImagePars (velocity still needs X, Y)
     X_vel, Y_vel = build_map_grid_from_image_pars(image_pars_vel)
-    X_int, Y_int = build_map_grid_from_image_pars(image_pars_int)
 
     return jax.jit(
         partial(
@@ -512,8 +510,7 @@ def create_jitted_likelihood_joint(
             data_int=data_int,
             X_vel=X_vel,
             Y_vel=Y_vel,
-            X_int=X_int,
-            Y_int=Y_int,
+            image_pars_int=image_pars_int,
             variance_vel=variance_vel,
             variance_int=variance_int,
             kl_model=kl_model,

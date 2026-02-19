@@ -122,6 +122,7 @@ def joint_model_task():
         'g2': -0.02,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -151,6 +152,7 @@ def joint_model_task():
             'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
             'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
             'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
+            'int_h_over_r': 0.1,  # Fixed
             'int_x0': 0.0,  # Fixed
             'int_y0': 0.0,  # Fixed
             'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),

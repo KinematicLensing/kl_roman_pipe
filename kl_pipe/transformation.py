@@ -93,8 +93,9 @@ def cen2source(
         Coordinates in source plane.
     """
 
-    norm = 1.0 / (1.0 - (g1**2 + g2**2))
-    transform = norm * jnp.array([[1.0 + g1, g2], [g2, 1.0 - g1]])
+    # area-preserving shear M^{-1} (image→source): matches GalSim .shear() convention
+    norm = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
+    transform = norm * jnp.array([[1.0 - g1, -g2], [-g2, 1.0 + g1]])
 
     return _multiply(transform, x, y)
 

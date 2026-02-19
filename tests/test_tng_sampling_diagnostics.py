@@ -219,7 +219,13 @@ def estimate_intensity_params(
     # Estimate half-light radius
     total = intensity_map.sum()
     if total <= 0:
-        return {'flux': flux, 'int_rscale': 0.5, 'int_x0': 0.0, 'int_y0': 0.0}
+        return {
+            'flux': flux,
+            'int_rscale': 0.5,
+            'int_h_over_r': 0.1,
+            'int_x0': 0.0,
+            'int_y0': 0.0,
+        }
 
     cumsum = np.cumsum(np.sort(intensity_map.ravel())[::-1])
     half_light_npix = np.searchsorted(cumsum, total / 2)
@@ -237,6 +243,7 @@ def estimate_intensity_params(
     return {
         'flux': flux,
         'int_rscale': int_rscale,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -305,6 +312,7 @@ def create_tng_joint_inference_task(
         # After normalization, flux ~0.01 gives unit integrated flux in model
         'flux': TruncatedNormal(true_pars.get('flux', 0.01), 0.02, 0.001, 0.1),
         'int_rscale': TruncatedNormal(true_pars.get('int_rscale', 0.5), 0.5, 0.05, 3.0),
+        'int_h_over_r': 0.1,  # Fixed
         'int_x0': TruncatedNormal(
             true_pars.get('int_x0', 0.0), 0.5, -offset_bound, offset_bound
         ),

@@ -484,6 +484,7 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
         'g2': -0.02,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -535,6 +536,7 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
         (-0.1, 0.1),  # g2
         (0.1, 10.0),  # flux
         (0.5, 10.0),  # int_rscale
+        (0.1, 0.1),  # int_h_over_r
         (-extent, extent),  # int_x0
         (-extent, extent),  # int_y0
     ]
@@ -609,10 +611,11 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     true_pars = {
         'cosi': 0.7,
         'theta_int': 0.785,
-        'g1': 0.03,
-        'g2': -0.02,
+        'g1': 0.0,
+        'g2': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -622,16 +625,26 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     # generate PSF-convolved data
     from kl_pipe.synthetic import SyntheticIntensity
 
-    synth = SyntheticIntensity(true_pars, model_type='exponential', seed=test_config.seed, psf=psf)
+    synth = SyntheticIntensity(
+        true_pars, model_type='exponential', seed=test_config.seed, psf=psf
+    )
     data_noisy = synth.generate(
-        test_config.image_pars_intensity, snr=snr, seed=test_config.seed,
-        include_poisson=test_config.include_poisson_noise, sersic_backend='galsim',
+        test_config.image_pars_intensity,
+        snr=snr,
+        seed=test_config.seed,
+        include_poisson=test_config.include_poisson_noise,
+        sersic_backend='galsim',
     )
     variance = synth.variance
 
+    # convert GalSim flux/pixel → surface brightness to match model units
+    ps2 = test_config.image_pars_intensity.pixel_scale**2
+    data_noisy = data_noisy / ps2
+    variance = variance / ps2**2
+
     # configure model with same PSF
     model = InclinedExponentialModel()
-    model.configure_psf(psf, test_config.image_pars_intensity.shape, test_config.image_pars_intensity.pixel_scale)
+    model.configure_psf(psf, image_pars=test_config.image_pars_intensity)
     theta_true = model.pars2theta(true_pars)
 
     log_like = create_jitted_likelihood_intensity(
@@ -654,6 +667,7 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
         (-0.1, 0.1),
         (0.1, 10.0),
         (0.5, 10.0),
+        (0.1, 0.1),  # int_h_over_r
         (-extent, extent),
         (-extent, extent),
     ]
@@ -677,14 +691,21 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
 
     test_name = f"opt_inclined_exp_psf_snr{snr}"
     plot_parameter_comparison(
-        true_pars, pars_opt, recovery_stats, test_name, test_config, snr,
-        exclude_params=['cosi', 'g1', 'g2'],
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        exclude_params=['cosi', 'theta_int', 'g1', 'g2'],
     )
 
     model.clear_psf()
     assert_parameter_recovery(
-        recovery_stats, snr, 'Optimizer: Inclined exponential (PSF)',
-        exclude_params=['cosi', 'g1', 'g2'],
+        recovery_stats,
+        snr,
+        'Optimizer: Inclined exponential (PSF)',
+        exclude_params=['cosi', 'theta_int', 'g1', 'g2'],
     )
 
 
@@ -709,6 +730,7 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
         'vel_y0': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -717,33 +739,63 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
 
     # generate data
     from kl_pipe.synthetic import (
-        SyntheticIntensity, SyntheticVelocity, generate_sersic_intensity_2d,
+        SyntheticIntensity,
+        SyntheticVelocity,
+        generate_sersic_intensity_2d,
     )
     from kl_pipe.velocity import OffsetVelocityModel
 
     synth_int = SyntheticIntensity(
-        {k: v for k, v in true_pars.items() if k in InclinedExponentialModel.PARAMETER_NAMES},
-        model_type='exponential', seed=test_config.seed, psf=psf,
+        {
+            k: v
+            for k, v in true_pars.items()
+            if k in InclinedExponentialModel.PARAMETER_NAMES
+        },
+        model_type='exponential',
+        seed=test_config.seed,
+        psf=psf,
     )
     data_int_noisy = synth_int.generate(
-        test_config.image_pars_intensity, snr=snr, seed=test_config.seed,
-        include_poisson=test_config.include_poisson_noise, sersic_backend='galsim',
+        test_config.image_pars_intensity,
+        snr=snr,
+        seed=test_config.seed,
+        include_poisson=test_config.include_poisson_noise,
+        sersic_backend='galsim',
     )
     variance_int = synth_int.variance
 
-    int_pars_for_vel = {k: v for k, v in true_pars.items() if k in InclinedExponentialModel.PARAMETER_NAMES}
+    # convert GalSim flux/pixel → surface brightness to match model units
+    ps2 = test_config.image_pars_intensity.pixel_scale**2
+    data_int_noisy = data_int_noisy / ps2
+    variance_int = variance_int / ps2**2
+
+    int_pars_for_vel = {
+        k: v
+        for k, v in true_pars.items()
+        if k in InclinedExponentialModel.PARAMETER_NAMES
+    }
     flux_image = generate_sersic_intensity_2d(
-        test_config.image_pars_velocity, backend='scipy', n_sersic=1.0,
+        test_config.image_pars_velocity,
+        backend='scipy',
+        n_sersic=1.0,
         **{k: v for k, v in int_pars_for_vel.items() if k != 'n_sersic'},
     )
 
     synth_vel = SyntheticVelocity(
-        {k: v for k, v in true_pars.items() if k in OffsetVelocityModel.PARAMETER_NAMES},
-        model_type='arctan', seed=test_config.seed + 1,
-        psf=psf, intensity_for_psf=flux_image,
+        {
+            k: v
+            for k, v in true_pars.items()
+            if k in OffsetVelocityModel.PARAMETER_NAMES
+        },
+        model_type='arctan',
+        seed=test_config.seed + 1,
+        psf=psf,
+        intensity_for_psf=flux_image,
     )
     data_vel_noisy = synth_vel.generate(
-        test_config.image_pars_velocity, snr=snr, seed=test_config.seed + 1,
+        test_config.image_pars_velocity,
+        snr=snr,
+        seed=test_config.seed + 1,
         include_poisson=test_config.include_poisson_noise,
     )
     variance_vel = synth_vel.variance
@@ -755,11 +807,10 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
         vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
     )
     joint_model.configure_joint_psf(
-        psf_vel=psf, psf_int=psf,
-        image_shape_vel=test_config.image_pars_velocity.shape,
-        pixel_scale_vel=test_config.image_pars_velocity.pixel_scale,
-        image_shape_int=test_config.image_pars_intensity.shape,
-        pixel_scale_int=test_config.image_pars_intensity.pixel_scale,
+        psf_vel=psf,
+        psf_int=psf,
+        image_pars_vel=test_config.image_pars_velocity,
+        image_pars_int=test_config.image_pars_intensity,
     )
     theta_true = joint_model.pars2theta(true_pars)
 
@@ -779,11 +830,13 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
 
     extent_vel = (
         test_config.image_pars_velocity.shape[0]
-        * test_config.image_pars_velocity.pixel_scale / 2
+        * test_config.image_pars_velocity.pixel_scale
+        / 2
     )
     extent_int = (
         test_config.image_pars_intensity.shape[0]
-        * test_config.image_pars_intensity.pixel_scale / 2
+        * test_config.image_pars_intensity.pixel_scale
+        / 2
     )
 
     # build bounds following joint model parameter ordering
@@ -807,6 +860,8 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
             bounds.append((0.1, 10.0))
         elif name == 'int_rscale':
             bounds.append((0.5, 10.0))
+        elif name == 'int_h_over_r':
+            bounds.append((0.1, 0.1))
         elif name in ('int_x0', 'int_y0'):
             bounds.append((-extent_int, extent_int))
         else:
@@ -836,12 +891,20 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
     test_name = f"opt_joint_psf_snr{snr}"
     exclude_params = ['cosi', 'g1', 'g2']
     plot_parameter_comparison(
-        true_pars, pars_opt, recovery_stats, test_name, test_config, snr,
-        product_stats=product_stats, exclude_params=exclude_params,
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        product_stats=product_stats,
+        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
-        recovery_stats, snr, 'Optimizer: Joint model (PSF)',
+        recovery_stats,
+        snr,
+        'Optimizer: Joint model (PSF)',
         exclude_params=exclude_params,
     )
 

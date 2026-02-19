@@ -242,6 +242,7 @@ def create_joint_inference_task(
         # Intensity params
         'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
         'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
+        'int_h_over_r': 0.1,  # Fixed
         'int_x0': 0.0,  # Fixed
         'int_y0': 0.0,  # Fixed
         # Shared geometric params
@@ -429,6 +430,7 @@ class TestJointSamplingDiagnostics:
             'g2': 0.0,
             'flux': 1.0,
             'int_rscale': 3.0,
+            'int_h_over_r': 0.1,
             'int_x0': 0.0,
             'int_y0': 0.0,
         }
@@ -449,6 +451,7 @@ class TestJointSamplingDiagnostics:
             'g2': -0.02,
             'flux': 1.0,
             'int_rscale': 3.0,
+            'int_h_over_r': 0.1,
             'int_x0': 0.0,
             'int_y0': 0.0,
         }
@@ -641,6 +644,7 @@ class TestSamplerComparison:
             'g2': -0.02,
             'flux': 1.0,
             'int_rscale': 3.0,
+            'int_h_over_r': 0.1,
             'int_x0': 0.0,
             'int_y0': 0.0,
         }

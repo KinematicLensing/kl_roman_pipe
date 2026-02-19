@@ -2,12 +2,18 @@
 Pytest configuration and shared fixtures for kl_pipe tests.
 
 This module provides:
-- Warning suppression for sampler-related warnings (test-only)
+- Warning suppression for expected test warnings
 - Shared test configuration fixtures
 """
 
+import jax
+
+jax.config.update("jax_enable_x64", True)
+
 import pytest
 import warnings
+
+from galsim.errors import GalSimFFTSizeWarning
 
 
 # ==============================================================================
@@ -16,7 +22,7 @@ import warnings
 
 
 @pytest.fixture(autouse=True)
-def suppress_sampler_warnings():
+def suppress_expected_warnings():
     """
     Suppress expected warnings during tests.
 
@@ -27,6 +33,8 @@ def suppress_sampler_warnings():
     Suppressed warnings:
     - emcee autocorrelation warning (chain too short)
     - JAXopt deprecation warning (blackjax dependency)
+    - GalSim FFT size warning (expected for large PSF convolutions)
+    - matplotlib tight_layout warning (non-compatible axes)
     """
     with warnings.catch_warnings():
         # emcee chain length warning - expected for short test runs
@@ -41,6 +49,19 @@ def suppress_sampler_warnings():
             "ignore",
             message="JAXopt is no longer maintained",
             category=DeprecationWarning,
+        )
+
+        # GalSim FFT size warning - expected for large convolution stamps
+        warnings.filterwarnings(
+            "ignore",
+            category=GalSimFFTSizeWarning,
+        )
+
+        # matplotlib tight_layout with non-compatible axes
+        warnings.filterwarnings(
+            "ignore",
+            message="This figure includes Axes that are not compatible with tight_layout",
+            category=UserWarning,
         )
 
         yield

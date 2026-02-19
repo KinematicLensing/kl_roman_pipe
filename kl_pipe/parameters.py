@@ -409,6 +409,30 @@ class ImagePars(object):
             # must be xy indexing
             return self.shape[0]
 
+    def make_fine_scale(self, oversample):
+        """Return new ImagePars at finer pixel scale for oversampled rendering.
+
+        Parameters
+        ----------
+        oversample : int
+            Oversampling factor. Odd integers recommended to avoid
+            centroid-shift artifacts (Bernstein & Gruen 2014).
+        """
+        import warnings
+
+        if oversample % 2 == 0:
+            warnings.warn(
+                f"oversample={oversample} is even. Odd values recommended to "
+                "avoid half-pixel centroid shifts in oversampled rendering "
+                "(Bernstein & Gruen 2014). Use 3, 5, 7, or 9.",
+                stacklevel=2,
+            )
+        return ImagePars(
+            shape=(self.Nrow * oversample, self.Ncol * oversample),
+            pixel_scale=self.pixel_scale / oversample,
+            indexing='ij',
+        )
+
     def _estimate_pixel_scale(self):
         # Optionally use astropy.wcs.utils.proj_plane_pixel_scales
         from astropy.wcs.utils import proj_plane_pixel_scales

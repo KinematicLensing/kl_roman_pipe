@@ -671,10 +671,10 @@ class TNGDataVectorGenerator:
         # Step 3: Apply weak lensing shear
         # ===================================================================
         if g1 != 0 or g2 != 0:
-            # Shear matrix (inverse of cen2source)
+            # source→cen = A^{-1} = norm * [[1+g1, g2], [g2, 1-g1]]
             norm = 1.0 / (1.0 - (g1**2 + g2**2))
-            x_cen = norm * ((1.0 - g1) * x_source - g2 * y_source)
-            y_cen = norm * (-g2 * x_source + (1.0 + g1) * y_source)
+            x_cen = norm * ((1.0 + g1) * x_source + g2 * y_source)
+            y_cen = norm * (g2 * x_source + (1.0 - g1) * y_source)
         else:
             x_cen = x_source
             y_cen = y_source
@@ -983,7 +983,7 @@ class TNGDataVectorGenerator:
             from ..psf import gsobj_to_kernel, convolve_fft_numpy
 
             kernel, padded_shape = gsobj_to_kernel(
-                config.psf, intensity.shape, config.image_pars.pixel_scale
+                config.psf, image_pars=config.image_pars
             )
             intensity = convolve_fft_numpy(intensity, kernel, padded_shape)
 
@@ -1139,7 +1139,7 @@ class TNGDataVectorGenerator:
                 intensity_map, _ = self.generate_intensity_map(config, snr=None)
 
             kernel, padded_shape = gsobj_to_kernel(
-                config.psf, velocity.shape, config.image_pars.pixel_scale
+                config.psf, image_pars=config.image_pars
             )
             velocity = convolve_flux_weighted_numpy(
                 velocity, intensity_map, kernel, padded_shape

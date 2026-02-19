@@ -32,10 +32,10 @@ def output_dir():
 @pytest.fixture(scope="module")
 def tng_generator():
     """Load TNG generator for SubhaloID 8."""
-    from kl_pipe.tng.loaders import load_tng_galaxy
-    from kl_pipe.tng.data_vectors import TNGDataVectorGenerator
+    from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator
 
-    galaxy = load_tng_galaxy(subhalo_id=8)
+    tng_data = TNG50MockData()
+    galaxy = tng_data.get_galaxy(subhalo_id=8)
     return TNGDataVectorGenerator(galaxy)
 
 
@@ -82,14 +82,12 @@ def test_tng_intensity_with_psf(tng_generator, tng_config, tng_psf, output_dir):
     flux_no_psf = np.sum(intensity_no_psf)
     flux_psf = np.sum(intensity_psf)
     rel_flux_diff = abs(flux_psf - flux_no_psf) / abs(flux_no_psf)
-    assert rel_flux_diff < 0.01, (
-        f"Flux not conserved: {rel_flux_diff:.2%} difference"
-    )
+    assert rel_flux_diff < 0.01, f"Flux not conserved: {rel_flux_diff:.2%} difference"
 
     # PSF version should have lower peak (smoother)
-    assert np.max(intensity_psf) < np.max(intensity_no_psf), (
-        "PSF-convolved intensity should have lower peak"
-    )
+    assert np.max(intensity_psf) < np.max(
+        intensity_no_psf
+    ), "PSF-convolved intensity should have lower peak"
 
     # diagnostic plot
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -134,9 +132,9 @@ def test_tng_velocity_with_psf(tng_generator, tng_config, tng_psf, output_dir):
     # PSF should reduce velocity extremes (smoother)
     range_no_psf = np.ptp(velocity_no_psf)
     range_psf = np.ptp(velocity_psf)
-    assert range_psf < range_no_psf, (
-        f"PSF should reduce velocity range: {range_no_psf:.1f} -> {range_psf:.1f}"
-    )
+    assert (
+        range_psf < range_no_psf
+    ), f"PSF should reduce velocity range: {range_no_psf:.1f} -> {range_psf:.1f}"
 
     # diagnostic plot
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -144,11 +142,15 @@ def test_tng_velocity_with_psf(tng_generator, tng_config, tng_psf, output_dir):
     vmin = min(np.percentile(velocity_no_psf, 2), np.percentile(velocity_psf, 2))
     vmax = max(np.percentile(velocity_no_psf, 98), np.percentile(velocity_psf, 98))
 
-    im0 = axes[0].imshow(velocity_no_psf, origin='lower', cmap='RdBu_r', vmin=vmin, vmax=vmax)
+    im0 = axes[0].imshow(
+        velocity_no_psf, origin='lower', cmap='RdBu_r', vmin=vmin, vmax=vmax
+    )
     axes[0].set_title(f'No PSF (range={range_no_psf:.0f})')
     plt.colorbar(im0, ax=axes[0])
 
-    im1 = axes[1].imshow(velocity_psf, origin='lower', cmap='RdBu_r', vmin=vmin, vmax=vmax)
+    im1 = axes[1].imshow(
+        velocity_psf, origin='lower', cmap='RdBu_r', vmin=vmin, vmax=vmax
+    )
     axes[1].set_title(f'With PSF (range={range_psf:.0f})')
     plt.colorbar(im1, ax=axes[1])
 

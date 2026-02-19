@@ -88,6 +88,7 @@ REQUIRED_PARAMS = {
     'exponential': {
         'flux',
         'int_rscale',
+        'int_h_over_r',
         'cosi',
         'theta_int',
         'g1',
@@ -155,10 +156,10 @@ def generate_arctan_velocity_2d(
     X_c = X - vel_x0
     Y_c = Y - vel_y0
 
-    # Step 2: apply shear
-    norm = 1.0 / (1.0 - (g1**2 + g2**2))
-    X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
-    Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
+    # Step 2: area-preserving shear (image→source), matches GalSim .shear()
+    norm = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
+    X_shear = norm * ((1.0 - g1) * X_c - g2 * Y_c)
+    Y_shear = norm * (-g2 * X_c + (1.0 + g1) * Y_c)
 
     # Step 3: rotate
     cos_pa = np.cos(-theta_int)
@@ -187,7 +188,7 @@ def generate_arctan_velocity_2d(
             raise ValueError("intensity_for_psf required for velocity PSF")
         from kl_pipe.psf import gsobj_to_kernel, convolve_flux_weighted_numpy
 
-        kernel, padded_shape = gsobj_to_kernel(psf, v_map.shape, image_pars.pixel_scale)
+        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
         v_map = convolve_flux_weighted_numpy(
             v_map, intensity_for_psf, kernel, padded_shape
         )
@@ -216,6 +217,7 @@ def generate_sersic_intensity_2d(
     g2: float = 0.0,
     int_x0: float = 0.0,
     int_y0: float = 0.0,
+    int_h_over_r: float = 0.0,
     backend: str = 'scipy',
     psf=None,
 ) -> np.ndarray:
@@ -240,6 +242,8 @@ def generate_sersic_intensity_2d(
         Shear components.
     int_x0, int_y0 : float, optional
         Centroid offsets.
+    int_h_over_r : float, optional
+        Scale height / scale radius ratio for 3D disk. Default 0.0 (thin disk).
     backend : str, optional
         Backend for computation ('scipy' or 'galsim'). Default is 'scipy'.
     psf : galsim.GSObject, optional
@@ -263,6 +267,7 @@ def generate_sersic_intensity_2d(
             g2,
             int_x0,
             int_y0,
+            int_h_over_r=int_h_over_r,
             psf=psf,
         )
     else:
@@ -277,6 +282,7 @@ def generate_sersic_intensity_2d(
             g2,
             int_x0,
             int_y0,
+            int_h_over_r=int_h_over_r,
             psf=psf,
         )
 
@@ -292,9 +298,14 @@ def _generate_sersic_scipy(
     g2: float,
     int_x0: float,
     int_y0: float,
+    int_h_over_r: float = 0.0,
     psf=None,
 ) -> np.ndarray:
-    """Generate Sersic profile using scipy."""
+    """Generate Sersic profile using scipy.
+
+    When int_h_over_r > 0 and n_sersic == 1.0, uses 3D LOS integration
+    through a sech² vertical profile (matching GalSim InclinedExponential).
+    """
 
     # Build coordinate grids from ImagePars
     X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
@@ -305,52 +316,76 @@ def _generate_sersic_scipy(
     X_c = X - int_x0
     Y_c = Y - int_y0
 
-    # Step 2: Apply inverse lensing shear (cen -> source)
-    norm = 1.0 / (1.0 - (g1**2 + g2**2))
-    X_shear = norm * ((1.0 + g1) * X_c + g2 * Y_c)
-    Y_shear = norm * (g2 * X_c + (1.0 - g1) * Y_c)
+    # Step 2: area-preserving shear (cen -> source), matches GalSim .shear()
+    norm = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
+    X_shear = norm * ((1.0 - g1) * X_c - g2 * Y_c)
+    Y_shear = norm * (-g2 * X_c + (1.0 + g1) * Y_c)
 
     # Step 3: Rotate by position angle (source -> gal)
     cos_pa = np.cos(-theta_int)
     sin_pa = np.sin(-theta_int)
-    X_rot = cos_pa * X_shear - sin_pa * Y_shear
-    Y_rot = sin_pa * X_shear + cos_pa * Y_shear
+    X_gal = cos_pa * X_shear - sin_pa * Y_shear
+    Y_gal = sin_pa * X_shear + cos_pa * Y_shear
 
+    # 3D LOS integration path for exponential with sech² vertical profile
+    if int_h_over_r > 0 and n_sersic == 1.0:
+        h_z = int_h_over_r * int_rscale
+        rho0 = flux / (4.0 * np.pi * h_z * int_rscale**2)
+
+        # Gauss-Legendre quadrature (same as JAX model)
+        from kl_pipe.intensity import _DEFAULT_N_QUAD
+
+        nodes, weights = np.polynomial.legendre.leggauss(_DEFAULT_N_QUAD)
+
+        delta = 5.0 * h_z / max(cosi, 0.1)
+        ell_center = Y_gal * sini / max(cosi, 0.1)  # (...,)
+        ell = ell_center[..., None] + delta * nodes  # (..., N_QUAD)
+        w = delta * weights
+
+        # LOS integration in galaxy frame
+        y_disk = Y_gal[..., None] * cosi + ell * sini
+        z_val = ell * cosi - Y_gal[..., None] * sini
+        x_disk = X_gal[..., None]
+
+        R = np.sqrt(x_disk**2 + y_disk**2)
+        radial = np.exp(-R / int_rscale)
+        z_norm = z_val / h_z
+        cosh_z = np.cosh(np.clip(z_norm, -20.0, 20.0))
+        vertical = 1.0 / (cosh_z**2)
+
+        integrand = rho0 * radial * vertical
+        intensity_obs = np.sum(integrand * w, axis=-1)
+
+        if psf is not None:
+            from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
+
+            kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
+            intensity_obs = convolve_fft_numpy(intensity_obs, kernel, padded_shape)
+
+        return intensity_obs
+
+    # thin-disk path (original)
     # Step 4: Deproject inclination (gal -> disk) - divide by cosi
-    X_disk = X_rot
-    Y_disk = Y_rot / cosi if cosi > 0 else Y_rot
+    X_disk = X_gal
+    Y_disk = Y_gal / cosi if cosi > 0 else Y_gal
 
     # Compute radius in disk plane
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
 
     # Convert flux to central surface brightness
-    # For exponential (n=1): F = 2π * I0 * r_scale²
-    #                   →  I0 = F / (2π * r_scale²)
-    # For general Sersic: F = I0 * r_scale² * 2π * n * Γ(2n)
-    #                   →  I0 = F / (r_scale² * 2π * n * Γ(2n))
     if n_sersic == 1.0:
-        # Exponential case (optimized, no gamma function call)
         I0_disk = flux / (2.0 * np.pi * int_rscale**2)
     else:
-        # General Sersic case
         norm_factor = int_rscale**2 * 2.0 * np.pi * n_sersic * gamma(2.0 * n_sersic)
         I0_disk = flux / norm_factor
 
-    # Evaluate Sersic profile in disk plane
-    #   For exponential (n=1): I(r) = I0 * exp(-r/r_scale)
-    #   For general Sersic: I(r) = I0 * exp(-(r/r_scale)^(1/n))
     intensity_disk = I0_disk * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))
-
-    # Step 5: Project surface brightness to observer frame
-    #  (same flux in smaller solid angle -> brighter by 1/cos(i))
     intensity_obs = intensity_disk / cosi if cosi > 0 else intensity_disk
 
     if psf is not None:
         from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
 
-        kernel, padded_shape = gsobj_to_kernel(
-            psf, intensity_obs.shape, image_pars.pixel_scale
-        )
+        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
         intensity_obs = convolve_fft_numpy(intensity_obs, kernel, padded_shape)
 
     return intensity_obs
@@ -367,8 +402,10 @@ def _generate_sersic_galsim(
     g2: float,
     int_x0: float,
     int_y0: float,
+    int_h_over_r: float = 0.0,
     gsparams: gs.GSParams = None,
     psf=None,
+    method: str = 'auto',
 ) -> np.ndarray:
     """
     Generate Sersic profile using GalSim backend.
@@ -405,12 +442,16 @@ def _generate_sersic_galsim(
 
     inclination = gs.Angle(np.arccos(cosi), gs.radians)
 
+    # scale_h_over_r: use provided value, or GalSim default (0.1)
+    h_over_r = int_h_over_r if int_h_over_r > 0 else 0.1
+
     # Create the inclined profile
     if n_sersic == 1.0:
         # Use InclinedExponential for speed
         profile = gs.InclinedExponential(
             inclination=inclination,
             scale_radius=int_rscale,
+            scale_h_over_r=h_over_r,
             flux=flux,
             gsparams=gsparams,
         )
@@ -420,6 +461,7 @@ def _generate_sersic_galsim(
             n=n_sersic,
             inclination=inclination,
             scale_radius=int_rscale,
+            scale_h_over_r=h_over_r,
             flux=flux,
             gsparams=gsparams,
         )
@@ -436,16 +478,15 @@ def _generate_sersic_galsim(
     if psf is not None:
         profile = gs.Convolve(profile, psf)
 
-    # Setup GalSim image from ImagePars
-    # GalSim needs bounds and pixel scale
-    nx, ny = image_pars.Nx, image_pars.Ny
+    # GalSim stores x (horizontal) in cols; we store X (horizontal) in rows.
+    # Physical params (shift, rotate, shear) are Cartesian — correct as-is.
+    nx, ny = image_pars.Nrow, image_pars.Ncol
     pixel_scale = image_pars.pixel_scale
 
-    # Draw the profile
-    image = profile.drawImage(nx=nx, ny=ny, scale=pixel_scale, method='auto')
+    image = profile.drawImage(nx=nx, ny=ny, scale=pixel_scale, method=method)
 
-    # GalSim array indexing matches numpy (y, x) = (row, col)
-    intensity = image.array
+    # transpose: GalSim (row=y, col=x) -> ours (row=X, col=Y)
+    intensity = image.array.T
 
     return intensity
 

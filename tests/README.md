@@ -7,12 +7,23 @@ This directory contains comprehensive tests for the `kl_pipe` kinematic lensing 
 ### Unit Tests
 - **`test_velocity.py`**: Velocity model evaluation, coordinate transformations, parameter conversions
 - **`test_intensity.py`**: Intensity model evaluation, flux conservation, inclination effects
+- **`test_priors.py`**: Prior distributions (Uniform, Gaussian, TruncatedNormal, PriorDict)
 - **`test_utils.py`**: Shared test utilities, tolerance configuration, plotting helpers
 - **`test_jax.py`**: JAX-specific functionality (JIT compilation, gradients)
+
+### PSF Tests
+- **`test_psf.py`**: PSF convolution pipeline, oversampled rendering, GalSim regression
+- **`test_psf_tng.py`**: PSF convolution with TNG50 mock data
 
 ### Integration Tests (Parameter Recovery)
 - **`test_likelihood_slices.py`**: Brute-force likelihood slicing for parameter recovery
 - **`test_optimizer_recovery.py`**: Gradient-based optimization for parameter recovery
+
+### Sampling Tests
+- **`test_sampling.py`**: Sampler config validation, factory pattern, InferenceTask
+- **`test_sampling_diagnostics.py`**: emcee + nautilus full MCMC with diagnostic plots
+- **`test_numpyro.py`**: NumPyro NUTS velocity + joint recovery, convergence (R-hat, ESS)
+- **`test_blackjax.py`**: BlackJAX HMC/NUTS velocity-only diagnostics
 
 ### TNG50 Tests
 - **`test_tng_loaders.py`**: TNG50 data loading, galaxy access, particle data validation
@@ -420,6 +431,13 @@ The `-s` flag shows print statements and allows debugger access
 3. **Run full suite** before committing
 4. **Document** any tolerance adjustments with scientific reasoning
 5. **Inspect plots** for any marginal failures to verify correctness
+
+---
+
+## Future Test Ideas
+
+See [FUTURE_TESTS.md](FUTURE_TESTS.md) for an evolving list of planned tests and
+test gaps, organized by science impact and implementation difficulty.
 
 ---
 

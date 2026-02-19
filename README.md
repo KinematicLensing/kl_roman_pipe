@@ -4,8 +4,6 @@ General-purpose kinematic lensing analysis toolkit, designed to serve as the fou
 
 This library provides modular tools for modeling galaxy velocity fields and surface brightness profiles, with JAX-based implementations optimized for gradient-based parameter inference.
 
-**Current development branch:** `se/basic_models`
-
 ## Quick Start
 
 ```bash
@@ -30,20 +28,38 @@ make test-basic  # Skips TNG50 tests
 
 ```
 kl_pipe/              # Main pipeline package
-├── model.py          # Model base classes (Model, VelocityModel, IntensityModel)
-├── velocity.py       # Velocity field models (e.g., ArctanVelocityModel)
+├── model.py          # Model base classes (Model, VelocityModel, IntensityModel, KLModel)
+├── velocity.py       # Velocity field models (e.g., CenteredVelocityModel)
 ├── intensity.py      # Surface brightness models (e.g., InclinedExponentialModel)
 ├── likelihood.py     # Likelihood construction and optimization
 ├── transformation.py # Multi-plane coordinate transformations
+├── parameters.py     # Parameter and coordinate handling (ImagePars, Pars, etc.)
+├── priors.py         # Prior distributions (Uniform, Gaussian, TruncatedNormal, etc.)
+├── psf.py            # PSF convolution (PSFData, oversampled rendering, FFT pipeline)
 ├── synthetic.py      # Synthetic data generation
-├── parameters.py     # Parameter and coordinate handling
+├── noise.py          # SNR-based noise utilities
+├── utils.py          # Grid builders, path helpers
+├── plotting.py       # Velocity/intensity map visualization
+├── diagnostics.py    # Parameter recovery plots, joint Nsigma analysis
+├── sampling/         # MCMC sampling infrastructure
+│   ├── base.py       # Sampler ABC, SamplerResult
+│   ├── configs.py    # Config dataclasses per sampler type
+│   ├── task.py       # InferenceTask: model+likelihood+priors+data
+│   ├── factory.py    # build_sampler() registry
+│   ├── emcee.py      # Ensemble MCMC (gradient-free)
+│   ├── nautilus.py   # Neural nested sampling (evidence)
+│   ├── blackjax.py   # JAX-native HMC/NUTS
+│   ├── numpyro.py    # NUTS w/ Z-score reparam (recommended)
+│   └── diagnostics.py # Trace, corner, recovery plots
 └── tng/              # TNG50 mock data utilities
-    └── loaders.py    # Load gas, stellar, and subhalo data
+    ├── loaders.py    # Load gas, stellar, and subhalo data
+    └── data_vectors.py # 3D particle-to-2D map rendering
 
 tests/                # Unit tests (pytest)
 docs/
 ├── tutorials/        # Interactive Jupyter tutorials
 │   ├── quickstart.md
+│   ├── sampling.md
 │   └── tng50_data.md
 data/
 ├── cyverse/          # CyVerse data configuration
@@ -66,9 +82,11 @@ This installs the package in editable mode with all dependencies via `conda-lock
 ### Testing
 - `make test` - Run all tests (downloads TNG50 data if needed, ~340 MB)
 - `make test-basic` - Run only basic tests (no download required)
-- `make test-tng50` - Run only TNG50-specific tests
+- `make test-tng` - Run only TNG50-specific tests
+- `make test-sampling` - Run MCMC sampling tests (excludes nautilus)
 - `make test-fast` - Stop on first failure
 - `make test-coverage` - Generate coverage report
+- `make test-tutorials` - Execute all tutorials end-to-end (CI mode)
 
 **To run tests without downloading data:**
 ```bash
@@ -82,6 +100,7 @@ conda run -n klpipe pytest tests/ -v -m "not tng50"
 
 ### Documentation
 - `make tutorials` - Convert markdown tutorials to Jupyter notebooks
+- `make test-tutorials` - Convert and execute tutorials (CI smoke test)
 
 ### Code Quality
 - `make format` - Auto-format code with Black
@@ -109,6 +128,7 @@ See [`docs/tutorials/tng50_data.md`](docs/tutorials/tng50_data.md) for details.
 
 Interactive tutorials are available in [`docs/tutorials/`](docs/tutorials/):
 - **quickstart.md** - Pipeline basics: models, likelihoods, optimization
+- **sampling.md** - Bayesian inference with MCMC sampling (emcee, nautilus, numpyro)
 - **tng50_data.md** - Working with TNG50 mock observations
 
 Convert to Jupyter notebooks:
@@ -122,10 +142,13 @@ Then open the `.ipynb` files in Jupyter Lab or VS Code.
 
 - **JAX-based:** Automatic differentiation and JIT compilation for fast gradient-based optimization
 - **Multi-plane coordinate system:** Proper handling of lensing transformations (5 reference frames)
+- **3D intensity model:** Inclined exponential with sech^2 vertical profile (matches GalSim `InclinedExponential`)
+- **PSF convolution:** Oversampled FFT pipeline with configurable oversample factor (default N=5)
+- **MCMC sampling:** Multiple backends (emcee, nautilus, numpyro, blackjax) with unified interface
 - **Modular models:** Easy to extend with new velocity and intensity models
 - **Pure functions:** Stateless models for reproducibility
 - **Synthetic data generation:** Built-in tools for testing and validation
-- **TNG50 integration:** Work with realistic mock observations
+- **TNG50 integration:** Work with realistic mock observations from IllustrisTNG
 
 ## Development
 

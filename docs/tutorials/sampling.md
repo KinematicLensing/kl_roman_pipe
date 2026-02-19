@@ -25,6 +25,11 @@ The sampling module follows the same JAX-compatible, functional design as the re
 ## Quick Overview
 
 ```{code-cell} python
+import os
+CI_MODE = os.environ.get('KL_PIPE_CI', '0') == '1'
+if CI_MODE:
+    print("CI mode: using reduced MCMC settings for faster execution")
+
 from kl_pipe.sampling import (
     InferenceTask,
     EnsembleSamplerConfig,
@@ -156,12 +161,12 @@ from kl_pipe.sampling import EnsembleSamplerConfig, build_sampler
 
 # Configure the sampler
 config = EnsembleSamplerConfig(
-    n_walkers=32,         # Number of walkers (should be > 2 * n_params)
-    n_iterations=2000,    # Total iterations
-    burn_in=500,          # Iterations to discard
-    thin=1,               # Thinning factor
+    n_walkers=32,
+    n_iterations=200 if CI_MODE else 2000,
+    burn_in=50 if CI_MODE else 500,
+    thin=1,
     seed=42,
-    progress=True,        # Show progress bar
+    progress=not CI_MODE,
 )
 
 # Build and run the sampler
@@ -202,10 +207,10 @@ from kl_pipe.sampling import NestedSamplerConfig
 
 # nautilus configuration
 config_nautilus = NestedSamplerConfig(
-    n_live=500,          # Number of live points
-    n_networks=4,        # Number of neural networks
+    n_live=100 if CI_MODE else 500,
+    n_networks=4,
     seed=42,
-    progress=True,
+    progress=not CI_MODE,
 )
 
 print("Nested sampler configuration:")
@@ -262,14 +267,14 @@ The key feature is **Z-score reparameterization**, which automatically normalize
 from kl_pipe.sampling import NumpyroSamplerConfig, ReparamStrategy
 
 config_numpyro = NumpyroSamplerConfig(
-    n_samples=1250,               # Samples per chain
-    n_warmup=625,                 # Warmup iterations
-    n_chains=4,                   # Number of chains (for R-hat)
-    dense_mass=True,              # Dense mass matrix for correlations
-    reparam_strategy='prior',     # Z-score using prior mean/std
-    target_accept_prob=0.8,       # Target acceptance
+    n_samples=200 if CI_MODE else 1250,
+    n_warmup=100 if CI_MODE else 625,
+    n_chains=1 if CI_MODE else 4,
+    dense_mass=True,
+    reparam_strategy='prior',
+    target_accept_prob=0.8,
     seed=42,
-    progress=True,
+    progress=not CI_MODE,
 )
 
 print("NumPyro configuration:")
@@ -388,6 +393,7 @@ true_pars_joint = {
     # Intensity
     'flux': 1.0,
     'int_rscale': 3.0,
+    'int_h_over_r': 0.1,
     'int_x0': 0.0,
     'int_y0': 0.0,
     # Shared geometry
@@ -458,6 +464,7 @@ priors_joint = PriorDict({
     # Intensity params
     'flux': Uniform(0.1, 5.0),
     'int_rscale': Uniform(0.5, 10.0),
+    'int_h_over_r': 0.1,  # Fixed
     'int_x0': 0.0,  # Fixed
     'int_y0': 0.0,  # Fixed
 
@@ -499,12 +506,12 @@ For joint models, NumPyro is recommended due to its Z-score reparameterization:
 ```{code-cell} python
 # NumPyro handles multi-scale gradients automatically
 config_joint = NumpyroSamplerConfig(
-    n_samples=2500,
-    n_warmup=1250,
-    n_chains=4,
+    n_samples=200 if CI_MODE else 2500,
+    n_warmup=100 if CI_MODE else 1250,
+    n_chains=1 if CI_MODE else 4,
     dense_mass=True,
     seed=42,
-    progress=True,
+    progress=not CI_MODE,
 )
 
 sampler_joint = build_sampler('numpyro', task_joint, config_joint)
@@ -550,53 +557,56 @@ The TNG50 simulation provides realistic galaxy morphologies and kinematics that 
 ### 6.1 Load TNG Data
 
 ```{code-cell} python
-from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
+try:
+    from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
+    tng_data = TNG50MockData()
+    TNG_AVAILABLE = True
+except Exception:
+    TNG_AVAILABLE = False
+    print("TNG50 data not available. Skipping TNG sections.")
+    print("Download with: make download-cyverse-data")
 
-# Load the TNG50 dataset
-tng_data = TNG50MockData()
-
-# See what's available
-print(f"Number of galaxies: {tng_data.n_galaxies}")
-print(f"Available SubhaloIDs: {tng_data.subhalo_ids[:10]}...")  # First 10
-
-# Load a specific galaxy by SubhaloID
-galaxy = tng_data.get_galaxy(subhalo_id=8)
+if TNG_AVAILABLE:
+    print(f"Number of galaxies: {tng_data.n_galaxies}")
+    print(f"Available SubhaloIDs: {tng_data.subhalo_ids[:10]}...")
+    galaxy = tng_data.get_galaxy(subhalo_id=8)
 ```
 
 ### 6.2 Generate Data Vectors
 
 ```{code-cell} python
-# Create render configuration
-image_pars_tng = ImagePars(shape=(32, 32), pixel_scale=0.2, indexing='ij')
-render_config = TNGRenderConfig(
-    image_pars=image_pars_tng,
-    band='r',                       # r-band photometry
-    use_native_orientation=True,    # Use TNG catalog orientation
-    target_redshift=0.3,            # Scale to z=0.3 (Roman-like)
-    use_cic_gridding=True,          # Cloud-in-Cell interpolation
-)
+if TNG_AVAILABLE:
+    # Create render configuration
+    image_pars_tng = ImagePars(shape=(32, 32), pixel_scale=0.2, indexing='ij')
+    render_config = TNGRenderConfig(
+        image_pars=image_pars_tng,
+        band='r',                       # r-band photometry
+        use_native_orientation=True,    # Use TNG catalog orientation
+        target_redshift=0.3,            # Scale to z=0.3 (Roman-like)
+        use_cic_gridding=True,          # Cloud-in-Cell interpolation
+    )
 
-# Generate velocity and intensity maps from particle data
-gen = TNGDataVectorGenerator(galaxy)
-velocity_map, var_vel_tng = gen.generate_velocity_map(render_config, snr=30.0, seed=42)
-intensity_map, var_int_tng = gen.generate_intensity_map(render_config, snr=30.0, seed=43)
+    # Generate velocity and intensity maps from particle data
+    gen = TNGDataVectorGenerator(galaxy)
+    velocity_map, var_vel_tng = gen.generate_velocity_map(render_config, snr=30.0, seed=42)
+    intensity_map, var_int_tng = gen.generate_intensity_map(render_config, snr=30.0, seed=43)
 
-print(f"Velocity map shape: {velocity_map.shape}")
-print(f"Intensity map shape: {intensity_map.shape}")
-print(f"Native inclination: {gen.native_inclination_deg:.1f} deg")
-print(f"Native PA: {gen.native_pa_deg:.1f} deg")
+    print(f"Velocity map shape: {velocity_map.shape}")
+    print(f"Intensity map shape: {intensity_map.shape}")
+    print(f"Native inclination: {gen.native_inclination_deg:.1f} deg")
+    print(f"Native PA: {gen.native_pa_deg:.1f} deg")
 
-# Plot the TNG data
-fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-im0 = axes[0].imshow(velocity_map.T, origin='lower', cmap='RdBu_r')
-axes[0].set_title('TNG Velocity Map')
-plt.colorbar(im0, ax=axes[0], label='km/s')
+    # Plot the TNG data
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    im0 = axes[0].imshow(velocity_map.T, origin='lower', cmap='RdBu_r')
+    axes[0].set_title('TNG Velocity Map')
+    plt.colorbar(im0, ax=axes[0], label='km/s')
 
-im1 = axes[1].imshow(intensity_map.T, origin='lower', cmap='viridis')
-axes[1].set_title('TNG Intensity Map')
-plt.colorbar(im1, ax=axes[1], label='Flux')
-plt.tight_layout()
-plt.show()
+    im1 = axes[1].imshow(intensity_map.T, origin='lower', cmap='viridis')
+    axes[1].set_title('TNG Intensity Map')
+    plt.colorbar(im1, ax=axes[1], label='Flux')
+    plt.tight_layout()
+    plt.show()
 ```
 
 ### 6.3 Normalize Intensity
@@ -604,12 +614,12 @@ plt.show()
 TNG luminosities are in physical units (erg/s). For sampling with `kl_pipe`'s normalized intensity model, we need to estimate the flux normalization.
 
 ```{code-cell} python
-# Estimate flux normalization from the intensity map
-flux_estimate = float(np.sum(intensity_map))
-intensity_normalized = intensity_map / flux_estimate
+if TNG_AVAILABLE:
+    flux_estimate = float(np.sum(intensity_map))
+    intensity_normalized = intensity_map / flux_estimate
 
-print(f"Total flux: {flux_estimate:.2e}")
-print(f"Normalized peak: {intensity_normalized.max():.4f}")
+    print(f"Total flux: {flux_estimate:.2e}")
+    print(f"Normalized peak: {intensity_normalized.max():.4f}")
 ```
 
 ### 6.4 Estimate Initial Parameters
@@ -617,78 +627,76 @@ print(f"Normalized peak: {intensity_normalized.max():.4f}")
 Use the TNG catalog orientation as starting estimates:
 
 ```{code-cell} python
-# Native orientation from TNG catalog
-initial_pars = {
-    'cosi': gen.native_cosi,
-    'theta_int': gen.native_pa_rad,
-    'g1': 0.0,    # No shear in simulation
-    'g2': 0.0,
-}
+if TNG_AVAILABLE:
+    initial_pars = {
+        'cosi': gen.native_cosi,
+        'theta_int': gen.native_pa_rad,
+        'g1': 0.0,
+        'g2': 0.0,
+    }
 
-print(f"Initial cosi: {initial_pars['cosi']:.3f}")
-print(f"Initial theta_int: {initial_pars['theta_int']:.3f} rad")
+    print(f"Initial cosi: {initial_pars['cosi']:.3f}")
+    print(f"Initial theta_int: {initial_pars['theta_int']:.3f} rad")
 ```
 
 ### 6.5 Build Joint Task and Run
 
 ```{code-cell} python
-# Define priors centered on TNG estimates
-priors_tng = PriorDict({
-    # Velocity
-    'v0': Gaussian(0.0, 20.0),
-    'vcirc': Uniform(50, 400),
-    'vel_rscale': Uniform(0.5, 15.0),
+if TNG_AVAILABLE:
+    priors_tng = PriorDict({
+        # Velocity
+        'v0': Gaussian(0.0, 20.0),
+        'vcirc': Uniform(50, 400),
+        'vel_rscale': Uniform(0.5, 15.0),
 
-    # Intensity
-    'flux': Uniform(0.01, 10.0),
-    'int_rscale': Uniform(0.2, 10.0),
-    'int_x0': 0.0,
-    'int_y0': 0.0,
+        # Intensity
+        'flux': Uniform(0.01, 10.0),
+        'int_rscale': Uniform(0.2, 10.0),
+        'int_h_over_r': 0.1,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
 
-    # Geometry -- use TNG estimates to inform priors
-    'cosi': TruncatedNormal(gen.native_cosi, 0.2, 0.05, 0.99),
-    'theta_int': Uniform(0, np.pi),
-    'g1': Uniform(-0.1, 0.1),
-    'g2': Uniform(-0.1, 0.1),
-})
+        # Geometry -- use TNG estimates to inform priors
+        'cosi': TruncatedNormal(gen.native_cosi, 0.2, 0.05, 0.99),
+        'theta_int': Uniform(0, np.pi),
+        'g1': Uniform(-0.1, 0.1),
+        'g2': Uniform(-0.1, 0.1),
+    })
 
-# Create joint task
-vel_model_tng = CenteredVelocityModel()
-int_model_tng = InclinedExponentialModel()
-joint_model_tng = KLModel(
-    velocity_model=vel_model_tng,
-    intensity_model=int_model_tng,
-    shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
-)
+    vel_model_tng = CenteredVelocityModel()
+    int_model_tng = InclinedExponentialModel()
+    joint_model_tng = KLModel(
+        velocity_model=vel_model_tng,
+        intensity_model=int_model_tng,
+        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
+    )
 
-task_tng = InferenceTask.from_joint_model(
-    model=joint_model_tng,
-    priors=priors_tng,
-    data_vel=jnp.array(velocity_map),
-    data_int=jnp.array(intensity_normalized),
-    # Use actual TNG variance -- don't inflate to hide model mismatch!
-    # Proper propagation: Var(I_norm) = Var(I_raw) / flux_estimate^2
-    variance_vel=var_vel_tng,
-    variance_int=var_int_tng / flux_estimate**2,
-    image_pars_vel=image_pars_tng,
-    image_pars_int=image_pars_tng,
-)
+    task_tng = InferenceTask.from_joint_model(
+        model=joint_model_tng,
+        priors=priors_tng,
+        data_vel=jnp.array(velocity_map),
+        data_int=jnp.array(intensity_normalized),
+        variance_vel=var_vel_tng,
+        variance_int=var_int_tng / flux_estimate**2,
+        image_pars_vel=image_pars_tng,
+        image_pars_int=image_pars_tng,
+    )
 
-# Run with NumPyro
-config_tng = NumpyroSamplerConfig(
-    n_samples=1250,
-    n_warmup=625,
-    n_chains=4,
-    dense_mass=True,
-    seed=42,
-)
+    config_tng = NumpyroSamplerConfig(
+        n_samples=200 if CI_MODE else 1250,
+        n_warmup=100 if CI_MODE else 625,
+        n_chains=1 if CI_MODE else 4,
+        dense_mass=True,
+        seed=42,
+        progress=not CI_MODE,
+    )
 
-sampler_tng = build_sampler('numpyro', task_tng, config_tng)
-result_tng = sampler_tng.run()
+    sampler_tng = build_sampler('numpyro', task_tng, config_tng)
+    result_tng = sampler_tng.run()
 
-print_summary(result_tng)
-print(f"\nMax R-hat: {max(result_tng.get_rhat().values()):.4f}")
-print(f"Divergences: {result_tng.diagnostics.get('n_divergences', 0)}")
+    print_summary(result_tng)
+    print(f"\nMax R-hat: {max(result_tng.get_rhat().values()):.4f}")
+    print(f"Divergences: {result_tng.diagnostics.get('n_divergences', 0)}")
 ```
 
 ### 6.6 Interpreting TNG Results
@@ -696,21 +704,21 @@ print(f"Divergences: {result_tng.diagnostics.get('n_divergences', 0)}")
 With TNG data there is no single "true" parameter set -- the analytic model is an approximation. Expect model mismatch: the posterior will be shifted from the TNG catalog values because the arctan rotation curve and exponential disk don't perfectly describe TNG morphology. The key question is whether shear constraints remain unbiased despite this mismatch.
 
 ```{code-cell} python
-# Compare to TNG catalog values (not "truth" -- just reference)
-tng_reference = {
-    'cosi': gen.native_cosi,
-    'theta_int': gen.native_pa_rad,
-    'g1': 0.0,
-    'g2': 0.0,
-}
+if TNG_AVAILABLE:
+    tng_reference = {
+        'cosi': gen.native_cosi,
+        'theta_int': gen.native_pa_rad,
+        'g1': 0.0,
+        'g2': 0.0,
+    }
 
-fig = plot_corner(
-    result_tng,
-    params=['g1', 'g2', 'cosi', 'theta_int'],
-    true_values=tng_reference,  # Reference, not ground truth
-    sampler_info={'name': 'numpyro'},
-)
-plt.show()
+    fig = plot_corner(
+        result_tng,
+        params=['g1', 'g2', 'cosi', 'theta_int'],
+        true_values=tng_reference,
+        sampler_info={'name': 'numpyro'},
+    )
+    plt.show()
 ```
 
 ---
@@ -766,13 +774,15 @@ from kl_pipe.sampling.diagnostics import plot_corner_comparison
 # Run samplers on the same problem
 results_comparison = {}
 
-config_quick = EnsembleSamplerConfig(n_walkers=24, n_iterations=500, burn_in=100, seed=42, progress=False)
+config_quick = EnsembleSamplerConfig(
+    n_walkers=24, n_iterations=100 if CI_MODE else 500, burn_in=20 if CI_MODE else 100, seed=42, progress=False)
 results_comparison['emcee'] = build_sampler('emcee', task, config_quick).run()
 
-config_nautilus_quick = NestedSamplerConfig(n_live=200, seed=42, progress=False)
+config_nautilus_quick = NestedSamplerConfig(n_live=50 if CI_MODE else 200, seed=42, progress=False)
 results_comparison['nautilus'] = build_sampler('nautilus', task, config_nautilus_quick).run()
 
-config_numpyro_quick = NumpyroSamplerConfig(n_samples=500, n_warmup=200, n_chains=1, seed=42, progress=False)
+config_numpyro_quick = NumpyroSamplerConfig(
+    n_samples=100 if CI_MODE else 500, n_warmup=50 if CI_MODE else 200, n_chains=1, seed=42, progress=False)
 results_comparison['numpyro'] = build_sampler('numpyro', task, config_numpyro_quick).run()
 
 fig = plot_corner_comparison(results_comparison, true_values=true_pars)

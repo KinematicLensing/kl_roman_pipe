@@ -457,6 +457,7 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
         'g2': 0.0,
         'flux': 1.0,  # total flux
         'int_rscale': 3.0,  # Scale length (arcsec)
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,  # No offset (arcsec)
         'int_y0': 0.0,  # No offset (arcsec)
     }
@@ -528,6 +529,7 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
         'g2': -0.02,  # Non-zero shear
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -614,6 +616,7 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
         # Intensity parameters
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -738,6 +741,7 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
         # Intensity parameters
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 1.0,  # Same offset (aligned)
         'int_y0': -0.5,
     }
@@ -846,6 +850,7 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
         'g2': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -855,7 +860,9 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
     # generate PSF-convolved data using GalSim ground truth
     from kl_pipe.synthetic import SyntheticIntensity
 
-    synth = SyntheticIntensity(true_pars, model_type='exponential', seed=test_config.seed, psf=psf)
+    synth = SyntheticIntensity(
+        true_pars, model_type='exponential', seed=test_config.seed, psf=psf
+    )
     data_noisy = synth.generate(
         test_config.image_pars_intensity,
         snr=snr,
@@ -866,9 +873,14 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
     variance = synth.variance
     data_true = synth.data_true
 
+    # convert GalSim flux/pixel → surface brightness to match model units
+    ps2 = test_config.image_pars_intensity.pixel_scale**2
+    data_noisy = data_noisy / ps2
+    variance = variance / ps2**2
+
     # configure model with same PSF
     model = InclinedExponentialModel()
-    model.configure_psf(psf, test_config.image_pars_intensity.shape, test_config.image_pars_intensity.pixel_scale)
+    model.configure_psf(psf, test_config.image_pars_intensity)
     theta_true = model.pars2theta(true_pars)
 
     # create likelihood
@@ -878,13 +890,22 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
 
     # slice all parameters
     slices = slice_all_parameters(
-        log_like, model, theta_true, test_config,
+        log_like,
+        model,
+        theta_true,
+        test_config,
         image_pars=test_config.image_pars_intensity,
     )
 
     test_name = f"inclined_exponential_psf_snr{snr}"
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars, test_name, test_config, snr, 'intensity'
+        slices,
+        true_pars,
+        test_name,
+        test_config,
+        snr,
+        'intensity',
+        has_psf=True,
     )
 
     model.clear_psf()
@@ -919,6 +940,7 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
         'g2': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -939,11 +961,16 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
     from kl_pipe.synthetic import SyntheticVelocity
 
     synth = SyntheticVelocity(
-        true_pars_vel, model_type='arctan', seed=test_config.seed,
-        psf=psf, intensity_for_psf=flux_image,
+        true_pars_vel,
+        model_type='arctan',
+        seed=test_config.seed,
+        psf=psf,
+        intensity_for_psf=flux_image,
     )
     data_noisy = synth.generate(
-        test_config.image_pars_velocity, snr=snr, seed=test_config.seed,
+        test_config.image_pars_velocity,
+        snr=snr,
+        seed=test_config.seed,
         include_poisson=test_config.include_poisson_noise,
     )
     variance = synth.variance
@@ -954,8 +981,10 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
     theta_int = int_model.pars2theta(true_pars_int)
 
     vel_model.configure_velocity_psf(
-        psf, test_config.image_pars_velocity.shape, test_config.image_pars_velocity.pixel_scale,
-        flux_model=int_model, flux_theta=theta_int,
+        psf,
+        test_config.image_pars_velocity,
+        flux_model=int_model,
+        flux_theta=theta_int,
     )
     theta_true = vel_model.pars2theta(true_pars_vel)
 
@@ -964,13 +993,22 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
     )
 
     slices = slice_all_parameters(
-        log_like, vel_model, theta_true, test_config,
+        log_like,
+        vel_model,
+        theta_true,
+        test_config,
         image_pars=test_config.image_pars_velocity,
     )
 
     test_name = f"centered_velocity_psf_snr{snr}"
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars_vel, test_name, test_config, snr, 'velocity'
+        slices,
+        true_pars_vel,
+        test_name,
+        test_config,
+        snr,
+        'velocity',
+        has_psf=True,
     )
 
     vel_model.clear_psf()
@@ -1002,6 +1040,7 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
         'vel_y0': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
@@ -1009,34 +1048,71 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
     psf = gs.Gaussian(fwhm=0.625)
 
     # generate intensity data with PSF (galsim ground truth)
-    from kl_pipe.synthetic import SyntheticIntensity, SyntheticVelocity, generate_sersic_intensity_2d
+    from kl_pipe.synthetic import (
+        SyntheticIntensity,
+        SyntheticVelocity,
+        generate_sersic_intensity_2d,
+    )
 
     synth_int = SyntheticIntensity(
-        {k: v for k, v in true_pars.items() if k in InclinedExponentialModel.PARAMETER_NAMES},
-        model_type='exponential', seed=test_config.seed, psf=psf,
+        {
+            k: v
+            for k, v in true_pars.items()
+            if k in InclinedExponentialModel.PARAMETER_NAMES
+        },
+        model_type='exponential',
+        seed=test_config.seed,
+        psf=psf,
     )
     data_int_noisy = synth_int.generate(
-        test_config.image_pars_intensity, snr=snr, seed=test_config.seed,
-        include_poisson=test_config.include_poisson_noise, sersic_backend='galsim',
+        test_config.image_pars_intensity,
+        snr=snr,
+        seed=test_config.seed,
+        include_poisson=test_config.include_poisson_noise,
+        sersic_backend='galsim',
     )
     variance_int = synth_int.variance
 
+    # convert GalSim flux/pixel → surface brightness to match model units
+    ps2 = test_config.image_pars_intensity.pixel_scale**2
+    data_int_noisy = data_int_noisy / ps2
+    variance_int = variance_int / ps2**2
+
     # generate intensity on velocity grid for flux weighting
-    vel_pars = {k: v for k, v in true_pars.items() if k in CenteredVelocityModel.PARAMETER_NAMES or k in InclinedExponentialModel.PARAMETER_NAMES}
-    int_pars_for_vel = {k: v for k, v in true_pars.items() if k in InclinedExponentialModel.PARAMETER_NAMES}
+    vel_pars = {
+        k: v
+        for k, v in true_pars.items()
+        if k in CenteredVelocityModel.PARAMETER_NAMES
+        or k in InclinedExponentialModel.PARAMETER_NAMES
+    }
+    int_pars_for_vel = {
+        k: v
+        for k, v in true_pars.items()
+        if k in InclinedExponentialModel.PARAMETER_NAMES
+    }
     flux_image = generate_sersic_intensity_2d(
-        test_config.image_pars_velocity, backend='scipy', n_sersic=1.0,
+        test_config.image_pars_velocity,
+        backend='scipy',
+        n_sersic=1.0,
         **{k: v for k, v in int_pars_for_vel.items() if k != 'n_sersic'},
     )
 
     # generate velocity data with PSF
     synth_vel = SyntheticVelocity(
-        {k: v for k, v in true_pars.items() if k in OffsetVelocityModel.PARAMETER_NAMES},
-        model_type='arctan', seed=test_config.seed + 1,
-        psf=psf, intensity_for_psf=flux_image,
+        {
+            k: v
+            for k, v in true_pars.items()
+            if k in OffsetVelocityModel.PARAMETER_NAMES
+        },
+        model_type='arctan',
+        seed=test_config.seed + 1,
+        psf=psf,
+        intensity_for_psf=flux_image,
     )
     data_vel_noisy = synth_vel.generate(
-        test_config.image_pars_velocity, snr=snr, seed=test_config.seed + 1,
+        test_config.image_pars_velocity,
+        snr=snr,
+        seed=test_config.seed + 1,
         include_poisson=test_config.include_poisson_noise,
     )
     variance_vel = synth_vel.variance
@@ -1048,11 +1124,10 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
         vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
     )
     joint_model.configure_joint_psf(
-        psf_vel=psf, psf_int=psf,
-        image_shape_vel=test_config.image_pars_velocity.shape,
-        pixel_scale_vel=test_config.image_pars_velocity.pixel_scale,
-        image_shape_int=test_config.image_pars_intensity.shape,
-        pixel_scale_int=test_config.image_pars_intensity.pixel_scale,
+        psf_vel=psf,
+        psf_int=psf,
+        image_pars_vel=test_config.image_pars_velocity,
+        image_pars_int=test_config.image_pars_intensity,
     )
     theta_true = joint_model.pars2theta(true_pars)
 
@@ -1067,12 +1142,22 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
     )
 
     slices = slice_all_parameters(
-        log_like, joint_model, theta_true, test_config, image_pars=None,
+        log_like,
+        joint_model,
+        theta_true,
+        test_config,
+        image_pars=None,
     )
 
     test_name = f"joint_psf_snr{snr}"
     recovery_stats = plot_likelihood_slices(
-        slices, true_pars, test_name, test_config, snr, 'joint'
+        slices,
+        true_pars,
+        test_name,
+        test_config,
+        snr,
+        'joint',
+        has_psf=True,
     )
 
     assert_parameter_recovery(recovery_stats, snr, 'Joint model (PSF)')
