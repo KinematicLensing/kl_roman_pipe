@@ -1399,5 +1399,375 @@ def test_oversample_velocity_binning(image_pars):
     )
 
 
+# ==============================================================================
+# F. Oversampled Rendering Tests
+# ==============================================================================
+
+
+def test_oversample_convergence(oversample_image_pars, output_dir):
+    """
+    Oversampled residuals decrease monotonically: N=1 > N=3 > N=5 > N=9.
+    N=5 (default) should be within 1e-4 of GalSim ground truth.
+
+    Uses hlr=3.0 on 150x200 stamps (45"x60") so flux at boundary is ~3e-6
+    of peak, eliminating edge effects while keeping a physically realistic
+    source size. This isolates the aliasing error that oversampling fixes.
+    """
+    pixel_scale = oversample_image_pars.pixel_scale
+    nx, ny = oversample_image_pars.Ncol, oversample_image_pars.Nrow
+
+    sersic = gs.Exponential(half_light_radius=3.0, flux=1.0)
+    psf_obj = gs.Gaussian(fwhm=0.625)
+
+    # GalSim ground truth: continuous Convolve + drawImage
+    conv_gs = gs.Convolve(sersic, psf_obj)
+    img_gs = conv_gs.drawImage(nx=nx, ny=ny, scale=pixel_scale).array
+
+    peak = np.max(np.abs(img_gs))
+    residuals = {}
+    images = {}
+    threshold = 1e-4
+
+    for N in [1, 3, 5, 9]:
+        # point-sample source at fine scale using make_fine_scale
+        fine_ip = oversample_image_pars.make_fine_scale(N)
+        fine_nx, fine_ny = fine_ip.Ncol, fine_ip.Nrow
+
+        img_source = sersic.drawImage(
+            nx=fine_nx, ny=fine_ny, scale=fine_ip.pixel_scale, method='no_pixel'
+        ).array
+        # scale from GalSim flux/pixel to surface-brightness convention
+        img_source = img_source * (N * N)
+
+        pdata = precompute_psf_fft(
+            psf_obj, image_pars=oversample_image_pars, oversample=N
+        )
+        img_result = np.array(convolve_fft(jnp.array(img_source), pdata))
+        max_resid = np.max(np.abs(img_gs - img_result)) / peak
+        residuals[N] = max_resid
+        images[N] = img_result
+
+    # --- diagnostic image grid (before assertions so plots always saved) ---
+    ns = [1, 3, 5, 9]
+    fig, axes = plt.subplots(3, 5, figsize=(20, 12))
+
+    # row 0: N=1..9 images + GalSim ref
+    vmin = min(img_gs.min(), min(images[n].min() for n in ns))
+    vmax = max(img_gs.max(), max(images[n].max() for n in ns))
+    for col, n in enumerate(ns):
+        im = axes[0, col].imshow(images[n], origin='lower', vmin=vmin, vmax=vmax)
+        color = 'green' if residuals[n] < threshold else 'red'
+        axes[0, col].set_title(
+            f'N={n}: {residuals[n]:.2e} (thr={threshold:.0e})', color=color
+        )
+    im_ref = axes[0, 4].imshow(img_gs, origin='lower', vmin=vmin, vmax=vmax)
+    axes[0, 4].set_title('GalSim ref')
+    plt.colorbar(im_ref, ax=axes[0, :].tolist(), shrink=0.8)
+
+    # row 1: |residuals| with LogNorm
+    abs_resids = {n: np.abs(images[n] - img_gs) for n in ns}
+    vmax_abs = max(np.max(abs_resids[n]) for n in ns)
+    floor_abs = min(
+        np.min(abs_resids[n][abs_resids[n] > 0])
+        for n in ns
+        if np.any(abs_resids[n] > 0)
+    )
+    for col, n in enumerate(ns):
+        im = axes[1, col].imshow(
+            abs_resids[n],
+            origin='lower',
+            norm=LogNorm(vmin=floor_abs, vmax=vmax_abs),
+        )
+        color = 'green' if residuals[n] < threshold else 'red'
+        axes[1, col].set_title(f'|N={n} - GS|', color=color)
+    axes[1, 4].axis('off')
+    plt.colorbar(im, ax=axes[1, :4].tolist(), shrink=0.8)
+
+    # row 2: |relative residuals| with LogNorm
+    vmax_rel = vmax_abs / peak
+    floor_rel = floor_abs / peak
+    for col, n in enumerate(ns):
+        im = axes[2, col].imshow(
+            abs_resids[n] / peak,
+            origin='lower',
+            norm=LogNorm(vmin=floor_rel, vmax=vmax_rel),
+        )
+        color = 'green' if residuals[n] < threshold else 'red'
+        axes[2, col].set_title(f'|N={n} - GS|/peak', color=color)
+    axes[2, 4].axis('off')
+    plt.colorbar(im, ax=axes[2, :4].tolist(), shrink=0.8)
+
+    all_pass = (
+        residuals[5] < threshold
+        and residuals[3] < residuals[1]
+        and residuals[5] < residuals[3]
+    )
+    status = 'PASS' if all_pass else 'FAIL'
+    status_color = 'green' if status == 'PASS' else 'red'
+    fig.suptitle(
+        f'Oversample convergence (Exp(hlr=3) x Gaussian) — {status} — threshold: {threshold:.0e}',
+        fontsize=14,
+        color=status_color,
+    )
+    plt.tight_layout()
+    plt.savefig(output_dir / 'oversample_convergence_grid.png', dpi=150)
+    plt.close()
+
+    # --- summary line plot ---
+    fig, ax = plt.subplots(figsize=(6, 4))
+    vals = [residuals[n] for n in ns]
+    ax.semilogy(ns, vals, 'bo-', markersize=8)
+    ax.axhline(threshold, color='r', ls='--', label=f'{threshold} target')
+    ax.set_xlabel('Oversample factor N')
+    ax.set_ylabel('Max |residual| / peak')
+    ax.set_title('Oversample convergence (Exponential x Gaussian PSF)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / 'oversample_convergence_summary.png', dpi=150)
+    plt.close()
+
+    # --- assertions (after plots so diagnostics always available) ---
+    # monotonic decrease
+    assert (
+        residuals[3] < residuals[1]
+    ), f"N=3 ({residuals[3]:.2e}) not better than N=1 ({residuals[1]:.2e})"
+    assert (
+        residuals[5] < residuals[3]
+    ), f"N=5 ({residuals[5]:.2e}) not better than N=3 ({residuals[3]:.2e})"
+
+    # N=5 target: within 1e-4 of GalSim (matches default oversample=5)
+    assert (
+        residuals[5] < threshold
+    ), f"N=5 residual {residuals[5]:.2e} exceeds {threshold} target"
+
+
+@pytest.mark.parametrize("psf_obj,psf_name", PSF_CASES)
+def test_galsim_regression_oversampled(
+    psf_obj, psf_name, oversample_image_pars, output_dir
+):
+    """
+    GalSim regression with oversampled source evaluation on 150x200 stamps.
+
+    Tests production-default accuracy: default kernel GSParams (which truncate
+    heavy-tailed PSFs at ~0.5%), tight ground truth GSParams (isolates our
+    pipeline error from GalSim inaccuracy). Threshold 5e-3 accommodates kernel
+    truncation for all PSFs while catching oversampling regressions (broken
+    oversampling gives ~10-20e-3).
+
+    For rigorous accuracy with tight kernel GSParams, see
+    test_galsim_regression_oversampled_rigorous.
+    """
+    pixel_scale = oversample_image_pars.pixel_scale
+    nx, ny = oversample_image_pars.Ncol, oversample_image_pars.Nrow
+    N = 5
+
+    # tight GSParams for ground truth only — isolates our pipeline error
+    gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
+    sersic = gs.Exponential(half_light_radius=3.0, flux=1.0, gsparams=gsp)
+    psf_tight = psf_obj.withGSParams(gsp)
+
+    # GalSim ground truth with tightened params
+    conv_gs = gs.Convolve(sersic, psf_tight)
+    img_gs = conv_gs.drawImage(nx=nx, ny=ny, scale=pixel_scale).array
+
+    # oversampled JAX path — default kernel GSParams (production default)
+    fine_ip = oversample_image_pars.make_fine_scale(N)
+    img_source = sersic.drawImage(
+        nx=fine_ip.Ncol, ny=fine_ip.Nrow, scale=fine_ip.pixel_scale, method='no_pixel'
+    ).array
+    # scale from GalSim flux/pixel to surface-brightness convention
+    img_source = img_source * (N * N)
+
+    pdata = precompute_psf_fft(
+        psf_obj,
+        image_pars=oversample_image_pars,
+        oversample=N,
+    )
+    img_jax = np.array(convolve_fft(jnp.array(img_source), pdata))
+
+    residual = img_gs - img_jax
+    peak = np.max(np.abs(img_gs))
+    max_rel_resid = np.max(np.abs(residual)) / peak
+
+    threshold = 5e-3
+
+    # diagnostic plot
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    im0 = axes[0].imshow(img_gs, origin='lower')
+    axes[0].set_title('GalSim native')
+    plt.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(img_jax, origin='lower')
+    axes[1].set_title(f'JAX FFT (N={N})')
+    plt.colorbar(im1, ax=axes[1])
+
+    rel_resid = residual / peak
+    vmax_rel = np.max(np.abs(rel_resid))
+    im2 = axes[2].imshow(
+        rel_resid, origin='lower', cmap='RdBu_r', vmin=-vmax_rel, vmax=vmax_rel
+    )
+    axes[2].set_title(f'resid/peak (max|.|={max_rel_resid:.2e})')
+    plt.colorbar(im2, ax=axes[2])
+
+    status = 'PASS' if max_rel_resid < threshold else 'FAIL'
+    status_color = 'green' if status == 'PASS' else 'red'
+    fig.suptitle(
+        f'Oversampled (N={N}) {psf_name} -- {status} (max={max_rel_resid:.2e}, thr={threshold:.0e})',
+        color=status_color,
+    )
+    plt.tight_layout()
+    plt.savefig(output_dir / f'galsim_regression_oversample_{psf_name}.png', dpi=150)
+    plt.close()
+
+    assert max_rel_resid < threshold, (
+        f"Oversampled regression failed for {psf_name}: "
+        f"max_rel_resid={max_rel_resid:.2e} (threshold={threshold:.0e})"
+    )
+
+
+RIGOROUS_PSF_CASES = [
+    pytest.param(gs.Gaussian(fwhm=0.625), 'Gaussian_0.625', id='Gaussian_0.625'),
+    pytest.param(gs.Moffat(beta=2.5, fwhm=1.0), 'Moffat_2.5_1.0', id='Moffat_2.5_1.0'),
+]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("psf_obj,psf_name", RIGOROUS_PSF_CASES)
+def test_galsim_regression_oversampled_rigorous(
+    psf_obj, psf_name, oversample_image_pars, output_dir
+):
+    """
+    Rigorous oversampled regression with tight GSParams on BOTH kernel and
+    ground truth. Proves pipeline achieves 5e-4 accuracy when kernel
+    truncation is eliminated.
+
+    Gaussian_0.625: typical use case, fast kernel FFTs.
+    Moffat_2.5: heaviest tails = hardest kernel truncation case; moderate
+    kernel FFTs (~15-30s), unlike Airy/OpticalPSF (49k/24k pixels).
+    """
+    pixel_scale = oversample_image_pars.pixel_scale
+    nx, ny = oversample_image_pars.Ncol, oversample_image_pars.Nrow
+    N = 5
+
+    # tight GSParams for both ground truth and kernel
+    gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
+    sersic = gs.Exponential(half_light_radius=3.0, flux=1.0, gsparams=gsp)
+    psf_tight = psf_obj.withGSParams(gsp)
+
+    # GalSim ground truth
+    conv_gs = gs.Convolve(sersic, psf_tight)
+    img_gs = conv_gs.drawImage(nx=nx, ny=ny, scale=pixel_scale).array
+
+    # oversampled JAX path — tight kernel GSParams
+    fine_ip = oversample_image_pars.make_fine_scale(N)
+    img_source = sersic.drawImage(
+        nx=fine_ip.Ncol, ny=fine_ip.Nrow, scale=fine_ip.pixel_scale, method='no_pixel'
+    ).array
+    img_source = img_source * (N * N)
+
+    pdata = precompute_psf_fft(
+        psf_obj,
+        image_pars=oversample_image_pars,
+        oversample=N,
+        gsparams=gsp,
+    )
+    img_jax = np.array(convolve_fft(jnp.array(img_source), pdata))
+
+    residual = img_gs - img_jax
+    peak = np.max(np.abs(img_gs))
+    max_rel_resid = np.max(np.abs(residual)) / peak
+
+    threshold = 5e-4
+
+    # diagnostic plot
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    im0 = axes[0].imshow(img_gs, origin='lower')
+    axes[0].set_title('GalSim native')
+    plt.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(img_jax, origin='lower')
+    axes[1].set_title(f'JAX FFT (N={N})')
+    plt.colorbar(im1, ax=axes[1])
+
+    rel_resid = residual / peak
+    vmax_rel = np.max(np.abs(rel_resid))
+    im2 = axes[2].imshow(
+        rel_resid, origin='lower', cmap='RdBu_r', vmin=-vmax_rel, vmax=vmax_rel
+    )
+    axes[2].set_title(f'resid/peak (max|.|={max_rel_resid:.2e})')
+    plt.colorbar(im2, ax=axes[2])
+
+    status = 'PASS' if max_rel_resid < threshold else 'FAIL'
+    status_color = 'green' if status == 'PASS' else 'red'
+    fig.suptitle(
+        f'Rigorous oversampled (N={N}) {psf_name} -- {status} '
+        f'(max={max_rel_resid:.2e}, thr={threshold:.0e})',
+        color=status_color,
+    )
+    plt.tight_layout()
+    plt.savefig(
+        output_dir / f'galsim_regression_oversample_rigorous_{psf_name}.png', dpi=150
+    )
+    plt.close()
+
+    assert max_rel_resid < threshold, (
+        f"Rigorous oversampled regression failed for {psf_name}: "
+        f"max_rel_resid={max_rel_resid:.2e} (threshold={threshold:.0e})"
+    )
+
+
+def test_oversample_flux_conservation(image_pars, compact_test_image):
+    """Total flux preserved after oversample+bin."""
+    psf_obj = gs.Gaussian(fwhm=0.625)
+
+    for N in [1, 3, 5]:
+        # tile to fine scale — same SB value per subpixel
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1)
+
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+        result = np.array(convolve_fft(jnp.array(fine_image), pdata))
+
+        # mean-bin preserves avg pixel value:
+        #   sum(fine)=N^2*sum(compact), conv preserves sum, mean-bin divides by N^2
+        np.testing.assert_allclose(
+            np.sum(result),
+            np.sum(compact_test_image),
+            rtol=1e-6,
+            err_msg=f"Flux not conserved for N={N}",
+        )
+
+
+def test_oversample_velocity_binning(image_pars):
+    """Sum-then-divide binning produces correct flux-weighted velocity."""
+    psf_obj = gs.Gaussian(fwhm=0.625)
+    N = 3
+
+    # constant velocity everywhere: result should be that same constant
+    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
+    intensity = np.exp(-np.sqrt(X**2 + Y**2) / 3.0)
+    velocity = np.full_like(intensity, 42.0)
+
+    # tile to fine scale
+    fine_intensity = np.repeat(np.repeat(intensity, N, axis=0), N, axis=1) / (N * N)
+    fine_velocity = np.repeat(np.repeat(velocity, N, axis=0), N, axis=1)
+
+    pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+    result = np.array(
+        convolve_flux_weighted(
+            jnp.array(fine_velocity), jnp.array(fine_intensity), pdata
+        )
+    )
+
+    # where intensity is nonnegligible, velocity should be ~42
+    mask = intensity > 1e-8
+    np.testing.assert_allclose(
+        result[mask],
+        42.0,
+        atol=1e-6,
+        err_msg="Constant velocity not preserved through oversampled flux-weighted PSF",
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

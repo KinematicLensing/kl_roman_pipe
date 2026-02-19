@@ -346,6 +346,44 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
     Parameters
     ----------
     image : jnp.ndarray
+        2D image, shape == psf_data.original_shape (fine-scale when oversampled).
+    psf_data : PSFData
+        Pre-computed PSF.
+
+    Returns
+    -------
+    jnp.ndarray
+        Convolved image, shape == psf_data.coarse_shape.
+    """
+    if image.shape != psf_data.original_shape:
+        raise ValueError(
+            f"Image shape {image.shape} != PSFData.original_shape {psf_data.original_shape}. "
+            f"Recompute PSFData with matching image_shape."
+        )
+
+    result = _convolve_fft_raw(image, psf_data)
+
+    if psf_data.oversample > 1:
+        N = psf_data.oversample
+        Nrow_c, Ncol_c = psf_data.coarse_shape
+        result = result.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+
+    return result
+
+
+def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
+    """
+    2D FFT convolution with optional oversampled binning.
+
+    When psf_data.oversample > 1, the input image must be at fine-scale
+    (shape == original_shape == coarse_shape * oversample). The result
+    is binned down to coarse_shape by averaging N×N blocks.
+
+    Fully JAX JIT and autodiff compatible.
+
+    Parameters
+    ----------
+    image : jnp.ndarray
         2D image to convolve, shape == psf_data.original_shape.
     psf_data : PSFData
         Pre-computed PSF from precompute_psf_fft.
@@ -365,8 +403,8 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
 
     if psf_data.oversample > 1:
         N = psf_data.oversample
-        Nrow_c, Ncol_c = psf_data.coarse_shape
-        result = result.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+        Ny_c, Nx_c = psf_data.coarse_shape
+        result = result.reshape(Ny_c, N, Nx_c, N).mean(axis=(1, 3))
 
     return result
 
