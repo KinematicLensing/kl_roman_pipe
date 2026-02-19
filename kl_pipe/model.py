@@ -236,6 +236,10 @@ class Model(ABC):
         a fine-scale grid and convolved at that resolution; convolve_fft bins
         the result back to coarse scale automatically.
 
+        When PSF is configured with oversample > 1, the model is evaluated on
+        a fine-scale grid and convolved at that resolution; convolve_fft bins
+        the result back to coarse scale automatically.
+
         Parameters
         ----------
         theta : jnp.ndarray
