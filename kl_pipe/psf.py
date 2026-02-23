@@ -441,8 +441,8 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
 
     if psf_data.oversample > 1:
         N = psf_data.oversample
-        Ny_c, Nx_c = psf_data.coarse_shape
-        result = result.reshape(Ny_c, N, Nx_c, N).mean(axis=(1, 3))
+        Nrow_c, Ncol_c = psf_data.coarse_shape
+        result = result.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
 
     return result
 
