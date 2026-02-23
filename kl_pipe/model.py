@@ -53,7 +53,7 @@ class Model(ABC):
 
         Two calling conventions (image_pars is preferred):
         - configure_psf(gsobj, image_pars=image_pars)
-        - configure_psf(gsobj, image_shape=(Ny, Nx), pixel_scale=scale)
+        - configure_psf(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale)
 
         Parameters
         ----------
@@ -62,7 +62,7 @@ class Model(ABC):
         image_pars : ImagePars, optional
             Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
         image_shape : tuple, optional
-            (Ny, Nx) of data images.
+            (Nrow, Ncol) of data images.
         pixel_scale : float, optional
             arcsec/pixel.
         oversample : int
@@ -414,7 +414,7 @@ class VelocityModel(Model):
 
         Two calling conventions (image_pars is preferred):
         - configure_velocity_psf(gsobj, image_pars=image_pars, ...)
-        - configure_velocity_psf(gsobj, image_shape=(Ny, Nx), pixel_scale=scale, ...)
+        - configure_velocity_psf(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale, ...)
 
         Parameters
         ----------
@@ -423,7 +423,7 @@ class VelocityModel(Model):
         image_pars : ImagePars, optional
             Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
         image_shape : tuple, optional
-            (Ny, Nx) of velocity data images.
+            (Nrow, Ncol) of velocity data images.
         pixel_scale : float, optional
             arcsec/pixel.
         oversample : int
@@ -735,7 +735,7 @@ class KLModel(object):
 
         Two calling conventions (image_pars is preferred):
         - configure_joint_psf(..., image_pars_vel=pars_vel, image_pars_int=pars_int)
-        - configure_joint_psf(..., image_shape_vel=(Ny,Nx), pixel_scale_vel=..., ...)
+        - configure_joint_psf(..., image_shape_vel=(Nrow,Ncol), pixel_scale_vel=..., ...)
 
         Parameters
         ----------
@@ -748,11 +748,11 @@ class KLModel(object):
         image_pars_int : ImagePars, optional
             Image parameters for intensity data.
         image_shape_vel : tuple, optional
-            (Ny, Nx) of velocity data.
+            (Nrow, Ncol) of velocity data.
         pixel_scale_vel : float, optional
             arcsec/pixel for velocity grid.
         image_shape_int : tuple, optional
-            (Ny, Nx) of intensity data.
+            (Nrow, Ncol) of intensity data.
         pixel_scale_int : float, optional
             arcsec/pixel for intensity grid.
         oversample : int

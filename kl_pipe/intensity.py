@@ -217,9 +217,9 @@ class InclinedExponentialModel(IntensityModel):
 
         Axis convention
         ---------------
-        krow = fftfreq(Nrow) is conjugate to rows (axis 0 = X, horizontal).
-        kcol = fftfreq(Ncol) is conjugate to cols (axis 1 = Y, vertical).
-        gal2disk compresses Y (cols), so cosi acts on kcol in k-space.
+        ky = fftfreq(Nrow) is conjugate to rows (axis 0 = Y, vertical).
+        kx = fftfreq(Ncol) is conjugate to cols (axis 1 = X, horizontal).
+        gal2disk compresses Y (rows), so cosi acts on ky in k-space.
 
         Parameters
         ----------
@@ -269,42 +269,41 @@ class InclinedExponentialModel(IntensityModel):
             pad_row = eff_Nrow
             pad_col = eff_Ncol
 
-        # 1. k-grid at effective resolution (higher Nyquist when oversampled)
-        krow = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
-        kcol = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
-        KROW, KCOL = jnp.meshgrid(krow, kcol, indexing='ij')
+        # 1. k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
 
-        # 2. centroid phase + half-pixel grid alignment correction
-        #    based on OUTPUT grid (Nrow, pixel_scale), not effective grid,
-        #    so that subsampled fine pixels align with the coarse centered grid
-        hrow = 0.5 * pixel_scale * (1 - Nrow % 2)
-        hcol = 0.5 * pixel_scale * (1 - Ncol % 2)
-        phase = jnp.exp(-1j * (KROW * (x0 - hrow) + KCOL * (y0 - hcol)))
+        # 2. centroid phase: pair kx with x0 (horizontal), ky with y0 (vertical)
+        #    half-pixel correction based on OUTPUT grid centering
+        hx = 0.5 * pixel_scale * (1 - Ncol % 2)
+        hy = 0.5 * pixel_scale * (1 - Nrow % 2)
+        phase = jnp.exp(-1j * (KX * (x0 - hx) + KY * (y0 - hy)))
 
         # 3. shear: area-preserving M = (1/sqrt(1-|g|^2)) * [[1+g1, g2], [g2, 1-g1]]
-        #    matches GalSim .shear() (det=1, flux-preserving, no prefactor on I_hat)
+        #    (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
         norm_shear = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
-        krow_s = norm_shear * ((1.0 + g1) * KROW + g2 * KCOL)
-        kcol_s = norm_shear * (g2 * KROW + (1.0 - g1) * KCOL)
+        kx_s = norm_shear * ((1.0 + g1) * KX + g2 * KY)
+        ky_s = norm_shear * (g2 * KX + (1.0 - g1) * KY)
 
-        # rotation: R(-theta_int) on (krow, kcol)
+        # rotation: R(-theta_int) on (kx, ky)
         c = jnp.cos(-theta_int)
         s = jnp.sin(-theta_int)
-        krow_gal = c * krow_s - s * kcol_s
-        kcol_gal = s * krow_s + c * kcol_s
+        kx_gal = c * kx_s - s * ky_s
+        ky_gal = s * kx_s + c * ky_s
 
         # 4. analytic FT in galaxy frame
-        krow_scaled = krow_gal * rscale
-        kcol_scaled = kcol_gal * rscale
+        kx_scaled = kx_gal * rscale
+        ky_scaled = ky_gal * rscale
 
-        # radial FT: (1 + krow² + (kcol*cosi)²)^{-3/2}  [cosi compresses cols]
-        k_sq = krow_scaled**2 + (kcol_scaled * cosi) ** 2
+        # radial FT: (1 + kx² + (ky*cosi)²)^{-3/2}  [cosi compresses rows=vertical]
+        k_sq = kx_scaled**2 + (ky_scaled * cosi) ** 2
         ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
 
-        # vertical FT: u/sinh(u), u = (pi/2)*h_over_r*kcol_scaled*sini
+        # vertical FT: u/sinh(u), u = (pi/2)*h_over_r*ky_scaled*sini
         # safe-where pattern: substitute finite dummy in non-selected branch
         # so JAX autodiff never sees 0/sinh(0) = 0/0 = NaN
-        u = (jnp.pi / 2.0) * h_over_r * kcol_scaled * sini
+        u = (jnp.pi / 2.0) * h_over_r * ky_scaled * sini
         u_safe = jnp.where(jnp.abs(u) < 1e-4, jnp.ones_like(u), u)
         ft_vertical = jnp.where(
             jnp.abs(u) < 1e-4,
@@ -359,7 +358,7 @@ class InclinedExponentialModel(IntensityModel):
             Ncol = image_pars.Ncol
         else:
             Nrow, Ncol = X.shape
-            pixel_scale = jnp.abs(X[1, 0] - X[0, 0])
+            pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
         if self._psf_data is not None:
             from kl_pipe.psf import convolve_fft

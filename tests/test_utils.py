@@ -195,8 +195,8 @@ class TestConfig:
         # absolute tolerance floor (for parameters near zero)
         # if true value is very small, relative error is misleading
         self.absolute_tolerance_floor = {
-            'g1': 0.0025,  # Increased from 0.002 for low SNR cases
-            'g2': 0.0025,  # Increased from 0.002 for low SNR cases
+            'g1': 0.004,  # noise floor ~0.003 for g~0.02 at SNR=10 on non-square grids
+            'g2': 0.004,
             'vel_x0': 0.1,
             'vel_y0': 0.1,
             'int_x0': 0.1,
@@ -1759,3 +1759,59 @@ class TestQuadraticPeakInterp:
         assert 1.0 <= result <= 3.0, f"result {result} outside neighbor range"
         # peak should be right of center since right side is shallower
         assert result > 2.0
+
+
+# ==============================================================================
+# Coordinate Convention Guardrail Tests
+# ==============================================================================
+
+
+class TestGridConvention:
+    """Tests asserting X=horizontal=cols, Y=vertical=rows."""
+
+    def test_grid_convention_standard(self):
+        """X=horizontal=cols, Y=vertical=rows on non-square image."""
+        ip = ImagePars(shape=(60, 100), pixel_scale=1.0, indexing='ij')
+        from kl_pipe.utils import build_map_grid_from_image_pars
+
+        X, Y = build_map_grid_from_image_pars(ip)
+        assert X.shape == (60, 100)
+        # X varies along cols (axis 1), constant along rows (axis 0)
+        assert jnp.allclose(X[0, :], X[1, :])
+        assert not jnp.allclose(X[:, 0], X[:, 1])
+        # Y varies along rows (axis 0), constant along cols (axis 1)
+        assert jnp.allclose(Y[:, 0], Y[:, 1])
+        assert not jnp.allclose(Y[0, :], Y[1, :])
+        # Nx = horizontal = Ncol
+        assert len(jnp.unique(X[0, :])) == ip.Nx == 100
+        assert len(jnp.unique(Y[:, 0])) == ip.Ny == 60
+
+    def test_grid_convention_non_centered(self):
+        """Non-centered grid: X pixel indices 0..Ncol-1, Y 0..Nrow-1."""
+        ip = ImagePars(shape=(60, 100), pixel_scale=1.0, indexing='ij')
+        from kl_pipe.utils import build_map_grid_from_image_pars
+
+        X, Y = build_map_grid_from_image_pars(ip, unit='pixel', centered=False)
+        assert float(X[0, 0]) == 0.0
+        assert float(X[0, 99]) == 99.0
+        assert float(Y[0, 0]) == 0.0
+        assert float(Y[59, 0]) == 59.0
+
+    def test_image_pars_convention(self):
+        """Nx=Ncol, Ny=Nrow for both indexing modes."""
+        ip_ij = ImagePars(shape=(60, 100), pixel_scale=1.0, indexing='ij')
+        assert ip_ij.Ny == ip_ij.Nrow == 60
+        assert ip_ij.Nx == ip_ij.Ncol == 100
+        ip_xy = ImagePars(shape=(100, 60), pixel_scale=1.0, indexing='xy')
+        assert ip_xy.Ny == ip_xy.Nrow == 60
+        assert ip_xy.Nx == ip_xy.Ncol == 100
+
+    def test_wcs_pixel_world_roundtrip(self):
+        """Center pixel maps to (0, 0) world coords."""
+        ip = ImagePars(shape=(60, 100), pixel_scale=0.3, indexing='ij')
+        wcs = ip.wcs
+        # crpix is 1-indexed (FITS); pixel_to_world_values is 0-indexed
+        cx, cy = wcs.wcs.crpix - 1
+        ra, dec = wcs.pixel_to_world_values(cx, cy)
+        assert abs(float(ra)) < 1e-10
+        assert abs(float(dec)) < 1e-10
