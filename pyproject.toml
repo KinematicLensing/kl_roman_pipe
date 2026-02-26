@@ -33,4 +33,6 @@ markers = [
 filterwarnings = [
     # Ignore ArviZ FutureWarning about upcoming refactor
     "ignore:.*ArviZ is undergoing a major refactor.*:FutureWarning",
+    # Tests often create tasks without PSF intentionally
+    "ignore::kl_pipe.sampling.task.NoPSFWarning",
 ]

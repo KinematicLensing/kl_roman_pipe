@@ -13,11 +13,17 @@ components needed for MCMC sampling:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Callable, Union, Tuple, Any, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
+
+
+class NoPSFWarning(UserWarning):
+    """Inference task created without PSF — model will be unconvolved."""
+
 
 if TYPE_CHECKING:
     from kl_pipe.model import Model, VelocityModel, IntensityModel, KLModel
@@ -390,6 +396,12 @@ class InferenceTask:
                 freeze=True,
                 gsparams=psf_gsparams,
             )
+        elif not model.has_psf:
+            warnings.warn(
+                "\nNo PSF configured — velocity model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
 
         from kl_pipe.likelihood import create_jitted_likelihood_velocity
 
@@ -448,6 +460,12 @@ class InferenceTask:
         if psf is not None:
             model.configure_psf(
                 psf, image_pars=image_pars, freeze=True, gsparams=psf_gsparams
+            )
+        elif not model.has_psf:
+            warnings.warn(
+                "\nNo PSF configured — intensity model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
             )
 
         from kl_pipe.likelihood import create_jitted_likelihood_intensity
@@ -524,6 +542,19 @@ class InferenceTask:
                 image_pars_int=image_pars_int,
                 freeze=True,
                 gsparams=psf_gsparams,
+            )
+
+        missing = []
+        if not model.velocity_model.has_psf:
+            missing.append('velocity')
+        if not model.intensity_model.has_psf:
+            missing.append('intensity')
+        if missing:
+            channels = ' and '.join(missing)
+            warnings.warn(
+                f"\nNo PSF configured for {channels} channel(s) — model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
             )
 
         from kl_pipe.likelihood import create_jitted_likelihood_joint
