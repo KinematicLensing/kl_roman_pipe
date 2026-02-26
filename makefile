@@ -131,9 +131,14 @@ test: $(CYVERSE_DATA_MARKER)
 	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics"
 
+.PHONY: test-extended
+test-extended: $(CYVERSE_DATA_MARKER)
+	@echo "Running extended tests (excluding TNG diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
-	@echo "Running ALL tests (including slow diagnostics)..."
+	@echo "Running FULL test suite (including TNG diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v
 
 .PHONY: test-tng

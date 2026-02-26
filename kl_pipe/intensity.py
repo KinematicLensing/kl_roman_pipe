@@ -69,6 +69,50 @@ class InclinedExponentialModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_exp'
 
+    def configure_psf(
+        self,
+        gsobj,
+        image_pars=None,
+        *,
+        image_shape=None,
+        pixel_scale=None,
+        oversample=5,
+        gsparams=None,
+        freeze=False,
+    ):
+        """Configure PSF with fused k-space convolution kernel."""
+        super().configure_psf(
+            gsobj,
+            image_pars=image_pars,
+            image_shape=image_shape,
+            pixel_scale=pixel_scale,
+            oversample=oversample,
+            gsparams=gsparams,
+            freeze=freeze,
+        )
+
+        # compute padded grid dims matching _render_kspace
+        if image_pars is not None:
+            coarse_Nrow = image_pars.Nrow
+            coarse_Ncol = image_pars.Ncol
+            ps = image_pars.pixel_scale
+        else:
+            coarse_Nrow, coarse_Ncol = image_shape
+            ps = pixel_scale
+
+        N = max(self._psf_oversample, 1)
+        fine_Nrow = coarse_Nrow * N
+        fine_Ncol = coarse_Ncol * N
+        fine_ps = ps / N
+
+        pad_sq = next_fast_len(self._kspace_pad_factor * max(fine_Nrow, fine_Ncol))
+
+        from kl_pipe.psf import precompute_psf_kspace_fft
+
+        self._psf_kspace_fft = precompute_psf_kspace_fft(
+            gsobj, (pad_sq, pad_sq), fine_ps, gsparams=gsparams
+        )
+
     def evaluate_in_disk_plane(
         self,
         theta: jnp.ndarray,
@@ -197,6 +241,7 @@ class InclinedExponentialModel(IntensityModel):
         pixel_scale: float,
         pad_factor: int = None,
         oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
     ) -> jnp.ndarray:
         """
         Core k-space FFT rendering (analytic FT of 3D inclined exponential).
@@ -208,6 +253,11 @@ class InclinedExponentialModel(IntensityModel):
         Anti-aliasing: the IFFT is computed on a padded grid (pad_factor × N)
         to suppress periodic boundary wrap-around, then cropped to (Nrow, Ncol).
         Analogous to the zero-padding in convolve_fft for linear convolution.
+
+        When ``psf_kernel_fft`` is provided, the PSF is multiplied in k-space
+        BEFORE the IFFT crop, so edge pixels see PSF-scattered light from
+        source regions beyond the image boundary. This fuses rendering +
+        convolution into a single FFT pass and eliminates boundary flux loss.
 
         When ``oversample > 1``, the k-grid extends to N × Nyquist, reducing
         cusp aliasing by ~N³ (exponential FT decays as k⁻³). The IFFT is
@@ -235,6 +285,10 @@ class InclinedExponentialModel(IntensityModel):
         oversample : int, optional
             Oversampling factor for cusp anti-aliasing. Pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³. Default 1.
+        psf_kernel_fft : jnp.ndarray, optional
+            Pre-computed PSF kernel FFT on the same padded grid. When provided,
+            ``I_hat * psf_kernel_fft`` is computed before the IFFT, fusing
+            rendering and PSF convolution. Shape must match the padded grid.
 
         Returns
         -------
@@ -262,7 +316,10 @@ class InclinedExponentialModel(IntensityModel):
         sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
 
         # padded FFT grid for anti-aliasing (reduces periodic boundary wrap-around)
-        if pad_factor > 1:
+        if psf_kernel_fft is not None:
+            # fused path: padded grid must match the pre-computed PSF kernel FFT
+            pad_row, pad_col = psf_kernel_fft.shape
+        elif pad_factor > 1:
             pad_row = next_fast_len(pad_factor * eff_Nrow)
             pad_col = next_fast_len(pad_factor * eff_Ncol)
         else:
@@ -313,6 +370,10 @@ class InclinedExponentialModel(IntensityModel):
 
         I_hat = flux * ft_radial * ft_vertical * phase
 
+        # fused PSF convolution: multiply in k-space BEFORE IFFT crop
+        if psf_kernel_fft is not None:
+            I_hat = I_hat * psf_kernel_fft
+
         # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
         full = jnp.fft.ifft2(I_hat).real
         full = jnp.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
@@ -360,11 +421,26 @@ class InclinedExponentialModel(IntensityModel):
             Nrow, Ncol = X.shape
             pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
+        if self._psf_kspace_fft is not None:
+            # fused k-space path: render + convolve in one FFT pass
+            N = max(self._psf_oversample, 1)
+            image = self._render_kspace(
+                theta,
+                Nrow * N,
+                Ncol * N,
+                pixel_scale / N,
+                psf_kernel_fft=self._psf_kspace_fft,
+            )
+            if N > 1:
+                image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+            return image
+
         if self._psf_data is not None:
+            # fallback real-space path (shouldn't happen for this model,
+            # but keeps base class contract)
             from kl_pipe.psf import convolve_fft
 
             if self._psf_oversample > 1:
-                # render at fine scale so convolve_fft can bin down
                 N = self._psf_oversample
                 image = self._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
             else:

@@ -157,6 +157,62 @@ def gsobj_to_kernel(
     return padded_kernel, padded_shape
 
 
+def precompute_psf_kspace_fft(
+    gsobj: 'galsim.GSObject',
+    padded_shape: Tuple[int, int],
+    pixel_scale: float,
+    gsparams: 'galsim.GSParams' = None,
+) -> jnp.ndarray:
+    """
+    Evaluate PSF's continuous Fourier transform on the padded DFT grid.
+
+    Uses GalSim's ``drawKImage`` to sample the PSF's analytic k-space
+    representation directly, avoiding the sinc smoothing and aliasing
+    introduced by pixel-rendering then FFT-ing.
+
+    For combined k-space rendering + PSF convolution: the result lives on
+    the same padded grid that ``_render_kspace`` uses, so element-wise
+    multiplication in k-space correctly convolves before the IFFT crop.
+
+    Parameters
+    ----------
+    gsobj : galsim.GSObject
+        PSF profile.
+    padded_shape : tuple
+        (N_pad, N_pad) of the padded FFT grid (must be square and must
+        match _render_kspace).
+    pixel_scale : float
+        arcsec/pixel at the fine scale (pixel_scale / oversample if oversampled).
+    gsparams : galsim.GSParams, optional
+        Override GSParams (affects kvalue_accuracy).
+
+    Returns
+    -------
+    jnp.ndarray
+        Complex kernel FFT in standard FFT order (DC at [0,0]),
+        shape == padded_shape.
+    """
+    pad_sq = padded_shape[0]
+    if padded_shape[0] != padded_shape[1]:
+        raise ValueError(f"drawKImage requires square grid, got {padded_shape}")
+
+    if gsparams is not None:
+        gsobj = gsobj.withGSParams(gsparams)
+
+    # dk matching the DFT grid: dk = 2*pi / (N * pixel_scale)
+    dk = 2.0 * np.pi / (pad_sq * pixel_scale)
+    kim = gsobj.drawKImage(nx=pad_sq, ny=pad_sq, scale=dk)
+
+    # drawKImage returns centered layout; convert to FFT order (DC at [0,0])
+    fft_ordered = np.fft.ifftshift(kim.array)
+
+    # normalize so DC = 1 (unit-flux PSF convention), matching the
+    # sum(kernel)=1 → DFT[0,0]=1 convention used by the real-space path
+    fft_ordered = fft_ordered / fft_ordered[0, 0]
+
+    return jnp.array(fft_ordered)
+
+
 def precompute_psf_fft(
     gsobj: 'galsim.GSObject',
     image_pars: 'ImagePars' = None,
