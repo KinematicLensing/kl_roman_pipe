@@ -137,6 +137,11 @@ test-extended: $(CYVERSE_DATA_MARKER)
 	@echo "Running extended tests (excluding TNG diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics and not grism_validation"
 
+.PHONY: test-extended
+test-extended: $(CYVERSE_DATA_MARKER)
+	@echo "Running extended tests (excluding TNG diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
 	@echo "Running FULL test suite (including TNG diagnostics)..."

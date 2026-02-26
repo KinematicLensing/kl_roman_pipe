@@ -559,6 +559,12 @@ class InferenceTask:
                 variance=variance_vel,
                 mask=mask_vel,
             )
+        elif not model.has_psf:
+            warnings.warn(
+                "\nNo PSF configured — velocity model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
 
         return cls.from_velocity_obs(model, priors, obs, meta_pars=meta_pars)
 

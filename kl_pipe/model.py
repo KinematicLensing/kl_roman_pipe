@@ -39,6 +39,7 @@ class Model(ABC):
         self._psf_oversample = 1
         self._psf_fine_X = None
         self._psf_fine_Y = None
+        self._psf_kspace_fft = None
 
         return
 
@@ -129,6 +130,7 @@ class Model(ABC):
         self._psf_oversample = 1
         self._psf_fine_X = None
         self._psf_fine_Y = None
+        self._psf_kspace_fft = None
 
     @property
     def has_psf(self):
