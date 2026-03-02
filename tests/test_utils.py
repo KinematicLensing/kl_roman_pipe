@@ -87,6 +87,65 @@ def redirect_sampler_output(log_path: Path, also_terminal: bool = False):
 
 
 # ==============================================================================
+# Mask Generation Helpers
+# ==============================================================================
+
+
+def make_aperture_mask(shape, radius_frac=1.0):
+    """
+    Elliptical aperture mask. True=valid (inside aperture).
+
+    Semi-axes = radius_frac * dim/2 for each dimension,
+    simulating a circular FOV on a rectangular detector.
+    Fraction masked ~ 1 - pi/4 * radius_frac**2 (~21.5% at 1.0).
+    """
+    nrow, ncol = shape
+    iy = np.arange(nrow) - (nrow - 1) / 2.0
+    ix = np.arange(ncol) - (ncol - 1) / 2.0
+    IX, IY = np.meshgrid(ix, iy, indexing='xy')
+    a = radius_frac * ncol / 2.0
+    b = radius_frac * nrow / 2.0
+    return (IX / a) ** 2 + (IY / b) ** 2 <= 1.0
+
+
+def make_center_mask(shape, radius_frac=0.2):
+    """
+    Create a mask that excludes a central disk. True=valid.
+
+    Parameters
+    ----------
+    shape : tuple
+        Shape of the mask array (Nx, Ny).
+    radius_frac : float
+        Fraction of the smaller dimension to use as exclusion radius.
+    """
+    nx, ny = shape
+    ix = np.arange(nx) - (nx - 1) / 2.0
+    iy = np.arange(ny) - (ny - 1) / 2.0
+    IX, IY = np.meshgrid(ix, iy, indexing='ij')
+    r = np.sqrt(IX**2 + IY**2)
+    radius = radius_frac * min(nx, ny) / 2.0
+    return r > radius
+
+
+def make_random_mask(shape, fraction_valid=0.75, seed=42):
+    """
+    Create a random per-pixel mask. True=valid.
+
+    Parameters
+    ----------
+    shape : tuple
+        Shape of the mask array (Nx, Ny).
+    fraction_valid : float
+        Fraction of pixels to keep valid.
+    seed : int
+        Random seed for reproducibility.
+    """
+    rng = np.random.RandomState(seed)
+    return rng.random(shape) < fraction_valid
+
+
+# ==============================================================================
 # Test Configuration Data Structures
 # ==============================================================================
 

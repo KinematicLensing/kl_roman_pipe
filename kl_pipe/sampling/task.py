@@ -96,6 +96,7 @@ class InferenceTask:
     priors: 'PriorDict'
     data: Dict[str, jnp.ndarray]
     variance: Dict[str, Union[jnp.ndarray, float]]
+    mask: Dict[str, Optional[jnp.ndarray]] = field(default_factory=dict)
     meta_pars: Dict[str, Any] = field(default_factory=dict)
 
     # Cached functions (computed lazily)
@@ -349,6 +350,7 @@ class InferenceTask:
         flux_image: Any = None,
         flux_image_pars: Any = None,
         psf_gsparams: Any = None,
+        mask_vel: Optional[jnp.ndarray] = None,
     ) -> 'InferenceTask':
         """
         Create inference task for velocity-only inference.
@@ -379,6 +381,8 @@ class InferenceTask:
             Image parameters of flux_image (for resampling if needed).
         psf_gsparams : galsim.GSParams, optional
             GalSim rendering parameters for PSF kernel accuracy.
+        mask_vel : jnp.ndarray, optional
+            Boolean mask (True=valid, False=masked). Same shape as data_vel.
 
         Returns
         -------
@@ -406,7 +410,7 @@ class InferenceTask:
         from kl_pipe.likelihood import create_jitted_likelihood_velocity
 
         likelihood_fn = create_jitted_likelihood_velocity(
-            model, image_pars, variance_vel, data_vel
+            model, image_pars, variance_vel, data_vel, mask_vel=mask_vel
         )
 
         return cls(
@@ -415,6 +419,7 @@ class InferenceTask:
             priors=priors,
             data={'velocity': data_vel},
             variance={'velocity': variance_vel},
+            mask={'velocity': mask_vel},
             meta_pars=meta_pars or {},
         )
 
@@ -429,6 +434,7 @@ class InferenceTask:
         meta_pars: Optional[Dict] = None,
         psf: Any = None,
         psf_gsparams: Any = None,
+        mask_int: Optional[jnp.ndarray] = None,
     ) -> 'InferenceTask':
         """
         Create inference task for intensity-only inference.
@@ -451,6 +457,8 @@ class InferenceTask:
             PSF for intensity channel.
         psf_gsparams : galsim.GSParams, optional
             GalSim rendering parameters for PSF kernel accuracy.
+        mask_int : jnp.ndarray, optional
+            Boolean mask (True=valid, False=masked). Same shape as data_int.
 
         Returns
         -------
@@ -471,7 +479,7 @@ class InferenceTask:
         from kl_pipe.likelihood import create_jitted_likelihood_intensity
 
         likelihood_fn = create_jitted_likelihood_intensity(
-            model, image_pars, variance_int, data_int
+            model, image_pars, variance_int, data_int, mask_int=mask_int
         )
 
         return cls(
@@ -480,6 +488,7 @@ class InferenceTask:
             priors=priors,
             data={'intensity': data_int},
             variance={'intensity': variance_int},
+            mask={'intensity': mask_int},
             meta_pars=meta_pars or {},
         )
 
@@ -498,6 +507,8 @@ class InferenceTask:
         psf_vel: Any = None,
         psf_int: Any = None,
         psf_gsparams: Any = None,
+        mask_vel: Optional[jnp.ndarray] = None,
+        mask_int: Optional[jnp.ndarray] = None,
     ) -> 'InferenceTask':
         """
         Create inference task for joint velocity + intensity inference.
@@ -528,6 +539,10 @@ class InferenceTask:
             PSF for intensity channel.
         psf_gsparams : galsim.GSParams, optional
             GalSim rendering parameters for PSF kernel accuracy.
+        mask_vel : jnp.ndarray, optional
+            Boolean mask for velocity data (True=valid). Same shape as data_vel.
+        mask_int : jnp.ndarray, optional
+            Boolean mask for intensity data (True=valid). Same shape as data_int.
 
         Returns
         -------
@@ -567,6 +582,8 @@ class InferenceTask:
             variance_int,
             data_vel,
             data_int,
+            mask_vel=mask_vel,
+            mask_int=mask_int,
         )
 
         return cls(
@@ -575,5 +592,6 @@ class InferenceTask:
             priors=priors,
             data={'velocity': data_vel, 'intensity': data_int},
             variance={'velocity': variance_vel, 'intensity': variance_int},
+            mask={'velocity': mask_vel, 'intensity': mask_int},
             meta_pars=meta_pars or {},
         )
