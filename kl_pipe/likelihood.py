@@ -42,6 +42,7 @@ def _log_likelihood_velocity(
     obs: 'VelocityObs',
     vel_model: 'VelocityModel',
     flux_theta_override: jnp.ndarray = None,
+    mask_vel: jnp.ndarray = None,
 ) -> float:
     """
     Log-likelihood for velocity observations.
@@ -117,6 +118,9 @@ def _log_likelihood_intensity(
         Image observation with data, variance, mask, and PSF.
     int_model : IntensityModel
         Intensity model instance.
+    mask_int : jnp.ndarray, optional
+        Boolean mask array (True=valid, False=masked). Same shape as data_int.
+        If None, all pixels are used.
 
     Returns
     -------
@@ -198,6 +202,7 @@ def _log_likelihood_joint(
         obs_vel,
         kl_model.velocity_model,
         flux_theta_override=theta_int,
+        mask_vel=mask_vel,
     )
     log_prob_int = _log_likelihood_intensity(
         theta_int,
@@ -269,6 +274,7 @@ def create_jitted_likelihood_velocity(
             _log_likelihood_velocity,
             obs=obs_vel,
             vel_model=vel_model,
+            mask_vel=mask_vel,
         )
     )
 
@@ -318,6 +324,7 @@ def create_jitted_likelihood_intensity(
             _log_likelihood_intensity,
             obs=obs_int,
             int_model=int_model,
+            mask_int=mask_int,
         )
     )
 
@@ -390,5 +397,7 @@ def create_jitted_likelihood_joint(
             obs_vel=obs_vel,
             obs_int=obs_int,
             kl_model=kl_model,
+            mask_vel=mask_vel,
+            mask_int=mask_int,
         )
     )
