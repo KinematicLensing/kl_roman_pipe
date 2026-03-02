@@ -213,6 +213,7 @@ def plot_data_comparison_panels(
     n_params: Optional[int] = None,
     model_label: str = 'Model',
     enable_plots: bool = True,
+    mask: Optional[np.ndarray] = None,
 ) -> Optional[Path]:
     """
     Create 2x3 panel diagnostic plot.
@@ -242,6 +243,8 @@ def plot_data_comparison_panels(
         Label for model panel. Default is 'Model'.
     enable_plots : bool, optional
         If False, skip plotting. Default is True.
+    mask : ndarray, optional
+        Boolean mask (True=valid). Masked pixels shown as white (NaN).
 
     Returns
     -------
@@ -256,9 +259,16 @@ def plot_data_comparison_panels(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Convert to numpy arrays
-    data_noisy = np.asarray(data_noisy)
-    data_true = np.asarray(data_true)
-    model_eval = np.asarray(model_eval)
+    data_noisy = np.asarray(data_noisy).astype(float, copy=True)
+    data_true = np.asarray(data_true).astype(float, copy=True)
+    model_eval = np.asarray(model_eval).astype(float, copy=True)
+
+    # apply mask: set excluded pixels to NaN so they appear white
+    if mask is not None:
+        mask = np.asarray(mask)
+        data_noisy[~mask] = np.nan
+        data_true[~mask] = np.nan
+        model_eval[~mask] = np.nan
 
     # Compute residuals & chi2
     residual_true = data_noisy - data_true
@@ -268,10 +278,11 @@ def plot_data_comparison_panels(
     chi2_true = None
     chi2_model = None
     if variance is not None:
-        chi2_true = np.sum(residual_true**2 / variance)
-        chi2_model = np.sum(residual_model**2 / variance)
+        chi2_true = np.nansum(residual_true**2 / variance)
+        chi2_model = np.nansum(residual_model**2 / variance)
         if n_params is not None:
-            dof = data_noisy.size - n_params
+            n_valid = np.sum(np.isfinite(data_noisy))
+            dof = n_valid - n_params
             chi2_true /= dof
             chi2_model /= dof
 
@@ -280,13 +291,15 @@ def plot_data_comparison_panels(
 
     # Common colorbar limits for data
     data_arrays = [data_noisy, data_true, model_eval]
-    vmin_data = min(np.percentile(arr, 1) for arr in data_arrays)
-    vmax_data = max(np.percentile(arr, 99) for arr in data_arrays)
+    vmin_data = min(np.nanpercentile(arr, 1) for arr in data_arrays)
+    vmax_data = max(np.nanpercentile(arr, 99) for arr in data_arrays)
     norm_data = MidpointNormalize(vmin=vmin_data, vmax=vmax_data, midpoint=0)
 
     # Common colorbar limits for residuals
     residual_arrays = [residual_true, residual_model]
-    abs_max = max(np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays)
+    abs_max = max(
+        np.abs(np.nanpercentile(arr, [1, 99])).max() for arr in residual_arrays
+    )
     norm_resid = MidpointNormalize(vmin=-abs_max, vmax=abs_max, midpoint=0)
 
     # Row 1: noisy | true | noisy - true
