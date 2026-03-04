@@ -6,7 +6,8 @@ name: Python Format Checker
 # already: https://github.com/psf/black/issues/3040
 
 on:
-  - pull_request
+  workflow_dispatch: # Allows manual run only; disables auto-runs
+  # - pull_request
   # - push
 
 jobs:

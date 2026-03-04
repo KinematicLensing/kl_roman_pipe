@@ -14,6 +14,52 @@ This directory contains comprehensive tests for the `kl_pipe` kinematic lensing 
 - **`test_likelihood_slices.py`**: Brute-force likelihood slicing for parameter recovery
 - **`test_optimizer_recovery.py`**: Gradient-based optimization for parameter recovery
 
+### TNG50 Tests
+- **`test_tng_loaders.py`**: TNG50 data loading, galaxy access, particle data validation
+- **`test_tng_data_vectors.py`**: Rendering, orientation transforms, gridding, diagnostic plots (40 tests)
+- **`test_tng_mock_data.py`**: Mock data structure validation
+- **`test_tng_likelihood.py`**: Model fitting with TNG truth data
+
+TNG tests require data files in `data/tng50/` (see `data/cyverse/README.md` for download).
+
+#### TNG Diagnostic Outputs
+
+Run diagnostic tests with:
+```bash
+make test-tng-diagnostics
+```
+
+**Diagnostic plots** are saved to `tests/out/tng_diagnostics/`:
+- `high_res_native_orientation_all_galaxies.png`: All 5 galaxies at 1024x1024 resolution
+- `cic_vs_ngp_comparison_*.png`: Gridding algorithm comparison with particle overlay
+- `symmetry_breaking_*.png`: Complementary inclinations showing TNG asymmetry  
+- `resolution_grid_*.png`: 16, 32, 64, 128 pixel resolution comparison
+- `snr_grid_*.png`: Clean vs SNR=100, 50, 20
+- `glamour_shot_subhalo_8.png`: High-res showcase of best-looking galaxy
+- `inclination_sweep_preserved_*.png`: Face-on to edge-on with gas-stellar offset preserved (realistic)
+- `inclination_sweep_aligned_*.png`: Same but forcing perfect alignment (synthetic)
+- `pa_sweep_*.png`: 0°, 45°, 90°, 135° position angles
+- `multi_galaxy_inclination_sweep_*.png`: All 5 galaxies × inclinations
+- `vertical_extent_*.png`: Disk thickness vs inclination analysis
+
+**CSV outputs** (quantitative diagnostics, also in `tests/out/tng_diagnostics/`):
+- `vertical_extent_<subhalo_id>.csv`: Disk thickness measurements
+  - Columns: `cosi`, `inclination_deg`, `z_extent_kpc`, `z_extent_arcsec`, `normalized_z_extent`
+  - Shows how disk vertical extent varies with viewing angle (validates 3D transformation)
+  - Edge-on views show maximum thickness, face-on minimum
+  
+- `inclination_sweep_summary_<subhalo_id>.csv`: Rendering diagnostics per orientation
+  - Columns: `cosi`, `inclination_deg`, `total_flux`, `velocity_range_km_s`, `nonzero_pixels`, `mean_intensity`
+  - Tracks how observables change with inclination
+  - Validates flux conservation and projection effects
+
+Diagnostics validate:
+1. Vertical extent analysis: 3D rotations preserve realistic disk thickness (not 2D projections)
+2. Inclination sweep: Physically realistic variation in observables with viewing angle
+3. Gas-stellar offset plots: ~30-40° misalignment correctly preserved or removed
+4. Gridding comparison: CIC produces smoother maps while conserving flux
+5. Symmetry breaking: TNG galaxies are asymmetric (not perfectly symmetric disks)
+
 ---
 
 ## Test Regimes: Likelihood Slicing vs Optimization

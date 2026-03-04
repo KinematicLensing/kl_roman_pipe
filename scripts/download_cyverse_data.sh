@@ -14,7 +14,7 @@ set -e  # Exit on error
 # Configuration
 CONFIG_FILE="${1:-data/cyverse/cyverse_data.conf}"
 DATA_DIR="data"
-CURL_OPTS="--retry 5 --retry-delay 3 --connect-timeout 30 --max-time 300 --netrc-optional"
+CURL_OPTS="-L --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 300 --netrc-optional"
 
 # Colors for output
 RED='\033[0;31m'
@@ -54,6 +54,15 @@ setup_netrc_if_needed() {
         needs_setup=true
         echo -e "${YELLOW}Warning: No CyVerse credentials in ~/.netrc${NC}"
     else
+        # Validate .netrc entry format: must have machine, login, and password
+        local netrc_entry
+        netrc_entry=$(grep "machine data.cyverse.org" "$netrc_file" 2>/dev/null)
+        if ! echo "$netrc_entry" | grep -q "login" || \
+           ! echo "$netrc_entry" | grep -q "password"; then
+            echo -e "${YELLOW}Warning: ~/.netrc entry for data.cyverse.org looks malformed.${NC}"
+            echo -e "${YELLOW}Expected format: machine data.cyverse.org login YOUR_USERNAME password YOUR_PASSWORD${NC}"
+            echo -e "${YELLOW}Note: CyVerse requires your USERNAME, not email address.${NC}"
+        fi
         # Check permissions
         local perms=$(stat -f "%Lp" "$netrc_file" 2>/dev/null || stat -c "%a" "$netrc_file" 2>/dev/null)
         if [ "$perms" != "600" ]; then
@@ -136,8 +145,88 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
+# Connectivity pre-check
+echo -e "${BLUE}Checking CyVerse connectivity...${NC}"
+if ! curl --head --silent --connect-timeout 5 --max-time 10 \
+     "https://data.cyverse.org/" > /dev/null 2>&1; then
+    echo -e "${RED}Error: CyVerse (data.cyverse.org) is unreachable.${NC}"
+    echo -e "${RED}Check your network connection and try again.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}CyVerse is reachable.${NC}"
+echo ""
+
 # Setup authentication if needed
 setup_netrc_if_needed
+
+# Flag to only offer credential update once per run
+AUTH_RETRY_OFFERED=false
+
+# Function to offer credential update after 401 failure
+offer_credential_update() {
+    local netrc_file="$HOME/.netrc"
+
+    # Non-interactive: print instructions and exit
+    if [ ! -t 0 ]; then
+        echo -e "${RED}401 Unauthorized — credentials in ~/.netrc may be invalid.${NC}"
+        echo -e "${RED}CyVerse requires your USERNAME (not email).${NC}"
+        echo ""
+        echo "To fix, edit ~/.netrc and ensure this line exists:"
+        echo "  machine data.cyverse.org login YOUR_USERNAME password YOUR_PASSWORD"
+        echo ""
+        echo "Or set environment variables:"
+        echo "  export CYVERSE_USER='your_username'"
+        echo "  export CYVERSE_PASS='your_password'"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${RED}401 Unauthorized — credentials in ~/.netrc may be invalid.${NC}"
+    echo -e "${YELLOW}Note: CyVerse requires your USERNAME, not email address.${NC}"
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "  1. Update credentials now"
+    echo "  2. Continue without updating"
+    echo ""
+    read -p "Choose [1/2]: " -n 1 -r choice
+    echo ""
+
+    case $choice in
+        1)
+            # Remove old CyVerse entry from .netrc
+            if [ -f "$netrc_file" ]; then
+                sed -i.bak '/machine data\.cyverse\.org/d' "$netrc_file"
+                rm -f "${netrc_file}.bak"
+            fi
+
+            echo ""
+            echo -e "${GREEN}Setting up new CyVerse credentials...${NC}"
+            read -p "CyVerse username: " username
+            read -s -p "CyVerse password: " password
+            echo ""
+
+            if [ -z "$username" ] || [ -z "$password" ]; then
+                echo -e "${RED}Error: Username or password cannot be empty${NC}"
+                return 1
+            fi
+
+            # Append new entry
+            if [ -f "$netrc_file" ]; then
+                echo "" >> "$netrc_file"
+            fi
+            printf "machine data.cyverse.org login %s password %s\n" "$username" "$password" >> "$netrc_file"
+            chmod 600 "$netrc_file"
+
+            echo -e "${GREEN}Credentials updated in ~/.netrc${NC}"
+            echo ""
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
 
 # Function to build curl command with authentication
 build_curl_cmd() {
@@ -183,7 +272,7 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
     # Check if file already exists
     if [ -f "$local_file" ]; then
         echo -e "${YELLOW}Skipping (already exists): $local_path${NC}"
-        ((skipped++))
+        ((++skipped))
         continue
     fi
     
@@ -193,13 +282,59 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
     
     # Build and execute curl command
     curl_cmd=$(build_curl_cmd "$remote_url" "$local_file")
-    if eval "$curl_cmd" 2>&1; then
+    curl_output=""
+    set +e
+    curl_output=$(eval "$curl_cmd" 2>&1)
+    curl_exit=$?
+    set -e
+
+    if [ $curl_exit -eq 0 ]; then
+        # Guard against 0-byte files from 307 redirects (e.g. CyVerse IP block)
+        if [ ! -s "$local_file" ]; then
+            echo -e "${RED}Error: downloaded file is 0 bytes: $local_path${NC}"
+            echo -e "${RED}CyVerse may be blocking your IP. Visit https://unblockme.cyverse.org/ in a browser, then retry.${NC}"
+            rm -f "$local_file"
+            ((++failed))
+            continue
+        fi
         echo -e "${GREEN}Downloaded successfully${NC}"
-        ((downloaded++))
+        ((++downloaded))
     else
-        echo -e "${RED}Failed to download: $local_path${NC}"
         rm -f "$local_file"  # Remove partial download
-        ((failed++))
+
+        # Detect 401 from curl -f output (exit code 22 = HTTP error, output contains "401")
+        is_auth_error=false
+        if [[ "$curl_output" == *"401"* ]] || [[ "$curl_output" == *"Unauthorized"* ]]; then
+            is_auth_error=true
+        fi
+
+        if $is_auth_error && [[ "$remote_url" != *"dav-anon"* ]] && ! $AUTH_RETRY_OFFERED; then
+            AUTH_RETRY_OFFERED=true
+            echo -e "${RED}Failed to download (401 Unauthorized): $local_path${NC}"
+            if offer_credential_update; then
+                # Credentials updated — retry this file
+                echo -e "${BLUE}Retrying: $local_path${NC}"
+                curl_cmd=$(build_curl_cmd "$remote_url" "$local_file")
+                set +e
+                eval "$curl_cmd" 2>&1
+                retry_exit=$?
+                set -e
+                if [ $retry_exit -eq 0 ] && [ -s "$local_file" ]; then
+                    echo -e "${GREEN}Downloaded successfully after credential update${NC}"
+                    ((++downloaded))
+                else
+                    rm -f "$local_file"
+                    echo -e "${RED}Still failed after credential update: $local_path${NC}"
+                    ((++failed))
+                fi
+            else
+                echo -e "${YELLOW}Continuing without credential update.${NC}"
+                ((++failed))
+            fi
+        else
+            echo -e "${RED}Failed to download: $local_path${NC}"
+            ((++failed))
+        fi
     fi
     echo ""
     
