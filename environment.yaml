@@ -27,5 +27,4 @@ dependencies:
   - sep
   - reproject
   - black
-  - ffmpeg
   - pip

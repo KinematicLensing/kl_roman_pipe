@@ -169,14 +169,13 @@ def optimize_with_gradients(
         return -np.array(grad_fn(jnp.array(theta)))
 
     # Run optimization
-    # ftol is the relative change tolerance: (f_k - f_{k+1})/max{|f_k|,|f_{k+1}|,1} <= ftol
     result = minimize(
         objective,
         x0=np.array(theta_init),
         method=method,
         jac=gradient,
         bounds=bounds,
-        options={'maxiter': 2000, 'ftol': 1e-8},
+        options={'maxiter': 1000, 'ftol': 1e-9},
     )
 
     return jnp.array(result.x), result

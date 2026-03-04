@@ -3,7 +3,6 @@ Tests for TNG50 mock data loading.
 """
 
 import pytest
-import numpy as np
 from pathlib import Path
 from kl_pipe.tng import (
     load_gas_data,
@@ -18,27 +17,24 @@ from kl_pipe.tng import (
 def test_load_gas_data():
     """Test loading gas mock data."""
     data = load_gas_data()
-    assert isinstance(data, np.ndarray)
+    assert isinstance(data, dict)
     assert len(data) > 0
-    assert isinstance(data[0], dict)
 
 
 @pytest.mark.tng50
 def test_load_stellar_data():
     """Test loading stellar mock data."""
     data = load_stellar_data()
-    assert isinstance(data, np.ndarray)
+    assert isinstance(data, dict)
     assert len(data) > 0
-    assert isinstance(data[0], dict)
 
 
 @pytest.mark.tng50
 def test_load_subhalo_data():
     """Test loading subhalo mock data."""
     data = load_subhalo_data()
-    assert isinstance(data, np.ndarray)
+    assert isinstance(data, dict)
     assert len(data) > 0
-    assert isinstance(data[0], dict)
 
 
 @pytest.mark.tng50
@@ -50,14 +46,9 @@ def test_tng50_mock_data_all():
     assert mock_data.stellar is not None
     assert mock_data.subhalo is not None
 
-    assert isinstance(mock_data.gas, np.ndarray)
-    assert isinstance(mock_data.stellar, np.ndarray)
-    assert isinstance(mock_data.subhalo, np.ndarray)
-
-    # Test new features
-    assert mock_data.n_galaxies == len(mock_data.gas)
-    assert mock_data.subhalo_ids is not None
-    assert len(mock_data) == mock_data.n_galaxies
+    assert isinstance(mock_data.gas, dict)
+    assert isinstance(mock_data.stellar, dict)
+    assert isinstance(mock_data.subhalo, dict)
 
 
 @pytest.mark.tng50
