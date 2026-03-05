@@ -93,8 +93,9 @@ def cen2source(
         Coordinates in source plane.
     """
 
-    norm = 1.0 / (1.0 - (g1**2 + g2**2))
-    transform = norm * jnp.array([[1.0 + g1, g2], [g2, 1.0 - g1]])
+    # area-preserving shear M^{-1} (image→source): matches GalSim .shear() convention
+    norm = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
+    transform = norm * jnp.array([[1.0 - g1, -g2], [-g2, 1.0 + g1]])
 
     return _multiply(transform, x, y)
 
@@ -108,7 +109,7 @@ def source2gal(
     Parameters
     ----------
     theta_int : float
-        Intrinsic position angle.
+        Intrinsic position angle, in radians. Domain is typically [0, 2pi).
     x, y : jnp.ndarray
         Coordinates in source plane.
 
@@ -138,7 +139,9 @@ def gal2disk(
     Parameters
     ----------
     cosi : float
-        Cosine of inclination angle.
+        Cosine of inclination angle, in radians. Domain is typically [0, 1] for Sersic
+        or symmetric profiles, but can be [-1, 1] for TNG profiles to allow for
+        more complex distributions.
     x, y : jnp.ndarray
         Coordinates in gal plane.
 
@@ -183,9 +186,9 @@ def transform_to_disk_plane(
     g1, g2 : float
         Lensing shear components.
     theta_int : float
-        Intrinsic position angle (radians).
+        Intrinsic position angle (radians). Typically in [0, 2pi).
     cosi : float
-        Cosine of inclination angle.
+        Cosine of inclination angle. Typically in [0, 1] for symmetric profiles.
     Returns
     -------
     x_disk, y_disk : jnp.ndarray

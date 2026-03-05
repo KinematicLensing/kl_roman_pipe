@@ -1,18 +1,26 @@
+import numpy as np
 import jax.numpy as jnp
+import jax
+from scipy.fft import next_fast_len
 
 from kl_pipe.model import IntensityModel
+from kl_pipe.transformation import obs2cen, cen2source, source2gal
+
+
+# default number of Gauss-Legendre quadrature points for LOS integration
+_DEFAULT_N_QUAD = 200
 
 
 class InclinedExponentialModel(IntensityModel):
     """
-    Exponential disk intensity model, with possible inclination and shear. Intrinsically
-    assumes circular exponential profile in disk plane:
-        I(r) = I0 * exp(-r / r_scale)
-    where r is the circular radius in the disk plane. This corresponds to a Sersic
-    profile with n=1.
+    3D inclined exponential disk model with sech² vertical profile.
 
-    New approach uses a flux-based parameterization where flux is conserved under
-    projection. Includes cos(i) surface brightness correction.
+    Matches GalSim's InclinedExponential: radial exponential disk with
+    vertical sech²(z/h_z) profile, integrated along the line of sight.
+
+    Two evaluation paths:
+    - ``render_image``: k-space FFT (exact analytic FT, no aliasing)
+    - ``__call__``: real-space Gauss-Legendre quadrature (N-pt LOS integration)
 
     Parameters
     ----------
@@ -25,9 +33,12 @@ class InclinedExponentialModel(IntensityModel):
     flux : float
         Total integrated flux (conserved quantity)
     int_rscale : float
-        Exponential scale length
+        Exponential scale length (arcsec)
+    int_h_over_r : float
+        Ratio of vertical scale height to radial scale length.
+        h_z = int_h_over_r * int_rscale. GalSim default is 0.1.
     int_x0, int_y0 : float
-        Centroid position
+        Centroid position (arcsec)
     """
 
     PARAMETER_NAMES = (
@@ -37,9 +48,22 @@ class InclinedExponentialModel(IntensityModel):
         'g2',
         'flux',
         'int_rscale',
+        'int_h_over_r',
         'int_x0',
         'int_y0',
     )
+
+    # anti-aliasing pad factor for k-space FFT rendering;
+    # 2x squashes periodic boundary wrap-around (e.g. 0.7% → 0.005%)
+    _kspace_pad_factor = 2
+
+    def __init__(self, meta_pars=None, n_quad=None):
+        super().__init__(meta_pars)
+        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
+        self._n_quad = n
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        self._gl_nodes = jnp.array(nodes)
+        self._gl_weights = jnp.array(weights)
 
     @property
     def name(self) -> str:
@@ -53,13 +77,11 @@ class InclinedExponentialModel(IntensityModel):
         z: jnp.ndarray = None,
     ) -> jnp.ndarray:
         """
-        Evaluate exponential profile in disk plane, then project to observer.
+        Evaluate exponential profile in disk plane (thin-disk projection).
 
-        Steps:
-        1. Extract flux and scale length
-        2. Convert flux to I0: I0 = flux / (2π * r_scale²)
-        3. Evaluate exponential in disk plane
-        4. Apply cos(i) projection: I_obs = I_disk / cos(i)
+        This is the face-on radial profile only; the full 3D LOS integration
+        is done in ``__call__`` and ``render_image``. This method is retained
+        for the base class interface and velocity flux weighting.
 
         Parameters
         ----------
@@ -73,7 +95,6 @@ class InclinedExponentialModel(IntensityModel):
 
         flux = self.get_param('flux', theta)
         rscale = self.get_param('int_rscale', theta)
-        cosi = self.get_param('cosi', theta)
 
         # compute radius in disk plane
         r_disk = jnp.sqrt(x**2 + y**2)
@@ -85,11 +106,294 @@ class InclinedExponentialModel(IntensityModel):
         # evaluate exponential profile in disk plane
         intensity_disk = I0_disk * jnp.exp(-r_disk / rscale)
 
-        # NOTE: no inclination correction here to flux, as this is evaluated in disk
-        # plane and cosi correction is done in IntensityModel.__call__() method
-        #  i.e. intensity_obs = intensity_disk / cosi
-
         return intensity_disk
+
+    def __call__(
+        self,
+        theta: jnp.ndarray,
+        plane: str,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate 3D inclined exponential via LOS Gauss-Legendre quadrature.
+
+        Integrates rho(R, z) = rho0 * exp(-R/r_s) * sech²(z/h_z) along the
+        line of sight at each pixel in the galaxy frame (obs → cen → source → gal,
+        but NOT deprojected to disk).
+        """
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        theta_int = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        h_over_r = self.get_param('int_h_over_r', theta)
+
+        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+        h_z = h_over_r * rscale
+
+        # transform to galaxy frame (NOT disk — we integrate LOS ourselves)
+        xp, yp = x, y
+        if plane == 'obs':
+            xp, yp = obs2cen(x0, y0, xp, yp)
+        if plane in ('obs', 'cen'):
+            xp, yp = cen2source(g1, g2, xp, yp)
+        if plane in ('obs', 'cen', 'source'):
+            xp, yp = source2gal(theta_int, xp, yp)
+
+        if plane == 'disk':
+            # face-on: no LOS integration needed, return thin-disk SB
+            r_disk = jnp.sqrt(x**2 + y**2)
+            I0_disk = flux / (2.0 * jnp.pi * rscale**2)
+            return I0_disk * jnp.exp(-r_disk / rscale)
+
+        # volume density normalization: flux = integral over all space
+        # rho0 = flux / (4 * pi * h_z * r_s^2)
+        rho0 = flux / (4.0 * jnp.pi * h_z * rscale**2)
+
+        # Per-pixel GL centering: sech²(z/h_z) peak is at ell where
+        # z = ell*cosi - y_gal*sini = 0, i.e. ell_center = y_gal*sini/cosi.
+        # Integration half-width delta = 5*h_z/cosi captures >99.99% of sech².
+        delta = 5.0 * h_z / jnp.maximum(cosi, 0.1)
+        ell_center = yp * sini / jnp.maximum(cosi, 0.1)  # (...,)
+
+        # Gauss-Legendre on [ell_center - delta, ell_center + delta]
+        ell = ell_center[..., None] + delta * self._gl_nodes  # (..., N_QUAD)
+        w = delta * self._gl_weights  # (N_QUAD,)
+
+        # at each quadrature point, compute disk coords
+        # y_disk = y_gal * cosi + l * sini
+        # z = l * cosi - y_gal * sini
+        # x_disk = x_gal (unchanged)
+        y_disk = yp[..., None] * cosi + ell * sini  # (..., N_QUAD)
+        z_val = ell * cosi - yp[..., None] * sini  # (..., N_QUAD)
+        x_disk = xp[..., None]  # (..., N_QUAD)
+
+        R = jnp.sqrt(x_disk**2 + y_disk**2)  # (..., N_QUAD)
+
+        # rho = rho0 * exp(-R/r_s) * sech²(z/h_z)
+        radial = jnp.exp(-R / rscale)
+        z_norm = z_val / h_z
+        # sech²(x) = 1/cosh²(x); clip to avoid overflow
+        cosh_z = jnp.cosh(jnp.clip(z_norm, -20.0, 20.0))
+        vertical = 1.0 / (cosh_z**2)
+
+        integrand = rho0 * radial * vertical  # (..., N_QUAD)
+
+        # weighted sum over quadrature points
+        intensity = jnp.sum(integrand * w, axis=-1)
+
+        return intensity
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+    ) -> jnp.ndarray:
+        """
+        Core k-space FFT rendering (analytic FT of 3D inclined exponential).
+
+        Matches GalSim's SBInclinedExponential kValueHelper exactly.
+        No point-sampling aliasing; the thin-disk limit (h_over_r -> 0)
+        falls out naturally as ft_vertical -> 1.
+
+        Anti-aliasing: the IFFT is computed on a padded grid (pad_factor × N)
+        to suppress periodic boundary wrap-around, then cropped to (Nrow, Ncol).
+        Analogous to the zero-padding in convolve_fft for linear convolution.
+
+        When ``oversample > 1``, the k-grid extends to N × Nyquist, reducing
+        cusp aliasing by ~N³ (exponential FT decays as k⁻³). The IFFT is
+        computed at fine resolution and subsampled back to (Nrow, Ncol).
+        The half-pixel phase correction uses the coarse grid centering so
+        subsampled positions align with the standard centered grid.
+
+        Axis convention
+        ---------------
+        krow = fftfreq(Nrow) is conjugate to rows (axis 0 = X, horizontal).
+        kcol = fftfreq(Ncol) is conjugate to cols (axis 1 = Y, vertical).
+        gal2disk compresses Y (cols), so cosi acts on kcol in k-space.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array.
+        Nrow, Ncol : int
+            Output grid dimensions.
+        pixel_scale : float
+            Output pixel scale (arcsec/pixel).
+        pad_factor : int, optional
+            IFFT grid padding factor. Defaults to ``self._kspace_pad_factor``.
+            1 = no padding; 2 = 2x grid (squashes boundary flux in log-space).
+        oversample : int, optional
+            Oversampling factor for cusp anti-aliasing. Pushes Nyquist to
+            N × π/pixel_scale, reducing aliasing by ~N³. Default 1.
+
+        Returns
+        -------
+        jnp.ndarray
+            Rendered image at specified resolution, shape (Nrow, Ncol).
+        """
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+
+        # effective (fine) grid for k-space evaluation
+        eff_Nrow = Nrow * oversample
+        eff_Ncol = Ncol * oversample
+        eff_ps = pixel_scale / oversample
+
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        theta_int = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        h_over_r = self.get_param('int_h_over_r', theta)
+
+        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+
+        # padded FFT grid for anti-aliasing (reduces periodic boundary wrap-around)
+        if pad_factor > 1:
+            pad_row = next_fast_len(pad_factor * eff_Nrow)
+            pad_col = next_fast_len(pad_factor * eff_Ncol)
+        else:
+            pad_row = eff_Nrow
+            pad_col = eff_Ncol
+
+        # 1. k-grid at effective resolution (higher Nyquist when oversampled)
+        krow = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
+        kcol = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
+        KROW, KCOL = jnp.meshgrid(krow, kcol, indexing='ij')
+
+        # 2. centroid phase + half-pixel grid alignment correction
+        #    based on OUTPUT grid (Nrow, pixel_scale), not effective grid,
+        #    so that subsampled fine pixels align with the coarse centered grid
+        hrow = 0.5 * pixel_scale * (1 - Nrow % 2)
+        hcol = 0.5 * pixel_scale * (1 - Ncol % 2)
+        phase = jnp.exp(-1j * (KROW * (x0 - hrow) + KCOL * (y0 - hcol)))
+
+        # 3. shear: area-preserving M = (1/sqrt(1-|g|^2)) * [[1+g1, g2], [g2, 1-g1]]
+        #    matches GalSim .shear() (det=1, flux-preserving, no prefactor on I_hat)
+        norm_shear = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
+        krow_s = norm_shear * ((1.0 + g1) * KROW + g2 * KCOL)
+        kcol_s = norm_shear * (g2 * KROW + (1.0 - g1) * KCOL)
+
+        # rotation: R(-theta_int) on (krow, kcol)
+        c = jnp.cos(-theta_int)
+        s = jnp.sin(-theta_int)
+        krow_gal = c * krow_s - s * kcol_s
+        kcol_gal = s * krow_s + c * kcol_s
+
+        # 4. analytic FT in galaxy frame
+        krow_scaled = krow_gal * rscale
+        kcol_scaled = kcol_gal * rscale
+
+        # radial FT: (1 + krow² + (kcol*cosi)²)^{-3/2}  [cosi compresses cols]
+        k_sq = krow_scaled**2 + (kcol_scaled * cosi) ** 2
+        ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
+
+        # vertical FT: u/sinh(u), u = (pi/2)*h_over_r*kcol_scaled*sini
+        # safe-where pattern: substitute finite dummy in non-selected branch
+        # so JAX autodiff never sees 0/sinh(0) = 0/0 = NaN
+        u = (jnp.pi / 2.0) * h_over_r * kcol_scaled * sini
+        u_safe = jnp.where(jnp.abs(u) < 1e-4, jnp.ones_like(u), u)
+        ft_vertical = jnp.where(
+            jnp.abs(u) < 1e-4,
+            1.0 - u**2 / 6.0,
+            u_safe / jnp.sinh(u_safe),
+        )
+
+        I_hat = flux * ft_radial * ft_vertical * phase
+
+        # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
+        full = jnp.fft.ifft2(I_hat).real
+        full = jnp.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
+        image = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
+
+        if oversample > 1:
+            image = image[::oversample, ::oversample]
+
+        return image
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """
+        Render via k-space FFT, with optional PSF convolution.
+
+        When PSF is configured with oversampling, renders at fine scale
+        so convolve_fft can bin down to coarse scale.
+
+        Parameters
+        ----------
+        oversample : int, optional
+            Cusp anti-aliasing factor for the non-PSF path. The exponential
+            profile has a cusp at R=0 whose FT decays as k⁻³; power above
+            Nyquist aliases into the image. Oversampling pushes Nyquist to
+            N × π/pixel_scale, reducing aliasing by ~N³.
+            Ignored when PSF is configured (PSF convolution suppresses
+            high-k aliasing naturally). Default 2.
+        """
+        if image_pars is None and (X is None or Y is None):
+            raise ValueError("Provide image_pars or (X, Y)")
+
+        if image_pars is not None:
+            pixel_scale = image_pars.pixel_scale
+            Nrow = image_pars.Nrow
+            Ncol = image_pars.Ncol
+        else:
+            Nrow, Ncol = X.shape
+            pixel_scale = jnp.abs(X[1, 0] - X[0, 0])
+
+        if self._psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            if self._psf_oversample > 1:
+                # render at fine scale so convolve_fft can bin down
+                N = self._psf_oversample
+                image = self._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
+            else:
+                image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
+            return convolve_fft(image, self._psf_data)
+
+        # warn if cusp aliasing likely exceeds 1% even with current oversample
+        try:
+            rscale_val = float(self.get_param('int_rscale', theta))
+            ps_val = float(pixel_scale)
+            k_ny_eff = oversample * np.pi / ps_val
+            alias_frac = 1.0 / (1.0 + (k_ny_eff * rscale_val) ** 2) ** 1.5
+            if alias_frac > 0.01:
+                import warnings
+
+                warnings.warn(
+                    f"render_image: estimated cusp aliasing {alias_frac:.1%} of peak "
+                    f"(r_s/ps={rscale_val / ps_val:.1f}, oversample={oversample}). "
+                    f"Increase oversample or use a finer pixel scale for sub-1% "
+                    f"accuracy without PSF convolution.",
+                    stacklevel=2,
+                )
+        except (TypeError, ValueError):
+            pass  # inside JIT trace, skip warning
+
+        return self._render_kspace(
+            theta, Nrow, Ncol, pixel_scale, oversample=oversample
+        )
 
 
 INTENSITY_MODEL_TYPES = {

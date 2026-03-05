@@ -5,6 +5,7 @@ Interactive tutorials for learning the kinematic lensing pipeline.
 ## Available Tutorials
 
 - **`quickstart.md`** - Introduction to basic pipeline functionality: models, likelihoods, and optimization
+- **`sampling.md`** - Bayesian inference with MCMC sampling (emcee, nautilus, numpyro, blackjax)
 - **`tng50_data.md`** - Working with TNG50 mock observations downloaded from CyVerse
 
 ## Converting to Jupyter Notebooks
@@ -17,6 +18,7 @@ make tutorials
 
 # Or convert a specific tutorial manually
 jupytext --to ipynb docs/tutorials/quickstart.md
+jupytext --to ipynb docs/tutorials/sampling.md
 jupytext --to ipynb docs/tutorials/tng50_data.md
 ```
 
@@ -49,8 +51,5 @@ jupyter lab
 - Open the `.ipynb` file directly
 - VS Code will prompt to select the `klpipe` kernel
 
-### As Python Scripts
-The markdown files are also valid Python scripts (using `# %%` cell markers):
-```bash
-conda run -n klpipe python docs/tutorials/quickstart.md
-```
+### As Jupytext Markdown
+The markdown files can be converted and executed via `make test-tutorials`.
