@@ -153,7 +153,7 @@ def compute_empirical_scales(
     # Run short MCMC
     kernel = NUTS(preconditioning_model, dense_mass=False)  # Diagonal for speed
     mcmc = MCMC(
-        kernel, num_warmup=50, num_samples=n_samples, num_chains=1, progress_bar=False
+        kernel, num_warmup=100, num_samples=n_samples, num_chains=1, progress_bar=False
     )
     mcmc.run(rng_key)
 

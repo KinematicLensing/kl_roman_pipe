@@ -157,6 +157,259 @@ class TestInferenceTask:
 
 
 # ==============================================================================
+# InferenceTask Mask Tests
+# ==============================================================================
+
+
+class TestInferenceTaskMask:
+    """Tests for InferenceTask with pixel masks."""
+
+    def test_velocity_with_mask(self):
+        """InferenceTask.from_velocity_model with mask produces finite posterior."""
+        true_pars = {
+            'cosi': 0.6,
+            'theta_int': 0.785,
+            'g1': 0.0,
+            'g2': 0.0,
+            'v0': 10.0,
+            'vcirc': 200.0,
+            'vel_rscale': 5.0,
+        }
+
+        image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
+        synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
+        data_noisy = synth.generate(image_pars, snr=100, include_poisson=False)
+        variance = synth.variance
+
+        mask = np.ones(image_pars.shape, dtype=bool)
+        mask[12:, 12:] = False  # mask one quadrant
+
+        priors = PriorDict(
+            {
+                'vcirc': Uniform(100, 300),
+                'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
+                'theta_int': 0.785,
+                'g1': 0.0,
+                'g2': 0.0,
+                'v0': 10.0,
+                'vel_rscale': 5.0,
+            }
+        )
+
+        model = CenteredVelocityModel()
+        task = InferenceTask.from_velocity_model(
+            model,
+            priors,
+            jnp.array(data_noisy),
+            variance,
+            image_pars,
+            mask_vel=jnp.array(mask),
+        )
+
+        assert task.mask['velocity'] is not None
+        key = random.PRNGKey(42)
+        theta = task.sample_prior(key, 1)[0]
+        lp = task.log_posterior(theta)
+        assert np.isfinite(lp)
+
+    def test_intensity_with_mask(self):
+        """InferenceTask.from_intensity_model with mask produces finite posterior."""
+        from kl_pipe.intensity import InclinedExponentialModel
+        from kl_pipe.synthetic import SyntheticIntensity
+
+        true_pars = {
+            'cosi': 0.7,
+            'theta_int': 0.785,
+            'g1': 0.0,
+            'g2': 0.0,
+            'flux': 1.0,
+            'int_rscale': 3.0,
+            'int_h_over_r': 0.1,
+            'int_x0': 0.0,
+            'int_y0': 0.0,
+        }
+
+        image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
+        synth = SyntheticIntensity(true_pars, model_type='exponential', seed=42)
+        data_noisy = synth.generate(image_pars, snr=100, include_poisson=False)
+        variance = synth.variance
+
+        mask = np.ones(image_pars.shape, dtype=bool)
+        mask[12:, 12:] = False
+
+        priors = PriorDict(
+            {
+                'flux': Uniform(0.1, 10.0),
+                'int_rscale': Uniform(0.5, 10.0),
+                'cosi': 0.7,
+                'theta_int': 0.785,
+                'g1': 0.0,
+                'g2': 0.0,
+                'int_h_over_r': 0.1,
+                'int_x0': 0.0,
+                'int_y0': 0.0,
+            }
+        )
+
+        model = InclinedExponentialModel()
+        task = InferenceTask.from_intensity_model(
+            model,
+            priors,
+            jnp.array(data_noisy),
+            variance,
+            image_pars,
+            mask_int=jnp.array(mask),
+        )
+
+        assert task.mask['intensity'] is not None
+        key = random.PRNGKey(42)
+        theta = task.sample_prior(key, 1)[0]
+        lp = task.log_posterior(theta)
+        assert np.isfinite(lp)
+
+    def test_joint_with_masks(self):
+        """InferenceTask.from_joint_model with both masks produces finite posterior."""
+        from kl_pipe.intensity import InclinedExponentialModel
+        from kl_pipe.velocity import OffsetVelocityModel
+        from kl_pipe.model import KLModel
+        from kl_pipe.synthetic import SyntheticIntensity
+
+        true_pars = {
+            'cosi': 0.6,
+            'theta_int': 0.785,
+            'g1': 0.0,
+            'g2': 0.0,
+            'v0': 10.0,
+            'vcirc': 200.0,
+            'vel_rscale': 5.0,
+            'vel_x0': 0.0,
+            'vel_y0': 0.0,
+            'flux': 1.0,
+            'int_rscale': 3.0,
+            'int_h_over_r': 0.1,
+            'int_x0': 0.0,
+            'int_y0': 0.0,
+        }
+
+        ip_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
+        ip_int = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
+
+        vel_pars = {
+            k: v
+            for k, v in true_pars.items()
+            if k in OffsetVelocityModel.PARAMETER_NAMES
+        }
+        synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
+        data_vel = synth_vel.generate(ip_vel, snr=100, include_poisson=False)
+        var_vel = synth_vel.variance
+
+        int_pars = {
+            k: v
+            for k, v in true_pars.items()
+            if k in InclinedExponentialModel.PARAMETER_NAMES
+        }
+        synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
+        data_int = synth_int.generate(ip_int, snr=100, include_poisson=False)
+        var_int = synth_int.variance
+
+        mask_vel = np.ones(ip_vel.shape, dtype=bool)
+        mask_vel[12:, 12:] = False
+        mask_int = np.ones(ip_int.shape, dtype=bool)
+        mask_int[:12, :12] = False
+
+        vel_model = OffsetVelocityModel()
+        int_model = InclinedExponentialModel()
+        joint_model = KLModel(
+            vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
+        )
+
+        priors = PriorDict(
+            {
+                'vcirc': Uniform(100, 300),
+                'cosi': 0.6,
+                'theta_int': 0.785,
+                'g1': 0.0,
+                'g2': 0.0,
+                'v0': 10.0,
+                'vel_rscale': 5.0,
+                'vel_x0': 0.0,
+                'vel_y0': 0.0,
+                'flux': 1.0,
+                'int_rscale': 3.0,
+                'int_h_over_r': 0.1,
+                'int_x0': 0.0,
+                'int_y0': 0.0,
+            }
+        )
+
+        task = InferenceTask.from_joint_model(
+            joint_model,
+            priors,
+            jnp.array(data_vel),
+            jnp.array(data_int),
+            var_vel,
+            var_int,
+            ip_vel,
+            ip_int,
+            mask_vel=jnp.array(mask_vel),
+            mask_int=jnp.array(mask_int),
+        )
+
+        assert task.mask['velocity'] is not None
+        assert task.mask['intensity'] is not None
+        key = random.PRNGKey(42)
+        theta = task.sample_prior(key, 1)[0]
+        lp = task.log_posterior(theta)
+        assert np.isfinite(lp)
+
+    def test_mask_none_backward_compat(self):
+        """from_velocity_model without mask arg works identically to before."""
+        true_pars = {
+            'cosi': 0.6,
+            'theta_int': 0.785,
+            'g1': 0.0,
+            'g2': 0.0,
+            'v0': 10.0,
+            'vcirc': 200.0,
+            'vel_rscale': 5.0,
+        }
+
+        image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
+        synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
+        data_noisy = synth.generate(image_pars, snr=100, include_poisson=False)
+        variance = synth.variance
+
+        priors = PriorDict(
+            {
+                'vcirc': Uniform(100, 300),
+                'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
+                'theta_int': 0.785,
+                'g1': 0.0,
+                'g2': 0.0,
+                'v0': 10.0,
+                'vel_rscale': 5.0,
+            }
+        )
+
+        model = CenteredVelocityModel()
+        task = InferenceTask.from_velocity_model(
+            model,
+            priors,
+            jnp.array(data_noisy),
+            variance,
+            image_pars,
+        )
+
+        # mask field should be empty dict or contain None
+        assert task.mask.get('velocity') is None
+
+        key = random.PRNGKey(42)
+        theta = task.sample_prior(key, 1)[0]
+        lp = task.log_posterior(theta)
+        assert np.isfinite(lp)
+
+
+# ==============================================================================
 # Config Tests
 # ==============================================================================
 
