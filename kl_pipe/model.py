@@ -639,6 +639,16 @@ class IntensityModel(Model):
             # apply cos(i) brightening factor for projected intensity
             return I_disk / cosi
 
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Subclasses should override with their own k-space implementation.
+        """
+        raise NotImplementedError(
+            "Subclasses must implement render_unconvolved method."
+        )
+
     @abstractmethod
     def evaluate_in_disk_plane(
         self, theta: jnp.ndarray, X: jnp.ndarray, Y: jnp.ndarray, Z: jnp.ndarray = None
@@ -704,11 +714,14 @@ class KLModel(object):
         intensity_model: IntensityModel,
         shared_pars: Set[str] = None,
         meta_pars: dict = None,
+        spectral_model=None,
     ):
         self.velocity_model = velocity_model
         self.intensity_model = intensity_model
         self.shared_pars = shared_pars or set()
         self.meta_pars = meta_pars or {}
+        self.spectral_model = spectral_model
+        self._grism_psf_data = None
 
         self._build_parameter_structure()
 
@@ -794,8 +807,9 @@ class KLModel(object):
         """
         Build the unified parameter space and component slicing indices.
 
-        Creates PARAMETER_NAMES with shared parameters appearing once, and builds
-        index mappings for extracting component-specific parameter arrays.
+        When spectral_model is present, uses 3-way ordered deduplication:
+        iterate vel_pars, int_pars, spectral_pars in order; first occurrence
+        of each param name wins position.
         """
 
         vel_pars = self.velocity_model.PARAMETER_NAMES
@@ -808,10 +822,28 @@ class KLModel(object):
             invalid = self.shared_pars - (vel_pars_set & int_pars_set)
             raise ValueError(f"Shared parameters {invalid} not present in both models")
 
-        param_list = list(vel_pars)
-        for param in int_pars:
-            if param not in self.shared_pars:
-                param_list.append(param)
+        # 3-way ordered deduplication
+        seen = set()
+        param_list = []
+
+        for name in vel_pars:
+            if name not in seen:
+                param_list.append(name)
+                seen.add(name)
+
+        for name in int_pars:
+            if name not in seen:
+                param_list.append(name)
+                seen.add(name)
+            elif name in self.shared_pars:
+                pass  # already added from vel_pars
+
+        if self.spectral_model is not None:
+            spec_pars = self.spectral_model.PARAMETER_NAMES
+            for name in spec_pars:
+                if name not in seen:
+                    param_list.append(name)
+                    seen.add(name)
 
         self.PARAMETER_NAMES = tuple(param_list)
 
@@ -823,6 +855,13 @@ class KLModel(object):
         self._intensity_indices = jnp.array(
             [composite_param_dict[name] for name in int_pars]
         )
+
+        if self.spectral_model is not None:
+            self._spectral_indices = jnp.array(
+                [composite_param_dict[name] for name in spec_pars]
+            )
+        else:
+            self._spectral_indices = None
 
         self._param_indices = composite_param_dict
 
@@ -879,6 +918,102 @@ class KLModel(object):
             Parameter array for intensity model.
         """
         return theta[self._intensity_indices]
+
+    def get_spectral_pars(self, theta: jnp.ndarray) -> jnp.ndarray:
+        """Extract spectral component parameters from composite theta."""
+        if self._spectral_indices is None:
+            raise ValueError("No spectral model configured")
+        return theta[self._spectral_indices]
+
+    def render_cube(
+        self,
+        theta: jnp.ndarray,
+        cube_pars,
+        plane: str = 'obs',
+    ) -> jnp.ndarray:
+        """Render PSF-convolved datacube.
+
+        1. Calls spectral_model.build_cube() -> intrinsic cube (no PSF)
+        2. Per-slice convolve_fft(cube[:,:,k], psf_data) if PSF configured
+
+        Returns shape (Nrow, Ncol, Nlambda).
+        """
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured — use render_image for 2D")
+
+        theta_vel = self.get_velocity_pars(theta)
+        theta_int = self.get_intensity_pars(theta)
+        theta_spec = self.get_spectral_pars(theta)
+
+        cube = self.spectral_model.build_cube(
+            theta_spec, theta_vel, theta_int, cube_pars, plane=plane
+        )
+
+        # per-slice PSF convolution
+        if self._grism_psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            Nlam = cube.shape[2]
+            slices = []
+            for k in range(Nlam):
+                slices.append(convolve_fft(cube[:, :, k], self._grism_psf_data))
+            cube = jnp.stack(slices, axis=-1)
+
+        return cube
+
+    def render_grism(
+        self,
+        theta: jnp.ndarray,
+        grism_pars,
+        plane: str = 'obs',
+        cube_pars=None,
+    ) -> jnp.ndarray:
+        """Render dispersed grism image.
+
+        1. Calls render_cube -> PSF-convolved cube
+        2. Calls disperse_cube -> 2D dispersed image
+
+        For JIT/grad, pre-compute cube_pars with a concrete z and pass it in:
+            cube_pars = gp.to_cube_pars(z=1.0)
+            jit(partial(kl.render_grism, grism_pars=gp, cube_pars=cube_pars))(theta)
+
+        Returns shape (Nrow, Ncol).
+        """
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured")
+
+        from kl_pipe.dispersion import disperse_cube
+
+        if cube_pars is None:
+            # convenience path: auto-build from z (not JIT-compatible)
+            theta_spec = self.get_spectral_pars(theta)
+            z = float(self.spectral_model.get_param('z', theta_spec))
+            cube_pars = grism_pars.to_cube_pars(z)
+
+        cube = self.render_cube(theta, cube_pars, plane=plane)
+
+        return disperse_cube(cube, grism_pars, cube_pars.lambda_grid)
+
+    def configure_grism_psf(
+        self,
+        gsobj,
+        cube_pars,
+        oversample: int = 5,
+        gsparams=None,
+    ):
+        """Pre-compute PSF FFT at the cube's spatial grid.
+
+        Uses existing precompute_psf_fft() from psf.py.
+        Stores _grism_psf_data for use by render_cube.
+        """
+        from kl_pipe.psf import precompute_psf_fft
+
+        self._grism_psf_data = precompute_psf_fft(
+            gsobj,
+            image_pars=cube_pars.image_pars,
+            oversample=oversample,
+            gsparams=gsparams,
+        )
 
     def evaluate_velocity(
         self,
@@ -976,6 +1111,24 @@ class KLModel(object):
         intensity_map = self.evaluate_intensity(theta, plane, X, Y, Z)
 
         return velocity_map, intensity_map
+
+    def render(
+        self,
+        theta: jnp.ndarray,
+        data_type: str,
+        data_pars,
+        plane: str = 'obs',
+        **kwargs,
+    ) -> jnp.ndarray:
+        """High-level rendering interface for different data products."""
+        if data_type == 'cube':
+            return self.render_cube(theta, data_pars, plane=plane, **kwargs)
+        elif data_type == 'grism':
+            return self.render_grism(theta, data_pars, plane=plane, **kwargs)
+        else:
+            raise ValueError(
+                f"Unknown data_type '{data_type}'. " f"Must be one of: 'cube', 'grism'"
+            )
 
     def theta2pars(self, theta: jnp.ndarray) -> dict:
         """
