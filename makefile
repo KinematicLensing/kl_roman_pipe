@@ -67,10 +67,11 @@ tutorials:
 test-tutorials:
 	@echo "Converting and executing tutorials..."
 	@conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg \
-		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/tng50_data.md && \
+		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/grism.md docs/tutorials/tng50_data.md && \
 		jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 \
 			docs/tutorials/quickstart.ipynb \
 			docs/tutorials/sampling.ipynb \
+			docs/tutorials/grism.ipynb \
 			docs/tutorials/tng50_data.ipynb'
 	@echo "All tutorials executed successfully."
 
