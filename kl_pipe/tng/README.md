@@ -259,6 +259,62 @@ Run TNG tests with:
 pytest tests/test_tng_*.py -v
 ```
 
+## Fiber Spectra Simulation
+
+You can convert rendered 2D TNG intensity/velocity maps into a set of 1D fiber
+spectra using `kl_pipe.tng.fiber`.
+
+```python
+from kl_pipe.tng import (
+  TNG50MockData,
+  TNGDataVectorGenerator,
+  TNGRenderConfig,
+  FiberPlacement,
+  FiberObservationConfig,
+  EmissionConfig,
+  FiberSpectraSimulator,
+)
+from kl_pipe.parameters import ImagePars
+
+tng = TNG50MockData()
+galaxy = tng[0]
+gen = TNGDataVectorGenerator(galaxy)
+
+image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
+render_cfg = TNGRenderConfig(image_pars=image_pars, target_redshift=0.7)
+
+fibers = [
+  FiberPlacement(x_arcsec=0.0, y_arcsec=0.0, radius_arcsec=0.4, name='center'),
+  FiberPlacement(x_arcsec=1.2, y_arcsec=-0.3, radius_arcsec=0.3, name='offset'),
+]
+
+obs_cfg = FiberObservationConfig(
+  wave_min=6550.0,
+  wave_max=6575.0,
+  n_wave=512,
+  exposure_time=1200.0,
+  spectral_fwhm=1.0,
+)
+
+emission_cfg = EmissionConfig(
+  rest_wavelength=6563.0,
+  emission_flux=1.0,
+  intrinsic_sigma_kms=20.0,
+)
+
+sim = FiberSpectraSimulator(image_pars)
+result = sim.simulate_from_generator(
+  generator=gen,
+  render_config=render_cfg,
+  fibers=fibers,
+  obs_config=obs_cfg,
+  emission_config=emission_cfg,
+)
+
+# result.wavelengths -> shape (n_wave,)
+# result.spectra     -> shape (n_fibers, n_wave)
+```
+
 Key test files:
 - `test_tng_loaders.py`: Data loading and access
 - `test_tng_data_vectors.py`: Rendering, transforms, gridding, diagnostic plots (40 tests)
