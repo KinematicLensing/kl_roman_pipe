@@ -21,7 +21,7 @@ import numpy as np
 
 
 # Default data directory
-DEFAULT_DATA_DIR = Path(__file__).parent.parent.parent / "data" / "tng50"
+DEFAULT_DATA_DIR = "/ocean/projects/phy250048p/shared/tng/data/tng50"
 
 
 class TNG50MockData:

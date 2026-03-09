@@ -13,6 +13,13 @@ from .loaders import (
     TNG50MockData,
 )
 from .data_vectors import TNGDataVectorGenerator, TNGRenderConfig
+from .fiber import (
+    FiberPlacement,
+    FiberObservationConfig,
+    EmissionConfig,
+    FiberSimulationResult,
+    FiberSpectraSimulator,
+)
 
 __all__ = [
     "load_gas_data",
@@ -22,4 +29,9 @@ __all__ = [
     "TNG50MockData",
     "TNGDataVectorGenerator",
     "TNGRenderConfig",
+    "FiberPlacement",
+    "FiberObservationConfig",
+    "EmissionConfig",
+    "FiberSimulationResult",
+    "FiberSpectraSimulator",
 ]
