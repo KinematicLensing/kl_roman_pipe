@@ -33,7 +33,7 @@ from kl_pipe.likelihood import (
     create_jitted_likelihood_joint,
 )
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
-from kl_pipe.diagnostics import plot_data_comparison_panels
+from kl_pipe.diagnostics.imaging import plot_data_comparison_panels
 
 from test_utils import (
     TestConfig,
