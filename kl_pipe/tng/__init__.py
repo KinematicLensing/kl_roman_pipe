@@ -11,6 +11,7 @@ from .loaders import (
     load_subhalo_data,
     get_available_keys,
     TNG50MockData,
+    TNG50Galaxy,
 )
 from .data_vectors import TNGDataVectorGenerator, TNGRenderConfig
 from .fiber import (
@@ -27,6 +28,7 @@ __all__ = [
     "load_subhalo_data",
     "get_available_keys",
     "TNG50MockData",
+    "TNG50Galaxy",
     "TNGDataVectorGenerator",
     "TNGRenderConfig",
     "FiberPlacement",
