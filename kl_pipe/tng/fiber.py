@@ -13,7 +13,8 @@ Design goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
@@ -55,8 +56,11 @@ class FiberObservationConfig:
         Number of wavelength samples (uniform grid).
     exposure_time : float
         Exposure time in seconds.
-    system_throughput : float, default=1.0
-        Multiplicative throughput in [0, 1].
+    system_throughput : float | str | np.ndarray, default=1.0
+        Throughput model. Supported forms:
+        - scalar float in [0, 1]
+        - path to two-column ``.dat`` file: wavelength[Angstrom], throughput
+        - array-like of length ``n_wave`` with throughput on the simulation grid
     spectral_fwhm : float, default=0.0
         Instrumental Gaussian spectral FWHM in Angstrom.
     systemic_redshift : float, default=0.0
@@ -79,7 +83,7 @@ class FiberObservationConfig:
     wave_max: float
     n_wave: int
     exposure_time: float
-    system_throughput: float = 1.0
+    system_throughput: Union[float, str, np.ndarray] = 1.0
     spectral_fwhm: float = 0.0
     systemic_redshift: float = 0.0
     spectral_dispersion_per_arcsec: float = 0.0
@@ -103,11 +107,35 @@ class EmissionConfig:
         overlap and intensity weighting.
     intrinsic_sigma_kms : float, default=20.0
         Intrinsic Gaussian velocity dispersion of the line in km/s.
+    continuum_type : str, default='none'
+        Continuum model mode:
+        - 'none': no continuum
+        - 'func': evaluate ``continuum_func`` with variable ``wave`` in Angstrom
+        - 'temp': interpolate from ``continuum_template_path``
+    continuum_func : str, optional
+        Expression string for continuum shape in flambda-like units,
+        e.g. ``"1.0 - 2e-4*(wave-6500)"``.
+    continuum_template_path : str, optional
+        Path to two-column template file (wavelength, flux density).
+    continuum_template_wave_scale : float, default=1.0
+        Multiplicative factor to convert template wavelength column to Angstrom.
+        Example: use 10.0 for template wavelengths in nm.
+    obs_cont_norm_wave : float, default=6563.0
+        Observer-frame wavelength in Angstrom at which the continuum is normalized.
+    obs_cont_norm_flam : float, default=0.0
+        Continuum flux density normalization at ``obs_cont_norm_wave`` in
+        arbitrary flambda-like units per second.
     """
 
     rest_wavelength: float
     emission_flux: float
     intrinsic_sigma_kms: float = 20.0
+    continuum_type: str = "none"
+    continuum_func: Optional[str] = None
+    continuum_template_path: Optional[str] = None
+    continuum_template_wave_scale: float = 1.0
+    obs_cont_norm_wave: float = 6563.0
+    obs_cont_norm_flam: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -125,6 +153,8 @@ class FiberSpectraSimulator:
 
     def __init__(self, image_pars: ImagePars):
         self.image_pars = image_pars
+        self._throughput_cache: Dict[str, np.ndarray] = {}
+        self._continuum_cache: Dict[str, np.ndarray] = {}
 
     def simulate_from_maps(
         self,
@@ -158,6 +188,10 @@ class FiberSpectraSimulator:
             raise ValueError("At least one fiber placement is required")
 
         wave = np.linspace(obs_config.wave_min, obs_config.wave_max, obs_config.n_wave)
+        throughput_curve = self._resolve_throughput_curve(
+            obs_config.system_throughput, wave
+        )
+        dw = wave[1] - wave[0] if wave.size > 1 else 1.0
         spectra = np.zeros((len(fibers), obs_config.n_wave), dtype=np.float64)
 
         X, Y = self._build_arcsec_grid()
@@ -196,7 +230,6 @@ class FiberSpectraSimulator:
             fiber_flux_total = (
                 emission_config.emission_flux
                 * obs_config.exposure_time
-                * obs_config.system_throughput
                 * (aperture_sum / total_weight)
             )
             pixel_flux = fiber_flux_total * (aperture_weights / aperture_sum)
@@ -211,6 +244,16 @@ class FiberSpectraSimulator:
                 obs_config=obs_config,
                 emission_config=emission_config,
             )
+
+            continuum = self._render_continuum_spectrum(
+                wave=wave,
+                aperture_fraction=(aperture_sum / total_weight),
+                obs_config=obs_config,
+                emission_config=emission_config,
+                dw=dw,
+            )
+
+            spec = (spec + continuum) * throughput_curve
 
             if obs_config.spectral_fwhm > 0:
                 spec = self._apply_spectral_resolution(
@@ -242,6 +285,38 @@ class FiberSpectraSimulator:
 
         grids = np.meshgrid(x_coords, y_coords, indexing="xy")
         return grids[0], grids[1]
+
+    def _resolve_throughput_curve(
+        self,
+        system_throughput: Union[float, str, np.ndarray],
+        wave: np.ndarray,
+    ) -> np.ndarray:
+        """Resolve throughput into an array sampled on ``wave``."""
+        n_wave = wave.size
+
+        if isinstance(system_throughput, (int, float)):
+            return np.full(n_wave, float(system_throughput), dtype=np.float64)
+
+        if isinstance(system_throughput, str):
+            path = str(Path(system_throughput).expanduser().resolve())
+            if path not in self._throughput_cache:
+                data = np.loadtxt(path)
+                if data.ndim != 2 or data.shape[1] < 2:
+                    raise ValueError(
+                        "system_throughput .dat file must have at least two columns: wave, throughput"
+                    )
+                self._throughput_cache[path] = data[:, :2]
+
+            table = self._throughput_cache[path]
+            tcurve = np.interp(wave, table[:, 0], table[:, 1], left=0.0, right=0.0)
+            return np.clip(tcurve, 0.0, None)
+
+        arr = np.asarray(system_throughput, dtype=np.float64)
+        if arr.shape != (n_wave,):
+            raise ValueError(
+                f"Array throughput must have shape ({n_wave},), got {arr.shape}"
+            )
+        return np.clip(arr, 0.0, None)
 
     def simulate_from_generator(
         self,
@@ -368,6 +443,93 @@ class FiberSpectraSimulator:
         spec = np.sum(flux_vals[:, None] * profiles, axis=0)
 
         return spec
+
+    def _render_continuum_spectrum(
+        self,
+        wave: np.ndarray,
+        aperture_fraction: float,
+        obs_config: FiberObservationConfig,
+        emission_config: EmissionConfig,
+        dw: float,
+    ) -> np.ndarray:
+        """Render continuum contribution using ObsFrameSED-like options."""
+        if emission_config.continuum_type.lower() == "none":
+            return np.zeros_like(wave)
+
+        if emission_config.obs_cont_norm_flam <= 0:
+            return np.zeros_like(wave)
+
+        shape = self._evaluate_continuum_shape(wave, obs_config, emission_config)
+        norm_wave = float(emission_config.obs_cont_norm_wave)
+        shape_at_norm = np.interp(norm_wave, wave, shape, left=np.nan, right=np.nan)
+        if not np.isfinite(shape_at_norm) or shape_at_norm == 0:
+            return np.zeros_like(wave)
+
+        shape = shape / shape_at_norm
+        flux_density = emission_config.obs_cont_norm_flam * shape
+
+        # Convert flux density to binned flux by multiplying by delta-lambda.
+        continuum = (
+            aperture_fraction
+            * obs_config.exposure_time
+            * np.clip(flux_density, 0.0, None)
+            * dw
+        )
+        return continuum
+
+    def _evaluate_continuum_shape(
+        self,
+        wave: np.ndarray,
+        obs_config: FiberObservationConfig,
+        emission_config: EmissionConfig,
+    ) -> np.ndarray:
+        """Evaluate raw continuum shape on observer-frame wavelength grid."""
+        ctype = emission_config.continuum_type.lower()
+        z = float(obs_config.systemic_redshift)
+
+        if ctype == "func":
+            expr = emission_config.continuum_func
+            if expr is None:
+                raise ValueError(
+                    "continuum_func must be provided when continuum_type='func'"
+                )
+            local = {"wave": wave, "np": np}
+            values = eval(expr, {"__builtins__": {}}, local)
+            arr = np.asarray(values, dtype=np.float64)
+            if arr.ndim == 0:
+                return np.full_like(wave, float(arr), dtype=np.float64)
+            if arr.shape != wave.shape:
+                raise ValueError(
+                    f"continuum_func must evaluate to scalar or shape {wave.shape}, got {arr.shape}"
+                )
+            return arr
+
+        if ctype == "temp":
+            template_path = emission_config.continuum_template_path
+            if template_path is None:
+                raise ValueError(
+                    "continuum_template_path must be provided when continuum_type='temp'"
+                )
+            path = str(Path(template_path).expanduser().resolve())
+            if path not in self._continuum_cache:
+                data = np.loadtxt(path)
+                if data.ndim != 2 or data.shape[1] < 2:
+                    raise ValueError(
+                        "continuum template file must have at least two columns: wave, flux"
+                    )
+                self._continuum_cache[path] = data[:, :2]
+
+            table = self._continuum_cache[path]
+            wave_rest = table[:, 0] * float(
+                emission_config.continuum_template_wave_scale
+            )
+            wave_obs = wave_rest * (1.0 + z)
+            flux = table[:, 1]
+            return np.interp(wave, wave_obs, flux, left=0.0, right=0.0)
+
+        raise ValueError(
+            f"Unsupported continuum_type '{emission_config.continuum_type}'"
+        )
 
     @staticmethod
     def _apply_spectral_resolution(
