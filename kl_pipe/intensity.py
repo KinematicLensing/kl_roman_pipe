@@ -83,6 +83,20 @@ class InclinedExponentialModel(IntensityModel):
             oversample=oversample,
         )
 
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Calls _render_kspace without psf_kernel_fft.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
     def evaluate_in_disk_plane(
         self,
         theta: jnp.ndarray,
