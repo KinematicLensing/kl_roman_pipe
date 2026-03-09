@@ -139,3 +139,54 @@ def test_spectral_resolution_broadening_reduces_peak():
 
     # Kernel is normalized; allow a small numerical tolerance.
     assert np.isclose(flux_blur, flux_sharp, rtol=2e-2)
+
+
+def test_continuum_adds_baseline_flux():
+    image_pars, intensity, velocity = _build_test_maps()
+    obs, emission = _base_configs()
+
+    fibers = [FiberPlacement(0.0, 0.0, 0.5, name='center')]
+    sim = FiberSpectraSimulator(image_pars)
+
+    no_cont = sim.simulate_from_maps(intensity, velocity, fibers, obs, emission)
+
+    with_cont = EmissionConfig(
+        rest_wavelength=emission.rest_wavelength,
+        emission_flux=emission.emission_flux,
+        intrinsic_sigma_kms=emission.intrinsic_sigma_kms,
+        continuum_type='func',
+        continuum_func='1.0',
+        obs_cont_norm_wave=6563.0,
+        obs_cont_norm_flam=1e-3,
+    )
+    yes_cont = sim.simulate_from_maps(intensity, velocity, fibers, obs, with_cont)
+
+    assert yes_cont.spectra[0].mean() > no_cont.spectra[0].mean()
+
+
+def test_throughput_dat_file_shapes_spectrum(tmp_path):
+    image_pars, intensity, velocity = _build_test_maps()
+    obs, emission = _base_configs()
+
+    fibers = [FiberPlacement(0.0, 0.0, 0.5, name='center')]
+    sim = FiberSpectraSimulator(image_pars)
+
+    # Throughput ramps from 0.2 to 1.0 across the wavelength range.
+    w = np.linspace(obs.wave_min, obs.wave_max, obs.n_wave)
+    t = np.linspace(0.2, 1.0, obs.n_wave)
+    tfile = tmp_path / 'throughput.dat'
+    np.savetxt(tfile, np.column_stack([w, t]))
+
+    obs_with_file = FiberObservationConfig(
+        wave_min=obs.wave_min,
+        wave_max=obs.wave_max,
+        n_wave=obs.n_wave,
+        exposure_time=obs.exposure_time,
+        system_throughput=str(tfile),
+        spectral_fwhm=obs.spectral_fwhm,
+        aperture_subsampling=obs.aperture_subsampling,
+    )
+    out = sim.simulate_from_maps(intensity, velocity, fibers, obs_with_file, emission)
+
+    # At red end (higher throughput), spectrum should be less suppressed than blue end.
+    assert out.spectra[0, -1] > out.spectra[0, 0]
