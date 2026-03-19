@@ -130,12 +130,12 @@ test-data: $(UNIT_TEST_FILES)
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
 	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics"
+	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation"
 
 .PHONY: test-extended
 test-extended: $(CYVERSE_DATA_MARKER)
 	@echo "Running extended tests (excluding TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics and not grism_validation"
 
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
@@ -279,6 +279,34 @@ prune-diagnostics:
 # 	@echo "Generating HTML and syncing to rigel..."
 # 	@conda run --no-capture-output -n klpipe python $(COLLATE_SCRIPT) --html --sync
 # 	@echo "HTML synced to $(DIAGNOSTICS_REMOTE_HOST):$(DIAGNOSTICS_REMOTE_DIR)"
+
+#-------------------------------------------------------------------------------
+# Grism cross-code validation
+
+VALIDATION_CONFIG = scripts/validation/test_params.yaml
+VALIDATION_DATA_DIR = $(TEST_DIR)/data/validation
+
+.PHONY: render-validation-kl-pipe
+render-validation-kl-pipe:
+	@echo "Rendering kl_pipe validation combos..."
+	@conda run -n klpipe python scripts/validation/render_kl_pipe.py \
+		--outdir $(VALIDATION_DATA_DIR)/kl_pipe --config $(VALIDATION_CONFIG)
+
+.PHONY: render-validation-geko
+render-validation-geko:
+	@echo "Rendering geko validation combos..."
+	@conda run -n klpipe python scripts/validation/render_geko.py \
+		--outdir $(VALIDATION_DATA_DIR)/geko --config $(VALIDATION_CONFIG)
+
+.PHONY: download-validation-data
+download-validation-data:
+	@echo "Downloading validation reference data from CyVerse..."
+	@echo "TODO: CyVerse path TBD. For now, render locally."
+
+.PHONY: test-grism-validation
+test-grism-validation:
+	@echo "Running grism cross-code validation tests..."
+	@conda run -n klpipe pytest tests/test_grism_validation.py -v -m grism_validation
 
 #-------------------------------------------------------------------------------
 # NOTE: These may be useful in the future if we use git submodules
