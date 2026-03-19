@@ -389,8 +389,12 @@ class InclinedExponentialModel(IntensityModel):
             I_hat = I_hat * psf_kernel_fft
 
         # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
+        # roll amount must align with subsampling grid: (Nrow//2)*oversample
+        # ensures DC lands on a subsampled pixel for correct centering
         full = jnp.fft.ifft2(I_hat).real
-        full = jnp.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
+        roll_row = (Nrow // 2) * oversample
+        roll_col = (Ncol // 2) * oversample
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
         image = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
 
         if oversample > 1:
