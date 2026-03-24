@@ -1123,7 +1123,7 @@ class TNGDataVectorGenerator:
                 mode='weighted_average',
             )
 
-        # Apply flux-weighted PSF convolution if requested
+        # Apply flux-weighted PSF convolution if requested (a)
         if config.psf is not None:
             from ..psf import gsobj_to_kernel, convolve_flux_weighted_numpy
             import warnings
