@@ -40,7 +40,7 @@ from kl_pipe.sampling.diagnostics import (
     plot_corner_comparison,
     print_summary,
 )
-from kl_pipe.diagnostics import (
+from kl_pipe.diagnostics.imaging import (
     plot_combined_data_comparison,
     plot_data_comparison_panels,
     compute_joint_nsigma,

@@ -67,10 +67,11 @@ tutorials:
 test-tutorials:
 	@echo "Converting and executing tutorials..."
 	@conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg \
-		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/tng50_data.md && \
+		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/grism.md docs/tutorials/tng50_data.md && \
 		jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 \
 			docs/tutorials/quickstart.ipynb \
 			docs/tutorials/sampling.ipynb \
+			docs/tutorials/grism.ipynb \
 			docs/tutorials/tng50_data.ipynb'
 	@echo "All tutorials executed successfully."
 
@@ -129,12 +130,12 @@ test-data: $(UNIT_TEST_FILES)
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
 	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics"
+	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation"
 
 .PHONY: test-extended
 test-extended: $(CYVERSE_DATA_MARKER)
 	@echo "Running extended tests (excluding TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics and not grism_validation"
 
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
@@ -278,6 +279,52 @@ prune-diagnostics:
 # 	@echo "Generating HTML and syncing to rigel..."
 # 	@conda run --no-capture-output -n klpipe python $(COLLATE_SCRIPT) --html --sync
 # 	@echo "HTML synced to $(DIAGNOSTICS_REMOTE_HOST):$(DIAGNOSTICS_REMOTE_DIR)"
+
+#-------------------------------------------------------------------------------
+# Grism cross-code validation
+#
+# Workflow:
+#   1. make setup-validation-env       (once: clone klpipe + install geko)
+#   2. make render-validation-kl-pipe  (render 28 tests via kl_pipe)
+#   3. make render-validation-geko     (render 28 tests via geko, needs klpipe_validation env)
+#   4. make test-grism-validation      (compare outputs)
+#
+# Convention verification (run before first comparison):
+#   make verify-geko-conventions
+
+VALIDATION_CONFIG = scripts/validation/test_params.yaml
+VALIDATION_DATA_DIR = $(TEST_DIR)/data/validation
+
+.PHONY: setup-validation-env
+setup-validation-env:
+	@bash scripts/validation/setup_env.sh
+
+.PHONY: verify-geko-conventions
+verify-geko-conventions:
+	@echo "Verifying geko parameter conventions..."
+	@conda run -n klpipe_validation python scripts/validation/verify_geko_conventions.py
+
+.PHONY: render-validation-kl-pipe
+render-validation-kl-pipe:
+	@echo "Rendering kl_pipe validation combos..."
+	@conda run -n klpipe python scripts/validation/render_kl_pipe.py \
+		--outdir $(VALIDATION_DATA_DIR)/kl_pipe --config $(VALIDATION_CONFIG)
+
+.PHONY: render-validation-geko
+render-validation-geko:
+	@echo "Rendering geko validation combos..."
+	@conda run -n klpipe_validation python scripts/validation/render_geko.py \
+		--outdir $(VALIDATION_DATA_DIR)/geko --config $(VALIDATION_CONFIG)
+
+.PHONY: download-validation-data
+download-validation-data:
+	@echo "Downloading validation reference data from CyVerse..."
+	@echo "TODO: CyVerse path TBD. For now, render locally."
+
+.PHONY: test-grism-validation
+test-grism-validation:
+	@echo "Running grism cross-code validation tests..."
+	@conda run -n klpipe pytest tests/test_grism_validation.py -v -m grism_validation
 
 #-------------------------------------------------------------------------------
 # NOTE: These may be useful in the future if we use git submodules

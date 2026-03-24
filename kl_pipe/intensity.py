@@ -113,6 +113,20 @@ class InclinedExponentialModel(IntensityModel):
             gsobj, (pad_sq, pad_sq), fine_ps, gsparams=gsparams
         )
 
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Calls _render_kspace without psf_kernel_fft.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
     def evaluate_in_disk_plane(
         self,
         theta: jnp.ndarray,
@@ -375,8 +389,12 @@ class InclinedExponentialModel(IntensityModel):
             I_hat = I_hat * psf_kernel_fft
 
         # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
+        # roll amount must align with subsampling grid: (Nrow//2)*oversample
+        # ensures DC lands on a subsampled pixel for correct centering
         full = jnp.fft.ifft2(I_hat).real
-        full = jnp.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
+        roll_row = (Nrow // 2) * oversample
+        roll_col = (Ncol // 2) * oversample
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
         image = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
 
         if oversample > 1:

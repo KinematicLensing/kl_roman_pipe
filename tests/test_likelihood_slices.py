@@ -40,7 +40,7 @@ from test_utils import (
     assert_parameter_recovery,
     make_aperture_mask,
 )
-from kl_pipe.diagnostics import plot_data_comparison_panels
+from kl_pipe.diagnostics.imaging import plot_data_comparison_panels
 
 
 # ==============================================================================
