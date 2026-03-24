@@ -4,7 +4,7 @@ Cross-code grism validation test suite.
 Compares kl_pipe datacube/grism outputs against external codes (geko, kl-tools,
 grizli) using reference .npz files in tests/data/validation/<code>/.
 
-Test matrix: 35 tests across 7 test groups.
+Test matrix: 28 tests across 6 test groups.
 See scripts/validation/test_params.yaml for full definitions.
 
 Test groups:
@@ -13,9 +13,11 @@ Test groups:
      rotating_psf, rotating_compact, rotating_extended
   3. Inclination Sweep (5): incl_sweep_cosi01..09
   4. PA Sweep (7): pa_sweep_0..180
-  5. Dispersion Angle Sweep (7): dispangle_sweep_0..180
-  6. Spectral Properties (2): narrow_lines, broad_lines
-  7. Redshift Sweep (4): redshift_sweep_05..15
+  5. Spectral Properties (2): narrow_lines, broad_lines
+  6. Redshift Sweep (4): redshift_sweep_05..15
+
+Dispersion angle sweep (7 tests) removed from cross-code validation — tests
+kl_pipe-internal cos/sin decomposition, retained in test_grism_core.py.
 
 Tags: static, rotating, sweep, psf
 
@@ -111,6 +113,28 @@ def _run_comparison(
         )
 
     return grism_results, cube_results
+
+
+def _run_map_comparison(
+    test_name: str, code: str = REFERENCE_CODE, tier: str = TOLERANCE_TIER
+):
+    """Run velocity/intensity map comparison. Returns (vmap_results, imap_results)."""
+    _skip_if_missing(test_name, code)
+
+    kl_data = load_reference_data(test_name, 'kl_pipe', data_dir=DATA_DIR)
+    ref_data = load_reference_data(test_name, code, data_dir=DATA_DIR)
+
+    tolerances = load_tolerances(tier)
+
+    vmap_results = None
+    if kl_data['vmap'] is not None and ref_data['vmap'] is not None:
+        vmap_results = compare_images(kl_data['vmap'], ref_data['vmap'], tolerances)
+
+    imap_results = None
+    if kl_data['imap'] is not None and ref_data['imap'] is not None:
+        imap_results = compare_images(kl_data['imap'], ref_data['imap'], tolerances)
+
+    return vmap_results, imap_results
 
 
 def _assert_results(test_name, results, data_type):
@@ -283,37 +307,7 @@ class TestPASweep:
 
 
 # =============================================================================
-# Test group 5: Dispersion Angle Sweep
-# =============================================================================
-
-_DISPANGLE_TESTS = [
-    'dispangle_sweep_0',
-    'dispangle_sweep_30',
-    'dispangle_sweep_45',
-    'dispangle_sweep_90',
-    'dispangle_sweep_120',
-    'dispangle_sweep_150',
-    'dispangle_sweep_180',
-]
-
-
-@pytest.mark.grism_validation
-class TestDispAngleSweep:
-    """Dispersion angle sweep 0 -> pi. Tests cos/sin decomposition."""
-
-    @pytest.mark.parametrize('test_name', _DISPANGLE_TESTS)
-    def test_grism(self, test_name):
-        grism_results, _ = _run_comparison(test_name)
-        _assert_results(test_name, grism_results, 'grism')
-
-    @pytest.mark.parametrize('test_name', _DISPANGLE_TESTS)
-    def test_datacube(self, test_name):
-        _, cube_results = _run_comparison(test_name)
-        _assert_results(test_name, cube_results, 'datacube')
-
-
-# =============================================================================
-# Test group 6: Spectral Properties
+# Test group 5: Spectral Properties
 # =============================================================================
 
 _SPECTRAL_TESTS = [
@@ -338,7 +332,7 @@ class TestSpectralProperties:
 
 
 # =============================================================================
-# Test group 7: Redshift Sweep
+# Test group 6: Redshift Sweep
 # =============================================================================
 
 _REDSHIFT_TESTS = [
@@ -365,7 +359,7 @@ class TestRedshiftSweep:
 
 
 # =============================================================================
-# Diagnostic plots (not pass/fail)
+# Velocity and intensity map diagnostics (secondary, not primary pass/fail)
 # =============================================================================
 
 _ALL_TESTS = (
@@ -373,10 +367,82 @@ _ALL_TESTS = (
     + _ROTATING_TESTS
     + _INCL_TESTS
     + _PA_TESTS
-    + _DISPANGLE_TESTS
     + _SPECTRAL_TESTS
     + _REDSHIFT_TESTS
 )
+
+
+@pytest.mark.grism_validation
+class TestVelocityMaps:
+    """Velocity map comparison. Secondary diagnostic — helps root-cause grism disagreement."""
+
+    @pytest.mark.parametrize('test_name', _ALL_TESTS)
+    def test_vmap(self, test_name):
+        vmap_results, _ = _run_map_comparison(test_name)
+        _assert_results(test_name, vmap_results, 'velocity_map')
+
+
+@pytest.mark.grism_validation
+class TestIntensityMaps:
+    """Intensity map comparison. Secondary diagnostic — helps root-cause grism disagreement."""
+
+    @pytest.mark.parametrize('test_name', _ALL_TESTS)
+    def test_imap(self, test_name):
+        _, imap_results = _run_map_comparison(test_name)
+        _assert_results(test_name, imap_results, 'intensity_map')
+
+
+# =============================================================================
+# Diagnostic plots (not pass/fail)
+# =============================================================================
+
+
+def _save_map_diagnostic_plot(test_name, kl_data, ref_data, code=REFERENCE_CODE):
+    """Save velocity/intensity map comparison plot."""
+    try:
+        import matplotlib
+
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig.suptitle(f'{test_name}: vmap/imap kl_pipe vs {code}', fontsize=14)
+
+    # velocity map row
+    if kl_data['vmap'] is not None and ref_data['vmap'] is not None:
+        vmax = max(np.max(np.abs(kl_data['vmap'])), np.max(np.abs(ref_data['vmap'])))
+        if vmax == 0:
+            vmax = 1.0
+        axes[0, 0].imshow(
+            kl_data['vmap'], origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax
+        )
+        axes[0, 0].set_title('kl_pipe vmap')
+        axes[0, 1].imshow(
+            ref_data['vmap'], origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax
+        )
+        axes[0, 1].set_title(f'{code} vmap')
+        resid = kl_data['vmap'] - ref_data['vmap']
+        im = axes[0, 2].imshow(resid, origin='lower', cmap='RdBu_r')
+        axes[0, 2].set_title('residual')
+        plt.colorbar(im, ax=axes[0, 2])
+
+    # intensity map row
+    if kl_data['imap'] is not None and ref_data['imap'] is not None:
+        vmax = max(np.max(kl_data['imap']), np.max(ref_data['imap']))
+        axes[1, 0].imshow(kl_data['imap'], origin='lower', vmin=0, vmax=vmax)
+        axes[1, 0].set_title('kl_pipe imap')
+        axes[1, 1].imshow(ref_data['imap'], origin='lower', vmin=0, vmax=vmax)
+        axes[1, 1].set_title(f'{code} imap')
+        resid = kl_data['imap'] - ref_data['imap']
+        im = axes[1, 2].imshow(resid, origin='lower', cmap='RdBu_r')
+        axes[1, 2].set_title('residual')
+        plt.colorbar(im, ax=axes[1, 2])
+
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUT_DIR, f'{test_name}_maps.png'), dpi=150)
+    plt.close(fig)
 
 
 @pytest.mark.grism_validation
@@ -389,3 +455,4 @@ class TestDiagnosticPlots:
         kl_data = load_reference_data(test_name, 'kl_pipe', data_dir=DATA_DIR)
         ref_data = load_reference_data(test_name, REFERENCE_CODE, data_dir=DATA_DIR)
         _save_diagnostic_plot(test_name, kl_data, ref_data)
+        _save_map_diagnostic_plot(test_name, kl_data, ref_data)

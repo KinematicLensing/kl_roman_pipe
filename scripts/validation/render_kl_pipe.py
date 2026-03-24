@@ -3,7 +3,7 @@
 Render all validation tests using kl_pipe.
 
 Part of the grism cross-code validation (see docs/validation/grism_validation_plan.md).
-Loads the 35 test configurations from test_params.yaml, builds a KLModel for each,
+Loads the 28 test configurations from test_params.yaml, builds a KLModel for each,
 and renders noiseless datacube + grism + velocity/intensity maps. Outputs are saved
 as .npz files for comparison against geko, kl-tools, and grizli.
 
@@ -11,7 +11,7 @@ Each .npz contains keys: cube, grism, vmap, imap, lambda_grid.
 
 Usage
 -----
-    # render all 35 tests
+    # render all tests
     python scripts/validation/render_kl_pipe.py
 
     # render a single test

@@ -42,7 +42,7 @@ code is more likely correct.
 
 If you're writing a rendering script for kl-tools or grizli:
 
-1. Look at `scripts/validation/test_params.yaml` for the 35 test configurations
+1. Look at `scripts/validation/test_params.yaml` for the 28 test configurations
 2. Use the utility functions in `scripts/validation/utils.py` to load parameters:
    `get_test_params(test_name)` gives you a flat dict of source + observation params
 3. Copy `scripts/validation/render_kl_pipe.py` as a template for your script
@@ -75,6 +75,11 @@ NOTE: Sometimes `description` itself is another group tag, but not always. Depen
 
 My preferred approach is to have an image size is say **32x48** (Nrow != Ncol). This catches any row/col or Nrow/Ncol
 transposition bugs that a square grid would hide. However, this may induce subtle implementation differences in any FFT-space rendering that complicates pixel comparisons that we will have to look out for.
+
+**geko square-image workaround**: geko's `Grism` class requires `im_shape` as a single int
+(square). We render max(Nrow, Ncol) = 48 square in geko, then crop central 32 rows:
+`geko_out[8:40, :]`. Dispersion is along x, so the crop (along y) is safe.
+`verify_geko_conventions.py` confirms the intensity peak aligns after crop.
 
 ### Code-Specific Rendering Parameters
 
@@ -188,31 +193,20 @@ Fixed: vcirc=200, cosi=0.5, disp_angle=0. Vary theta_int.
 | `pa_sweep_150` | `rotating, sweep` | 5pi/6 | |
 | `pa_sweep_180` | `rotating, sweep` | pi | Anti-aligned (kinematics compressed) |
 
-### Test group 5: Dispersion Angle Sweep (0 to pi)
+### ~~Test group 5: Dispersion Angle Sweep~~ (removed from cross-code)
 
-Rotating the grism direction tests the cos/sin decomposition in the dispersion code.
-Full 0 to pi range catches sign errors in the shift components. Similar conceptually to PA sweeps but tests different parts of the code.
+Dispersion angle sweep tests kl_pipe-internal cos/sin decomposition, not cross-code
+physics. All cross-code tests use `dispersion_angle=0` (standard Roman grism cutout).
+These 7 tests are retained in `tests/test_grism_core.py` for unit testing.
 
-Fixed: vcirc=200, cosi=0.5, theta_int=0. Vary dispersion_angle.
-
-| Name | Tags | disp_angle | Notes |
-|------|------|------------|-------|
-| `dispangle_sweep_0` | `rotating, sweep` | 0 | Aligned (kinematics stretched) |
-| `dispangle_sweep_30` | `rotating, sweep` | pi/6 | |
-| `dispangle_sweep_45` | `rotating, sweep` | pi/4 | |
-| `dispangle_sweep_90` | `rotating, sweep` | pi/2 | Orthogonal |
-| `dispangle_sweep_120` | `rotating, sweep` | 2pi/3 | |
-| `dispangle_sweep_150` | `rotating, sweep` | 5pi/6 | |
-| `dispangle_sweep_180` | `rotating, sweep` | pi | Anti-aligned (kinematics compressed) |
-
-### Test group 6: Spectral Properties
+### Test group 5 (was 6): Spectral Properties
 
 | Name | Tags | Description | Varies from base |
 |------|------|-------------|------------------|
 | `narrow_lines` | `static` | vel_disp=30 km/s, narrower lines | vel_disp |
 | `broad_lines` | `static` | vel_disp=100 km/s, broader lines | vel_disp |
 
-### Test group 7: Redshift Sweep
+### Test group 6 (was 7): Redshift Sweep
 
 Redshift changes observed wavelength, which changes the line width in nm
 (lambda_obs * vel_dispersion / c) and therefore the line width in pixels. Also shifts
@@ -227,7 +221,7 @@ Fixed: vcirc=200, cosi=0.5, theta_int=0, disp_angle=0.
 | `redshift_sweep_10` | `rotating, sweep` | 1.0 | Ha at ~1313 nm (base) |
 | `redshift_sweep_15` | `rotating, sweep` | 1.5 | Ha at ~1641 nm |
 
-**Total: 4 + 6 + 5 + 7 + 7 + 2 + 4 = 35 tests**
+**Total: 4 + 6 + 5 + 7 + 2 + 4 = 28 tests** (was 35; 7 dispangle tests moved to unit tests)
 
 ---
 
@@ -239,19 +233,18 @@ Owners shoudl fill out their section as they work so we can udnerstand how to ma
 
 ### kl_pipe to geko
 
-| kl_pipe | geko | Conversion | Verified? |
-|---------|------|------------|-----------|
-| `cosi` | `i` (deg) | `i = degrees(arccos(cosi))` | Yes |
-| `theta_int` (rad, from +x) | `PAmorph` (deg) | `PAmorph = degrees(theta_int)` | **NO** |
-| `vcirc` (km/s) | `Va` (km/s) | Direct | Yes |
-| `vel_rscale` (arcsec) | `rt` (arcsec) | Direct | Yes |
-| `int_rscale` (arcsec) | `re` | **NO**: `r_hl = 1.678 * r_scale` for n=1? | |
-| `flux` (integrated) | `Ie` (SB at re) | `Ie = flux / (2*pi*re^2)` for n=1? | **NO** |
-| `v0` (km/s) | `v0` (km/s) | Direct | Yes |
-| `vel_dispersion` (km/s) | `sigma0` (km/s) | Direct | Yes |
-| `int_h_over_r` | `q0` | **NO**: different geometric meaning | |
+| kl_pipe | geko | Conversion | Status |
+|---------|------|------------|--------|
+| `cosi` | `i` (deg) | `i = degrees(arccos(cosi))` | Verified |
+| `theta_int` (rad, from +x) | `PA` (deg, CCW from +y) | `PA = (90 - degrees(theta_int)) % 180` | Derived from source; verify w/ script |
+| `vcirc` (km/s) | `Va` (km/s) | Direct | Verified |
+| `vel_rscale` (arcsec) | `rt` (arcsec); `rt_pix = rt / pix_scale` | Direct + unit conv | Verified |
+| `int_rscale` (arcsec) | `re` (arcsec) = 1.678 * int_rscale for n=1; `re_pix = re / pix_scale` | Exponential half-light relation | Verified (standard result) |
+| `flux` (integrated) | `amplitude` (integrated flux) | Direct. geko computes Ie internally via `flux_to_Ie(amplitude, n, re, ellip)` | Verified |
+| `v0` (km/s) | `v0` (km/s) | Direct | Verified |
+| `vel_dispersion` (km/s) | `sigma0` (km/s) | Direct | Verified |
+| `int_h_over_r` | `q0` | Approximate: `q0 ~ int_h_over_r`. Different geometry (Hubble oblate spheroid vs sech^2). `verify_geko_conventions.py` quantifies the error. | Approximate |
 | `g1, g2` | N/A | geko has no shear; fix to 0 in kl_pipe | N/A |
-| `theta_int` (shared PA) | `PAmorph`, `PAkin` | Set both equal in geko | -- |
 
 ### kl_pipe to kl-tools (Jiachuan)
 
@@ -321,18 +314,32 @@ NOTE: These are initial "estimates" (i.e. made-up). All will need be refined aft
 | `tests/test_validation_utils.py` | Unit tests for utils.py (runs under default make test) |
 | `docs/validation/grism_validation_plan.md` | This document |
 
+### Environment
+
+geko (`astro-geko`) is not in the main `klpipe` conda env. A separate validation env
+is required:
+
+```bash
+make setup-validation-env   # clone klpipe + install astro-geko -> klpipe_validation
+```
+
+Convention verification (run once before first comparison):
+```bash
+make verify-geko-conventions  # PA, q0, grid centering checks
+```
+
 ### New Makefile targets
 
 ```bash
-make render-validation-kl-pipe    # python scripts/validation/render_kl_pipe.py
-make render-validation-geko       # python scripts/validation/render_geko.py
-make download-validation-data     # CyVerse -> tests/data/validation/
-make test-grism-validation              # pytest -m grism_validation
+make setup-validation-env         # create klpipe_validation conda env
+make verify-geko-conventions      # run PA/q0/grid checks
+make render-validation-kl-pipe    # render 28 tests via kl_pipe (klpipe env)
+make render-validation-geko       # render 28 tests via geko (klpipe_validation env)
+make download-validation-data     # CyVerse -> tests/data/validation/ (TBD)
+make test-grism-validation        # pytest -m grism_validation
 ```
 
 ### Test suite structure
-
-[UNDER CONSTRUCTION]
 
 Tests are organized by test group, with parametrized tests per class:
 
@@ -341,10 +348,11 @@ TestStaticGalaxy         # 4 tests x 2 (grism + datacube)
 TestRotatingGalaxy       # 6 tests x 2
 TestInclinationSweep     # 5 tests x 2
 TestPASweep              # 7 tests x 2
-TestDispAngleSweep       # 7 tests x 2
 TestSpectralProperties   # 2 tests x 2
 TestRedshiftSweep        # 4 tests x 2
-TestDiagnosticPlots      # 35 tests (side-by-side comparison plots)
+TestVelocityMaps         # 28 tests (secondary diagnostic)
+TestIntensityMaps        # 28 tests (secondary diagnostic)
+TestDiagnosticPlots      # 28 tests (side-by-side plots, not pass/fail)
 ```
 
 Marker: `@pytest.mark.grism_validation`. Excluded from default `make test` and
@@ -358,39 +366,60 @@ Each cross-code test:
 
 Diagnostic plots saved to `tests/out/grism-validation/`.
 
+## Known Systematics (expected code differences)
+
+Sources of disagreement that are NOT bugs — inherent differences between implementations:
+
+| Source | Affects | Expected magnitude | Notes |
+|--------|---------|-------------------|-------|
+| **Intensity rendering** | imap, cube, grism | ~0.5-1% | geko: 2D Sersic with 25x real-space oversampling. kl_pipe: 3D sech^2+exponential via analytic k-space FFT. |
+| **Thickness model** | imap, cube, grism | TBD | geko: Hubble q0 axis ratio (oblate spheroid). kl_pipe: sech^2 vertical profile with h_over_r. |
+| **Flux normalization** | imap, cube, grism | <0.5% | geko `flux_to_Ie()` depends on `ellip` which depends on q0. Coupled to thickness model. |
+| **Spectral integration** | cube, grism | <0.1% | geko: Gaussian CDF integration. kl_pipe: Gaussian evaluation at bin centers with spectral oversampling. |
+| **Bilinear interpolation** | grism only | <0.1% | kl_pipe: `map_coordinates` with pull semantics. geko: direct Gaussian placement. |
+| **PSF convolution** | cube, grism | identical if same PSF | Both use per-slice FFT convolution. |
+| **Coordinate precision** | all | <1e-6 | Pixel vs arcsec grids, float64 throughout. |
+
+Dispersion model and LSF differences are eliminated by the Roman wrapper (forces geko to
+use the same linear dispersion and R(lambda) as kl_pipe).
+
+**Bottom line**: dominant expected systematic is intensity rendering (~0.5-1%). Primary
+tier tolerances (1% max residual) should be achievable for velocity/intensity maps; grism
+images may need 1-2% due to accumulated differences.
+
+See also: `GRISM_VALIDATION_RISKS.md` for risk assessment and fallback strategies.
+
+---
+
 ## Open Questions
 
-We can assemble our major open questions here for the whole process.
+### Resolved
 
-### Geko Parameter mapping
+- **PA convention**: geko PA in degrees, CCW from +y. Mapping: `PA = (90 - degrees(theta_int)) % 180`.
+  Derived from geko source (`_v_core`). Verified by `verify_geko_conventions.py`.
+- **`re` definition**: half-light radius. `re = 1.678 * int_rscale` for n=1 (standard result).
+- **Flux normalization**: geko `amplitude` = integrated flux (same as kl_pipe `flux`).
+  geko computes `Ie` internally via `flux_to_Ie(amplitude, n, re, ellip)`.
+- **Dispersion model**: geko uses JWST 4th-order polynomial, but our Roman wrapper
+  bypasses this and sets linear dispersion matching kl_pipe. Not a cross-code difference.
 
-Before the first real comparison run, we need to verify several parameter conversions
-between kl_pipe and geko. Getting any of these wrong produces results that look like
-code disagreement but are actually input mismatch:
+### Partially resolved
 
-- **PA convention**: is geko's `PAmorph=0` along +x or +y? CW or CCW?
-- **`re`**: half-light radius or scale radius?
-- **`q0` vs `int_h_over_r`**: intrinsic axis ratio vs height/radius — different geometry
-- **Flux normalization**: geko `Ie` = SB at re, or integrated flux?
-- **Rotation sign**: does geko's `Va` follow the same sign convention?
+- **`q0` vs `int_h_over_r`**: Different geometric models (Hubble oblate spheroid vs sech^2).
+  First-order approximation `q0 ~ int_h_over_r` expected to be within ~1-2%.
+  `verify_geko_conventions.py` quantifies the exact error via projected ellipticity matching.
 
-Resolution for all of these: inspect geko source code, then render an asymmetric test
-case (e.g. `pa_sweep_45`) in both codes and visually compare before running the full
-matrix.
+### Still open
 
-### kl-tools Parameter mapping
-
-`kl-tools` mapping is expected to be straightforward given the lineage, but need to
-confirm things like the shear convention hasn't diverged since the branch.
-
-### Dispersion model differences
-
-- `geko` uses 4th-order polynomial dispersion (JWST calibration); ours is linear. How much does this matter?
-- `grizli`: I don't know enough about the implementation details to predict what level of
-  reproducibility we can expect. Need significant input from Fabian.
+- **kl-tools mapping**: expected to be straightforward given lineage. Need to confirm
+  shear convention hasn't diverged.
+- **grizli integration**: need input from Fabian on parameter mapping and expected
+  agreement level.
 
 ### Out of scope
 
-- **Shear**: Excluded from cross-code comparison (`geko` has no shear). Shear validation
+- **Shear**: Excluded from cross-code comparison (geko has no shear). Shear validation
   is kl_pipe-internal only.
+- **Dispersion angle sweep**: Removed from cross-code tests (tests kl_pipe-internal
+  cos/sin decomposition). Retained in `test_grism_core.py`.
 - **Non-zero v0**: All codes should subtract systemic velocity themselves or never apply one.

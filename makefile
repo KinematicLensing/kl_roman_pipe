@@ -282,9 +282,27 @@ prune-diagnostics:
 
 #-------------------------------------------------------------------------------
 # Grism cross-code validation
+#
+# Workflow:
+#   1. make setup-validation-env       (once: clone klpipe + install geko)
+#   2. make render-validation-kl-pipe  (render 28 tests via kl_pipe)
+#   3. make render-validation-geko     (render 28 tests via geko, needs klpipe_validation env)
+#   4. make test-grism-validation      (compare outputs)
+#
+# Convention verification (run before first comparison):
+#   make verify-geko-conventions
 
 VALIDATION_CONFIG = scripts/validation/test_params.yaml
 VALIDATION_DATA_DIR = $(TEST_DIR)/data/validation
+
+.PHONY: setup-validation-env
+setup-validation-env:
+	@bash scripts/validation/setup_env.sh
+
+.PHONY: verify-geko-conventions
+verify-geko-conventions:
+	@echo "Verifying geko parameter conventions..."
+	@conda run -n klpipe_validation python scripts/validation/verify_geko_conventions.py
 
 .PHONY: render-validation-kl-pipe
 render-validation-kl-pipe:
@@ -295,7 +313,7 @@ render-validation-kl-pipe:
 .PHONY: render-validation-geko
 render-validation-geko:
 	@echo "Rendering geko validation combos..."
-	@conda run -n klpipe python scripts/validation/render_geko.py \
+	@conda run -n klpipe_validation python scripts/validation/render_geko.py \
 		--outdir $(VALIDATION_DATA_DIR)/geko --config $(VALIDATION_CONFIG)
 
 .PHONY: download-validation-data
