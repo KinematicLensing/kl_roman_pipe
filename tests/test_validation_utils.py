@@ -26,7 +26,7 @@ from utils import (
     load_tolerances,
 )
 
-EXPECTED_TEST_COUNT = 35
+EXPECTED_TEST_COUNT = 28
 
 
 class TestValidationUtils:
@@ -84,12 +84,18 @@ class TestValidationUtils:
     # ---- get_geko_params ----
 
     def test_get_geko_params_static_base(self):
-        with pytest.warns(UserWarning, match='geko parameter mapping'):
-            gp = get_geko_params('static_base')
+        gp = get_geko_params('static_base')
         # cosi=0.5 -> i=60 deg
         assert abs(gp['i'] - 60.0) < 0.1
         # re = 1.678 * int_rscale = 1.678 * 0.3
         assert abs(gp['re'] - 1.678 * 0.3) < 1e-6
+        # PA: theta_int=0 -> PA=90
+        assert abs(gp['PA'] - 90.0) < 0.1
+        # amplitude = flux
+        assert gp['amplitude'] == 100.0
+        # pixel-unit params
+        assert abs(gp['re_pix'] - 1.678 * 0.3 / 0.11) < 1e-4
+        assert abs(gp['rt_pix'] - 0.5 / 0.11) < 1e-4
 
     # ---- load_tolerances ----
 

@@ -54,9 +54,11 @@ rendering:
     velocity_window_kms: 3000.0
 
   geko:
-    # TBD: verify geko's internal oversampling defaults.
-    # geko may handle spatial oversampling differently (real-space vs k-space).
+    # geko uses 25x real-space spatial oversampling internally.
+    # spectral handling is via Gaussian CDF integration (no oversampling knob).
     spectral_oversample: 5
+    # geko requires square im_shape. render max(Nrow,Ncol) square, crop to (Nrow, Ncol).
+    square_pad: true
 
   kl_tools:
     # Jiachuan to specify rendering parameters for kl-tools/tng-grism
@@ -97,14 +99,11 @@ tests:
   pa_sweep_150: {vcirc: 200.0, theta_int: 2.6180}
   pa_sweep_180: {vcirc: 200.0, theta_int: 3.1416}
 
-  # --- Test group 5: Dispersion Angle Sweep, 0 -> pi (rotating, aligned PA) ---
-  dispangle_sweep_0: {vcirc: 200.0, observation: {dispersion_angle: 0.0}}
-  dispangle_sweep_30: {vcirc: 200.0, observation: {dispersion_angle: 0.5236}}
-  dispangle_sweep_45: {vcirc: 200.0, observation: {dispersion_angle: 0.7854}}
-  dispangle_sweep_90: {vcirc: 200.0, observation: {dispersion_angle: 1.5708}}
-  dispangle_sweep_120: {vcirc: 200.0, observation: {dispersion_angle: 2.0944}}
-  dispangle_sweep_150: {vcirc: 200.0, observation: {dispersion_angle: 2.6180}}
-  dispangle_sweep_180: {vcirc: 200.0, observation: {dispersion_angle: 3.1416}}
+  # --- Test group 5: Dispersion Angle Sweep ---
+  # REMOVED from cross-code validation (geko uses fixed dispersion along x).
+  # Dispersion angle sweep tests kl_pipe-internal cos/sin decomposition;
+  # retained in tests/test_grism_core.py for unit testing.
+  # All cross-code tests use dispersion_angle=0 (standard Roman cutout).
 
   # --- Test group 6: Spectral Properties ---
   narrow_lines: {vel_dispersion: 30.0}

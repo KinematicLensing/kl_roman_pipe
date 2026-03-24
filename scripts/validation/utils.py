@@ -201,58 +201,62 @@ def get_kl_pipe_params(test_name: str, config: Optional[dict] = None) -> dict:
 def get_geko_params(test_name: str, config: Optional[dict] = None) -> dict:
     """Apply kl_pipe -> geko parameter mapping.
 
-    Returns geko-native dict. Logs warnings on unverified conversions.
+    Returns geko-native dict with model params and observation context.
 
-    Parameter mapping:
+    Parameter mapping (verified via verify_geko_conventions.py):
       cosi        -> i (deg) = degrees(arccos(cosi))
-      theta_int   -> PAmorph (deg) = degrees(theta_int)  [NEEDS VERIFICATION]
+      theta_int   -> PA (deg) = (90 - degrees(theta_int)) % 180
+                     geko PA: CCW from +y (N). kl_pipe theta_int: CCW from +x.
       vcirc       -> Va (km/s), direct
-      vel_rscale  -> rt (arcsec), direct
-      int_rscale  -> re (arcsec), re = 1.678 * int_rscale for n=1  [NEEDS VERIFICATION]
-      flux        -> Ie, Ie = flux / (2*pi*re^2) for n=1  [NEEDS VERIFICATION]
+      vel_rscale  -> rt (arcsec), direct; rt_pix = rt / pixel_scale
+      int_rscale  -> re (arcsec), re = 1.678 * int_rscale for n=1; re_pix = re / pixel_scale
+      flux        -> amplitude (integrated flux), direct. geko computes Ie
+                     internally via flux_to_Ie(amplitude, n, re, ellip).
       v0          -> v0, direct
       vel_disp    -> sigma0, direct
-      int_h_over_r -> q0  [NEEDS VERIFICATION: different geometric meaning]
-      g1, g2      -> N/A (geko has no shear)
+      int_h_over_r -> q0 (approximate: q0 ~ int_h_over_r). geko uses Hubble
+                      oblate-spheroid q0; kl_pipe uses sech^2 h_over_r.
+                      Exact mapping derived by verify_geko_conventions.py.
+      g1, g2      -> N/A (geko has no shear; fixed to 0 in kl_pipe)
     """
-    import warnings
-
     if config is None:
         config = load_config()
 
     p = get_test_params(test_name, config)
+    obs = p['observation']
+    pixel_scale = obs['pixel_scale']
 
     cosi = p['cosi']
     i_deg = float(np.degrees(np.arccos(cosi)))
 
+    # PA: kl_pipe theta_int (rad, CCW from +x) -> geko PA (deg, CCW from +y)
+    PA_deg = float((90.0 - np.degrees(p['theta_int'])) % 180.0)
+
     # half-light radius for exponential disk: r_hl = 1.678 * r_scale
     re = 1.678 * p['int_rscale']
 
-    # surface brightness at re (for n=1 exponential)
-    Ie = p['flux'] / (2.0 * np.pi * re**2)
+    # q0: approximate mapping. verify_geko_conventions.py quantifies the error.
+    q0 = p['int_h_over_r']
 
     geko_pars = {
         'Va': p['vcirc'],
         'rt': p['vel_rscale'],
+        'rt_pix': p['vel_rscale'] / pixel_scale,
         'i': i_deg,
-        'PAmorph': float(np.degrees(p['theta_int'])),
-        'PAkin': float(np.degrees(p['theta_int'])),
+        'PA': PA_deg,
         're': re,
-        'Ie': Ie,
+        're_pix': re / pixel_scale,
+        'amplitude': p['flux'],
         'v0': p['v0'],
         'sigma0': p['vel_dispersion'],
-        'q0': p['int_h_over_r'],
+        'q0': q0,
         'z': p['z'],
         'n_sersic': p.get('n_sersic', 1.0),
+        # observation context for rendering
+        'pixel_scale': pixel_scale,
+        'Nrow': obs['Nrow'],
+        'Ncol': obs['Ncol'],
     }
-
-    # warn on unverified conversions
-    warnings.warn(
-        "geko parameter mapping partially unverified: "
-        "PA convention, re definition, q0 vs int_h_over_r, Ie normalization. "
-        "See test_params.yaml open questions.",
-        stacklevel=2,
-    )
 
     return geko_pars
 
