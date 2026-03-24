@@ -1304,9 +1304,8 @@ class KLModel(object):
             # shape=(self.fiber_pars['shape'][0], self.fiber_pars['shape'][0]))
         else:
             Rmat = None
-
-            # this stuff needs to be precomputed
-        self.resolution_mat = Rmat
+        self.resolution_mat = jnp.array(Rmat.toarray())
+        # self.resolution_mat = Rmat
         # return Rmat#jnp.array(Rmat.toarray()) #need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
 
     def evaluate_velocity(
