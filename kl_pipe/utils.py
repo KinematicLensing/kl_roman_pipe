@@ -7,17 +7,16 @@ from pathlib import Path
 from typing import Tuple, Literal
 
 
-def build_pixel_grid(
+def _build_pixel_grid(
     N1: int,
     N2: int,
     indexing: Literal['ij', 'xy'],
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Build a coordinate grid for a 2D map with pixel-centered coordinates.
+    Internal helper for centered pixel grids. Not part of the public API.
 
-    Grid positions are defined at pixel centers. For even pixel counts,
-    the image center falls on pixel corners (between 4 pixels). For odd
-    counts, it falls on a pixel center.
+    Use ``build_map_grid_from_image_pars`` instead, which returns grids in
+    standard Cartesian convention (X=horizontal=cols, Y=vertical=rows).
 
     Parameters
     ----------
@@ -26,71 +25,12 @@ def build_pixel_grid(
     N2 : int
         Number of pixels along second axis.
     indexing : {'ij', 'xy'}
-        Indexing convention for output arrays:
-        - 'ij': Matrix indexing where X[i,j] corresponds to position (i,j).
-                Output shape is (N1, N2). First axis is x, second is y.
-        - 'xy': Cartesian indexing where X[i,j] corresponds to position (j,i).
-                Output shape is (N2, N1). First axis is y, second is x.
+        Passed directly to ``jnp.meshgrid``.
 
     Returns
     -------
     X, Y : jnp.ndarray
         2D coordinate grids in pixel units, centered at (0, 0).
-        Shape is (N1, N2) if indexing='ij', or (N2, N1) if indexing='xy'.
-
-    Examples
-    --------
-    >>> # Even dimensions: center falls between pixels
-    >>> X, Y = build_pixel_grid(120, 80, indexing='ij')
-    >>> X.shape
-    (120, 80)
-    >>> # No pixel is exactly at (0, 0) - center is between pixels
-    >>> X[59, 39]  # pixel just below/left of center
-    -0.5
-    >>> X[60, 40]  # pixel just above/right of center
-    0.5
-    >>> Y[59, 39]
-    -0.5
-    >>> Y[60, 40]
-    0.5
-    >>> # Corners
-    >>> X[0, 0]
-    -59.5
-    >>> Y[0, 0]
-    -39.5
-
-    >>> # Odd dimensions: center pixel is exactly at (0, 0)
-    >>> X, Y = build_pixel_grid(101, 51, indexing='ij')
-    >>> X.shape
-    (101, 51)
-    >>> X[50, 25]  # center pixel
-    0.0
-    >>> Y[50, 25]
-    0.0
-    >>> # Corners (no half-pixel offset)
-    >>> X[0, 0]
-    -50.0
-    >>> Y[0, 0]
-    -25.0
-
-    >>> # Cartesian indexing with rectangular grid (75 height, 125 width)
-    >>> # Note: with indexing='xy', first arg is width (x-direction)
-    >>> X, Y = build_pixel_grid(125, 75, indexing='xy')
-    >>> X.shape  # Shape is (N2, N1) for 'xy' indexing
-    (75, 125)
-    >>> # Center pixel (odd x odd)
-    >>> X[37, 62]
-    0.0
-    >>> Y[37, 62]
-    0.0
-
-    Notes
-    -----
-    The coordinate system is centered at (0, 0):
-    - For even N: pixels span from -(N/2 - 0.5) to (N/2 - 0.5)
-      Center falls on pixel corner at (0, 0)
-    - For odd N: pixels span from -(N-1)/2 to (N-1)/2
-      Center falls on pixel center at (0, 0)
     """
     if indexing not in ['ij', 'xy']:
         raise ValueError(f"indexing must be 'ij' or 'xy', got '{indexing}'")
@@ -126,15 +66,15 @@ def build_map_grid_from_image_pars(
     """
     Build coordinate grid from ImagePars instance.
 
-    This function always returns grids in matrix indexing ('ij') convention,
-    using the unambiguous Nrow and Ncol properties from ImagePars.
+    Returns (X, Y) in standard Cartesian convention:
+    X = horizontal coordinate (varies along cols, axis 1)
+    Y = vertical coordinate (varies along rows, axis 0)
+    Shape is always (Nrow, Ncol).
 
     Parameters
     ----------
     image_pars : ImagePars
         Image parameters containing shape, pixel_scale, and indexing.
-        The output grid uses image_pars.Nrow and image_pars.Ncol which
-        are guaranteed to represent rows and columns correctly.
     unit : {'arcsec', 'pixel'}
         Coordinate units for output grid:
         - 'arcsec': Scale coordinates by pixel_scale (physical units)
@@ -147,104 +87,73 @@ def build_map_grid_from_image_pars(
     Returns
     -------
     X, Y : jnp.ndarray
-        2D coordinate grids in specified units.
-        Always uses 'ij' indexing convention where X represents the row
-        coordinate and Y represents the column coordinate.
-        Shape is (Nrow, Ncol).
+        2D coordinate grids in specified units, shape (Nrow, Ncol).
+        X[i,j] = x_j (horizontal, constant along rows, varies along cols).
+        Y[i,j] = y_i (vertical, varies along rows, constant along cols).
 
     Examples
     --------
     >>> from kl_pipe.parameters import ImagePars
     >>>
-    >>> # Rectangular image: 150 rows x 200 columns
-    >>> # Regardless of how ImagePars was created, Nrow and Ncol are unambiguous
-    >>> image_pars = ImagePars(shape=(150, 200), pixel_scale=0.1, indexing='ij')
+    >>> # Rectangular image: 60 rows x 100 columns
+    >>> image_pars = ImagePars(shape=(60, 100), pixel_scale=0.1, indexing='ij')
     >>>
-    >>> # Physical coordinates in arcsec, centered at origin
     >>> X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
     >>> X.shape
-    (150, 200)
-    >>> # Center is between pixels for even dimensions
-    >>> X[74, 99]  # pixel just below/left of center
+    (60, 100)
+    >>> # X is horizontal (varies along cols = axis 1)
+    >>> float(X[0, 49])  # just left of center
     -0.05
-    >>> X[75, 100]  # pixel just above/right of center
+    >>> float(X[0, 50])  # just right of center
     0.05
-    >>> # Corners
-    >>> X[0, 0]  # corner in arcsec
-    -7.45
-    >>> Y[0, 0]
-    -9.95
-    >>>
-    >>> # Pixel coordinates, centered at origin
-    >>> X, Y = build_map_grid_from_image_pars(image_pars, unit='pixel', centered=True)
-    >>> X[74, 99]
-    -0.5
-    >>> X[75, 100]
-    0.5
-    >>>
-    >>> # Odd dimensions (101 rows x 51 columns) - center pixel at exactly (0, 0)
-    >>> image_pars2 = ImagePars(shape=(101, 51), pixel_scale=0.2, indexing='ij')
-    >>> X, Y = build_map_grid_from_image_pars(image_pars2, unit='arcsec', centered=True)
-    >>> X[50, 25]  # exact center
-    0.0
-    >>> Y[50, 25]
-    0.0
-    >>> X[0, 0]  # corner
-    -10.0
-    >>> Y[0, 0]
-    -5.0
-    >>>
-    >>> # Non-centered pixel indices (80 rows x 120 columns)
-    >>> image_pars3 = ImagePars(shape=(80, 120), pixel_scale=0.05, indexing='ij')
-    >>> X, Y = build_map_grid_from_image_pars(image_pars3, unit='pixel', centered=False)
-    >>> X[0, 0]
-    0.0
-    >>> X[79, 119]
-    79.0
-    >>> Y[79, 119]
-    119.0
-    >>>
-    >>> # Same grid but in arcsec (non-centered)
-    >>> X, Y = build_map_grid_from_image_pars(image_pars3, unit='arcsec', centered=False)
-    >>> X[0, 0]
-    0.0
-    >>> X[79, 119]
-    3.95
-    >>> Y[79, 119]
-    5.95
+    >>> # Y is vertical (varies along rows = axis 0)
+    >>> float(Y[29, 0])  # just below center
+    -0.05
+    >>> float(Y[30, 0])  # just above center
+    0.05
 
     Notes
     -----
-    This function intentionally uses only 'ij' indexing internally to avoid
-    confusion. The ImagePars.Nrow and ImagePars.Ncol properties handle any
-    indexing conversion needed from the original ImagePars creation.
+    Uses standard Cartesian convention matching GalSim, matplotlib imshow
+    with ``origin='lower'``, and FITS WCS (NAXIS1=Ncol=Nx, NAXIS2=Nrow=Ny).
+    No transposes are needed when comparing with these tools.
     """
     if unit not in ['arcsec', 'pixel']:
         raise ValueError(f"unit must be 'arcsec' or 'pixel', got '{unit}'")
 
-    if centered:
-        # Build centered grid in pixel units
-        # Always use 'ij' indexing with unambiguous Nrow, Ncol
-        X, Y = build_pixel_grid(image_pars.Nrow, image_pars.Ncol, indexing='ij')
+    Nrow = image_pars.Nrow
+    Ncol = image_pars.Ncol
 
-        # Scale to physical units if requested
+    if centered:
+        # standard convention: X=cols (horizontal), Y=rows (vertical)
+        x_coords = _centered_coords(Ncol)
+        y_coords = _centered_coords(Nrow)
+        X, Y = jnp.meshgrid(x_coords, y_coords, indexing='xy')
+
         if unit == 'arcsec':
             X = X * image_pars.pixel_scale
             Y = Y * image_pars.pixel_scale
     else:
-        # Non-centered: pixel indices starting from 0
-        # Always use 'ij' convention
-        idx_row = jnp.arange(image_pars.Nrow)
-        idx_col = jnp.arange(image_pars.Ncol)
+        # non-centered: pixel indices starting from 0
+        idx_x = jnp.arange(Ncol)  # horizontal pixel indices
+        idx_y = jnp.arange(Nrow)  # vertical pixel indices
+        X, Y = jnp.meshgrid(idx_x, idx_y, indexing='xy')
 
-        X, Y = jnp.meshgrid(idx_row, idx_col, indexing='ij')
-
-        # Scale to physical units if requested
         if unit == 'arcsec':
             X = X * image_pars.pixel_scale
             Y = Y * image_pars.pixel_scale
 
     return X, Y
+
+
+def _centered_coords(N: int) -> jnp.ndarray:
+    """
+    1D centered pixel coordinates for N pixels.
+
+    Even N: center on corner, coords = [-N/2+0.5, ..., N/2-0.5]
+    Odd N:  center on pixel, coords = [-(N-1)/2, ..., (N-1)/2]
+    """
+    return jnp.arange(N) - (N - 1) / 2.0
 
 
 def get_base_dir() -> Path:

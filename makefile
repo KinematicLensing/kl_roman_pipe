@@ -67,10 +67,11 @@ tutorials:
 test-tutorials:
 	@echo "Converting and executing tutorials..."
 	@conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg \
-		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/tng50_data.md && \
+		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/grism.md docs/tutorials/tng50_data.md && \
 		jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 \
 			docs/tutorials/quickstart.ipynb \
 			docs/tutorials/sampling.ipynb \
+			docs/tutorials/grism.ipynb \
 			docs/tutorials/tng50_data.ipynb'
 	@echo "All tutorials executed successfully."
 
@@ -131,9 +132,14 @@ test: $(CYVERSE_DATA_MARKER)
 	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics"
 
+.PHONY: test-extended
+test-extended: $(CYVERSE_DATA_MARKER)
+	@echo "Running extended tests (excluding TNG diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
-	@echo "Running ALL tests (including slow diagnostics)..."
+	@echo "Running FULL test suite (including TNG diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v
 
 .PHONY: test-tng

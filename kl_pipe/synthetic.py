@@ -220,6 +220,7 @@ def generate_sersic_intensity_2d(
     int_h_over_r: float = 0.0,
     backend: str = 'scipy',
     psf=None,
+    oversample: int = 1,
 ) -> np.ndarray:
     """
     Generate Sersic intensity profile.
@@ -284,6 +285,7 @@ def generate_sersic_intensity_2d(
             int_y0,
             int_h_over_r=int_h_over_r,
             psf=psf,
+            oversample=oversample,
         )
 
 
@@ -300,6 +302,7 @@ def _generate_sersic_scipy(
     int_y0: float,
     int_h_over_r: float = 0.0,
     psf=None,
+    oversample: int = 1,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy.
 
@@ -335,36 +338,41 @@ def _generate_sersic_scipy(
         Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
         ps = image_pars.pixel_scale
 
-        # padded k-grid (2x for anti-aliasing)
+        # effective (fine) grid for anti-aliasing, matching JAX _render_kspace
+        eff_Nrow = Nrow * oversample
+        eff_Ncol = Ncol * oversample
+        eff_ps = ps / oversample
+
+        # padded k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
         pad = 2
-        pr = int(np.ceil(pad * Nrow / 2) * 2)  # even padded sizes
-        pc = int(np.ceil(pad * Ncol / 2) * 2)
-        krow = 2 * np.pi * np.fft.fftfreq(pr, d=ps)
-        kcol = 2 * np.pi * np.fft.fftfreq(pc, d=ps)
-        KROW, KCOL = np.meshgrid(krow, kcol, indexing='ij')
+        pr = int(np.ceil(pad * eff_Nrow / 2) * 2)  # even padded sizes
+        pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
+        ky = 2 * np.pi * np.fft.fftfreq(pr, d=eff_ps)
+        kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
+        KY, KX = np.meshgrid(ky, kx, indexing='ij')
 
-        # centroid phase + half-pixel alignment
-        hrow = 0.5 * ps * (1 - Nrow % 2)
-        hcol = 0.5 * ps * (1 - Ncol % 2)
-        phase = np.exp(-1j * (KROW * (int_x0 - hrow) + KCOL * (int_y0 - hcol)))
+        # centroid phase: half-pixel correction uses COARSE grid centering
+        hx = 0.5 * ps * (1 - Ncol % 2)
+        hy = 0.5 * ps * (1 - Nrow % 2)
+        phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
 
-        # shear (area-preserving, flux-preserving)
+        # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
         norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
-        kr_s = norm_s * ((1 + g1) * KROW + g2 * KCOL)
-        kc_s = norm_s * (g2 * KROW + (1 - g1) * KCOL)
+        kx_s = norm_s * ((1 + g1) * KX + g2 * KY)
+        ky_s = norm_s * (g2 * KX + (1 - g1) * KY)
 
         # rotation by -theta_int
         c, s = np.cos(-theta_int), np.sin(-theta_int)
-        kr_gal = c * kr_s - s * kc_s
-        kc_gal = s * kr_s + c * kc_s
+        kx_gal = c * kx_s - s * ky_s
+        ky_gal = s * kx_s + c * ky_s
 
         # analytic FT
-        kr_sc = kr_gal * int_rscale
-        kc_sc = kc_gal * int_rscale
-        k_sq = kr_sc**2 + (kc_sc * cosi) ** 2
+        kx_sc = kx_gal * int_rscale
+        ky_sc = ky_gal * int_rscale
+        k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
         ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
 
-        u = (np.pi / 2) * int_h_over_r * kc_sc * sini
+        u = (np.pi / 2) * int_h_over_r * ky_sc * sini
         # safe-where: substitute finite dummy to avoid 0/sinh(0) = 0/0 warning
         u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
         ft_vertical = np.where(
@@ -373,8 +381,11 @@ def _generate_sersic_scipy(
 
         I_hat = flux * ft_radial * ft_vertical * phase
         full = np.fft.ifft2(I_hat).real
-        full = np.roll(full, (Nrow // 2, Ncol // 2), axis=(0, 1))
-        intensity_obs = full[:Nrow, :Ncol] / ps**2
+        full = np.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
+        intensity_obs = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
+
+        if oversample > 1:
+            intensity_obs = intensity_obs[::oversample, ::oversample]
 
         if psf is not None:
             from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
@@ -499,15 +510,15 @@ def _generate_sersic_galsim(
     if psf is not None:
         profile = gs.Convolve(profile, psf)
 
-    # GalSim stores x (horizontal) in cols; we store X (horizontal) in rows.
-    # Physical params (shift, rotate, shear) are Cartesian — correct as-is.
-    nx, ny = image_pars.Nrow, image_pars.Ncol
+    # standard convention: X=horizontal=cols, Y=vertical=rows
+    # GalSim drawImage(nx, ny) expects nx=Ncol, ny=Nrow
+    nx, ny = image_pars.Nx, image_pars.Ny
     pixel_scale = image_pars.pixel_scale
 
     image = profile.drawImage(nx=nx, ny=ny, scale=pixel_scale, method=method)
 
-    # transpose: GalSim (row=y, col=x) -> ours (row=X, col=Y)
-    intensity = image.array.T
+    # GalSim array shape = (ny, nx) = (Nrow, Ncol) — matches our grid directly
+    intensity = image.array
 
     return intensity
 
@@ -914,6 +925,211 @@ class SyntheticIntensity:
         )
 
         return self.data_noisy
+
+
+# ==============================================================================
+# Numpy reference datacube / grism generators
+# ==============================================================================
+
+
+def generate_datacube_3d(
+    image_pars,
+    vel_pars,
+    int_pars,
+    spectral_pars,
+    lambda_grid,
+    psf=None,
+    spatial_oversample=1,
+    spectral_oversample=1,
+):
+    """Independent numpy datacube generator for validation.
+
+    Uses generate_arctan_velocity_2d() and generate_sersic_intensity_2d()
+    internally. Completely independent from SpectralModel/JAX code paths.
+
+    Parameters
+    ----------
+    image_pars : ImagePars
+        Spatial grid.
+    vel_pars : dict
+        {v0, vcirc, vel_rscale, cosi, theta_int, g1, g2}
+    int_pars : dict
+        {flux, int_rscale, n_sersic, cosi, theta_int, g1, g2}
+    spectral_pars : dict
+        {z, vel_dispersion, lines: [{lambda_rest, flux, cont}, ...]}
+    lambda_grid : ndarray
+        Wavelength array nm, shape (Nlambda,)
+    psf : galsim.GSObject, optional
+        PSF to convolve each wavelength slice.
+
+    Returns
+    -------
+    ndarray, shape (Nrow, Ncol, Nlambda)
+    """
+    C_KMS = 299792.458
+
+    z = spectral_pars['z']
+    vel_disp = spectral_pars['vel_dispersion']
+    lines = spectral_pars['lines']
+
+    # velocity map (LOS, includes v0)
+    v_map = generate_arctan_velocity_2d(image_pars, **vel_pars)
+    v0 = vel_pars['v0']
+    v_rotation = v_map - v0
+
+    # broadband intensity (for continuum)
+    int_pars_full = dict(int_pars)
+    if 'n_sersic' not in int_pars_full:
+        int_pars_full['n_sersic'] = 1.0
+    I_broadband = generate_sersic_intensity_2d(
+        image_pars, **int_pars_full, oversample=spatial_oversample
+    )
+
+    Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
+    Nlam = len(lambda_grid)
+    osf = spectral_oversample
+
+    # fine wavelength grid (mirrors JAX SpectralModel.build_cube)
+    if osf > 1 and Nlam >= 2:
+        dl = lambda_grid[1] - lambda_grid[0]
+        half = dl / 2.0
+        fine_offsets = np.linspace(-half + half / osf, half - half / osf, osf)
+        lambda_fine = (lambda_grid[:, None] + fine_offsets[None, :]).reshape(-1)
+    else:
+        lambda_fine = lambda_grid
+        osf = 1
+
+    n_fine = len(lambda_fine)
+    cube_fine = np.zeros((Nrow, Ncol, n_fine))
+
+    R_func = spectral_pars.get('R_func', lambda lam: 461.0 * lam / 1000.0)
+
+    for line_info in lines:
+        lam_rest = line_info['lambda_rest']
+        line_flux = line_info['flux']
+        cont = line_info.get('cont', 0.0)
+
+        # per-line intensity: scale broadband by line flux ratio
+        # (simplified: uses broadband morphology with different total flux)
+        line_int_pars = dict(int_pars_full)
+        if 'line_int_pars' in line_info:
+            line_int_pars.update(line_info['line_int_pars'])
+        line_int_pars['flux'] = line_flux
+        I_line = generate_sersic_intensity_2d(
+            image_pars, **line_int_pars, oversample=spatial_oversample
+        )
+
+        # Doppler-shifted observed wavelength per pixel
+        lam_obs = lam_rest * (1.0 + z) * (1.0 + v_rotation / C_KMS)
+
+        # effective sigma
+        R_at_line = R_func(lam_rest * (1.0 + z))
+        sigma_inst = C_KMS / (2.355 * R_at_line)
+        sigma_eff = np.sqrt(vel_disp**2 + sigma_inst**2)
+        sigma_lambda = lam_obs * sigma_eff / C_KMS
+
+        # normalized Gaussian on fine grid
+        dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
+        sig = sigma_lambda[:, :, None]
+        gauss = (1.0 / (sig * np.sqrt(2.0 * np.pi))) * np.exp(-0.5 * (dlam / sig) ** 2)
+
+        cube_fine += I_line[:, :, None] * gauss
+        cube_fine += I_broadband[:, :, None] * cont
+
+    # bin fine -> coarse
+    if osf > 1:
+        cube = cube_fine.reshape(Nrow, Ncol, Nlam, osf).mean(axis=-1)
+    else:
+        cube = cube_fine
+
+    if psf is not None:
+        from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
+
+        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
+        for k in range(Nlam):
+            cube[:, :, k] = convolve_fft_numpy(cube[:, :, k], kernel, padded_shape)
+
+    return cube
+
+
+def generate_grism_2d(
+    image_pars,
+    vel_pars,
+    int_pars,
+    spectral_pars,
+    grism_pars,
+    lambda_grid=None,
+    psf=None,
+):
+    """Independent numpy grism image generator for validation.
+
+    Builds datacube via generate_datacube_3d(), then disperses with
+    scipy.ndimage.map_coordinates.
+
+    Parameters
+    ----------
+    image_pars : ImagePars
+        Spatial grid.
+    vel_pars, int_pars, spectral_pars : dict
+        As for generate_datacube_3d.
+    grism_pars : dict
+        {dispersion, lambda_ref, dispersion_angle}
+    lambda_grid : ndarray, optional
+        If None, built from grism_pars.
+    psf : galsim.GSObject, optional
+
+    Returns
+    -------
+    ndarray, shape (Nrow, Ncol)
+    """
+    from scipy.ndimage import map_coordinates as scipy_map_coords
+
+    disp = grism_pars['dispersion']
+    lam_ref = grism_pars['lambda_ref']
+    angle = grism_pars['dispersion_angle']
+
+    if lambda_grid is None:
+        # build lambda grid from grism pars
+        z = spectral_pars['z']
+        lines = spectral_pars['lines']
+        lam_obs = [l['lambda_rest'] * (1.0 + z) for l in lines]
+        lam_center = 0.5 * (min(lam_obs) + max(lam_obs))
+        C_KMS = 299792.458
+        vel_window = grism_pars.get('velocity_window_kms', 3000.0)
+        dlam_vel = lam_center * vel_window / C_KMS
+        lam_min = min(lam_obs) - dlam_vel
+        lam_max = max(lam_obs) + dlam_vel
+        n_lambda = int(np.ceil((lam_max - lam_min) / disp)) + 1
+        lambda_grid = np.linspace(lam_min, lam_max, max(n_lambda, 3))
+
+    cube = generate_datacube_3d(
+        image_pars, vel_pars, int_pars, spectral_pars, lambda_grid, psf=psf
+    )
+
+    Nrow, Ncol, Nlam = cube.shape
+    pixel_offsets = (lambda_grid - lam_ref) / disp
+
+    cos_a = np.cos(angle)
+    sin_a = np.sin(angle)
+
+    rows = np.arange(Nrow)
+    cols = np.arange(Ncol)
+    Y_base, X_base = np.meshgrid(rows, cols, indexing='ij')
+
+    dlam = np.abs(lambda_grid[1] - lambda_grid[0]) if Nlam >= 2 else 1.0
+
+    dispersed = np.zeros((Nrow, Ncol))
+    for k in range(Nlam):
+        offset_k = pixel_offsets[k]
+        dx_k = offset_k * cos_a
+        dy_k = offset_k * sin_a
+        coords = np.array([Y_base - dy_k, X_base - dx_k])
+        shifted = scipy_map_coords(
+            cube[:, :, k], coords, order=1, mode='constant', cval=0.0
+        )
+        dispersed += shifted * dlam
+
+    return dispersed
 
 
 class SyntheticKLObservation:

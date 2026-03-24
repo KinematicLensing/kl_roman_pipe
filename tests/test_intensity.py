@@ -218,8 +218,8 @@ def test_intensity_with_offset(exponential_theta_offset, test_image_pars):
     # Peak should not be at grid center
     assert peak_idx != (25, 25)
 
-    # Check approximate shift direction (x0=2.0 means shift right)
-    assert peak_idx[0] > 25  # Shifted in +x direction
+    # Check approximate shift direction (x0=2.0 means shift right along cols)
+    assert peak_idx[1] > 25  # Shifted in +x direction (cols = axis 1)
 
 
 # ==============================================================================
@@ -332,7 +332,7 @@ def test_plot_exponential_at_inclinations(inclination, output_dir, test_image_pa
     # Plot
     fig, ax = plt.subplots(figsize=(8, 7))
     im = ax.imshow(
-        np.array(intensity).T,
+        np.array(intensity),
         origin='lower',
         extent=[X.min(), X.max(), Y.min(), Y.max()],
         cmap='viridis',
@@ -362,7 +362,7 @@ def test_plot_high_inclination(output_dir):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     im = ax.imshow(
-        np.array(intensity).T,
+        np.array(intensity),
         origin='lower',
         extent=[X.min(), X.max(), Y.min(), Y.max()],
         cmap='viridis',
@@ -802,6 +802,94 @@ def test_render_image_vs_call_consistency(
         f"render_image vs __call__: max|resid|/peak = {max_frac:.2e} "
         f"(cosi={cosi}, h/r={int_h_over_r}, tol={tol})"
     )
+
+
+# ==============================================================================
+# Coordinate Convention Guardrail Tests
+# ==============================================================================
+
+
+def test_galsim_no_transpose():
+    """Synthetic GalSim data shape matches model without transpose on non-square."""
+    from kl_pipe.synthetic import generate_sersic_intensity_2d
+
+    ip = ImagePars(shape=(60, 100), pixel_scale=0.2, indexing='ij')
+    gs_data = generate_sersic_intensity_2d(
+        ip,
+        flux=1.0,
+        int_rscale=2.0,
+        n_sersic=1.0,
+        cosi=0.8,
+        theta_int=0.5,
+        g1=0.0,
+        g2=0.0,
+        int_h_over_r=0.1,
+        backend='galsim',
+    )
+    # shape should be (Nrow, Ncol) directly — no transpose
+    assert gs_data.shape == (
+        60,
+        100,
+    ), f"GalSim shape {gs_data.shape} != (60, 100). Convention mismatch."
+
+
+def test_asymmetric_psf_orientation(output_dir):
+    """Compare render_image vs GalSim with asymmetric PSF on non-square image."""
+    import galsim as gs
+    from kl_pipe.synthetic import generate_sersic_intensity_2d
+
+    ip = ImagePars(shape=(80, 120), pixel_scale=0.15, indexing='ij')
+    # asymmetric PSF with coma
+    psf_obj = gs.OpticalPSF(lam_over_diam=0.5, defocus=0.5, coma1=0.3)
+
+    cosi = 0.7
+    theta_int = np.pi / 4
+    flux = 1.0
+    rscale = 2.0
+    h_over_r = 0.1
+
+    theta = jnp.array([cosi, theta_int, 0.0, 0.0, flux, rscale, h_over_r, 0.0, 0.0])
+
+    model = InclinedExponentialModel()
+    model.configure_psf(psf_obj, image_pars=ip, oversample=9)
+    our_image = np.array(model.render_image(theta, image_pars=ip))
+
+    gs_image = generate_sersic_intensity_2d(
+        ip,
+        flux=flux,
+        int_rscale=rscale,
+        n_sersic=1.0,
+        cosi=cosi,
+        theta_int=theta_int,
+        g1=0.0,
+        g2=0.0,
+        int_h_over_r=h_over_r,
+        backend='galsim',
+        psf=psf_obj,
+    )
+    gs_sb = gs_image / ip.pixel_scale**2
+
+    peak = np.max(np.abs(gs_sb))
+    residual = np.abs(our_image - gs_sb)
+    max_frac = np.max(residual) / peak
+
+    # diagnostic plot
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    axes[0].imshow(gs_sb, origin='lower')
+    axes[0].set_title('GalSim')
+    axes[1].imshow(our_image, origin='lower')
+    axes[1].set_title('render_image')
+    axes[2].imshow(residual / peak, origin='lower', cmap='hot')
+    axes[2].set_title(f'|resid|/peak (max={max_frac:.2e})')
+    for ax in axes:
+        plt.colorbar(ax.images[0], ax=ax)
+    plt.tight_layout()
+    plt.savefig(output_dir / 'asymmetric_psf_orientation.png', dpi=150)
+    plt.close()
+
+    assert (
+        max_frac < 5e-3
+    ), f"Asymmetric PSF orientation: max|resid|/peak = {max_frac:.2e}"
 
 
 if __name__ == "__main__":

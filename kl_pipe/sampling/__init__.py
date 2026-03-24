@@ -51,7 +51,7 @@ from kl_pipe.sampling.configs import (
     NumpyroSamplerConfig,
     ReparamStrategy,
 )
-from kl_pipe.sampling.task import InferenceTask
+from kl_pipe.sampling.task import InferenceTask, NoPSFWarning
 from kl_pipe.sampling.factory import (
     build_sampler,
     get_available_samplers,
@@ -70,6 +70,7 @@ __all__ = [
     'Sampler',
     'SamplerResult',
     'InferenceTask',
+    'NoPSFWarning',
     # Config classes
     'BaseSamplerConfig',
     'EnsembleSamplerConfig',

@@ -9,6 +9,11 @@ from kl_pipe.transformation import transform_to_disk_plane
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import build_map_grid_from_image_pars
 
+# from kl_pipe.spectral import SpectralModel
+# from kl_pipe.spectral import FiberPars
+
+import galsim
+
 
 class Model(ABC):
     """
@@ -34,6 +39,7 @@ class Model(ABC):
         self._psf_oversample = 1
         self._psf_fine_X = None
         self._psf_fine_Y = None
+        self._psf_kspace_fft = None
 
         return
 
@@ -53,7 +59,7 @@ class Model(ABC):
 
         Two calling conventions (image_pars is preferred):
         - configure_psf(gsobj, image_pars=image_pars)
-        - configure_psf(gsobj, image_shape=(Ny, Nx), pixel_scale=scale)
+        - configure_psf(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale)
 
         Parameters
         ----------
@@ -62,7 +68,7 @@ class Model(ABC):
         image_pars : ImagePars, optional
             Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
         image_shape : tuple, optional
-            (Ny, Nx) of data images.
+            (Nrow, Ncol) of data images.
         pixel_scale : float, optional
             arcsec/pixel.
         oversample : int
@@ -124,6 +130,7 @@ class Model(ABC):
         self._psf_oversample = 1
         self._psf_fine_X = None
         self._psf_fine_Y = None
+        self._psf_kspace_fft = None
 
     @property
     def has_psf(self):
@@ -414,7 +421,7 @@ class VelocityModel(Model):
 
         Two calling conventions (image_pars is preferred):
         - configure_velocity_psf(gsobj, image_pars=image_pars, ...)
-        - configure_velocity_psf(gsobj, image_shape=(Ny, Nx), pixel_scale=scale, ...)
+        - configure_velocity_psf(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale, ...)
 
         Parameters
         ----------
@@ -423,7 +430,7 @@ class VelocityModel(Model):
         image_pars : ImagePars, optional
             Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
         image_shape : tuple, optional
-            (Ny, Nx) of velocity data images.
+            (Nrow, Ncol) of velocity data images.
         pixel_scale : float, optional
             arcsec/pixel.
         oversample : int
@@ -637,6 +644,16 @@ class IntensityModel(Model):
             # apply cos(i) brightening factor for projected intensity
             return I_disk / cosi
 
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Subclasses should override with their own k-space implementation.
+        """
+        raise NotImplementedError(
+            "Subclasses must implement render_unconvolved method."
+        )
+
     @abstractmethod
     def evaluate_in_disk_plane(
         self, theta: jnp.ndarray, X: jnp.ndarray, Y: jnp.ndarray, Z: jnp.ndarray = None
@@ -702,11 +719,14 @@ class KLModel(object):
         intensity_model: IntensityModel,
         shared_pars: Set[str] = None,
         meta_pars: dict = None,
+        spectral_model=None,
     ):
         self.velocity_model = velocity_model
         self.intensity_model = intensity_model
         self.shared_pars = shared_pars or set()
         self.meta_pars = meta_pars or {}
+        self.spectral_model = spectral_model
+        self._grism_psf_data = None
 
         self._build_parameter_structure()
 
@@ -735,7 +755,7 @@ class KLModel(object):
 
         Two calling conventions (image_pars is preferred):
         - configure_joint_psf(..., image_pars_vel=pars_vel, image_pars_int=pars_int)
-        - configure_joint_psf(..., image_shape_vel=(Ny,Nx), pixel_scale_vel=..., ...)
+        - configure_joint_psf(..., image_shape_vel=(Nrow,Ncol), pixel_scale_vel=..., ...)
 
         Parameters
         ----------
@@ -748,11 +768,11 @@ class KLModel(object):
         image_pars_int : ImagePars, optional
             Image parameters for intensity data.
         image_shape_vel : tuple, optional
-            (Ny, Nx) of velocity data.
+            (Nrow, Ncol) of velocity data.
         pixel_scale_vel : float, optional
             arcsec/pixel for velocity grid.
         image_shape_int : tuple, optional
-            (Ny, Nx) of intensity data.
+            (Nrow, Ncol) of intensity data.
         pixel_scale_int : float, optional
             arcsec/pixel for intensity grid.
         oversample : int
@@ -792,8 +812,9 @@ class KLModel(object):
         """
         Build the unified parameter space and component slicing indices.
 
-        Creates PARAMETER_NAMES with shared parameters appearing once, and builds
-        index mappings for extracting component-specific parameter arrays.
+        When spectral_model is present, uses 3-way ordered deduplication:
+        iterate vel_pars, int_pars, spectral_pars in order; first occurrence
+        of each param name wins position.
         """
 
         vel_pars = self.velocity_model.PARAMETER_NAMES
@@ -806,10 +827,28 @@ class KLModel(object):
             invalid = self.shared_pars - (vel_pars_set & int_pars_set)
             raise ValueError(f"Shared parameters {invalid} not present in both models")
 
-        param_list = list(vel_pars)
-        for param in int_pars:
-            if param not in self.shared_pars:
-                param_list.append(param)
+        # 3-way ordered deduplication
+        seen = set()
+        param_list = []
+
+        for name in vel_pars:
+            if name not in seen:
+                param_list.append(name)
+                seen.add(name)
+
+        for name in int_pars:
+            if name not in seen:
+                param_list.append(name)
+                seen.add(name)
+            elif name in self.shared_pars:
+                pass  # already added from vel_pars
+
+        if self.spectral_model is not None:
+            spec_pars = self.spectral_model.PARAMETER_NAMES
+            for name in spec_pars:
+                if name not in seen:
+                    param_list.append(name)
+                    seen.add(name)
 
         self.PARAMETER_NAMES = tuple(param_list)
 
@@ -821,6 +860,13 @@ class KLModel(object):
         self._intensity_indices = jnp.array(
             [composite_param_dict[name] for name in int_pars]
         )
+
+        if self.spectral_model is not None:
+            self._spectral_indices = jnp.array(
+                [composite_param_dict[name] for name in spec_pars]
+            )
+        else:
+            self._spectral_indices = None
 
         self._param_indices = composite_param_dict
 
@@ -877,6 +923,391 @@ class KLModel(object):
             Parameter array for intensity model.
         """
         return theta[self._intensity_indices]
+
+    def get_spectral_pars(self, theta: jnp.ndarray) -> jnp.ndarray:
+        """Extract spectral component parameters from composite theta."""
+        if self._spectral_indices is None:
+            raise ValueError("No spectral model configured")
+        return theta[self._spectral_indices]
+
+    def render_cube(
+        self,
+        theta: jnp.ndarray,
+        cube_pars,
+        plane: str = 'obs',
+    ) -> jnp.ndarray:
+        """Render PSF-convolved datacube.
+
+        1. Calls spectral_model.build_cube() -> intrinsic cube (no PSF)
+        2. Per-slice convolve_fft(cube[:,:,k], psf_data) if PSF configured
+
+        Returns shape (Nrow, Ncol, Nlambda).
+        """
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured — use render_image for 2D")
+
+        theta_vel = self.get_velocity_pars(theta)
+        theta_int = self.get_intensity_pars(theta)
+        theta_spec = self.get_spectral_pars(theta)
+
+        cube = self.spectral_model.build_cube(
+            theta_spec, theta_vel, theta_int, cube_pars, plane=plane
+        )
+
+        # per-slice PSF convolution
+        if self._grism_psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            Nlam = cube.shape[2]
+            slices = []
+            for k in range(Nlam):
+                slices.append(convolve_fft(cube[:, :, k], self._grism_psf_data))
+            cube = jnp.stack(slices, axis=-1)
+
+        return cube
+
+    def render_grism(
+        self,
+        theta: jnp.ndarray,
+        grism_pars,
+        plane: str = 'obs',
+        cube_pars=None,
+    ) -> jnp.ndarray:
+        """Render dispersed grism image.
+
+        1. Calls render_cube -> PSF-convolved cube
+        2. Calls disperse_cube -> 2D dispersed image
+
+        For JIT/grad, pre-compute cube_pars with a concrete z and pass it in:
+            cube_pars = gp.to_cube_pars(z=1.0)
+            jit(partial(kl.render_grism, grism_pars=gp, cube_pars=cube_pars))(theta)
+
+        Returns shape (Nrow, Ncol).
+        """
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured")
+
+        from kl_pipe.dispersion import disperse_cube
+
+        if cube_pars is None:
+            # convenience path: auto-build from z (not JIT-compatible)
+            theta_spec = self.get_spectral_pars(theta)
+            z = float(self.spectral_model.get_param('z', theta_spec))
+            cube_pars = grism_pars.to_cube_pars(z)
+
+        cube = self.render_cube(theta, cube_pars, plane=plane)
+
+        return disperse_cube(cube, grism_pars, cube_pars.lambda_grid)
+
+    def configure_grism_psf(
+        self,
+        gsobj,
+        cube_pars,
+        oversample: int = 5,
+        gsparams=None,
+    ):
+        """Pre-compute PSF FFT at the cube's spatial grid.
+
+        Uses existing precompute_psf_fft() from psf.py.
+        Stores _grism_psf_data for use by render_cube.
+        """
+        from kl_pipe.psf import precompute_psf_fft
+
+        self._grism_psf_data = precompute_psf_fft(
+            gsobj,
+            image_pars=cube_pars.image_pars,
+            oversample=oversample,
+            gsparams=gsparams,
+        )
+
+    def render_fiber(
+        self,
+        theta: jnp.ndarray,  # the theoretical model ingredients? yes
+        fiber_pars,  # mostly just contains obs_conf? well yeah kinda.
+        plane: str = 'obs',
+        cube_pars=None,
+        force_noise_free=True,
+        run_mode='ETC',
+    ) -> jnp.ndarray:
+
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured")
+
+        if cube_pars is None:
+            # convenience path: auto-build from z (not JIT-compatible)
+            theta_spec = self.get_spectral_pars(theta)
+            z = float(self.spectral_model.get_param('z', theta_spec))
+            cube_pars = fiber_pars.to_cube_pars(z)
+
+        cube = self.render_cube(
+            theta, cube_pars, plane=plane
+        )  # theoretical cube. I should just let the PSF convolution happen here? eh
+
+        # observe cube
+        # self.fiber_pars = fiber_pars
+        return self.fiber_observe_cube(cube, fiber_pars, force_noise_free, run_mode)
+
+    def fiber_observe_cube(
+        self, cube, fiber_pars, force_noise_free=True, run_mode='ETC'
+    ):
+        # self.fiber_pars = fiber_pars
+
+        # this stuff needs to be precomputed
+        # if fiber_pars.is_dispersed:
+        # self.ATMPSF_conv_fiber_mask = self.precompute_PSF_convolved_fiber_mask(fiber_pars)
+        # self.resolution_mat = self.get_resolution_matrix_fiber(fiber_pars)
+        # else:
+        # self.ATMPSF_conv_fiber_mask = None
+        # self.resolution_mat = None
+
+        # do the things
+        # if photometry image...wip
+        if not fiber_pars.is_dispersed:
+            self.ATMPSF_conv_fiber_mask = None
+            self.resolution_mat = None
+            print('not dispersed')
+            # if run_mode == 'ETC':
+
+            return
+
+        # if fiber 1D spectrum
+        else:
+            # see notes in kl-tools for why it can be done this way
+            # spec_1D = (self.ATMPSF_conv_fiber_mask[jnp.newaxis,:,:]*cube).sum(axis=(1,2))
+            # spec_cube = (self.ATMPSF_conv_fiber_mask[:,:,jnp.newaxis]*cube)
+            # print('spec_cube shape', spec_cube.shape)
+            self.wave = fiber_pars.lambda_grid
+            spec_1D = jnp.sum(
+                (self.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
+                axis=jnp.array([0, 1]),
+            )
+            if run_mode == 'ETC':
+                # if fiber_pars.run_options['run_mode'] == 'ETC':
+                spec_1D = spec_1D * fiber_pars._bp_array
+                factor = (
+                    jnp.pi
+                    * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
+                    * fiber_pars.obs_conf['EXPTIME']
+                    / fiber_pars.obs_conf['GAIN']
+                )  # units cm^2 * seconds * ADU/electron
+                spec_1D = spec_1D * factor
+            # otherwise, the theory_cube is scaled by a factor for emission line
+
+            # fiber PSF can result in degrade in spectra resolution
+            if self.resolution_mat is not None:
+                spec_1D = self.resolution_mat * spec_1D
+            if force_noise_free:
+                return spec_1D, None
+            else:
+                # if self.fiber_pars['run_options']['run_mode'] == 'ETC': "exposure time calculator" -- unit of spectrum = counts in detector.
+                if (
+                    run_mode == 'ETC'
+                ):  # noise computed from sky level; realistic sky level from kitt peak for example
+                    # dark current is ignored; readout noise not ignored
+                    # poisson noise is included too
+
+                    # precompute skysb, definitely don't repeat every likelihood eval
+                    skysb = galsim.LookupTable.from_file(
+                        fiber_pars.obs_conf["SKYMODEL"], f_log=True
+                    )  # Ang v.s. 1e-17 erg s-1 cm-2 A-1 arcsec-2
+                    fiber_area = jnp.pi * (fiber_pars.obs_conf["FIBERRAD"]) ** 2
+                    _wave = self.wave * 10  # Angstrom
+                    _dwave = _wave[1] - _wave[0]  # Angstrom
+                    _hnu = 1986445857.148928 / _wave  # 1e-17 erg
+                    skyct = skysb(_wave) * fiber_area * _dwave / _hnu  # s-1 cm-2
+                    skyct *= (
+                        fiber_pars._bp_array
+                        * jnp.pi
+                        * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
+                        * fiber_pars.obs_conf['EXPTIME']
+                        / fiber_pars.obs_conf['GAIN']
+                    )
+                    ## noise std, not including dark current
+                    ## eff read noise = sqrt(Npix along y) * read noise
+                    noise_std = (
+                        skyct + spec_1D + fiber_pars.obs_conf['RDNOISE'] ** 2
+                    ) ** 0.5
+                    # noise = jnp.random.randn(spec_1D.shape[0])*noise_std
+                    key = jax.random.key(0)
+                    noise = (
+                        jax.random.normal(key, shape=(spec_1D.shape[0],)) * noise_std
+                    )
+
+                else:  # for SNR mode, you provide flux and noise parameter and "the code doesn't care what the unit is"
+                    # noise = jnp.random.randn(spec_1D.shape[0])*fiber_pars.obs_conf['NOISESIG']
+                    key = jax.random.key(0)
+                    noise = (
+                        jax.random.normal(key, shape=(spec_1D.shape[0],))
+                        * fiber_pars.obs_conf['NOISESIG']
+                    )
+                ##print("----- %s seconds -----" % (time() - start_time))
+                if fiber_pars.obs_conf['ADDNOISE']:
+                    print('spec_1D, noise', spec_1D, noise)
+                    return spec_1D + noise, noise
+                else:
+                    return spec_1D, noise
+
+    def get_fiber_mask(self, fiber_pars):
+        from photutils.geometry import (
+            circular_overlap_grid as cog,
+        )  # is it alright for me to still use this?
+
+        # self.fiber_pars = fiber_pars
+        mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
+        mscale = fiber_pars.pix_scale
+        if fiber_pars.is_dispersed:
+            fiber_cen = [
+                fiber_pars.obs_conf['FIBERDX'],
+                fiber_pars.obs_conf['FIBERDY'],
+            ]  # dx, dy in arcsec
+            fiber_rad = fiber_pars.obs_conf['FIBERRAD']  # radius in arcsec
+            xmin, xmax = -mNx / 2 * mscale, mNx / 2 * mscale
+            ymin, ymax = -mNy / 2 * mscale, mNy / 2 * mscale
+            mask = cog(
+                xmin - fiber_cen[0],
+                xmax - fiber_cen[0],
+                ymin - fiber_cen[1],
+                ymax - fiber_cen[1],
+                mNx,
+                mNy,
+                fiber_rad,
+                1,
+                2,
+            )
+        else:
+            mask = jnp.ones([mNy, mNx])
+        return mask
+
+    # not using yet
+    def configure_fiber_psf(  # should I be using this? I guess it's better to try
+        self,
+        gsobj,
+        cube_pars,
+        oversample: int = 5,
+        gsparams=None,
+    ):
+        """Pre-compute PSF FFT at the cube's spatial grid.
+
+        Uses existing precompute_psf_fft() from psf.py.
+        Stores _grism_psf_data for use by render_cube.
+        """
+        from kl_pipe.psf import precompute_psf_fft
+
+        self._fiber_psf_data = precompute_psf_fft(
+            gsobj,
+            image_pars=cube_pars.image_pars,  # needs to be whatever size is oversampling * original size
+            oversample=oversample,
+            gsparams=gsparams,
+        )
+
+        return self._fiber_psf_data  # grism version doesn't return anything here btw
+
+    def precompute_PSF_convolved_fiber_mask(
+        self, fiber_pars
+    ):  # need to precompute this and make it a jax array
+        '''get atm-PSF convolved fiber mask'''
+        # self.fiber_pars = fiber_pars
+        mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
+        mscale = fiber_pars.pix_scale
+        galsim_psf = self._build_PSF_model_fiber(
+            fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff
+        )  # surely there is something for making the psf already
+
+        mask = galsim.InterpolatedImage(
+            galsim.Image(array=self.get_fiber_mask(fiber_pars)), scale=mscale
+        )
+        # print('mask', mask) #oh it's a galsim thing huh
+
+        # convolve fiber mask with atmospheric PSF
+        maskC = (
+            mask if galsim_psf is None else galsim.Convolve([mask, galsim_psf])
+        )  # beh maybe I'll jst keep this as a galsim convolution for now
+        ary = maskC.drawImage(nx=mNx, ny=mNy, scale=mscale).array
+
+        # replace galsim convolution?
+        # fiber_psf_data = self.configure_fiber_psf(galsim_psf, fiber_pars.cube_pars)
+        # if self._fiber_psf_data is not None:
+        # from kl_pipe.psf import convolve_fft
+        # oversample = self._fiber_psf_data.oversample
+        # maskC = convolve_fft(self.get_fiber_mask(fiber_pars), self._fiber_psf_data) #mask needs to be 5x bigger in size because of oversampling
+        ##maskC = convolve_fft(self.get_fiber_mask(fiber_pars), fiber_psf_data)
+        # else:
+        # maskC = self.get_fiber_mask(fiber_pars)
+        # print('maskC', maskC)
+        # ary=maskC
+
+        self.ATMPSF_conv_fiber_mask = jnp.array(ary)
+        # return jnp.array(ary)
+
+    def _build_PSF_model_fiber(self, config, **kwargs):
+        '''Generate Galsim PSF model
+
+        Inputs:
+        =======
+        kwargs: keyword arguments for building psf model
+            - lam: wavelength in nm
+            - scale: pixel scale
+
+        Outputs:
+        ========
+        psf_model: GalSim PSF object
+
+        '''
+        _type = config.get('PSFTYPE', 'none').lower()
+        if _type != 'none':
+            if _type == 'airy':
+                lam = kwargs.get('lam', 1000)  # nm
+                scale_unit = kwargs.get('scale_unit', galsim.arcsec)
+                return galsim.Airy(
+                    lam=lam, diam=config['DIAMETER'] / 100, scale_unit=scale_unit
+                )
+            elif _type == 'airy_mean':
+                scale_unit = kwargs.get('scale_unit', galsim.arcsec)
+                # return galsim.Airy(config['psf_fwhm']/1.028993969962188,
+                #               scale_unit=scale_unit)
+                lam = kwargs.get("lam_mean", 1000)  # nm
+                return galsim.Airy(
+                    lam=lam, diam=config['DIAMETER'] / 100, scale_unit=scale_unit
+                )
+            elif _type == 'airy_fwhm':
+                loverd = config['PSFFWHM'] / 1.028993969962188
+                scale_unit = kwargs.get('scale_unit', galsim.arcsec)
+                return galsim.Airy(lam_over_diam=loverd, scale_unit=scale_unit)
+            elif _type == 'moffat':
+                beta = config.get('PSFBETA', 2.5)
+                fwhm = config.get('PSFFWHM', 0.5)
+                return galsim.Moffat(beta=beta, fwhm=fwhm)
+            else:
+                raise ValueError(f'{_type} has not been implemented yet!')
+        else:
+            return None
+
+    def get_resolution_matrix_fiber(self, fiber_pars):
+        # self.fiber_pars = fiber_pars
+        from scipy.sparse import dia_matrix
+
+        if fiber_pars.is_dispersed:
+            diameter_in_pixel = fiber_pars.obs_conf['FIBRBLUR']
+            sigma = diameter_in_pixel / 4.0
+            x_in_pixel = jnp.arange(-5, 6)
+            # assume Gaussian for now
+            kernel = jnp.exp(-0.5 * (x_in_pixel / sigma) ** 2) / (
+                (2 * jnp.pi) ** 0.5 * sigma
+            )
+            # get the resolution matrix (sparse matrix)
+            # band = jnp.array([kernel]).repeat(self.fiber_pars['shape'][0], axis=0).T
+            band = jnp.array([kernel]).repeat(fiber_pars.n_lambda, axis=0).T
+            offset = jnp.arange(kernel.shape[0] // 2, -(kernel.shape[0] // 2) - 1, -1)
+            Rmat = dia_matrix(
+                (band, offset), shape=(fiber_pars.n_lambda, fiber_pars.n_lambda)
+            )
+            # shape=(self.fiber_pars['shape'][0], self.fiber_pars['shape'][0]))
+        else:
+            Rmat = None
+
+            # this stuff needs to be precomputed
+        self.resolution_mat = Rmat
+        # return Rmat#jnp.array(Rmat.toarray()) #need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
 
     def evaluate_velocity(
         self,
@@ -975,6 +1406,24 @@ class KLModel(object):
 
         return velocity_map, intensity_map
 
+    def render(
+        self,
+        theta: jnp.ndarray,
+        data_type: str,
+        data_pars,
+        plane: str = 'obs',
+        **kwargs,
+    ) -> jnp.ndarray:
+        """High-level rendering interface for different data products."""
+        if data_type == 'cube':
+            return self.render_cube(theta, data_pars, plane=plane, **kwargs)
+        elif data_type == 'grism':
+            return self.render_grism(theta, data_pars, plane=plane, **kwargs)
+        else:
+            raise ValueError(
+                f"Unknown data_type '{data_type}'. " f"Must be one of: 'cube', 'grism'"
+            )
+
     def theta2pars(self, theta: jnp.ndarray) -> dict:
         """
         Convert parameter array to dictionary.
@@ -1008,3 +1457,65 @@ class KLModel(object):
         """
 
         return jnp.array([pars[name] for name in self.PARAMETER_NAMES])
+
+
+# class FiberModel(object):
+# SpectralModel returns INTRINSIC cube (no PSF). PSF applied by KLModel per-slice.
+# so, should I be using KLModel first?
+
+#'''This class wraps the theoretical cube after it is generated to produce
+# simulated images.
+#'''
+
+##first make fiber parameters
+#''' Store the `FiberPars` object'''
+# def __init__(
+# self,
+# meta_pars: dict,
+# obs_conf: dict,
+# spectral_model: SpectralModel):
+
+# right now I have FiberPars taking cube_pars but I should just have it take meta_pars idk
+# self.Fpars = FiberPars(meta_pars, obs_conf=obs_conf)
+
+# calculate the atmospheric PSF convolved fiber mask, if PSF model is
+# not sampled.
+# if self.Fpars.is_dispersed:
+# self.ATMPSF_conv_fiber_mask = self.get_PSF_convolved_fiber_mask() #need to make these
+# self.resolution_mat = self.get_resolution_matrix() #need to make these
+# else:
+# self.ATMPSF_conv_fiber_mask = None
+# self.resolution_mat = None
+
+# return
+
+# @property
+# def bp_array(self):
+# return self.Fpars.bp_array
+# @property
+# def conf(self):
+# return self.Fpars.conf
+# @property
+# def lambdas(self): # (Nlam, 2)
+# return self.Fpars.lambdas
+# @property
+# def wave(self):
+# return self.Fpars.wave
+# @property
+# def lambda_eff(self):
+# return self.Fpars.lambda_eff
+
+# def get_fiber_mask(self):
+# mNx, mNy = self.Fpars['shape'][2], self.Fpars['shape'][1]
+# mscale = self.Fpars['pix_scale']
+# if self.Fpars.is_dispersed:
+# fiber_cen = [self.conf['FIBERDX'], self.conf['FIBERDY']] # dx, dy in arcsec
+# fiber_rad = self.conf['FIBERRAD'] # radius in arcsec
+# xmin, xmax = -mNx/2*mscale, mNx/2*mscale
+# ymin, ymax = -mNy/2*mscale, mNy/2*mscale
+# mask = cog(xmin-fiber_cen[0], xmax-fiber_cen[0],
+# ymin-fiber_cen[1], ymax-fiber_cen[1],
+# mNx, mNy, fiber_rad, 1, 2)
+# else:
+# mask = np.ones([mNy, mNx])
+# return mask

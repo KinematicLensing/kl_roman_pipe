@@ -67,6 +67,7 @@ def _log_likelihood_velocity_only(
     variance_vel: jnp.ndarray | float,
     vel_model: VelocityModel,
     flux_theta_override: jnp.ndarray = None,
+    mask_vel: jnp.ndarray = None,
 ) -> float:
     """
     Log-likelihood for velocity observations only.
@@ -92,6 +93,9 @@ def _log_likelihood_velocity_only(
         Velocity model instance.
     flux_theta_override : jnp.ndarray, optional
         Intensity params for joint mode flux weighting (passed to render_image).
+    mask_vel : jnp.ndarray, optional
+        Boolean mask array (True=valid, False=masked). Same shape as data_vel.
+        If None, all pixels are used.
 
     Returns
     -------
@@ -103,6 +107,10 @@ def _log_likelihood_velocity_only(
     This function is designed to be JIT-compiled. The variance can be either
     a scalar (constant noise) or an array (spatially varying noise), and the
     same formula handles both cases without conditionals.
+
+    The ``if mask_vel is not None`` check is a Python-level branch resolved at
+    JIT compile time (mask_vel is frozen via ``partial()``), not a traced
+    conditional.
     """
 
     # evaluate model via render_image (applies PSF if configured)
@@ -110,15 +118,20 @@ def _log_likelihood_velocity_only(
         theta, X=X_vel, Y=Y_vel, flux_theta_override=flux_theta_override
     )
 
-    # compute chi-squared
+    # broadcast scalar variance to array (fixes normalization for scalar case)
     residuals = data_vel - model_vel
-    chi2 = jnp.sum(residuals**2 / variance_vel)
+    variance_vel = jnp.broadcast_to(jnp.asarray(variance_vel), data_vel.shape)
 
-    # compute normalization (works for both scalar and array variance)
-    n_data = data_vel.size
-    log_det_term = jnp.sum(jnp.log(variance_vel))
+    if mask_vel is not None:
+        chi2 = jnp.sum(jnp.where(mask_vel, residuals**2 / variance_vel, 0.0))
+        n_data = jnp.sum(mask_vel).astype(float)
+        log_det_term = jnp.sum(jnp.where(mask_vel, jnp.log(variance_vel), 0.0))
+    else:
+        chi2 = jnp.sum(residuals**2 / variance_vel)
+        n_data = data_vel.size
+        log_det_term = jnp.sum(jnp.log(variance_vel))
+
     normalization = -0.5 * n_data * jnp.log(2 * jnp.pi) - 0.5 * log_det_term
-
     return normalization - 0.5 * chi2
 
 
@@ -128,6 +141,7 @@ def _log_likelihood_intensity_only(
     image_pars_int: 'ImagePars',
     variance_int: jnp.ndarray | float,
     int_model: IntensityModel,
+    mask_int: jnp.ndarray = None,
 ) -> float:
     """
     Log-likelihood for intensity observations only.
@@ -148,6 +162,9 @@ def _log_likelihood_intensity_only(
         If array, must have same shape as data_int.
     int_model : IntensityModel
         Intensity model instance.
+    mask_int : jnp.ndarray, optional
+        Boolean mask array (True=valid, False=masked). Same shape as data_int.
+        If None, all pixels are used.
 
     Returns
     -------
@@ -159,20 +176,29 @@ def _log_likelihood_intensity_only(
     This function is designed to be JIT-compiled. The variance can be either
     a scalar (constant noise) or an array (spatially varying noise), and the
     same formula handles both cases without conditionals.
+
+    The ``if mask_int is not None`` check is a Python-level branch resolved at
+    JIT compile time (mask_int is frozen via ``partial()``), not a traced
+    conditional.
     """
 
     # evaluate model via render_image (applies PSF if configured)
     model_int = int_model.render_image(theta, image_pars=image_pars_int)
 
-    # compute chi-squared
+    # broadcast scalar variance to array (fixes normalization for scalar case)
     residuals = data_int - model_int
-    chi2 = jnp.sum(residuals**2 / variance_int)
+    variance_int = jnp.broadcast_to(jnp.asarray(variance_int), data_int.shape)
 
-    # compute normalization (works for both scalar and array variance)
-    n_data = data_int.size
-    log_det_term = jnp.sum(jnp.log(variance_int))
+    if mask_int is not None:
+        chi2 = jnp.sum(jnp.where(mask_int, residuals**2 / variance_int, 0.0))
+        n_data = jnp.sum(mask_int).astype(float)
+        log_det_term = jnp.sum(jnp.where(mask_int, jnp.log(variance_int), 0.0))
+    else:
+        chi2 = jnp.sum(residuals**2 / variance_int)
+        n_data = data_int.size
+        log_det_term = jnp.sum(jnp.log(variance_int))
+
     normalization = -0.5 * n_data * jnp.log(2 * jnp.pi) - 0.5 * log_det_term
-
     return normalization - 0.5 * chi2
 
 
@@ -186,6 +212,8 @@ def _log_likelihood_separate_images(
     variance_vel: jnp.ndarray | float,
     variance_int: jnp.ndarray | float,
     kl_model: KLModel,
+    mask_vel: jnp.ndarray = None,
+    mask_int: jnp.ndarray = None,
 ) -> float:
     """
     Log-likelihood for combined velocity + intensity observations.
@@ -213,6 +241,10 @@ def _log_likelihood_separate_images(
         Variance for intensity data.
     kl_model : KLModel
         Combined kinematic-lensing model instance.
+    mask_vel : jnp.ndarray, optional
+        Boolean mask for velocity data (True=valid). Same shape as data_vel.
+    mask_int : jnp.ndarray, optional
+        Boolean mask for intensity data (True=valid). Same shape as data_int.
 
     Returns
     -------
@@ -243,9 +275,15 @@ def _log_likelihood_separate_images(
         variance_vel,
         kl_model.velocity_model,
         flux_theta_override=theta_int,
+        mask_vel=mask_vel,
     )
     log_prob_int = _log_likelihood_intensity_only(
-        theta_int, data_int, image_pars_int, variance_int, kl_model.intensity_model
+        theta_int,
+        data_int,
+        image_pars_int,
+        variance_int,
+        kl_model.intensity_model,
+        mask_int=mask_int,
     )
 
     # independent observations: joint likelihood is sum of log-likelihoods
@@ -262,6 +300,7 @@ def create_jitted_likelihood_velocity(
     image_pars_vel: ImagePars,
     variance_vel: jnp.ndarray | float,
     data_vel: jnp.ndarray,
+    mask_vel: jnp.ndarray = None,
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled velocity-only likelihood function.
@@ -289,6 +328,9 @@ def create_jitted_likelihood_velocity(
         Variance map or scalar variance for velocity data.
     data_vel : jnp.ndarray
         Observed velocity data (2D array).
+    mask_vel : jnp.ndarray, optional
+        Boolean mask array (True=valid, False=masked). Same shape as data_vel.
+        If None, all pixels are used.
 
     Returns
     -------
@@ -327,6 +369,13 @@ def create_jitted_likelihood_velocity(
     JAX transformations (grad, vmap, etc.).
     """
 
+    if mask_vel is not None:
+        if mask_vel.shape != data_vel.shape:
+            raise ValueError(
+                f"mask_vel shape {mask_vel.shape} != data_vel shape {data_vel.shape}"
+            )
+        mask_vel = jnp.asarray(mask_vel, dtype=bool)
+
     # pre-compute coordinate grids from ImagePars
     X_vel, Y_vel = build_map_grid_from_image_pars(image_pars_vel)
 
@@ -338,6 +387,7 @@ def create_jitted_likelihood_velocity(
             Y_vel=Y_vel,
             variance_vel=variance_vel,
             vel_model=vel_model,
+            mask_vel=mask_vel,
         )
     )
 
@@ -347,6 +397,7 @@ def create_jitted_likelihood_intensity(
     image_pars_int: ImagePars,
     variance_int: jnp.ndarray | float,
     data_int: jnp.ndarray,
+    mask_int: jnp.ndarray = None,
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled intensity-only likelihood function.
@@ -369,6 +420,9 @@ def create_jitted_likelihood_intensity(
         Variance map or scalar variance for intensity data.
     data_int : jnp.ndarray
         Observed intensity data (2D array).
+    mask_int : jnp.ndarray, optional
+        Boolean mask array (True=valid, False=masked). Same shape as data_int.
+        If None, all pixels are used.
 
     Returns
     -------
@@ -399,6 +453,13 @@ def create_jitted_likelihood_intensity(
     performance considerations.
     """
 
+    if mask_int is not None:
+        if mask_int.shape != data_int.shape:
+            raise ValueError(
+                f"mask_int shape {mask_int.shape} != data_int shape {data_int.shape}"
+            )
+        mask_int = jnp.asarray(mask_int, dtype=bool)
+
     return jax.jit(
         partial(
             _log_likelihood_intensity_only,
@@ -406,6 +467,7 @@ def create_jitted_likelihood_intensity(
             image_pars_int=image_pars_int,
             variance_int=variance_int,
             int_model=int_model,
+            mask_int=mask_int,
         )
     )
 
@@ -418,6 +480,8 @@ def create_jitted_likelihood_joint(
     variance_int: jnp.ndarray | float,
     data_vel: jnp.ndarray,
     data_int: jnp.ndarray,
+    mask_vel: jnp.ndarray = None,
+    mask_int: jnp.ndarray = None,
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled joint velocity + intensity likelihood function.
@@ -446,6 +510,10 @@ def create_jitted_likelihood_joint(
         Observed velocity data (2D array).
     data_int : jnp.ndarray
         Observed intensity data (2D array).
+    mask_vel : jnp.ndarray, optional
+        Boolean mask for velocity data (True=valid). Same shape as data_vel.
+    mask_int : jnp.ndarray, optional
+        Boolean mask for intensity data (True=valid). Same shape as data_int.
 
     Returns
     -------
@@ -500,6 +568,20 @@ def create_jitted_likelihood_joint(
     fields of view.
     """
 
+    if mask_vel is not None:
+        if mask_vel.shape != data_vel.shape:
+            raise ValueError(
+                f"mask_vel shape {mask_vel.shape} != data_vel shape {data_vel.shape}"
+            )
+        mask_vel = jnp.asarray(mask_vel, dtype=bool)
+
+    if mask_int is not None:
+        if mask_int.shape != data_int.shape:
+            raise ValueError(
+                f"mask_int shape {mask_int.shape} != data_int shape {data_int.shape}"
+            )
+        mask_int = jnp.asarray(mask_int, dtype=bool)
+
     # pre-compute coordinate grids from ImagePars (velocity still needs X, Y)
     X_vel, Y_vel = build_map_grid_from_image_pars(image_pars_vel)
 
@@ -514,6 +596,8 @@ def create_jitted_likelihood_joint(
             variance_vel=variance_vel,
             variance_int=variance_int,
             kl_model=kl_model,
+            mask_vel=mask_vel,
+            mask_int=mask_int,
         )
     )
 
