@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -182,7 +181,7 @@ def make_roman_grism(im_shape, pixel_scale, lambda_grid_nm, psf_array=None):
 
 
 # =============================================================================
-# standalone datacube + dispersion (fallback if Grism.disperse fails)
+# standalone datacube construction
 # =============================================================================
 
 
@@ -242,44 +241,6 @@ def build_datacube(vmap, imap, sigma_v_kms, z, lambda_rest_nm, lambda_grid_nm):
     cube = np.asarray(imap)[:, :, np.newaxis] * gauss
 
     return cube
-
-
-def disperse_datacube_simple(cube, lambda_grid_nm, lambda_ref_nm, dispersion_nm):
-    """Disperse datacube to 2D grism image via simple shift-and-add.
-
-    Standalone fallback if geko's Grism.disperse() fails. Dispersion along x only.
-
-    Parameters
-    ----------
-    cube : (Nrow, Ncol, Nlambda) array
-    lambda_grid_nm : (Nlambda,) array
-    lambda_ref_nm : float
-    dispersion_nm : float
-        nm per pixel.
-
-    Returns
-    -------
-    grism : (Nrow, Ncol) array
-    """
-    Nrow, Ncol, Nlambda = cube.shape
-    lam = np.asarray(lambda_grid_nm)
-    grism = np.zeros((Nrow, Ncol), dtype=np.float64)
-    dlam = abs(np.diff(lam[:2])[0]) if Nlambda > 1 else 1.0
-
-    for k in range(Nlambda):
-        # pixel offset for this wavelength
-        dx = (lam[k] - lambda_ref_nm) / dispersion_nm
-        # integer shift (nearest-neighbor; bilinear would be better but sufficient)
-        dx_int = int(np.round(dx))
-        slc = cube[:, :, k]
-        if dx_int == 0:
-            grism += slc * dlam
-        elif 0 < dx_int < Ncol:
-            grism[:, dx_int:] += slc[:, :-dx_int] * dlam
-        elif -Ncol < dx_int < 0:
-            grism[:, :dx_int] += slc[:, -dx_int:] * dlam
-
-    return grism
 
 
 def _gaussian_psf_kernel(fwhm_arcsec, pixel_scale, size=21):
@@ -514,16 +475,15 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
             grism = grism_sq[row_start:row_end, col_start:col_end]
             print(f"  grism via geko.Grism.disperse")
         except Exception as e:
-            warnings.warn(
-                f"geko Grism.disperse failed for '{test_name}': {e}. "
-                "Falling back to standalone dispersion.",
-                stacklevel=2,
-            )
+            raise RuntimeError(
+                f"geko Grism.disperse failed for '{test_name}': {e}"
+            ) from e
 
-    # fallback: build grism from datacube
     if grism is None:
-        grism = disperse_datacube_simple(cube, lambda_grid, lambda_ref, dispersion)
-        print(f"  grism via standalone dispersion (fallback)")
+        raise RuntimeError(
+            f"geko Grism.disperse() unavailable for '{test_name}'. "
+            "Install astro-geko with grism support or fix the error above."
+        )
 
     # --- save ---
     outdir.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,7 @@
 Verify kl_pipe <-> geko parameter conventions before cross-code comparison.
 
 Three checks:
-  A. PA mapping: velocity maps at theta_int=pi/4 (maximally asymmetric)
+  A. PA mapping: velocity maps at theta_int=pi/4, 3pi/4, pi + sign-flip test
   B. q0 <-> int_h_over_r: projected ellipticity sweep
   C. Grid centering: intensity peak alignment after square->rect crop
 
@@ -56,12 +56,54 @@ def _import_geko():
     return _v_core, sersic_profile
 
 
+def _check_pa_single(
+    theta_int,
+    vel_model,
+    image_pars,
+    X,
+    Y,
+    _v_core,
+    pixel_scale,
+    im_shape,
+    cosi,
+    vcirc,
+    vel_rscale,
+):
+    """Compare kl_pipe vs geko velocity maps at a single theta_int.
+
+    Returns (max_resid, vmap_kl, vmap_geko, PA_deg).
+    """
+    import jax.numpy as jnp
+
+    theta_vel = jnp.array([cosi, theta_int, 0.0, 0.0, 0.0, vcirc, vel_rscale])
+    vmap_kl = np.asarray(vel_model(theta_vel, 'obs', X, Y))
+
+    center = (im_shape - 1) / 2.0
+    x_1d = np.arange(im_shape) - center
+    y_1d = np.arange(im_shape) - center
+    X_pix, Y_pix = np.meshgrid(x_1d, y_1d, indexing='xy')
+
+    PA_deg = (90.0 - np.degrees(theta_int)) % 360.0
+    i_deg = np.degrees(np.arccos(cosi))
+    rt_pix = vel_rscale / pixel_scale
+
+    vmap_geko = np.asarray(_v_core(X_pix, Y_pix, PA_deg, i_deg, vcirc, rt_pix))
+
+    peak = max(np.max(np.abs(vmap_kl)), np.max(np.abs(vmap_geko)), 1e-10)
+    max_resid = np.max(np.abs(vmap_kl - vmap_geko)) / peak
+
+    return max_resid, vmap_kl, vmap_geko, PA_deg
+
+
 def check_pa_mapping():
-    """A. Compare velocity maps at theta_int=pi/4."""
+    """A. Compare velocity maps at multiple theta_int values.
+
+    Tests pi/4 (standard), 3pi/4 (third quadrant PA), and pi (wraps to PA=270
+    under % 360; would collide with theta_int=0 under the old % 180).
+    """
     import jax
 
     jax.config.update('jax_enable_x64', True)
-    import jax.numpy as jnp
     from kl_pipe.parameters import ImagePars
     from kl_pipe.utils import build_map_grid_from_image_pars
     from kl_pipe.velocity import CenteredVelocityModel
@@ -70,43 +112,80 @@ def check_pa_mapping():
 
     pixel_scale = 0.11
     im_shape = 48
-    theta_int = np.pi / 4
     cosi = 0.5
     vcirc = 200.0
     vel_rscale = 0.5  # arcsec
 
-    # kl_pipe: render on 48x48 arcsec grid
-    image_pars = ImagePars(shape=(im_shape, im_shape), pixel_scale=pixel_scale)
+    image_pars = ImagePars(
+        shape=(im_shape, im_shape), indexing='ij', pixel_scale=pixel_scale
+    )
     X, Y = build_map_grid_from_image_pars(image_pars)
     vel_model = CenteredVelocityModel()
-    theta_vel = jnp.array([cosi, theta_int, 0.0, 0.0, 0.0, vcirc, vel_rscale])
-    vmap_kl = np.asarray(vel_model(theta_vel, 'obs', X, Y))
 
-    # geko: render on centered pixel grid
-    center = (im_shape - 1) / 2.0
-    x_1d = np.arange(im_shape) - center
-    y_1d = np.arange(im_shape) - center
-    X_pix, Y_pix = np.meshgrid(x_1d, y_1d, indexing='xy')
+    test_angles = {
+        'pi/4': np.pi / 4,
+        '3pi/4': 3 * np.pi / 4,
+        'pi': np.pi,
+    }
 
-    PA_deg = (90.0 - np.degrees(theta_int)) % 180.0
-    i_deg = np.degrees(np.arccos(cosi))
-    rt_pix = vel_rscale / pixel_scale
+    all_pass = True
+    results_for_plot = {}
 
-    vmap_geko = np.asarray(_v_core(X_pix, Y_pix, PA_deg, i_deg, vcirc, rt_pix))
+    print("[A] PA mapping check (multiple angles):")
+    for label, theta_int in test_angles.items():
+        resid, vkl, vge, pa = _check_pa_single(
+            theta_int,
+            vel_model,
+            image_pars,
+            X,
+            Y,
+            _v_core,
+            pixel_scale,
+            im_shape,
+            cosi,
+            vcirc,
+            vel_rscale,
+        )
+        passed = resid < 0.001
+        all_pass = all_pass and passed
+        results_for_plot[label] = (resid, vkl, vge, pa)
 
-    # compare
-    peak = max(np.max(np.abs(vmap_kl)), np.max(np.abs(vmap_geko)), 1e-10)
-    max_resid = np.max(np.abs(vmap_kl - vmap_geko)) / peak
+        status = "PASS" if passed else "FAIL (threshold 0.1%)"
+        print(
+            f"    theta_int={label:6s} -> PA={pa:6.1f} deg | "
+            f"kl=[{vkl.min():.1f},{vkl.max():.1f}] "
+            f"geko=[{vge.min():.1f},{vge.max():.1f}] | "
+            f"resid={resid:.2e} {status}"
+        )
 
-    print(f"[A] PA mapping check (theta_int=pi/4):")
-    print(f"    kl_pipe vmap range: [{vmap_kl.min():.2f}, {vmap_kl.max():.2f}] km/s")
-    print(
-        f"    geko    vmap range: [{vmap_geko.min():.2f}, {vmap_geko.max():.2f}] km/s"
+    # verify theta_int=0 and theta_int=pi produce different velocity signs
+    theta_0 = 0.0
+    r0, vkl_0, _, pa0 = _check_pa_single(
+        theta_0,
+        vel_model,
+        image_pars,
+        X,
+        Y,
+        _v_core,
+        pixel_scale,
+        im_shape,
+        cosi,
+        vcirc,
+        vel_rscale,
     )
-    print(f"    max |residual| / peak = {max_resid:.6e}")
-    print(f"    PASS" if max_resid < 0.001 else f"    FAIL (threshold 0.1%)")
+    vkl_pi = results_for_plot['pi'][1]
 
-    # save diagnostic plot
+    # at theta_int=pi the velocity field should be sign-flipped vs theta_int=0
+    sign_check = np.max(np.abs(vkl_0 + vkl_pi))
+    sign_ok = sign_check < 0.001 * max(np.max(np.abs(vkl_0)), 1e-10)
+    print(
+        f"    sign check: |v(0) + v(pi)| max = {sign_check:.2e} "
+        f"{'PASS' if sign_ok else 'FAIL'}"
+    )
+    if not sign_ok:
+        all_pass = False
+
+    # save diagnostic plots
     _ensure_outdir()
     try:
         import matplotlib
@@ -114,16 +193,26 @@ def check_pa_mapping():
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        vmax = max(np.max(np.abs(vmap_kl)), np.max(np.abs(vmap_geko)))
-        axes[0].imshow(vmap_kl, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        axes[0].set_title('kl_pipe vmap')
-        axes[1].imshow(vmap_geko, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        axes[1].set_title(f'geko vmap (PA={PA_deg:.1f} deg)')
-        resid = vmap_kl - vmap_geko
-        im = axes[2].imshow(resid, origin='lower', cmap='RdBu_r')
-        axes[2].set_title(f'residual (max={max_resid:.2e})')
-        plt.colorbar(im, ax=axes[2])
+        n_angles = len(results_for_plot)
+        fig, axes = plt.subplots(n_angles, 3, figsize=(15, 4 * n_angles))
+        if n_angles == 1:
+            axes = axes[np.newaxis, :]
+
+        for row, (label, (resid, vkl, vge, pa)) in enumerate(results_for_plot.items()):
+            vmax = max(np.max(np.abs(vkl)), np.max(np.abs(vge)))
+            axes[row, 0].imshow(
+                vkl, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax
+            )
+            axes[row, 0].set_title(f'kl_pipe (theta_int={label})')
+            axes[row, 1].imshow(
+                vge, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax
+            )
+            axes[row, 1].set_title(f'geko (PA={pa:.1f} deg)')
+            r = vkl - vge
+            im = axes[row, 2].imshow(r, origin='lower', cmap='RdBu_r')
+            axes[row, 2].set_title(f'residual (max={resid:.2e})')
+            plt.colorbar(im, ax=axes[row, 2])
+
         plt.tight_layout()
         fig.savefig(OUT_DIR / 'pa_mapping.png', dpi=150)
         plt.close(fig)
@@ -131,7 +220,7 @@ def check_pa_mapping():
     except ImportError:
         pass
 
-    return max_resid < 0.001
+    return all_pass
 
 
 def check_q0_mapping():
@@ -156,7 +245,9 @@ def check_q0_mapping():
     # kl_pipe: render intensity map, measure second moments
     import jax.numpy as jnp
 
-    image_pars = ImagePars(shape=(im_shape, im_shape), pixel_scale=pixel_scale)
+    image_pars = ImagePars(
+        shape=(im_shape, im_shape), indexing='ij', pixel_scale=pixel_scale
+    )
     int_model = InclinedExponentialModel()
     theta_int_arr = jnp.array(
         [
@@ -272,7 +363,7 @@ def check_grid_centering():
     im_shape = max(Nrow, Ncol)  # 48
 
     # kl_pipe: 32x48
-    image_pars = ImagePars(shape=(Nrow, Ncol), pixel_scale=pixel_scale)
+    image_pars = ImagePars(shape=(Nrow, Ncol), indexing='ij', pixel_scale=pixel_scale)
     int_model = InclinedExponentialModel()
     theta_int_arr = jnp.array(
         [

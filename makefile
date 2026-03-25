@@ -299,8 +299,13 @@ VALIDATION_DATA_DIR = $(TEST_DIR)/data/validation
 setup-validation-env:
 	@bash scripts/validation/setup_env.sh
 
+# quiet variant used as a dependency — no output if env already exists
+.PHONY: _ensure-validation-env
+_ensure-validation-env:
+	@bash scripts/validation/setup_env.sh -q
+
 .PHONY: verify-geko-conventions
-verify-geko-conventions:
+verify-geko-conventions: _ensure-validation-env
 	@echo "Verifying geko parameter conventions..."
 	@conda run -n klpipe_validation python scripts/validation/verify_geko_conventions.py
 
@@ -311,7 +316,7 @@ render-validation-kl-pipe:
 		--outdir $(VALIDATION_DATA_DIR)/kl_pipe --config $(VALIDATION_CONFIG)
 
 .PHONY: render-validation-geko
-render-validation-geko:
+render-validation-geko: _ensure-validation-env
 	@echo "Rendering geko validation combos..."
 	@conda run -n klpipe_validation python scripts/validation/render_geko.py \
 		--outdir $(VALIDATION_DATA_DIR)/geko --config $(VALIDATION_CONFIG)

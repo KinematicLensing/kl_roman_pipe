@@ -205,8 +205,10 @@ def get_geko_params(test_name: str, config: Optional[dict] = None) -> dict:
 
     Parameter mapping (verified via verify_geko_conventions.py):
       cosi        -> i (deg) = degrees(arccos(cosi))
-      theta_int   -> PA (deg) = (90 - degrees(theta_int)) % 180
+      theta_int   -> PA (deg) = (90 - degrees(theta_int)) % 360
                      geko PA: CCW from +y (N). kl_pipe theta_int: CCW from +x.
+                     Full 360 range needed: theta_int=0 vs pi produce different
+                     velocity signs (sin(psi+pi)=-sin(psi)); % 180 collapses them.
       vcirc       -> Va (km/s), direct
       vel_rscale  -> rt (arcsec), direct; rt_pix = rt / pixel_scale
       int_rscale  -> re (arcsec), re = 1.678 * int_rscale for n=1; re_pix = re / pixel_scale
@@ -230,7 +232,7 @@ def get_geko_params(test_name: str, config: Optional[dict] = None) -> dict:
     i_deg = float(np.degrees(np.arccos(cosi)))
 
     # PA: kl_pipe theta_int (rad, CCW from +x) -> geko PA (deg, CCW from +y)
-    PA_deg = float((90.0 - np.degrees(p['theta_int'])) % 180.0)
+    PA_deg = float((90.0 - np.degrees(p['theta_int'])) % 360.0)
 
     # half-light radius for exponential disk: r_hl = 1.678 * r_scale
     re = 1.678 * p['int_rscale']
