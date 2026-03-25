@@ -310,8 +310,10 @@ def _render_intensity_map(X_pix, Y_pix, geko_pars):
     if _flux_to_Ie_fn is not None:
         Ie = float(_flux_to_Ie_fn(amplitude, n, re_pix, ellip))
     else:
-        # fallback for n=1: Ie = flux / (2*pi*re^2*q_obs)
-        Ie = amplitude / (2.0 * np.pi * re_pix**2 * q_obs)
+        raise ImportError(
+            "geko flux_to_Ie not available. Required for correct Sersic "
+            "normalization (naive formula is ~2x wrong for n=1)."
+        )
 
     # sersic_profile(x, y, Ie, re, n, x0, y0, ellip, theta)
     # geko's Sersic angle: angle of major axis in pixel coords
@@ -491,6 +493,15 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
             "Install astro-geko with grism support or fix the error above."
         )
 
+    # --- convert to kl_pipe conventions before saving ---
+    # geko renders in pixel coords (pix^-2); kl_pipe uses arcsec^-2.
+    # Convention: all .npz outputs use kl_pipe units:
+    #   imap: arcsec^-2 (surface brightness)
+    #   vmap: km/s (same in both codes)
+    #   grism: TBD — may need similar conversion; diagnosed via comparison
+    #   cube: TBD — diagnostic only
+    imap_arcsec = imap / pixel_scale**2
+
     # --- save ---
     outdir.mkdir(parents=True, exist_ok=True)
     outpath = outdir / f'{test_name}.npz'
@@ -499,7 +510,7 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
         cube=np.asarray(cube),
         grism=np.asarray(grism),
         vmap=np.asarray(vmap),
-        imap=np.asarray(imap),
+        imap=np.asarray(imap_arcsec),
         lambda_grid=np.asarray(lambda_grid),
     )
     print(f"  saved {outpath}")

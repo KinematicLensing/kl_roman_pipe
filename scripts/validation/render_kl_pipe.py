@@ -153,7 +153,11 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
     vmap = vel_model(theta_vel, 'obs', X, Y)
     imap = int_model.render_unconvolved(theta_int, image_pars)
 
-    # save
+    # save — all outputs in kl_pipe-native units:
+    #   imap: arcsec^-2 (surface brightness)
+    #   vmap: km/s
+    #   grism/cube: kl_pipe native (arcsec grid, nm wavelength)
+    # Other render scripts must convert to these conventions before saving.
     outdir.mkdir(parents=True, exist_ok=True)
     outpath = outdir / f'{test_name}.npz'
     np.savez(

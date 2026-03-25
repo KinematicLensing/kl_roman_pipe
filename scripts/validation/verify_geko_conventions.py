@@ -228,8 +228,31 @@ def check_pa_mapping():
     return all_pass
 
 
+def _ellip_from_moments(img):
+    """Measure ellipticity from flux-weighted second moments."""
+    total = np.sum(img)
+    if total == 0:
+        return 0.0
+    rows, cols = np.indices(img.shape)
+    rc = np.sum(rows * img) / total
+    cc = np.sum(cols * img) / total
+    Qxx = np.sum((cols - cc) ** 2 * img) / total
+    Qyy = np.sum((rows - rc) ** 2 * img) / total
+    Qxy = np.sum((cols - cc) * (rows - rc) * img) / total
+    e1 = (Qxx - Qyy) / (Qxx + Qyy)
+    e2 = 2 * Qxy / (Qxx + Qyy)
+    return np.sqrt(e1**2 + e2**2)
+
+
 def check_q0_mapping():
-    """B. Compare projected ellipticity: sweep geko q0 to match kl_pipe."""
+    """B. Verify analytic q0 = (pi/6)*h_over_r against numerical sweep.
+
+    The conversion comes from second-moment matching:
+      kl_pipe sech^2: ⟨z^2⟩ = pi^2 h_z^2 / 12
+      exponential disk: ⟨R^2/2⟩ = 3 r_s^2
+      Hubble: q_obs^2 = cos^2(i) + sin^2(i) q0^2
+    Setting equal: q0 = (pi/6) * (h_z / r_s) = (pi/6) * int_h_over_r
+    """
     import jax
 
     jax.config.update('jax_enable_x64', True)
@@ -247,7 +270,6 @@ def check_q0_mapping():
     int_h_over_r = 0.1
     int_rscale = 0.3  # arcsec
 
-    # kl_pipe: render intensity map, measure second moments
     import jax.numpy as jnp
 
     image_pars = ImagePars(
@@ -268,60 +290,53 @@ def check_q0_mapping():
         ]
     )
     imap_kl = np.asarray(int_model.render_unconvolved(theta_int_arr, image_pars))
-
-    def _ellip_from_moments(img):
-        """Measure ellipticity from unweighted second moments."""
-        total = np.sum(img)
-        if total == 0:
-            return 0.0
-        rows, cols = np.indices(img.shape)
-        rc = np.sum(rows * img) / total
-        cc = np.sum(cols * img) / total
-        Qxx = np.sum((cols - cc) ** 2 * img) / total
-        Qyy = np.sum((rows - rc) ** 2 * img) / total
-        Qxy = np.sum((cols - cc) * (rows - rc) * img) / total
-        e1 = (Qxx - Qyy) / (Qxx + Qyy)
-        e2 = 2 * Qxy / (Qxx + Qyy)
-        return np.sqrt(e1**2 + e2**2)
-
     ellip_kl = _ellip_from_moments(imap_kl)
 
-    # sweep geko q0 to match
+    # numerical sweep: find best-fit q0 by ellipticity matching
     i_deg = np.degrees(np.arccos(cosi))
     re_pix = 1.678 * int_rscale / pixel_scale
     center = (im_shape - 1) / 2.0
     x_1d = np.arange(im_shape) - center
     X_pix, Y_pix = np.meshgrid(x_1d, x_1d, indexing='xy')
 
-    q0_values = np.linspace(0.01, 0.5, 50)
+    try:
+        from geko.utils import flux_to_Ie
+    except ImportError:
+        raise ImportError(
+            "geko.utils.flux_to_Ie required for correct Sersic normalization"
+        )
+
+    q0_values = np.linspace(0.01, 0.5, 200)
     ellip_geko = []
     for q0 in q0_values:
         q_obs = np.sqrt(cosi**2 * (1 - q0**2) + q0**2)
         e = 1.0 - q_obs
-        Ie = 100.0 / (2 * np.pi * re_pix**2 * q_obs)
+        Ie = float(flux_to_Ie(100.0, 1.0, re_pix, e))
         imap_ge = np.asarray(
             sersic_profile(X_pix, Y_pix, Ie, re_pix, 1.0, 0, 0, e, 0.0)
         )
         ellip_geko.append(_ellip_from_moments(imap_ge))
     ellip_geko = np.array(ellip_geko)
 
-    # find best-fit q0
     idx = np.argmin(np.abs(ellip_geko - ellip_kl))
-    q0_best = q0_values[idx]
-    ellip_err = abs(ellip_geko[idx] - ellip_kl)
+    q0_numerical = q0_values[idx]
 
-    # compare with naive q0 = int_h_over_r
-    naive_err = abs(q0_values[np.argmin(np.abs(q0_values - int_h_over_r))] - q0_best)
+    # analytic prediction
+    q0_analytic = (np.pi / 6) * int_h_over_r
+    analytic_err = abs(q0_analytic - q0_numerical)
 
-    print(f"[B] q0 <-> int_h_over_r mapping (cosi={cosi}):")
+    print(f"[B] q0 mapping check (cosi={cosi}, h/r={int_h_over_r}):")
     print(f"    kl_pipe projected ellipticity: {ellip_kl:.4f}")
-    print(f"    best-fit geko q0: {q0_best:.4f} (ellip match err={ellip_err:.4f})")
-    print(f"    int_h_over_r: {int_h_over_r:.4f}")
-    print(f"    |q0_best - int_h_over_r|: {naive_err:.4f}")
-    if naive_err < 0.02:
-        print(f"    q0 ~ int_h_over_r is adequate (|diff| < 0.02)")
-    else:
-        print(f"    WARNING: q0 != int_h_over_r — need exact mapping")
+    print(f"    numerical best-fit q0:  {q0_numerical:.4f}")
+    print(f"    analytic q0 = (pi/6)*h/r: {q0_analytic:.4f}")
+    print(f"    |analytic - numerical|: {analytic_err:.4f}")
+
+    # pass if analytic prediction within sweep resolution (~0.5/200 = 0.0025)
+    sweep_resolution = (q0_values[-1] - q0_values[0]) / len(q0_values)
+    passed = analytic_err < 2 * sweep_resolution
+    print(
+        f"    {'PASS' if passed else 'FAIL'} (threshold = 2x sweep resolution = {2*sweep_resolution:.4f})"
+    )
 
     # save plot
     _ensure_outdir()
@@ -332,25 +347,45 @@ def check_q0_mapping():
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(q0_values, ellip_geko, 'b-', label='geko')
+        ax.plot(q0_values, ellip_geko, 'b-', label='geko sweep')
         ax.axhline(ellip_kl, color='r', ls='--', label=f'kl_pipe (h/r={int_h_over_r})')
-        ax.axvline(q0_best, color='g', ls=':', label=f'best q0={q0_best:.3f}')
-        ax.axvline(int_h_over_r, color='orange', ls=':', label=f'h/r={int_h_over_r}')
+        ax.axvline(
+            q0_numerical, color='g', ls=':', label=f'numerical q0={q0_numerical:.4f}'
+        )
+        ax.axvline(
+            q0_analytic,
+            color='purple',
+            ls='-.',
+            label=f'analytic (pi/6)*h/r={q0_analytic:.4f}',
+        )
         ax.set_xlabel('geko q0')
         ax.set_ylabel('projected ellipticity')
         ax.legend()
-        ax.set_title(f'q0 mapping at cosi={cosi}')
+        ax.set_title(f'q0 mapping: analytic vs numerical (cosi={cosi})')
         fig.savefig(OUT_DIR / 'q0_mapping.png', dpi=150)
         plt.close(fig)
         print(f"    plot saved: {OUT_DIR / 'q0_mapping.png'}")
     except ImportError:
         pass
 
-    return naive_err < 0.02
+    return passed
+
+
+def _compute_centroid(img):
+    """Flux-weighted centroid. Returns (row, col) as floats."""
+    total = np.sum(img)
+    if total == 0:
+        return np.array([0.0, 0.0])
+    rows, cols = np.indices(img.shape)
+    return np.array([np.sum(rows * img) / total, np.sum(cols * img) / total])
 
 
 def check_grid_centering():
-    """C. Verify intensity peak alignment after square->rect crop."""
+    """C. Verify centroid alignment after square->rect crop.
+
+    Uses analytic q0 = (pi/6)*h_over_r and flux-weighted centroid
+    (not argmax, which is ambiguous on even-sized grids).
+    """
     import jax
 
     jax.config.update('jax_enable_x64', True)
@@ -365,65 +400,82 @@ def check_grid_centering():
 
     pixel_scale = 0.11
     Nrow, Ncol = 32, 48
+    int_h_over_r = 0.1
+    int_rscale = 0.3  # arcsec
+    cosi = 0.5
+    flux = 100.0
     im_shape = max(Nrow, Ncol)  # 48
 
     # kl_pipe: 32x48
     image_pars = ImagePars(shape=(Nrow, Ncol), indexing='ij', pixel_scale=pixel_scale)
     int_model = InclinedExponentialModel()
     theta_int_arr = jnp.array(
-        [
-            0.5,
-            0.0,
-            0.0,
-            0.0,  # cosi, theta_int, g1, g2
-            100.0,
-            0.3,
-            0.1,
-            0.0,
-            0.0,  # flux, int_rscale, int_h_over_r, x0, y0
-        ]
+        [cosi, 0.0, 0.0, 0.0, flux, int_rscale, int_h_over_r, 0.0, 0.0]
     )
     imap_kl = np.asarray(int_model.render_unconvolved(theta_int_arr, image_pars))
-    peak_kl = np.unravel_index(np.argmax(imap_kl), imap_kl.shape)
 
-    # geko: 48x48, then crop
+    # geko: 48x48, then crop — using analytic q0
     center = (im_shape - 1) / 2.0
     x_1d = np.arange(im_shape) - center
     X_pix, Y_pix = np.meshgrid(x_1d, x_1d, indexing='xy')
-    cosi = 0.5
-    q0 = 0.1
+
+    q0 = (np.pi / 6) * int_h_over_r
     i_deg = np.degrees(np.arccos(cosi))
     q_obs = np.sqrt(cosi**2 * (1 - q0**2) + q0**2)
     e = 1.0 - q_obs
-    re_pix = 1.678 * 0.3 / pixel_scale
-    Ie = 100.0 / (2 * np.pi * re_pix**2 * q_obs)
+    re_pix = 1.678 * int_rscale / pixel_scale
+
+    # use geko's flux_to_Ie for correct Sersic normalization
+    # (naive Ie = flux/(2*pi*re^2*q) is ~2x too high for n=1)
+    try:
+        from geko.utils import flux_to_Ie
+
+        Ie = float(flux_to_Ie(flux, 1.0, re_pix, e))
+    except ImportError:
+        raise ImportError(
+            "geko.utils.flux_to_Ie required for correct Sersic normalization"
+        )
+
     imap_sq = np.asarray(sersic_profile(X_pix, Y_pix, Ie, re_pix, 1.0, 0, 0, e, 0.0))
 
-    # crop: central Nrow rows
-    row_start = (im_shape - Nrow) // 2  # (48-32)//2 = 8
+    # crop: central rows/cols
+    row_start = (im_shape - Nrow) // 2
     imap_crop = imap_sq[row_start : row_start + Nrow, :]
-    peak_crop = np.unravel_index(np.argmax(imap_crop), imap_crop.shape)
 
-    row_offset = abs(peak_kl[0] - peak_crop[0])
-    col_offset = abs(peak_kl[1] - peak_crop[1])
+    # convert kl_pipe from arcsec^-2 to pix^-2 so units match geko
+    imap_kl_pix = imap_kl * pixel_scale**2
 
-    print(f"[C] Grid centering check:")
-    print(f"    kl_pipe peak (32x48): row={peak_kl[0]}, col={peak_kl[1]}")
-    print(f"    geko cropped peak:    row={peak_crop[0]}, col={peak_crop[1]}")
-    print(f"    offset: ({row_offset}, {col_offset}) pixels")
+    # centroid comparison (sub-pixel) — units don't affect centroids
+    c_kl = _compute_centroid(imap_kl)
+    c_ge = _compute_centroid(imap_crop)
+    centroid_offset = np.sqrt(np.sum((c_kl - c_ge) ** 2))
 
-    if row_offset == 0 and col_offset == 0:
-        print(f"    PASS (exact alignment)")
-    elif row_offset <= 1 and col_offset <= 1:
-        print(f"    WARNING: 1-pixel offset — check sub-pixel centering convention")
-    else:
-        print(f"    FAIL: large offset — crop indices may be wrong")
+    # also report argmax for reference
+    peak_kl = np.unravel_index(np.argmax(imap_kl), imap_kl.shape)
+    peak_ge = np.unravel_index(np.argmax(imap_crop), imap_crop.shape)
 
-    # flux comparison
-    if np.max(imap_kl) > 0:
-        max_resid = np.max(np.abs(imap_crop - imap_kl)) / np.max(imap_kl)
+    print(f"[C] Grid centering check (q0=(pi/6)*h/r={q0:.4f}):")
+    print(f"    kl_pipe centroid: ({c_kl[0]:.2f}, {c_kl[1]:.2f})")
+    print(f"    geko    centroid: ({c_ge[0]:.2f}, {c_ge[1]:.2f})")
+    print(f"    centroid offset: {centroid_offset:.4f} pix")
+    print(f"    argmax kl_pipe: {peak_kl}, geko: {peak_ge}")
+
+    # centroid must agree to < 0.5 pix (sub-pixel centering)
+    centroid_ok = centroid_offset < 0.5
+    print(f"    {'PASS' if centroid_ok else 'FAIL'} (threshold 0.5 pix)")
+
+    # flux comparison (both in pix^-2 units)
+    flux_kl = np.sum(imap_kl_pix)
+    flux_ge = np.sum(imap_crop)
+    flux_rtol = abs(flux_kl - flux_ge) / abs(flux_kl)
+    print(
+        f"    integrated flux: kl={flux_kl:.2f}, geko={flux_ge:.2f} (rtol={flux_rtol:.4f})"
+    )
+
+    if np.max(imap_kl_pix) > 0:
+        max_resid = np.max(np.abs(imap_crop - imap_kl_pix)) / np.max(imap_kl_pix)
         print(f"    max |residual| / peak = {max_resid:.4f}")
-        print(f"    (expected ~1-3% from intensity model differences)")
+        print(f"    (residual from sech^2 vs Sersic profile shape difference)")
 
     # save plot
     _ensure_outdir()
@@ -434,16 +486,16 @@ def check_grid_centering():
         import matplotlib.pyplot as plt
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        axes[0].imshow(imap_kl, origin='lower')
-        axes[0].plot(peak_kl[1], peak_kl[0], 'rx', ms=10)
+        axes[0].imshow(imap_kl_pix, origin='lower')
+        axes[0].plot(c_kl[1], c_kl[0], 'r+', ms=12, mew=2)
         axes[0].set_title('kl_pipe (32x48)')
         axes[1].imshow(imap_crop, origin='lower')
-        axes[1].plot(peak_crop[1], peak_crop[0], 'rx', ms=10)
-        axes[1].set_title(f'geko cropped (32x48)')
-        if imap_kl.shape == imap_crop.shape:
-            resid = imap_crop - imap_kl
+        axes[1].plot(c_ge[1], c_ge[0], 'r+', ms=12, mew=2)
+        axes[1].set_title(f'geko cropped (q0={q0:.4f})')
+        if imap_kl_pix.shape == imap_crop.shape:
+            resid = imap_crop - imap_kl_pix
             im = axes[2].imshow(resid, origin='lower', cmap='RdBu_r')
-            axes[2].set_title('residual')
+            axes[2].set_title(f'residual (max rel={max_resid:.2f})')
             plt.colorbar(im, ax=axes[2])
         plt.tight_layout()
         fig.savefig(OUT_DIR / 'grid_centering.png', dpi=150)
@@ -452,7 +504,7 @@ def check_grid_centering():
     except ImportError:
         pass
 
-    return row_offset <= 1 and col_offset <= 1
+    return centroid_ok
 
 
 def main():

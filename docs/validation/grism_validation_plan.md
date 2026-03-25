@@ -52,6 +52,18 @@ If you're writing a rendering script for kl-tools or grizli:
 
 See the Parameter Mapping section for your code's parameter conversions.
 
+### Output unit conventions
+
+All `.npz` files use **kl_pipe-native units**. Render scripts for other codes must convert before saving.
+
+| Key | Units | Notes |
+|-----|-------|-------|
+| `imap` | arcsec^-2 | Surface brightness. Pixel-based codes: divide by `pixel_scale^2`. |
+| `vmap` | km/s | LOS velocity. Same in all codes. |
+| `grism` | kl_pipe native | Dispersed 2D image. Unit matching TBD after first comparison run. |
+| `cube` | kl_pipe native | Diagnostic only; primary comparison target is the grism. |
+| `lambda_grid` | nm | 1D wavelength grid for cube spectral axis. |
+
 ## Code Comparison Workflow
 
 1. Define conceptual test configurations we are interested in (~35 output grism datavectors).
@@ -236,14 +248,14 @@ Owners shoudl fill out their section as they work so we can udnerstand how to ma
 | kl_pipe | geko | Conversion | Status |
 |---------|------|------------|--------|
 | `cosi` | `i` (deg) | `i = degrees(arccos(cosi))` | Verified |
-| `theta_int` (rad, from +x) | `PA` (deg, CCW from +y) | `PA = (90 - degrees(theta_int)) % 180` | Derived from source; verify w/ script |
+| `theta_int` (rad, from +x) | `PA` (deg, CCW from +y) | `PA = (90 - degrees(theta_int)) % 360` | Verified (must be % 360; % 180 collapses velocity sign at theta_int=pi) |
 | `vcirc` (km/s) | `Va` (km/s) | Direct | Verified |
 | `vel_rscale` (arcsec) | `rt` (arcsec); `rt_pix = rt / pix_scale` | Direct + unit conv | Verified |
 | `int_rscale` (arcsec) | `re` (arcsec) = 1.678 * int_rscale for n=1; `re_pix = re / pix_scale` | Exponential half-light relation | Verified (standard result) |
 | `flux` (integrated) | `amplitude` (integrated flux) | Direct. geko computes Ie internally via `flux_to_Ie(amplitude, n, re, ellip)` | Verified |
 | `v0` (km/s) | `v0` (km/s) | Direct | Verified |
 | `vel_dispersion` (km/s) | `sigma0` (km/s) | Direct | Verified |
-| `int_h_over_r` | `q0` | Approximate: `q0 ~ int_h_over_r`. Different geometry (Hubble oblate spheroid vs sech^2). `verify_geko_conventions.py` quantifies the error. | Approximate |
+| `int_h_over_r` | `q0` | `q0 = (pi/6) * int_h_over_r`. Analytic second-moment matching: sech^2 ⟨z^2⟩ = pi^2 h_z^2/12, exp disk ⟨R^2/2⟩ = 3 r_s^2. | Verified (analytic + numerical sweep) |
 | `g1, g2` | N/A | geko has no shear; fix to 0 in kl_pipe | N/A |
 
 ### kl_pipe to kl-tools (Jiachuan)
@@ -395,19 +407,20 @@ See also: `GRISM_VALIDATION_RISKS.md` for risk assessment and fallback strategie
 
 ### Resolved
 
-- **PA convention**: geko PA in degrees, CCW from +y. Mapping: `PA = (90 - degrees(theta_int)) % 180`.
-  Derived from geko source (`_v_core`). Verified by `verify_geko_conventions.py`.
+- **PA convention**: `PA = (90 - degrees(theta_int)) % 360`. Must be `% 360` not `% 180` —
+  the latter collapses theta_int=0 and pi to the same PA, losing velocity sign reversal.
+  Verified at pi/4, 3pi/4, pi by `verify_geko_conventions.py` Check A.
+- **`q0` vs `int_h_over_r`**: `q0 = (pi/6) * int_h_over_r`. Analytic second-moment
+  matching between sech^2 vertical (⟨z^2⟩ = pi^2 h_z^2/12) and Hubble oblate spheroid.
+  Verified against numerical sweep in Check B (agreement within sweep resolution).
 - **`re` definition**: half-light radius. `re = 1.678 * int_rscale` for n=1 (standard result).
 - **Flux normalization**: geko `amplitude` = integrated flux (same as kl_pipe `flux`).
   geko computes `Ie` internally via `flux_to_Ie(amplitude, n, re, ellip)`.
+  The naive formula `Ie = flux/(2*pi*re^2*q)` is ~2x wrong for n=1; must use `flux_to_Ie`.
 - **Dispersion model**: geko uses JWST 4th-order polynomial, but our Roman wrapper
   bypasses this and sets linear dispersion matching kl_pipe. Not a cross-code difference.
-
-### Partially resolved
-
-- **`q0` vs `int_h_over_r`**: Different geometric models (Hubble oblate spheroid vs sech^2).
-  First-order approximation `q0 ~ int_h_over_r` expected to be within ~1-2%.
-  `verify_geko_conventions.py` quantifies the exact error via projected ellipticity matching.
+- **Grid centering**: Centroids agree to <0.01 pix after square→rect crop. argmax can
+  differ by 1 pixel on even-sized grids (flat-topped center); use centroids for validation.
 
 ### Still open
 

@@ -216,9 +216,10 @@ def get_geko_params(test_name: str, config: Optional[dict] = None) -> dict:
                      internally via flux_to_Ie(amplitude, n, re, ellip).
       v0          -> v0, direct
       vel_disp    -> sigma0, direct
-      int_h_over_r -> q0 (approximate: q0 ~ int_h_over_r). geko uses Hubble
-                      oblate-spheroid q0; kl_pipe uses sech^2 h_over_r.
-                      Exact mapping derived by verify_geko_conventions.py.
+      int_h_over_r -> q0 = (pi/6) * int_h_over_r. Analytic second-moment
+                      matching between kl_pipe sech^2 vertical profile
+                      (⟨z^2⟩ = pi^2 h_z^2 / 12) and geko Hubble oblate
+                      spheroid. Verified by verify_geko_conventions.py Check B.
       g1, g2      -> N/A (geko has no shear; fixed to 0 in kl_pipe)
     """
     if config is None:
@@ -237,8 +238,11 @@ def get_geko_params(test_name: str, config: Optional[dict] = None) -> dict:
     # half-light radius for exponential disk: r_hl = 1.678 * r_scale
     re = 1.678 * p['int_rscale']
 
-    # q0: approximate mapping. verify_geko_conventions.py quantifies the error.
-    q0 = p['int_h_over_r']
+    # q0: analytic second-moment matching between sech^2 (kl_pipe) and Hubble
+    # oblate spheroid (geko). For exp radial + sech^2 vertical:
+    #   ⟨z^2⟩ = pi^2 h_z^2 / 12,  ⟨R^2/2⟩ = 3 r_s^2
+    # Hubble q_obs^2 = cos^2(i) + sin^2(i) q0^2 matches when q0 = (pi/6) h/r.
+    q0 = (np.pi / 6) * p['int_h_over_r']
 
     geko_pars = {
         'Va': p['vcirc'],
