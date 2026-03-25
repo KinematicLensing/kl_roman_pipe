@@ -65,7 +65,7 @@ def _try_import_geko():
     global _axis_ratio_fn, _flux_to_Ie_fn, _Grism_cls
 
     # velocity function
-    for mod in ('geko.galaxy_model', 'geko.models', 'geko.velocity'):
+    for mod in ('geko.models', 'geko.galaxy_model', 'geko.velocity'):
         try:
             _v_core_fn = getattr(__import__(mod, fromlist=['_v_core']), '_v_core')
             break
@@ -78,7 +78,13 @@ def _try_import_geko():
         )
 
     # intensity function
-    for mod in ('geko.galaxy_model', 'geko.models', 'geko.intensity'):
+    for mod in (
+        'geko.utils',
+        'geko',
+        'geko.models',
+        'geko.galaxy_model',
+        'geko.intensity',
+    ):
         try:
             _sersic_fn = getattr(
                 __import__(mod, fromlist=['sersic_profile']), 'sersic_profile'

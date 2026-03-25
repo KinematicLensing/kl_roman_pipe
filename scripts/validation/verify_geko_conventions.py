@@ -35,24 +35,29 @@ def _ensure_outdir():
 
 def _import_geko():
     """Import geko functions; raise helpful error if missing."""
+    # _v_core: try geko.models (v1.0+), then legacy geko.galaxy_model
     try:
-        from geko.galaxy_model import _v_core
+        from geko.models import _v_core
     except ImportError:
         try:
-            from geko.models import _v_core
+            from geko.galaxy_model import _v_core
         except ImportError:
             raise ImportError(
                 "Cannot import geko velocity function. "
                 "Install: pip install astro-geko. "
                 "Or run in klpipe_validation env: conda activate klpipe_validation"
             )
+    # sersic_profile: lives in geko.utils (v1.0+), re-exported at top-level
     try:
-        from geko.galaxy_model import sersic_profile
+        from geko.utils import sersic_profile
     except ImportError:
         try:
-            from geko.models import sersic_profile
+            from geko import sersic_profile
         except ImportError:
-            sersic_profile = None
+            try:
+                from geko.models import sersic_profile
+            except ImportError:
+                sersic_profile = None
     return _v_core, sersic_profile
 
 
