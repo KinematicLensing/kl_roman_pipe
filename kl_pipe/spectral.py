@@ -144,15 +144,11 @@ class CubePars:
 
 
 ####WIP
-@dataclass(
-    frozen=True
-)  # " decorator in Python creates instances of a data class that are effectively immutable. This means that once an instance is created, you cannot change the value of its attributes"
-class FiberPars:  # should also take spectral config? no
+@dataclass(frozen=True)
+class FiberPars:
     cube_pars: CubePars
     obs_conf: dict  # meta_pars: MetaPars <-- could do this instead and get obs_conf from there
 
-    # use @classmethod to make a FiberPars instance from CubePars and other ingredients, I think
-    # classmethod takes the class itself, not a preexisting instance. So you can use it to make an instance
     @classmethod
     def from_cube_pars(cls, cube_pars, obs_conf):
         cls.is_dispersed = obs_conf['OBSTYPE'] == 1
@@ -174,15 +170,18 @@ class FiberPars:  # should also take spectral config? no
             ##_dlam = _dlam[_bid]
 
             cls.throughput = gs.Bandpass(
-                obs_conf['BANDPASS'],  # I can specify the bandpass with galsim to start
+                obs_conf['BANDPASS'],
                 'nm',
                 blue_limit=cls.lambda_grid[0],
                 red_limit=cls.lambda_grid[-1],
             )
-            cls._bp_array = cls.throughput(cls.lambda_grid)
+            cls._bp_array = jnp.array(cls.throughput(cls.lambda_grid))
             cls.lambda_eff = cls.throughput.effective_wavelength
 
-        else:  # photometry data -- still start from a cube, right? yeah I think that's fine
+        else:  # photometry
+            cls.lambda_grid = cube_pars.lambda_grid
+            cls.n_lambda = len(cls.lambda_grid)
+
             _from_file_ = os.path.isfile(obs_conf['BANDPASS'])
             if _from_file_:
                 cls.throughput = gs.Bandpass(obs_conf['BANDPASS'], 'nm')
@@ -194,101 +193,13 @@ class FiberPars:  # should also take spectral config? no
                     blue_limit=_lrange[0],
                     red_limit=_lrange[1],
                 )
+            cls._bp_array = jnp.array(cls.throughput(cls.lambda_grid))
             cls.lambda_eff = cls.throughput.effective_wavelength
-            cls.lambda_grid, cls.n_lambda, cls._bp_array = None, 1, None
+
+            # this is how it's written in kl-tools but I think I need these even for photometry
+            # cls.lambda_grid, cls.n_lambda, cls._bp_array = None, 1, None
 
         return cls(cube_pars=cube_pars, obs_conf=obs_conf)
-
-    # taken from grism pars.. should be the same, right?
-    # isn't it a little weird to have a method to make cube pars when the class already expects it
-    def to_cube_pars(
-        self,
-        z: float,
-        velocity_window_kms: float = 3000.0,
-        n_lambda: int = None,
-        line_lambdas_rest: tuple = None,
-    ) -> 'CubePars':
-        """Build CubePars centered on the emission line complex at redshift z.
-
-        Parameters
-        ----------
-        z : float
-            Galaxy redshift.
-        velocity_window_kms : float
-            Half-width of velocity window in km/s. Default 3000.
-        n_lambda : int, optional
-            Number of wavelength pixels. If None, computed from velocity window
-            and dispersion.
-        line_lambdas_rest : tuple of float, optional
-            Rest-frame wavelengths (nm) of lines to cover. If None, uses
-            H-alpha (656.28 nm).
-        """
-        from kl_pipe.spectral import CubePars
-
-        if line_lambdas_rest is None:
-            line_lambdas_rest = (656.28,)
-
-        # observed wavelength range covering all lines + velocity window
-        lam_obs = [(lam * (1.0 + z)) for lam in line_lambdas_rest]
-        lam_min_line = min(lam_obs)
-        lam_max_line = max(lam_obs)
-
-        # velocity window in wavelength units
-        c_kms = 299792.458
-        lam_center = 0.5 * (lam_min_line + lam_max_line)
-        dlam_vel = lam_center * velocity_window_kms / c_kms
-
-        lam_min = lam_min_line - dlam_vel
-        lam_max = lam_max_line + dlam_vel
-
-        if n_lambda is None:
-            n_lambda = int(np.ceil((lam_max - lam_min) / self.dispersion)) + 1
-            n_lambda = max(n_lambda, 3)
-
-        lambda_grid = jnp.linspace(lam_min, lam_max, n_lambda)
-        return CubePars(image_pars=self.image_pars, lambda_grid=lambda_grid)
-
-    # decide what things should be properties. I guess none need to be
-    # @property  #include these things inside __post__init?
-    # def spatial_shape(self):
-    # return self.cube_pars.spatial_shape
-
-    # def __init__(self, obs_conf): #CubePars doesn't have an init... is it alright to have one here? no lol
-
-    # def __post_init__(self): #could probably get rid of some of these. a little silly
-    # self.spatial_shape = self.cube_pars.spatial_shape
-    # self.lambda_grid = self.cube_pars.lambda_grid
-    # if self.is_dispersed:
-    # _bid = self.obs_conf['SEDBLKID'] #what is block ID?? it seems like it can alter the lambda range and resolution?
-    ##_lrange = _pars['model_dimension']['lambda_range'][_bid]. #I need to make sure, is the model dimension what I'd expect in cube_pars?
-    ##_dlam = _pars['model_dimension']['lambda_res']
-    ##if isinstance(_dlam, list):
-    ##_dlam = _dlam[_bid]
-
-    # self.throughput = gs.Bandpass(self.obs_conf['BANDPASS'], #I can specify the bandpass with galsim to start
-    #'nm', blue_limit=self.lambda_grid[0], red_limit=self.lambda_grid[-1])
-    # self._bp_array = self.throughput(self.lambda_grid)
-    # _Nlam = self.cube_pars.n_lambda
-
-    # else:
-    # _from_file_ = os.path.isfile(self.obs_conf['BANDPASS'])
-    # if _from_file_:
-    # self.throughput = gs.Bandpass(self.obs_conf['BANDPASS'], 'nm')
-    # else:
-    # _lrange = [np.min(self.lambda_grid),
-    # np.max(self.lambda_grid)]
-    # self.throughput = gs.Bandpass(self.pars['obs_conf']['BANDPASS'],
-    #'nm', blue_limit=_lrange[0], red_limit=_lrange[1])
-    # self.wave, _Nlam, self._bp_array = None, 1, None
-
-    # self.shape = np.array([_Nlam,
-    # self.cube_pars.image_pars.Ny,
-    # self.cube_pars.image_pars.Nx], dtype=int)
-    # self.pix_scale = self.cube_pars.image_pars.pixel_scale
-    # self.X, self.Y = utils.build_map_grid_from_image_pars(self.cube_pars.image_pars) #need to figure out the units for this, whether it can be off-center
-    # self.obs_index = self.obs_conf['OBSINDEX']
-    # self.lambda_eff = self.throughput.effective_wavelength
-    # return
 
 
 # =============================================================================
