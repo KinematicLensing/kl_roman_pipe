@@ -90,7 +90,7 @@ This avoids negative cos(i) in projection math.
 - Xu et al. (2022): arXiv:2201.00739 (kinematic lensing formalism)
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import numpy as np
 from dataclasses import dataclass
 from astropy.cosmology import FlatLambdaCDM
@@ -99,6 +99,10 @@ from astropy import units as u
 from ..parameters import ImagePars
 from ..utils import build_map_grid_from_image_pars
 from ..noise import add_noise
+
+
+# Speed of light in km/s (kept consistent with spectral.py)
+C_KMS = 299792.458
 
 
 # TNG50 cosmology (Planck 2013)
@@ -1169,6 +1173,236 @@ class TNGDataVectorGenerator:
             variance = np.zeros_like(velocity)
 
         return velocity, variance
+
+    def generate_cube(
+        self,
+        config: TNGRenderConfig,
+        cube_pars: Any,
+        spectral_config: Any,
+        z: float,
+        vel_dispersion: float,
+        line_fluxes: Dict[str, float],
+        line_continua: Optional[Dict[str, float]] = None,
+        v0: float = 0.0,
+        min_particle_weight: float = 0.0,
+    ) -> np.ndarray:
+        """
+        Build a high-resolution spectral cube by depositing gas particles directly.
+
+        This follows the old particle-based cube logic (as in legacy TNG fiber/grism
+        generation): project gas particles to image pixels, compute per-particle
+        Doppler-shifted line profiles, and accumulate onto the datacube.
+
+        Parameters
+        ----------
+        config : TNGRenderConfig
+            Rendering config controlling centering/orientation and particle projection.
+        cube_pars : CubePars-like object
+            Must provide ``image_pars``, ``lambda_grid``, and ``spatial_shape``.
+        spectral_config : SpectralConfig-like object
+            Must provide ``lines``, ``spectral_oversample``, ``lsf_mode``, and
+            ``effective_R_func``.
+        z : float
+            Systemic redshift.
+        vel_dispersion : float
+            Intrinsic velocity dispersion in km/s.
+        line_fluxes : dict
+            Mapping from line param prefix (for example ``Ha``, ``NII_6583``)
+            to total integrated line flux normalization.
+        line_continua : dict, optional
+            Mapping from line param prefix to local continuum coefficient.
+        v0 : float, default=0.0
+            Systemic velocity offset in km/s subtracted from particle LOS velocity.
+        min_particle_weight : float, default=0.0
+            Minimum gas particle weight threshold used for line emission deposition.
+
+        Returns
+        -------
+        np.ndarray
+            Datacube with shape (Nrow, Ncol, Nlambda).
+        """
+        if self.gas is None:
+            raise ValueError("Gas data required for particle-based cube generation")
+
+        if vel_dispersion < 0:
+            raise ValueError(f"vel_dispersion must be >= 0, got {vel_dispersion}")
+
+        line_continua = {} if line_continua is None else line_continua
+
+        # Validate spatial dimensions against cube_pars.
+        nrow, ncol = cube_pars.spatial_shape
+        if (nrow, ncol) != tuple(cube_pars.image_pars.shape):
+            raise ValueError(
+                "cube_pars.spatial_shape and cube_pars.image_pars.shape must match"
+            )
+
+        # Gas particle state.
+        coords = self.gas['Coordinates'].copy()
+        velocities = self.gas['Velocities'].copy()
+
+        # Use SFR (if present) as emission-line proxy, otherwise mass.
+        if 'StarFormationRate' in self.gas:
+            particle_weight = np.asarray(
+                self.gas['StarFormationRate'], dtype=np.float64
+            )
+        else:
+            particle_weight = np.asarray(self.gas['Masses'], dtype=np.float64)
+
+        # Remove invalid or negative emission weights.
+        particle_weight = np.where(np.isfinite(particle_weight), particle_weight, 0.0)
+        particle_weight = np.clip(particle_weight, 0.0, None)
+
+        # Subtract systemic velocity using inner particles, consistent with velocity map.
+        center = self._get_reference_center(
+            config.center_on_peak, config.band, config.use_dusted
+        )
+        coords_cen = self._center_coordinates(coords, center)
+        radii = np.sqrt(np.sum(coords_cen**2, axis=1))
+        inner_mask = radii < np.percentile(radii, 50)
+        masses = np.asarray(self.gas['Masses'], dtype=np.float64)
+        if inner_mask.sum() > 0:
+            v_systemic = np.average(
+                velocities[inner_mask], axis=0, weights=masses[inner_mask]
+            )
+        else:
+            v_systemic = np.median(velocities, axis=0)
+        velocities -= v_systemic
+
+        # Apply orientation and compute LOS velocity per particle.
+        if config.use_native_orientation:
+            coords_2d = coords_cen[:, :2]
+            vel_los = velocities[:, 2]
+        else:
+            if config.pars is None:
+                raise ValueError(
+                    "pars must be provided when use_native_orientation=False"
+                )
+
+            if config.preserve_gas_stellar_offset:
+                particle_type = 'stellar'
+            else:
+                particle_type = 'gas'
+
+            coords_disk, velocities_disk = self._undo_native_orientation(
+                coords_cen, velocities, particle_type=particle_type
+            )
+            coords_2d, vel_los, _ = self._apply_new_orientation(
+                coords_disk, velocities_disk, config.pars
+            )
+
+        # Convert particle positions to arcsec and then to nearest pixel bins.
+        coords_arcsec = convert_tng_to_arcsec(
+            coords_2d, self.distance_mpc, target_redshift=config.target_redshift
+        )
+
+        X, Y = build_map_grid_from_image_pars(
+            cube_pars.image_pars, unit='arcsec', centered=True
+        )
+        pixel_size = cube_pars.image_pars.pixel_scale
+        x_pix = np.round((coords_arcsec[:, 0] - X.min()) / pixel_size).astype(int)
+        y_pix = np.round((coords_arcsec[:, 1] - Y.min()) / pixel_size).astype(int)
+
+        # Keep particles with valid weights and in-bounds pixels.
+        valid = (
+            np.isfinite(vel_los)
+            & np.isfinite(coords_arcsec[:, 0])
+            & np.isfinite(coords_arcsec[:, 1])
+            & (particle_weight > float(min_particle_weight))
+            & (x_pix >= 0)
+            & (x_pix < ncol)
+            & (y_pix >= 0)
+            & (y_pix < nrow)
+        )
+        if not np.any(valid):
+            raise ValueError(
+                "No valid gas particles remained after projection/weight filtering"
+            )
+
+        x_pix = x_pix[valid]
+        y_pix = y_pix[valid]
+        vel_los = vel_los[valid]
+        particle_weight = particle_weight[valid]
+
+        # Normalize particle weights so each line_flux is distributed across particles.
+        weight_sum = np.sum(particle_weight)
+        if weight_sum <= 0:
+            raise ValueError("Sum of selected particle weights must be > 0")
+        particle_weight_norm = particle_weight / weight_sum
+
+        # Build oversampled wavelength grid.
+        lambda_coarse = np.asarray(cube_pars.lambda_grid, dtype=np.float64)
+        n_lam = len(lambda_coarse)
+        osf = int(spectral_config.spectral_oversample)
+        if osf > 1 and n_lam >= 2:
+            dl = lambda_coarse[1] - lambda_coarse[0]
+            half = dl / 2.0
+            fine_offsets = np.linspace(-half + half / osf, half - half / osf, osf)
+            lambda_fine = (lambda_coarse[:, None] + fine_offsets[None, :]).reshape(-1)
+        else:
+            lambda_fine = lambda_coarse
+            osf = 1
+
+        n_fine = len(lambda_fine)
+        cube_fine = np.zeros((nrow, ncol, n_fine), dtype=np.float64)
+        cube_flat = cube_fine.reshape(-1, n_fine)
+        flat_pix = y_pix * ncol + x_pix
+
+        # Add per-line emission from individual particles.
+        R_func = spectral_config.effective_R_func
+        for line in spectral_config.lines:
+            prefix = line.line_spec.param_prefix
+            if prefix not in line_fluxes:
+                raise KeyError(
+                    f"Missing line flux for prefix '{prefix}'. "
+                    f"Provided keys: {sorted(line_fluxes.keys())}"
+                )
+
+            line_flux = float(line_fluxes[prefix])
+            lam_rest = float(line.line_spec.lambda_rest)
+
+            v_rotation = vel_los - float(v0)
+            lam_obs = lam_rest * (1.0 + z) * (1.0 + v_rotation / C_KMS)
+
+            R_at_line = float(R_func(lam_rest * (1.0 + z)))
+            if R_at_line <= 0:
+                raise ValueError(
+                    f"Resolving power must be > 0 at line {prefix}, got {R_at_line}"
+                )
+
+            sigma_inst_kms = C_KMS / (2.355 * R_at_line)
+            sigma_eff_kms = np.sqrt(float(vel_dispersion) ** 2 + sigma_inst_kms**2)
+            sigma_lambda = np.maximum(lam_obs * sigma_eff_kms / C_KMS, 1e-12)
+
+            dlam = lambda_fine[None, :] - lam_obs[:, None]
+            sig = sigma_lambda[:, None]
+            profiles = (1.0 / (sig * np.sqrt(2.0 * np.pi))) * np.exp(
+                -0.5 * (dlam / sig) ** 2
+            )
+
+            particle_flux = line_flux * particle_weight_norm
+            np.add.at(cube_flat, flat_pix, particle_flux[:, None] * profiles)
+
+        # Continuum from stellar particle-rendered intensity map, added per line.
+        if len(line_continua) > 0:
+            intensity_map, _ = self.generate_intensity_map(config, snr=None)
+            for line in spectral_config.lines:
+                prefix = line.line_spec.param_prefix
+                cont = float(line_continua.get(prefix, 0.0))
+                if cont != 0.0:
+                    cube_fine += intensity_map[:, :, None] * cont
+
+        # Bin oversampled cube to coarse wavelength grid.
+        if osf > 1 and n_lam >= 2:
+            cube = cube_fine.reshape(nrow, ncol, n_lam, osf).mean(axis=-1)
+        else:
+            cube = cube_fine
+
+        if spectral_config.lsf_mode == 'convolution':
+            raise NotImplementedError(
+                "LSF convolution mode not yet implemented. Use lsf_mode='absorbed'."
+            )
+
+        return cube
 
     def generate_sfr_map(
         self,

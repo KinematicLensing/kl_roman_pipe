@@ -36,6 +36,33 @@ def roman_grism_R(lambda_nm: float) -> float:
     return 461.0 * lambda_nm / 1000.0
 
 
+def desi_b_R(lambda_nm: float) -> float:
+    """DESI B-channel resolving power: see Eq. 5.1 in https://arxiv.org/pdf/1611.00037."""
+    D = 4096 * 1.5e-5  # Detector width (4096 pixels) * pixel size (15 microns)
+    d = 1.07e-4  # fiber width
+    m = 0.42  # magnification
+    lambda_range = (593 - 360) * 1e-9  # wavelength range in meters (360-593 nm)
+    return 2 * D * lambda_nm * 1e-9 / (np.sqrt(3) * d * m * lambda_range)
+
+
+def desi_r_R(lambda_nm: float) -> float:
+    """DESI R-channel resolving power: see Eq. 5.1 in https://arxiv.org/pdf/1611.00037."""
+    D = 4096 * 1.5e-5  # Detector width (4096 pixels) * pixel size (15 microns)
+    d = 1.07e-4  # fiber width
+    m = 0.46  # magnification
+    lambda_range = (772 - 566) * 1e-9  # wavelength range in meters (566-772 nm)
+    return 2 * D * lambda_nm * 1e-9 / (np.sqrt(3) * d * m * lambda_range)
+
+
+def desi_z_R(lambda_nm: float) -> float:
+    """DESI Z-channel resolving power: see Eq. 5.1 in https://arxiv.org/pdf/1611.00037."""
+    D = 4096 * 1.5e-5  # Detector width (4096 pixels) * pixel size (15 microns)
+    d = 1.07e-4  # fiber width
+    m = 0.5  # magnification
+    lambda_range = (980 - 747) * 1e-9  # wavelength range in meters (747-980 nm)
+    return 2 * D * lambda_nm * 1e-9 / (np.sqrt(3) * d * m * lambda_range)
+
+
 # =============================================================================
 # Emission line specification
 # =============================================================================
@@ -376,6 +403,7 @@ class SpectralModel:
 
 # common line specs
 HALPHA = LineSpec(lambda_rest=656.28, name='Halpha', param_prefix='Ha')
+HALPHA_VAC = LineSpec(lambda_rest=656.46, name='Halpha_vac', param_prefix='Ha')
 NII_6548 = LineSpec(lambda_rest=654.80, name='NII_6548', param_prefix='NII_6548')
 NII_6583 = LineSpec(lambda_rest=658.34, name='NII_6583', param_prefix='NII_6583')
 
@@ -383,6 +411,11 @@ NII_6583 = LineSpec(lambda_rest=658.34, name='NII_6583', param_prefix='NII_6583'
 def halpha_line(own_params=frozenset({'flux'})) -> EmissionLine:
     """H-alpha at 656.28 nm."""
     return EmissionLine(line_spec=HALPHA, own_params=own_params)
+
+
+def halpha_vac_line(own_params=frozenset({'flux'})) -> EmissionLine:
+    """H-alpha at 656.46 nm (vacuum wavelength)."""
+    return EmissionLine(line_spec=HALPHA_VAC, own_params=own_params)
 
 
 def halpha_nii_lines() -> Tuple[EmissionLine, ...]:
