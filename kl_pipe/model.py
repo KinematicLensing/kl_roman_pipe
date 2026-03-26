@@ -722,6 +722,8 @@ class KLModel(object):
         self.meta_pars = meta_pars or {}
         self.spectral_model = spectral_model
         self._grism_psf_data = None
+        self._grism_psf_oversample = 1
+        self._grism_psf_fine_image_pars = None
 
         self._build_parameter_structure()
 
@@ -936,7 +938,11 @@ class KLModel(object):
         1. Calls spectral_model.build_cube() -> intrinsic cube (no PSF)
         2. Per-slice convolve_fft(cube[:,:,k], psf_data) if PSF configured
 
-        Returns shape (Nrow, Ncol, Nlambda).
+        When grism PSF oversampling is active (oversample > 1), the cube is
+        built at fine spatial resolution and convolve_fft handles the N×N
+        binning back to coarse scale.
+
+        Returns shape (Nrow_coarse, Ncol_coarse, Nlambda).
         """
         if self.spectral_model is None:
             raise ValueError("No spectral model configured — use render_image for 2D")
@@ -945,19 +951,32 @@ class KLModel(object):
         theta_int = self.get_intensity_pars(theta)
         theta_spec = self.get_spectral_pars(theta)
 
+        # when PSF oversampling is active, build cube at fine spatial scale
+        if self._grism_psf_data is not None and self._grism_psf_oversample > 1:
+            from kl_pipe.spectral import CubePars
+
+            fine_cube_pars = CubePars(
+                image_pars=self._grism_psf_fine_image_pars,
+                lambda_grid=cube_pars.lambda_grid,
+            )
+            effective_cube_pars = fine_cube_pars
+        else:
+            effective_cube_pars = cube_pars
+
         cube = self.spectral_model.build_cube(
-            theta_spec, theta_vel, theta_int, cube_pars, plane=plane
+            theta_spec, theta_vel, theta_int, effective_cube_pars, plane=plane
         )
 
-        # per-slice PSF convolution
+        # per-slice PSF convolution via vmap (JIT-friendly)
         if self._grism_psf_data is not None:
             from kl_pipe.psf import convolve_fft
 
-            Nlam = cube.shape[2]
-            slices = []
-            for k in range(Nlam):
-                slices.append(convolve_fft(cube[:, :, k], self._grism_psf_data))
-            cube = jnp.stack(slices, axis=-1)
+            # vmap over wavelength axis: (Nrow, Ncol, Nlam) -> (Nlam, Nrow, Ncol)
+            cube_transposed = jnp.moveaxis(cube, -1, 0)
+            conv_slice = lambda s: convolve_fft(s, self._grism_psf_data)
+            cube_transposed = jax.vmap(conv_slice)(cube_transposed)
+            # back to (Nrow_coarse, Ncol_coarse, Nlam)
+            cube = jnp.moveaxis(cube_transposed, 0, -1)
 
         return cube
 
@@ -1005,6 +1024,9 @@ class KLModel(object):
 
         Uses existing precompute_psf_fft() from psf.py.
         Stores _grism_psf_data for use by render_cube.
+
+        When oversample > 1, also stores fine-scale ImagePars so render_cube
+        can evaluate the model at fine resolution before convolving + binning.
         """
         from kl_pipe.psf import precompute_psf_fft
 
@@ -1014,6 +1036,14 @@ class KLModel(object):
             oversample=oversample,
             gsparams=gsparams,
         )
+        self._grism_psf_oversample = oversample
+
+        if oversample > 1:
+            self._grism_psf_fine_image_pars = cube_pars.image_pars.make_fine_scale(
+                oversample
+            )
+        else:
+            self._grism_psf_fine_image_pars = None
 
     def evaluate_velocity(
         self,
