@@ -165,6 +165,64 @@ class CubePars:
         return (self.image_pars.Nrow, self.image_pars.Ncol)
 
 
+@dataclass(frozen=True)
+class FiberPars:
+    cube_pars: CubePars
+    obs_conf: dict  # meta_pars: MetaPars <-- could do this instead and get obs_conf from there
+
+    @classmethod
+    def from_cube_pars(cls, cube_pars, obs_conf):
+        cls.is_dispersed = obs_conf['OBSTYPE'] == 1
+        cls.obs_index = obs_conf['OBSINDEX']
+        cls.pix_scale = cube_pars.image_pars.pixel_scale
+        cls.spatial_shape = cube_pars.spatial_shape
+        cls.X, cls.Y = utils.build_map_grid_from_image_pars(
+            cube_pars.image_pars
+        )  # need to figure out the units for this, whether it can be off-center
+
+        if cls.is_dispersed:  # fiber spectrum
+            cls.lambda_grid = cube_pars.lambda_grid
+            cls.n_lambda = len(cls.lambda_grid)
+
+            # _bid = obs_conf['SEDBLKID'] #what is block ID?? it seems like it can alter the lambda range and resolution?
+            ##_lrange = _pars['model_dimension']['lambda_range'][_bid]. #I need to make sure, is the model dimension what I'd expect in cube_pars?
+            ##_dlam = _pars['model_dimension']['lambda_res']
+            ##if isinstance(_dlam, list):
+            ##_dlam = _dlam[_bid]
+
+            cls.throughput = gs.Bandpass(
+                obs_conf['BANDPASS'],
+                'nm',
+                blue_limit=cls.lambda_grid[0],
+                red_limit=cls.lambda_grid[-1],
+            )
+            cls._bp_array = jnp.array(cls.throughput(cls.lambda_grid))
+            cls.lambda_eff = cls.throughput.effective_wavelength
+
+        else:  # photometry
+            cls.lambda_grid = cube_pars.lambda_grid
+            cls.n_lambda = len(cls.lambda_grid)
+
+            _from_file_ = os.path.isfile(obs_conf['BANDPASS'])
+            if _from_file_:
+                cls.throughput = gs.Bandpass(obs_conf['BANDPASS'], 'nm')
+            else:
+                _lrange = [np.min(cls.lambda_grid), np.max(cls.lambda_grid)]
+                cls.throughput = gs.Bandpass(
+                    obs_conf['BANDPASS'],
+                    'nm',
+                    blue_limit=_lrange[0],
+                    red_limit=_lrange[1],
+                )
+            cls._bp_array = jnp.array(cls.throughput(cls.lambda_grid))
+            cls.lambda_eff = cls.throughput.effective_wavelength
+
+            # this is how it's written in kl-tools but I think I need these even for photometry
+            # cls.lambda_grid, cls.n_lambda, cls._bp_array = None, 1, None
+
+        return cls(cube_pars=cube_pars, obs_conf=obs_conf)
+
+
 # =============================================================================
 # SpectralModel
 # =============================================================================
