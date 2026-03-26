@@ -346,6 +346,11 @@ def convolve_flux_weighted(
     jnp.ndarray
         Flux-weighted, PSF-convolved velocity map, shape == psf_data.coarse_shape.
     """
+    # normalize intensity to prevent FFT overflow with large flux values
+    # (e.g. TNG luminosities); cancels exactly in the ratio Conv(I*v)/Conv(I)
+    i_max = jnp.max(jnp.abs(intensity))
+    intensity = intensity / jnp.maximum(i_max, 1.0)
+
     conv_iv = _convolve_fft_raw(intensity * velocity, psf_data)
     conv_i = _convolve_fft_raw(intensity, psf_data)
 
@@ -427,6 +432,10 @@ def convolve_flux_weighted_numpy(
     np.ndarray
         Flux-weighted, PSF-convolved velocity map.
     """
+    # normalize intensity to prevent FFT overflow with large flux values
+    i_max = np.max(np.abs(intensity))
+    intensity = intensity / max(i_max, 1.0)
+
     conv_iv = convolve_fft_numpy(intensity * velocity, kernel, padded_shape)
     conv_i = convolve_fft_numpy(intensity, kernel, padded_shape)
 
