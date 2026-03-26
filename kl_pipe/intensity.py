@@ -69,50 +69,6 @@ class InclinedExponentialModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_exp'
 
-    def configure_psf(
-        self,
-        gsobj,
-        image_pars=None,
-        *,
-        image_shape=None,
-        pixel_scale=None,
-        oversample=5,
-        gsparams=None,
-        freeze=False,
-    ):
-        """Configure PSF with fused k-space convolution kernel."""
-        super().configure_psf(
-            gsobj,
-            image_pars=image_pars,
-            image_shape=image_shape,
-            pixel_scale=pixel_scale,
-            oversample=oversample,
-            gsparams=gsparams,
-            freeze=freeze,
-        )
-
-        # compute padded grid dims matching _render_kspace
-        if image_pars is not None:
-            coarse_Nrow = image_pars.Nrow
-            coarse_Ncol = image_pars.Ncol
-            ps = image_pars.pixel_scale
-        else:
-            coarse_Nrow, coarse_Ncol = image_shape
-            ps = pixel_scale
-
-        N = max(self._psf_oversample, 1)
-        fine_Nrow = coarse_Nrow * N
-        fine_Ncol = coarse_Ncol * N
-        fine_ps = ps / N
-
-        pad_sq = next_fast_len(self._kspace_pad_factor * max(fine_Nrow, fine_Ncol))
-
-        from kl_pipe.psf import precompute_psf_kspace_fft
-
-        self._psf_kspace_fft = precompute_psf_kspace_fft(
-            gsobj, (pad_sq, pad_sq), fine_ps, gsparams=gsparams
-        )
-
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
@@ -410,26 +366,73 @@ class InclinedExponentialModel(IntensityModel):
         X: jnp.ndarray = None,
         Y: jnp.ndarray = None,
         oversample: int = 1,
+        *,
+        obs=None,
         **kwargs,
     ) -> jnp.ndarray:
         """
         Render via k-space FFT, with optional PSF convolution.
 
-        When PSF is configured with oversampling, renders at fine scale
-        so convolve_fft can bin down to coarse scale.
+        When obs has oversampling, renders at fine scale so convolve_fft
+        can bin down to coarse scale.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
 
         Parameters
         ----------
+        obs : ImageObs, optional
+            Observation object. When obs.kspace_psf_fft is set, uses fused
+            k-space path. When obs.psf_data is set, uses fallback real-space.
         oversample : int, optional
             Cusp anti-aliasing factor for the non-PSF path. The exponential
             profile has a cusp at R=0 whose FT decays as k⁻³; power above
             Nyquist aliases into the image. Oversampling pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³.
-            Ignored when PSF is configured (PSF convolution suppresses
-            high-k aliasing naturally). Default 2.
+            Ignored when PSF is configured via obs (PSF convolution suppresses
+            high-k aliasing naturally). Default 1.
         """
+        if obs is not None:
+            pixel_scale = obs.image_pars.pixel_scale
+            Nrow = obs.image_pars.Nrow
+            Ncol = obs.image_pars.Ncol
+
+            if obs.kspace_psf_fft is not None:
+                # fused k-space path: render + convolve in one FFT pass
+                N = max(obs.oversample, 1)
+                image = self._render_kspace(
+                    theta,
+                    Nrow * N,
+                    Ncol * N,
+                    pixel_scale / N,
+                    psf_kernel_fft=obs.kspace_psf_fft,
+                )
+                if N > 1:
+                    image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                return image
+
+            if obs.psf_data is not None:
+                # fallback real-space path
+                from kl_pipe.psf import convolve_fft
+
+                if obs.oversample > 1:
+                    N = obs.oversample
+                    image = self._render_kspace(
+                        theta, Nrow * N, Ncol * N, pixel_scale / N
+                    )
+                else:
+                    image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
+                return convolve_fft(image, obs.psf_data)
+
+            # no PSF on obs
+            return self._render_kspace(
+                theta, Nrow, Ncol, pixel_scale, oversample=oversample
+            )
+
+        # legacy/convenience path (no obs)
         if image_pars is None and (X is None or Y is None):
-            raise ValueError("Provide image_pars or (X, Y)")
+            raise ValueError("Provide obs, image_pars, or (X, Y)")
 
         if image_pars is not None:
             pixel_scale = image_pars.pixel_scale
@@ -438,32 +441,6 @@ class InclinedExponentialModel(IntensityModel):
         else:
             Nrow, Ncol = X.shape
             pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
-
-        if self._psf_kspace_fft is not None:
-            # fused k-space path: render + convolve in one FFT pass
-            N = max(self._psf_oversample, 1)
-            image = self._render_kspace(
-                theta,
-                Nrow * N,
-                Ncol * N,
-                pixel_scale / N,
-                psf_kernel_fft=self._psf_kspace_fft,
-            )
-            if N > 1:
-                image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
-            return image
-
-        if self._psf_data is not None:
-            # fallback real-space path (shouldn't happen for this model,
-            # but keeps base class contract)
-            from kl_pipe.psf import convolve_fft
-
-            if self._psf_oversample > 1:
-                N = self._psf_oversample
-                image = self._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
-            else:
-                image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
-            return convolve_fft(image, self._psf_data)
 
         # warn if cusp aliasing likely exceeds 1% even with current oversample
         try:

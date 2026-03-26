@@ -36,6 +36,7 @@ from kl_pipe.psf import (
 from kl_pipe.intensity import InclinedExponentialModel
 from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.parameters import ImagePars
+from kl_pipe.observation import build_image_obs, build_velocity_obs
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
 
 
@@ -50,20 +51,16 @@ def _gaussian_2d(X, Y, sigma):
     return g / g.sum()
 
 
-def _render_manual_padded(model, psf_obj, theta, ip):
+def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
     """Real-space manual path on padded extent matching fused path.
 
     Renders source on the same padded grid the fused k-space path uses,
     convolves with drawImage PSF, then crops center and bins to coarse.
     Eliminates boundary flux difference; residual is purely the sinc gap
     between drawKImage (fused) and drawImage (this path).
-
-    Model must have PSF configured (to read oversample). Clears PSF
-    internally for the raw source render, then clears again on exit.
     """
-    N = model._psf_oversample
+    N = oversample
     pad_factor = model._kspace_pad_factor
-    model.clear_psf()
 
     fine_Nrow = ip.Nrow * N
     fine_Ncol = ip.Ncol * N
@@ -75,7 +72,7 @@ def _render_manual_padded(model, psf_obj, theta, ip):
     while pad_sq % 2 != fine_parity:
         pad_sq = next_fast_len(pad_sq + 1)
 
-    # render source at padded extent (PSF cleared → no-PSF path)
+    # render source at padded extent (no PSF path)
     ip_pad = ImagePars(shape=(pad_sq, pad_sq), pixel_scale=fine_ps, indexing='ij')
     raw_padded = model.render_image(theta, ip_pad, oversample=1)
 
@@ -809,12 +806,12 @@ def test_fused_kspace_psf_implementation(output_dir):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     model = InclinedExponentialModel()
-    model.configure_psf(psf_obj, ip)
-    N = model._psf_oversample
-    kernel = model._psf_kspace_fft
+    obs = build_image_obs(ip, psf=psf_obj, int_model=model)
+    N = obs.oversample
+    kernel = obs.kspace_psf_fft
 
     # fused path
-    img_fused = np.array(model.render_image(theta, ip))
+    img_fused = np.array(model.render_image(theta, obs=obs))
 
     # manual path with same kernel
     img_manual_fine = np.array(
@@ -827,7 +824,6 @@ def test_fused_kspace_psf_implementation(output_dir):
         )
     )
     img_manual = img_manual_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
-    model.clear_psf()
 
     peak = np.max(np.abs(img_fused))
     max_rel_resid = np.max(np.abs(img_fused - img_manual)) / peak
@@ -877,13 +873,13 @@ def test_kspace_vs_realspace_psf_agreement(output_dir):
     model = InclinedExponentialModel()
 
     # k-space fused path (drawKImage PSF)
-    model.configure_psf(psf_obj, ip)
-    img_kspace = np.array(model.render_image(theta, ip))
-    model.clear_psf()
+    obs = build_image_obs(ip, psf=psf_obj, int_model=model)
+    img_kspace = np.array(model.render_image(theta, obs=obs))
 
     # real-space path on padded extent (drawImage PSF)
-    model.configure_psf(psf_obj, ip)
-    img_realspace = _render_manual_padded(model, psf_obj, theta, ip)
+    img_realspace = _render_manual_padded(
+        model, psf_obj, theta, ip, oversample=obs.oversample
+    )
 
     peak = np.max(np.abs(img_realspace))
     max_rel_resid = np.max(np.abs(img_kspace - img_realspace)) / peak
@@ -926,9 +922,8 @@ def test_nonsquare_psf_regression(shape, output_dir):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     model = InclinedExponentialModel()
-    model.configure_psf(psf_obj, ip, oversample=1)
-    img = np.array(model.render_image(theta, ip))
-    model.clear_psf()
+    obs = build_image_obs(ip, psf=psf_obj, oversample=1, int_model=model)
+    img = np.array(model.render_image(theta, obs=obs))
 
     # with indexing='xy', shape=(Ncol, Nrow) but render_image returns (Nrow, Ncol)
     assert img.shape == (ip.Nrow, ip.Ncol)
@@ -991,13 +986,13 @@ def test_psf_render_image_consistency(gaussian_psf):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     # fused k-space path (drawKImage PSF, default oversample)
-    model.configure_psf(gaussian_psf, ip)
-    rendered = model.render_image(theta, ip)
-    model.clear_psf()
+    obs = build_image_obs(ip, psf=gaussian_psf, int_model=model)
+    rendered = model.render_image(theta, obs=obs)
 
     # real-space path on padded extent (drawImage PSF)
-    model.configure_psf(gaussian_psf, ip)
-    manual = _render_manual_padded(model, gaussian_psf, theta, ip)
+    manual = _render_manual_padded(
+        model, gaussian_psf, theta, ip, oversample=obs.oversample
+    )
 
     peak = np.max(np.abs(manual))
     np.testing.assert_allclose(np.array(rendered), np.array(manual), atol=5e-4 * peak)
@@ -1022,31 +1017,16 @@ def test_velocity_render_image_flux_weighted(image_pars, gaussian_psf):
     manual = convolve_flux_weighted(raw_vel, raw_int, pdata)
 
     # render_image with PSF + flux_model (oversample=1 for exact equality)
-    vel_model.configure_velocity_psf(
-        gaussian_psf,
+    obs = build_velocity_obs(
         image_pars,
+        psf=gaussian_psf,
         oversample=1,
         flux_model=int_model,
         flux_theta=theta_int,
     )
-    rendered = vel_model.render_image(theta_vel, image_pars)
-    vel_model.clear_psf()
+    rendered = vel_model.render_image(theta_vel, obs=obs)
 
     np.testing.assert_allclose(np.array(rendered), np.array(manual), atol=1e-10)
-
-
-def test_psf_frozen_raises():
-    """configure_psf raises if frozen."""
-    model = InclinedExponentialModel()
-    psf = gs.Gaussian(fwhm=0.5)
-    frozen_pars = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
-    model.configure_psf(psf, frozen_pars, oversample=1, freeze=True)
-
-    with pytest.raises(ValueError, match="frozen"):
-        model.configure_psf(psf, frozen_pars)
-
-    model.clear_psf()
-    assert not model.has_psf
 
 
 # ==============================================================================

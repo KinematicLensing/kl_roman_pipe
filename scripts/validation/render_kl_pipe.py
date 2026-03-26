@@ -118,9 +118,16 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
         line_lambdas_rest=kl['line_lambdas_rest'],
     )
 
-    # configure PSF if needed
+    # build GrismObs (carries PSF + cube_pars for render_cube / render_grism)
+    from kl_pipe.observation import GrismObs
+
+    psf_data = None
+    fine_image_pars = None
+    spatial_oversample = 1
+
     if kl['psf_kwargs'] is not None:
         import galsim
+        from kl_pipe.psf import precompute_psf_fft
 
         fwhm = kl['psf_kwargs']['fwhm']
         psf_type = kl['psf_kwargs']['type']
@@ -130,18 +137,29 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
                 "Only 'gaussian' is defined in test_params.yaml."
             )
         gsobj = galsim.Gaussian(fwhm=fwhm)
+        spatial_oversample = kl['rendering']['spatial_oversample']
 
-        kl_model.configure_grism_psf(
+        psf_data = precompute_psf_fft(
             gsobj,
-            cube_pars,
-            oversample=kl['rendering']['spatial_oversample'],
+            image_pars=cube_pars.image_pars,
+            oversample=spatial_oversample,
         )
+        if spatial_oversample > 1:
+            fine_image_pars = cube_pars.image_pars.make_fine_scale(spatial_oversample)
+
+    obs = GrismObs(
+        grism_pars=grism_pars,
+        cube_pars=cube_pars,
+        psf_data=psf_data,
+        oversample=spatial_oversample,
+        fine_image_pars=fine_image_pars,
+    )
 
     # render datacube
-    cube = kl_model.render_cube(theta, cube_pars, plane='obs')
+    cube = kl_model.render_cube(theta, obs, plane='obs')
 
     # render grism
-    grism = kl_model.render_grism(theta, grism_pars, plane='obs', cube_pars=cube_pars)
+    grism = kl_model.render_grism(theta, obs, plane='obs')
 
     # render velocity and intensity maps
     from kl_pipe.utils import build_map_grid_from_image_pars

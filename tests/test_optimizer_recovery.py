@@ -32,6 +32,7 @@ from kl_pipe.likelihood import (
     create_jitted_likelihood_intensity,
     create_jitted_likelihood_joint,
 )
+from kl_pipe.observation import build_image_obs, build_velocity_obs, build_joint_obs
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
 from kl_pipe.diagnostics.imaging import plot_data_comparison_panels
 
@@ -230,9 +231,10 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     )
 
     # Create likelihood with gradients
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     # Add small perturbation to initial guess (5% random noise)
     rng = np.random.RandomState(test_config.seed)
@@ -370,9 +372,10 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
     )
 
     # Create likelihood
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     # Initial guess with perturbation
     rng = np.random.RandomState(test_config.seed)
@@ -516,9 +519,10 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
     )
 
     # Create likelihood
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     # Initial guess
     rng = np.random.RandomState(test_config.seed)
@@ -643,14 +647,18 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     data_noisy = data_noisy / ps2
     variance = variance / ps2**2
 
-    # configure model with same PSF
+    # build obs with PSF
     model = InclinedExponentialModel()
-    model.configure_psf(psf, image_pars=test_config.image_pars_intensity)
     theta_true = model.pars2theta(true_pars)
 
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        psf=psf,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     # optimize
     rng = np.random.RandomState(test_config.seed)
@@ -701,7 +709,6 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
         exclude_params=['cosi', 'theta_int', 'g1', 'g2'],
     )
 
-    model.clear_psf()
     assert_parameter_recovery(
         recovery_stats,
         snr,
@@ -807,23 +814,20 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
     joint_model = KLModel(
         vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
     )
-    joint_model.configure_joint_psf(
-        psf_vel=psf,
-        psf_int=psf,
-        image_pars_vel=test_config.image_pars_velocity,
-        image_pars_int=test_config.image_pars_intensity,
-    )
     theta_true = joint_model.pars2theta(true_pars)
 
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        psf_vel=psf,
+        psf_int=psf,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     # optimize
     rng = np.random.RandomState(test_config.seed)
@@ -943,13 +947,13 @@ def test_optimize_centered_velocity_masked(test_config, velocity_grids):
 
     mask = make_aperture_mask(data_noisy.shape)
 
-    log_like = create_jitted_likelihood_velocity(
-        model,
+    obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
-        variance,
-        data_noisy,
-        mask_vel=jnp.array(mask),
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     rng = np.random.RandomState(test_config.seed)
     theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
@@ -1051,13 +1055,13 @@ def test_optimize_inclined_exponential_masked(test_config, intensity_grids):
 
     mask = make_aperture_mask(data_noisy.shape)
 
-    log_like = create_jitted_likelihood_intensity(
-        model,
+    obs_int = build_image_obs(
         test_config.image_pars_intensity,
-        variance,
-        data_noisy,
-        mask_int=jnp.array(mask),
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     rng = np.random.RandomState(test_config.seed)
     theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
@@ -1178,17 +1182,18 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
     mask_vel = make_aperture_mask(data_vel_noisy.shape)
     mask_int = make_aperture_mask(data_int_noisy.shape)
 
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
         mask_vel=jnp.array(mask_vel),
         mask_int=jnp.array(mask_int),
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     rng = np.random.RandomState(test_config.seed)
     theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))

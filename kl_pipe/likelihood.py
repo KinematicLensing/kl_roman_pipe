@@ -2,8 +2,8 @@
 Likelihood functions for kinematic-lensing models.
 
 Provides JAX-compatible log-likelihood functions for:
-- Velocity-only observations
-- Intensity-only observations
+- Velocity-only observations (via VelocityObs)
+- Intensity-only observations (via ImageObs)
 - Combined velocity + intensity observations
 
 All functions are designed to be JIT-compilable and support automatic differentiation.
@@ -11,33 +11,13 @@ The likelihood functions include proper normalization constants for model compar
 
 Examples
 --------
-Basic usage with JIT compilation:
-
->>> from functools import partial
->>> import jax
->>> from kl_pipe.likelihood import _log_likelihood_velocity_only
->>> from kl_pipe.velocity import CenteredVelocityModel
->>> from kl_pipe.utils import build_map_grid_from_image_pars
->>>
->>> # setup model and grids
->>> model = CenteredVelocityModel()
->>> X, Y = build_map_grid_from_image_pars(image_pars)
->>> variance = 10.0  # km/s variance
->>>
->>> # create JIT-compiled likelihood
->>> log_like = jax.jit(
-...     partial(_log_likelihood_velocity_only,
-...             X_vel=X, Y_vel=Y, variance_vel=variance, vel_model=model)
-... )
->>>
->>> # evaluate
->>> theta = jnp.array([10.0, 200.0, 5.0, 0.6, 0.785, 0.0, 0.0])
->>> log_prob = log_like(theta, data_vel)
-
-Using the helper functions:
+Basic usage with the helper functions:
 
 >>> from kl_pipe.likelihood import create_jitted_likelihood_velocity
->>> log_like = create_jitted_likelihood_velocity(model, image_pars, variance, data_vel)
+>>> from kl_pipe.observation import build_velocity_obs
+>>>
+>>> obs_vel = build_velocity_obs(image_pars, data=data_vel, variance=variance)
+>>> log_like = create_jitted_likelihood_velocity(model, obs_vel)
 >>> log_prob = log_like(theta)
 >>>
 >>> # compute gradients
@@ -54,48 +34,34 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from kl_pipe.model import VelocityModel, IntensityModel, KLModel
-    from kl_pipe.parameters import ImagePars
-
-from kl_pipe.utils import build_map_grid_from_image_pars
+    from kl_pipe.observation import ImageObs, VelocityObs
 
 
-def _log_likelihood_velocity_only(
+def _log_likelihood_velocity(
     theta: jnp.ndarray,
-    data_vel: jnp.ndarray,
-    X_vel: jnp.ndarray,
-    Y_vel: jnp.ndarray,
-    variance_vel: jnp.ndarray | float,
-    vel_model: VelocityModel,
+    obs: 'VelocityObs',
+    vel_model: 'VelocityModel',
     flux_theta_override: jnp.ndarray = None,
-    mask_vel: jnp.ndarray = None,
 ) -> float:
     """
-    Log-likelihood for velocity observations only.
+    Log-likelihood for velocity observations.
 
     Computes the Gaussian log-likelihood including normalization constants:
-        log L = -0.5 * [N*log(2π) + log(det(Σ)) + χ²]
+        log L = -0.5 * [N*log(2pi) + log(det(Sigma)) + chi2]
 
-    Where N is the number of data points, Σ is the covariance (diagonal),
-    and χ² is the weighted sum of squared residuals.
+    Where N is the number of data points, Sigma is the covariance (diagonal),
+    and chi2 is the weighted sum of squared residuals.
 
     Parameters
     ----------
     theta : jnp.ndarray
         Velocity model parameters.
-    data_vel : jnp.ndarray
-        Observed velocity map (2D array).
-    X_vel, Y_vel : jnp.ndarray
-        Coordinate grids for velocity map evaluation.
-    variance_vel : jnp.ndarray or float
-        Variance map (2D array) or scalar variance for velocity data.
-        If array, must have same shape as data_vel.
+    obs : VelocityObs
+        Velocity observation with data, variance, mask, and PSF.
     vel_model : VelocityModel
         Velocity model instance.
     flux_theta_override : jnp.ndarray, optional
-        Intensity params for joint mode flux weighting (passed to render_image).
-    mask_vel : jnp.ndarray, optional
-        Boolean mask array (True=valid, False=masked). Same shape as data_vel.
-        If None, all pixels are used.
+        Intensity params for joint mode flux weighting.
 
     Returns
     -------
@@ -108,63 +74,49 @@ def _log_likelihood_velocity_only(
     a scalar (constant noise) or an array (spatially varying noise), and the
     same formula handles both cases without conditionals.
 
-    The ``if mask_vel is not None`` check is a Python-level branch resolved at
-    JIT compile time (mask_vel is frozen via ``partial()``), not a traced
+    The ``if obs.mask is not None`` check is a Python-level branch resolved at
+    JIT compile time (obs is frozen via ``partial()``), not a traced
     conditional.
     """
-
-    # evaluate model via render_image (applies PSF if configured)
     model_vel = vel_model.render_image(
-        theta, X=X_vel, Y=Y_vel, flux_theta_override=flux_theta_override
+        theta, obs=obs, flux_theta_override=flux_theta_override
     )
 
-    # broadcast scalar variance to array (fixes normalization for scalar case)
-    residuals = data_vel - model_vel
-    variance_vel = jnp.broadcast_to(jnp.asarray(variance_vel), data_vel.shape)
+    residuals = obs.data - model_vel
+    variance = jnp.broadcast_to(jnp.asarray(obs.variance), obs.data.shape)
 
-    if mask_vel is not None:
-        chi2 = jnp.sum(jnp.where(mask_vel, residuals**2 / variance_vel, 0.0))
-        n_data = jnp.sum(mask_vel).astype(float)
-        log_det_term = jnp.sum(jnp.where(mask_vel, jnp.log(variance_vel), 0.0))
+    if obs.mask is not None:
+        chi2 = jnp.sum(jnp.where(obs.mask, residuals**2 / variance, 0.0))
+        n_data = jnp.sum(obs.mask).astype(float)
+        log_det_term = jnp.sum(jnp.where(obs.mask, jnp.log(variance), 0.0))
     else:
-        chi2 = jnp.sum(residuals**2 / variance_vel)
-        n_data = data_vel.size
-        log_det_term = jnp.sum(jnp.log(variance_vel))
+        chi2 = jnp.sum(residuals**2 / variance)
+        n_data = obs.data.size
+        log_det_term = jnp.sum(jnp.log(variance))
 
     normalization = -0.5 * n_data * jnp.log(2 * jnp.pi) - 0.5 * log_det_term
     return normalization - 0.5 * chi2
 
 
-def _log_likelihood_intensity_only(
+def _log_likelihood_intensity(
     theta: jnp.ndarray,
-    data_int: jnp.ndarray,
-    image_pars_int: 'ImagePars',
-    variance_int: jnp.ndarray | float,
-    int_model: IntensityModel,
-    mask_int: jnp.ndarray = None,
+    obs: 'ImageObs',
+    int_model: 'IntensityModel',
 ) -> float:
     """
-    Log-likelihood for intensity observations only.
+    Log-likelihood for intensity observations.
 
     Computes the Gaussian log-likelihood including normalization constants:
-        log L = -0.5 * [N*log(2π) + log(det(Σ)) + χ²]
+        log L = -0.5 * [N*log(2pi) + log(det(Sigma)) + chi2]
 
     Parameters
     ----------
     theta : jnp.ndarray
         Intensity model parameters.
-    data_int : jnp.ndarray
-        Observed intensity map (2D array).
-    image_pars_int : ImagePars
-        Image parameters for intensity map (shape, pixel_scale).
-    variance_int : jnp.ndarray or float
-        Variance map (2D array) or scalar variance for intensity data.
-        If array, must have same shape as data_int.
+    obs : ImageObs
+        Image observation with data, variance, mask, and PSF.
     int_model : IntensityModel
         Intensity model instance.
-    mask_int : jnp.ndarray, optional
-        Boolean mask array (True=valid, False=masked). Same shape as data_int.
-        If None, all pixels are used.
 
     Returns
     -------
@@ -177,43 +129,33 @@ def _log_likelihood_intensity_only(
     a scalar (constant noise) or an array (spatially varying noise), and the
     same formula handles both cases without conditionals.
 
-    The ``if mask_int is not None`` check is a Python-level branch resolved at
-    JIT compile time (mask_int is frozen via ``partial()``), not a traced
+    The ``if obs.mask is not None`` check is a Python-level branch resolved at
+    JIT compile time (obs is frozen via ``partial()``), not a traced
     conditional.
     """
+    model_int = int_model.render_image(theta, obs=obs)
 
-    # evaluate model via render_image (applies PSF if configured)
-    model_int = int_model.render_image(theta, image_pars=image_pars_int)
+    residuals = obs.data - model_int
+    variance = jnp.broadcast_to(jnp.asarray(obs.variance), obs.data.shape)
 
-    # broadcast scalar variance to array (fixes normalization for scalar case)
-    residuals = data_int - model_int
-    variance_int = jnp.broadcast_to(jnp.asarray(variance_int), data_int.shape)
-
-    if mask_int is not None:
-        chi2 = jnp.sum(jnp.where(mask_int, residuals**2 / variance_int, 0.0))
-        n_data = jnp.sum(mask_int).astype(float)
-        log_det_term = jnp.sum(jnp.where(mask_int, jnp.log(variance_int), 0.0))
+    if obs.mask is not None:
+        chi2 = jnp.sum(jnp.where(obs.mask, residuals**2 / variance, 0.0))
+        n_data = jnp.sum(obs.mask).astype(float)
+        log_det_term = jnp.sum(jnp.where(obs.mask, jnp.log(variance), 0.0))
     else:
-        chi2 = jnp.sum(residuals**2 / variance_int)
-        n_data = data_int.size
-        log_det_term = jnp.sum(jnp.log(variance_int))
+        chi2 = jnp.sum(residuals**2 / variance)
+        n_data = obs.data.size
+        log_det_term = jnp.sum(jnp.log(variance))
 
     normalization = -0.5 * n_data * jnp.log(2 * jnp.pi) - 0.5 * log_det_term
     return normalization - 0.5 * chi2
 
 
-def _log_likelihood_separate_images(
+def _log_likelihood_joint(
     theta: jnp.ndarray,
-    data_vel: jnp.ndarray,
-    data_int: jnp.ndarray,
-    X_vel: jnp.ndarray,
-    Y_vel: jnp.ndarray,
-    image_pars_int: 'ImagePars',
-    variance_vel: jnp.ndarray | float,
-    variance_int: jnp.ndarray | float,
-    kl_model: KLModel,
-    mask_vel: jnp.ndarray = None,
-    mask_int: jnp.ndarray = None,
+    obs_vel: 'VelocityObs',
+    obs_int: 'ImageObs',
+    kl_model: 'KLModel',
 ) -> float:
     """
     Log-likelihood for combined velocity + intensity observations.
@@ -226,30 +168,18 @@ def _log_likelihood_separate_images(
     Parameters
     ----------
     theta : jnp.ndarray
-        Combined model parameters (following kl_model.PARAMETER_NAMES order).
-    data_vel : jnp.ndarray
-        Observed velocity map (2D array).
-    data_int : jnp.ndarray
-        Observed intensity map (2D array).
-    X_vel, Y_vel : jnp.ndarray
-        Coordinate grids for velocity map evaluation.
-    image_pars_int : ImagePars
-        Image parameters for intensity map (shape, pixel_scale).
-    variance_vel : jnp.ndarray or float
-        Variance for velocity data.
-    variance_int : jnp.ndarray or float
-        Variance for intensity data.
+        Combined model parameters (kl_model.PARAMETER_NAMES order).
+    obs_vel : VelocityObs
+        Velocity observation.
+    obs_int : ImageObs
+        Intensity observation.
     kl_model : KLModel
-        Combined kinematic-lensing model instance.
-    mask_vel : jnp.ndarray, optional
-        Boolean mask for velocity data (True=valid). Same shape as data_vel.
-    mask_int : jnp.ndarray, optional
-        Boolean mask for intensity data (True=valid). Same shape as data_int.
+        Combined kinematic-lensing model.
 
     Returns
     -------
     float
-        Combined log-likelihood value (sum of velocity and intensity components).
+        Combined log-likelihood value.
 
     Notes
     -----
@@ -260,33 +190,21 @@ def _log_likelihood_separate_images(
     The velocity and intensity maps can have different shapes and pixel scales,
     as they are evaluated on their own coordinate grids.
     """
-
-    # extract component parameters from composite theta
     theta_vel = kl_model.get_velocity_pars(theta)
     theta_int = kl_model.get_intensity_pars(theta)
 
-    # compute log-likelihood for each component
-    # pass theta_int to velocity for joint PSF flux weighting
-    log_prob_vel = _log_likelihood_velocity_only(
+    log_prob_vel = _log_likelihood_velocity(
         theta_vel,
-        data_vel,
-        X_vel,
-        Y_vel,
-        variance_vel,
+        obs_vel,
         kl_model.velocity_model,
         flux_theta_override=theta_int,
-        mask_vel=mask_vel,
     )
-    log_prob_int = _log_likelihood_intensity_only(
+    log_prob_int = _log_likelihood_intensity(
         theta_int,
-        data_int,
-        image_pars_int,
-        variance_int,
+        obs_int,
         kl_model.intensity_model,
-        mask_int=mask_int,
     )
 
-    # independent observations: joint likelihood is sum of log-likelihoods
     return log_prob_vel + log_prob_int
 
 
@@ -296,22 +214,15 @@ def _log_likelihood_separate_images(
 
 
 def create_jitted_likelihood_velocity(
-    vel_model: VelocityModel,
-    image_pars_vel: ImagePars,
-    variance_vel: jnp.ndarray | float,
-    data_vel: jnp.ndarray,
-    mask_vel: jnp.ndarray = None,
+    vel_model: 'VelocityModel',
+    obs_vel: 'VelocityObs',
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled velocity-only likelihood function.
 
-    This helper function creates a JIT-compiled likelihood that only requires
-    the parameter array theta as input. All other arguments (grids, variance,
-    data, model) are "frozen" using functools.partial.
-
-    The coordinate grids are automatically generated from the ImagePars using
-    build_map_grid_from_image_pars before JIT compilation, so they are
-    pre-computed and reused for all likelihood evaluations.
+    Creates a JIT-compiled likelihood that only requires the parameter array
+    theta as input. The observation (grids, variance, data, PSF) is "frozen"
+    using functools.partial.
 
     The resulting function is optimized for repeated evaluation (e.g., in MCMC
     or optimization), as it compiles once and reuses the compiled code for all
@@ -320,17 +231,9 @@ def create_jitted_likelihood_velocity(
     Parameters
     ----------
     vel_model : VelocityModel
-        Velocity model instance to evaluate.
-    image_pars_vel : ImagePars
-        Image parameters defining the coordinate grid for velocity evaluation.
-        Grids are automatically generated using build_map_grid_from_image_pars.
-    variance_vel : jnp.ndarray or float
-        Variance map or scalar variance for velocity data.
-    data_vel : jnp.ndarray
-        Observed velocity data (2D array).
-    mask_vel : jnp.ndarray, optional
-        Boolean mask array (True=valid, False=masked). Same shape as data_vel.
-        If None, all pixels are used.
+        Velocity model instance.
+    obs_vel : VelocityObs
+        Velocity observation with data, variance, PSF, etc.
 
     Returns
     -------
@@ -340,23 +243,16 @@ def create_jitted_likelihood_velocity(
     Examples
     --------
     >>> from kl_pipe.velocity import CenteredVelocityModel
+    >>> from kl_pipe.observation import build_velocity_obs
     >>> from kl_pipe.parameters import ImagePars
-    >>> import jax.numpy as jnp
     >>>
-    >>> # Setup
     >>> model = CenteredVelocityModel()
     >>> image_pars = ImagePars(shape=(64, 64), pixel_scale=0.3)
-    >>> data = jnp.array(...)  # Your observed data
-    >>> variance = 10.0  # km/s²
+    >>> obs_vel = build_velocity_obs(image_pars, data=data, variance=10.0)
+    >>> log_like = create_jitted_likelihood_velocity(model, obs_vel)
     >>>
-    >>> # Create JIT-compiled likelihood
-    >>> log_like = create_jitted_likelihood_velocity(model, image_pars, variance, data)
-    >>>
-    >>> # Use in optimization or MCMC
     >>> theta = jnp.array([10.0, 200.0, 5.0, 0.6, 0.785, 0.0, 0.0])
     >>> log_prob = log_like(theta)  # Fast evaluation
-    >>>
-    >>> # Compute gradients
     >>> grad_fn = jax.grad(log_like)
     >>> gradient = grad_fn(theta)
 
@@ -368,61 +264,32 @@ def create_jitted_likelihood_velocity(
     The function is pure and has no side effects, making it safe for use with
     JAX transformations (grad, vmap, etc.).
     """
-
-    if mask_vel is not None:
-        if mask_vel.shape != data_vel.shape:
-            raise ValueError(
-                f"mask_vel shape {mask_vel.shape} != data_vel shape {data_vel.shape}"
-            )
-        mask_vel = jnp.asarray(mask_vel, dtype=bool)
-
-    # pre-compute coordinate grids from ImagePars
-    X_vel, Y_vel = build_map_grid_from_image_pars(image_pars_vel)
-
     return jax.jit(
         partial(
-            _log_likelihood_velocity_only,
-            data_vel=data_vel,
-            X_vel=X_vel,
-            Y_vel=Y_vel,
-            variance_vel=variance_vel,
+            _log_likelihood_velocity,
+            obs=obs_vel,
             vel_model=vel_model,
-            mask_vel=mask_vel,
         )
     )
 
 
 def create_jitted_likelihood_intensity(
-    int_model: IntensityModel,
-    image_pars_int: ImagePars,
-    variance_int: jnp.ndarray | float,
-    data_int: jnp.ndarray,
-    mask_int: jnp.ndarray = None,
+    int_model: 'IntensityModel',
+    obs_int: 'ImageObs',
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled intensity-only likelihood function.
 
-    This helper function creates a JIT-compiled likelihood that only requires
-    the parameter array theta as input. All other arguments (grids, variance,
-    data, model) are "frozen" using functools.partial.
-
-    The coordinate grids are automatically generated from the ImagePars using
-    build_map_grid_from_image_pars before JIT compilation.
+    Creates a JIT-compiled likelihood that only requires the parameter array
+    theta as input. The observation (grids, variance, data, PSF) is "frozen"
+    using functools.partial.
 
     Parameters
     ----------
     int_model : IntensityModel
-        Intensity model instance to evaluate.
-    image_pars_int : ImagePars
-        Image parameters defining the coordinate grid for intensity evaluation.
-        Grids are automatically generated using build_map_grid_from_image_pars.
-    variance_int : jnp.ndarray or float
-        Variance map or scalar variance for intensity data.
-    data_int : jnp.ndarray
-        Observed intensity data (2D array).
-    mask_int : jnp.ndarray, optional
-        Boolean mask array (True=valid, False=masked). Same shape as data_int.
-        If None, all pixels are used.
+        Intensity model instance.
+    obs_int : ImageObs
+        Image observation with data, variance, PSF, etc.
 
     Returns
     -------
@@ -432,19 +299,13 @@ def create_jitted_likelihood_intensity(
     Examples
     --------
     >>> from kl_pipe.intensity import InclinedExponentialModel
+    >>> from kl_pipe.observation import build_image_obs
     >>> from kl_pipe.parameters import ImagePars
     >>>
-    >>> # Setup
     >>> model = InclinedExponentialModel()
     >>> image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1)
-    >>> data = jnp.array(...)  # Your observed data
-    >>> variance = 0.01  # Intensity variance
-    >>>
-    >>> # Create JIT-compiled likelihood
-    >>> log_like = create_jitted_likelihood_intensity(model, image_pars, variance, data)
-    >>>
-    >>> # Evaluate and optimize
-    >>> theta = jnp.array([1.0, 3.0, 0.6, 0.785, 0.0, 0.0, 0.0, 0.0])
+    >>> obs_int = build_image_obs(image_pars, data=data, variance=0.01)
+    >>> log_like = create_jitted_likelihood_intensity(model, obs_int)
     >>> log_prob = log_like(theta)
 
     Notes
@@ -452,68 +313,35 @@ def create_jitted_likelihood_intensity(
     See create_jitted_likelihood_velocity for additional usage notes and
     performance considerations.
     """
-
-    if mask_int is not None:
-        if mask_int.shape != data_int.shape:
-            raise ValueError(
-                f"mask_int shape {mask_int.shape} != data_int shape {data_int.shape}"
-            )
-        mask_int = jnp.asarray(mask_int, dtype=bool)
-
     return jax.jit(
         partial(
-            _log_likelihood_intensity_only,
-            data_int=data_int,
-            image_pars_int=image_pars_int,
-            variance_int=variance_int,
+            _log_likelihood_intensity,
+            obs=obs_int,
             int_model=int_model,
-            mask_int=mask_int,
         )
     )
 
 
 def create_jitted_likelihood_joint(
-    kl_model: KLModel,
-    image_pars_vel: ImagePars,
-    image_pars_int: ImagePars,
-    variance_vel: jnp.ndarray | float,
-    variance_int: jnp.ndarray | float,
-    data_vel: jnp.ndarray,
-    data_int: jnp.ndarray,
-    mask_vel: jnp.ndarray = None,
-    mask_int: jnp.ndarray = None,
+    kl_model: 'KLModel',
+    obs_vel: 'VelocityObs',
+    obs_int: 'ImageObs',
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled joint velocity + intensity likelihood function.
 
-    This helper function creates a JIT-compiled likelihood for combined
-    kinematic-lensing observations. The velocity and intensity data can have
-    different shapes, pixel scales, and noise properties.
-
-    The coordinate grids are automatically generated from the respective
-    ImagePars objects using build_map_grid_from_image_pars before JIT
-    compilation.
+    Creates a JIT-compiled likelihood for combined kinematic-lensing
+    observations. The velocity and intensity data can have different shapes,
+    pixel scales, and noise properties.
 
     Parameters
     ----------
     kl_model : KLModel
-        Combined kinematic-lensing model instance.
-    image_pars_vel : ImagePars
-        Image parameters for velocity map. Grids are automatically generated.
-    image_pars_int : ImagePars
-        Image parameters for intensity map. Grids are automatically generated.
-    variance_vel : jnp.ndarray or float
-        Variance for velocity data.
-    variance_int : jnp.ndarray or float
-        Variance for intensity data.
-    data_vel : jnp.ndarray
-        Observed velocity data (2D array).
-    data_int : jnp.ndarray
-        Observed intensity data (2D array).
-    mask_vel : jnp.ndarray, optional
-        Boolean mask for velocity data (True=valid). Same shape as data_vel.
-    mask_int : jnp.ndarray, optional
-        Boolean mask for intensity data (True=valid). Same shape as data_int.
+        Combined kinematic-lensing model.
+    obs_vel : VelocityObs
+        Velocity observation.
+    obs_int : ImageObs
+        Intensity observation.
 
     Returns
     -------
@@ -526,35 +354,24 @@ def create_jitted_likelihood_joint(
     >>> from kl_pipe.model import KLModel
     >>> from kl_pipe.velocity import OffsetVelocityModel
     >>> from kl_pipe.intensity import InclinedExponentialModel
+    >>> from kl_pipe.observation import build_joint_obs
     >>> from kl_pipe.parameters import ImagePars
     >>>
-    >>> # Setup models
     >>> vel_model = OffsetVelocityModel()
     >>> int_model = InclinedExponentialModel()
     >>> kl_model = KLModel(vel_model, int_model,
-    ...                    shared_pars={'g1', 'g2', 'theta_int', 'sini'})
+    ...                    shared_pars={'g1', 'g2', 'theta_int', 'cosi'})
     >>>
-    >>> # Setup grids (can be different sizes!)
     >>> vel_pars = ImagePars(shape=(32, 32), pixel_scale=0.3)
     >>> int_pars = ImagePars(shape=(64, 64), pixel_scale=0.1)
     >>>
-    >>> # Load data
-    >>> data_vel = jnp.array(...)
-    >>> data_int = jnp.array(...)
-    >>> variance_vel = 10.0
-    >>> variance_int = 0.01
-    >>>
-    >>> # Create JIT-compiled joint likelihood
-    >>> log_like = create_jitted_likelihood_joint(
-    ...     kl_model, vel_pars, int_pars,
-    ...     variance_vel, variance_int, data_vel, data_int
+    >>> obs_vel, obs_int = build_joint_obs(
+    ...     vel_pars, int_pars, int_model,
+    ...     data_vel=data_vel, variance_vel=10.0,
+    ...     data_int=data_int, variance_int=0.01,
     ... )
-    >>>
-    >>> # Use in inference
-    >>> theta = jnp.array([...])  # Composite parameters
+    >>> log_like = create_jitted_likelihood_joint(kl_model, obs_vel, obs_int)
     >>> log_prob = log_like(theta)
-    >>> grad_fn = jax.grad(log_like)
-    >>> gradient = grad_fn(theta)
 
     Notes
     -----
@@ -567,75 +384,11 @@ def create_jitted_likelihood_joint(
     where velocity and intensity observations have different resolutions or
     fields of view.
     """
-
-    if mask_vel is not None:
-        if mask_vel.shape != data_vel.shape:
-            raise ValueError(
-                f"mask_vel shape {mask_vel.shape} != data_vel shape {data_vel.shape}"
-            )
-        mask_vel = jnp.asarray(mask_vel, dtype=bool)
-
-    if mask_int is not None:
-        if mask_int.shape != data_int.shape:
-            raise ValueError(
-                f"mask_int shape {mask_int.shape} != data_int shape {data_int.shape}"
-            )
-        mask_int = jnp.asarray(mask_int, dtype=bool)
-
-    # pre-compute coordinate grids from ImagePars (velocity still needs X, Y)
-    X_vel, Y_vel = build_map_grid_from_image_pars(image_pars_vel)
-
     return jax.jit(
         partial(
-            _log_likelihood_separate_images,
-            data_vel=data_vel,
-            data_int=data_int,
-            X_vel=X_vel,
-            Y_vel=Y_vel,
-            image_pars_int=image_pars_int,
-            variance_vel=variance_vel,
-            variance_int=variance_int,
+            _log_likelihood_joint,
+            obs_vel=obs_vel,
+            obs_int=obs_int,
             kl_model=kl_model,
-            mask_vel=mask_vel,
-            mask_int=mask_int,
         )
     )
-
-
-# NOTE: OLD!!!
-# TODO: Remove when ready
-# This was the first implementation for simple JAX testing; now replaced by above
-# should be removed when ready
-# def log_likelihood(
-#     theta: jnp.ndarray, kl_model: KLModel, datavector: jnp.ndarray, meta_pars: dict
-# ) -> float:
-#     """
-#     Compute log-likelihood for kinematic lensing model.
-
-#     Parameters
-#     ----------
-#     theta : jnp.ndarray
-#         Composite parameter array.
-#     kl_model : KLModel
-#         Combined velocity and intensity model.
-#     datavector : jnp.ndarray
-#         Observed data vector.
-#     meta_pars : dict
-#         Fixed metadata including coordinate grids.
-
-#     Returns
-#     -------
-#     float
-#         Log-likelihood value.
-#     """
-
-#     velocity_map, intensity_map = kl_model(
-#         theta, plane='obs', X=meta_pars['X'], Y=meta_pars['Y']
-#     )
-
-#     model_prediction = velocity_map * intensity_map
-
-#     residuals = datavector - model_prediction
-#     chi2 = jnp.sum(residuals**2)
-
-#     return -0.5 * chi2

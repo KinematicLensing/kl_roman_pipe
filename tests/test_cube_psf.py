@@ -1,7 +1,7 @@
 """
 Tests for datacube + grism PSF convolution.
 
-Validates that configure_grism_psf stores correct state, render_cube produces
+Validates that GrismObs stores correct state, render_cube produces
 correct shapes with oversampled PSF, and the full grism pipeline works end-to-end.
 Includes physical correctness (flux conservation, broadening), JAX compatibility
 (JIT, grad), GalSim regression, and diagnostic plots.
@@ -40,6 +40,7 @@ from kl_pipe.spectral import (
 )
 from kl_pipe.dispersion import GrismPars, disperse_cube, build_grism_pars_for_line
 from kl_pipe.psf import precompute_psf_fft, convolve_fft
+from kl_pipe.observation import GrismObs, build_image_obs
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # =============================================================================
@@ -93,6 +94,28 @@ def _merged_pars():
     merged.update(_INT_PARS)
     merged.update(_SPEC_PARS)
     return merged
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+
+def _make_grism_obs(cube_pars, psf, oversample, grism_pars=None):
+    """Build GrismObs for testing."""
+    psf_data = precompute_psf_fft(
+        psf, image_pars=cube_pars.image_pars, oversample=oversample
+    )
+    fine_ip = (
+        cube_pars.image_pars.make_fine_scale(oversample) if oversample > 1 else None
+    )
+    return GrismObs(
+        grism_pars=grism_pars,
+        cube_pars=cube_pars,
+        psf_data=psf_data,
+        oversample=oversample,
+        fine_image_pars=fine_ip,
+    )
 
 
 # =============================================================================
@@ -166,43 +189,29 @@ def gaussian_psf():
 # =============================================================================
 
 
-class TestConfigureGrismPsf:
-    def test_stores_state_oversample_1(self, kl_model, cube_pars, gaussian_psf):
+class TestGrismObsConstruction:
+    def test_obs_fields_oversample_1(self, cube_pars, gaussian_psf):
         """oversample=1: psf_data set, fine_image_pars None."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
 
-        assert kl._grism_psf_data is not None
-        assert kl._grism_psf_oversample == 1
-        assert kl._grism_psf_fine_image_pars is None
-        assert kl._grism_psf_data.coarse_shape == (32, 48)
-        assert kl._grism_psf_data.original_shape == (32, 48)
+        assert obs.psf_data is not None
+        assert obs.oversample == 1
+        assert obs.fine_image_pars is None
+        assert obs.psf_data.coarse_shape == (32, 48)
+        assert obs.psf_data.original_shape == (32, 48)
 
-    def test_stores_state_oversample_5(self, kl_model, cube_pars, gaussian_psf):
+    def test_obs_fields_oversample_5(self, cube_pars, gaussian_psf):
         """oversample=5: psf_data set, fine_image_pars has 5x resolution."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=5)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
 
-        assert kl._grism_psf_data is not None
-        assert kl._grism_psf_oversample == 5
-        assert kl._grism_psf_fine_image_pars is not None
-        assert kl._grism_psf_data.coarse_shape == (32, 48)
-        assert kl._grism_psf_data.original_shape == (160, 240)
-        assert kl._grism_psf_fine_image_pars.Nrow == 160
-        assert kl._grism_psf_fine_image_pars.Ncol == 240
-        assert kl._grism_psf_fine_image_pars.pixel_scale == pytest.approx(
-            0.11 / 5, rel=1e-10
-        )
+        assert obs.psf_data is not None
+        assert obs.oversample == 5
+        assert obs.fine_image_pars is not None
+        assert obs.psf_data.coarse_shape == (32, 48)
+        assert obs.psf_data.original_shape == (160, 240)
+        assert obs.fine_image_pars.Nrow == 160
+        assert obs.fine_image_pars.Ncol == 240
+        assert obs.fine_image_pars.pixel_scale == pytest.approx(0.11 / 5, rel=1e-10)
 
 
 class TestRenderCubeWithPsf:
@@ -215,14 +224,8 @@ class TestRenderCubeWithPsf:
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
         """oversample=1: no shape mismatch, output shape == coarse."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        cube = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
+        cube = kl_model.render_cube(theta, obs)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
 
@@ -230,14 +233,8 @@ class TestRenderCubeWithPsf:
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
         """oversample=5: fine-scale rendering + binning, output at coarse shape."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=5)
-        cube = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
+        cube = kl_model.render_cube(theta, obs)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
         assert float(jnp.sum(cube)) > 0
@@ -245,17 +242,11 @@ class TestRenderCubeWithPsf:
     def test_render_grism_with_psf(
         self, kl_model, grism_pars, cube_pars, theta, gaussian_psf
     ):
-        """Full pipeline: configure_grism_psf -> render_grism -> 2D output."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
+        """Full pipeline: GrismObs -> render_grism -> 2D output."""
+        obs = _make_grism_obs(
+            cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-
-        # use pre-computed cube_pars for deterministic lambda_grid
-        grism = kl.render_grism(theta, grism_pars, cube_pars=cube_pars)
+        grism = kl_model.render_grism(theta, obs)
         assert grism.shape == (32, 48)
         assert jnp.isfinite(grism).all()
         assert float(jnp.sum(grism)) > 0
@@ -273,14 +264,8 @@ class TestPhysicalCorrectness:
         cube_no_psf = kl_model.render_cube(theta, cube_pars)
 
         # with PSF oversample=1
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        cube_psf = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
+        cube_psf = kl_model.render_cube(theta, obs)
 
         # per-slice flux conservation
         for k in range(cube_pars.n_lambda):
@@ -296,14 +281,8 @@ class TestPhysicalCorrectness:
         """PSF widens spatial profile: std(psf_slice) > std(no_psf_slice) at peak."""
         cube_no_psf = kl_model.render_cube(theta, cube_pars)
 
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        cube_psf = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
+        cube_psf = kl_model.render_cube(theta, obs)
 
         # find peak wavelength slice
         slice_flux = jnp.sum(cube_no_psf, axis=(0, 1))
@@ -335,15 +314,8 @@ class TestPhysicalCorrectness:
         This is the key regression test: if the cube PSF path diverges from
         the known-good 2D path, something is wrong.
         """
-        # build a KLModel with grism PSF at oversample=1
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        cube_psf = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
+        cube_psf = kl_model.render_cube(theta, obs)
 
         # find peak slice
         slice_flux = jnp.sum(cube_psf, axis=(0, 1))
@@ -372,15 +344,9 @@ class TestJaxCompatibility:
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
         """jax.jit through render_cube with PSF oversample=1."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
 
-        render_jit = jax.jit(partial(kl.render_cube, cube_pars=cube_pars))
+        render_jit = jax.jit(partial(kl_model.render_cube, obs_or_cube_pars=obs))
         cube = render_jit(theta)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
@@ -389,15 +355,9 @@ class TestJaxCompatibility:
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
         """jax.jit through render_cube with PSF oversample=5."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=5)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
 
-        render_jit = jax.jit(partial(kl.render_cube, cube_pars=cube_pars))
+        render_jit = jax.jit(partial(kl_model.render_cube, obs_or_cube_pars=obs))
         cube = render_jit(theta)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
@@ -406,33 +366,21 @@ class TestJaxCompatibility:
         self, kl_model, grism_pars, cube_pars, theta, gaussian_psf
     ):
         """jax.jit through full grism+PSF pipeline."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
+        obs = _make_grism_obs(
+            cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
 
-        render_jit = jax.jit(
-            partial(kl.render_grism, grism_pars=grism_pars, cube_pars=cube_pars)
-        )
+        render_jit = jax.jit(partial(kl_model.render_grism, obs_or_grism_pars=obs))
         grism = render_jit(theta)
         assert grism.shape == (32, 48)
         assert jnp.isfinite(grism).all()
 
     def test_render_cube_psf_grad(self, kl_model, cube_pars, theta, gaussian_psf):
         """jax.grad of total flux through PSF-convolved cube."""
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
 
         def loss(th):
-            cube = kl.render_cube(th, cube_pars)
+            cube = kl_model.render_cube(th, obs)
             return jnp.sum(cube**2)
 
         grad_fn = jax.grad(loss)
@@ -542,14 +490,8 @@ class TestDiagnostics:
         """3-row grid: no-PSF slices, PSF slices, residuals across wavelength."""
         cube_no_psf = kl_model.render_cube(theta, cube_pars)
 
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        cube_psf = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
+        cube_psf = kl_model.render_cube(theta, obs)
 
         # select ~5 representative wavelength slices
         n_lam = cube_pars.n_lambda
@@ -601,27 +543,18 @@ class TestDiagnostics:
     ):
         """2x2 panel comparing cube peak slice (PSF) to 2D render_image (PSF)."""
         # cube path with PSF
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        cube_psf = kl.render_cube(theta, cube_pars)
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
+        cube_psf = kl_model.render_cube(theta, obs)
 
         slice_flux = jnp.sum(cube_psf, axis=(0, 1))
         peak_k = int(jnp.argmax(slice_flux))
         cube_slice = np.array(cube_psf[:, :, peak_k])
 
         # 2D intensity render with same PSF (broadband, different from per-line)
-        # use a fresh model to avoid contaminating the shared fixture
         int_model_fresh = InclinedExponentialModel()
         theta_int = kl_model.get_intensity_pars(theta)
-        int_model_fresh.configure_psf(
-            gaussian_psf, image_pars=cube_pars.image_pars, oversample=1
-        )
-        img_2d = np.array(int_model_fresh.render_image(theta_int, cube_pars.image_pars))
+        img_obs = build_image_obs(cube_pars.image_pars, psf=gaussian_psf, oversample=1)
+        img_2d = np.array(int_model_fresh.render_image(theta_int, obs=img_obs))
 
         # note: these aren't expected to match exactly (cube slice = line flux,
         # 2D = broadband) — this is a qualitative diagnostic
@@ -655,14 +588,8 @@ class TestDiagnostics:
     ):
         """Multi-row convergence grid: cube slices at N=1,3,5,7 vs N=9 reference."""
         # render reference at N=9
-        kl_ref = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
-        )
-        kl_ref.configure_grism_psf(gaussian_psf, cube_pars, oversample=9)
-        cube_ref = np.array(kl_ref.render_cube(theta, cube_pars))
+        obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=9)
+        cube_ref = np.array(kl_model.render_cube(theta, obs_ref))
 
         # find peak slice for comparison
         slice_flux = np.sum(cube_ref, axis=(0, 1))
@@ -675,14 +602,8 @@ class TestDiagnostics:
         slices = {}
 
         for N in ns:
-            kl_n = KLModel(
-                kl_model.velocity_model,
-                kl_model.intensity_model,
-                shared_pars=_SHARED_PARS,
-                spectral_model=kl_model.spectral_model,
-            )
-            kl_n.configure_grism_psf(gaussian_psf, cube_pars, oversample=N)
-            cube_n = np.array(kl_n.render_cube(theta, cube_pars))
+            obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
+            cube_n = np.array(kl_model.render_cube(theta, obs_n))
             test_slice = cube_n[:, :, peak_k]
             slices[N] = test_slice
             residuals[N] = np.max(np.abs(test_slice - ref_slice)) / peak
@@ -759,14 +680,8 @@ class TestDiagnostics:
         labels['no_psf'] = 'no PSF'
 
         for N in [1, 5]:
-            kl_n = KLModel(
-                kl_model.velocity_model,
-                kl_model.intensity_model,
-                shared_pars=_SHARED_PARS,
-                spectral_model=kl_model.spectral_model,
-            )
-            kl_n.configure_grism_psf(gaussian_psf, cube_pars, oversample=N)
-            cube_n = np.array(kl_n.render_cube(theta, cube_pars))
+            obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
+            cube_n = np.array(kl_model.render_cube(theta, obs_n))
             profiles[f'N={N}'] = cube_n[:, :, peak_k]
             labels[f'N={N}'] = f'PSF N={N}'
 
@@ -818,14 +733,10 @@ class TestDiagnostics:
         )
 
         # with PSF
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
+        obs = _make_grism_obs(
+            cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        grism_psf = np.array(kl.render_grism(theta, grism_pars, cube_pars=cube_pars))
+        grism_psf = np.array(kl_model.render_grism(theta, obs))
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -877,14 +788,10 @@ class TestDiagnostics:
             kl_model.render_grism(theta, grism_pars, cube_pars=cube_pars)
         )
 
-        kl = KLModel(
-            kl_model.velocity_model,
-            kl_model.intensity_model,
-            shared_pars=_SHARED_PARS,
-            spectral_model=kl_model.spectral_model,
+        obs = _make_grism_obs(
+            cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        kl.configure_grism_psf(gaussian_psf, cube_pars, oversample=1)
-        grism_psf = np.array(kl.render_grism(theta, grism_pars, cube_pars=cube_pars))
+        grism_psf = np.array(kl_model.render_grism(theta, obs))
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 

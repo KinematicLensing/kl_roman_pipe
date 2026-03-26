@@ -15,6 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from kl_pipe.intensity import InclinedExponentialModel, build_intensity_model
+from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir, build_map_grid_from_image_pars
 from kl_pipe import plotting
@@ -674,12 +675,11 @@ def test_galsim_regression_render_image_shear_psf(g1, g2, rect_image_pars, outpu
     # our model (k-space FFT + PSF)
     model = InclinedExponentialModel()
     psf_obj = gs.Gaussian(fwhm=fwhm)
-    model.configure_psf(psf_obj, rect_image_pars, oversample=5)
+    obs = build_image_obs(rect_image_pars, psf=psf_obj, oversample=5, int_model=model)
     theta = jnp.array(
         [cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0]
     )
-    our_image = np.array(model.render_image(theta, image_pars=rect_image_pars))
-    model.clear_psf()
+    our_image = np.array(model.render_image(theta, obs=obs))
 
     # GalSim reference (native convolution, pixel-integrated)
     gs_image = _generate_sersic_galsim(
@@ -851,8 +851,8 @@ def test_asymmetric_psf_orientation(output_dir):
     theta = jnp.array([cosi, theta_int, 0.0, 0.0, flux, rscale, h_over_r, 0.0, 0.0])
 
     model = InclinedExponentialModel()
-    model.configure_psf(psf_obj, image_pars=ip, oversample=9)
-    our_image = np.array(model.render_image(theta, image_pars=ip))
+    obs = build_image_obs(ip, psf=psf_obj, oversample=9, int_model=model)
+    our_image = np.array(model.render_image(theta, obs=obs))
 
     gs_image = generate_sersic_intensity_2d(
         ip,
