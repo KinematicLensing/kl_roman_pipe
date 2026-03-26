@@ -22,10 +22,6 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider
 from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
 from pathlib import Path
-import sys
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kl_pipe.tng import TNG50MockData
 

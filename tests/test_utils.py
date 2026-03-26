@@ -3,9 +3,16 @@ Shared test utilities for parameter recovery tests.
 
 This module contains common functions used by both likelihood slicing tests
 and gradient-based optimizer tests. May expand further in the future.
+
+Note: plot_data_comparison_panels and plot_combined_data_comparison have been
+moved to kl_pipe.diagnostics. The versions in this file are deprecated wrappers
+for backward compatibility.
 """
 
 import pytest
+import sys
+import contextlib
+import warnings
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,6 +22,68 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.plotting import MidpointNormalize
+
+
+# ==============================================================================
+# Output Redirection Utilities
+# ==============================================================================
+
+
+class TeeWriter:
+    """Write to both a file and optionally to terminal."""
+
+    def __init__(self, file_handle, also_terminal: bool = False, original_stdout=None):
+        self.file_handle = file_handle
+        self.also_terminal = also_terminal
+        self.original_stdout = original_stdout or sys.__stdout__
+
+    def write(self, message):
+        self.file_handle.write(message)
+        if self.also_terminal:
+            self.original_stdout.write(message)
+
+    def flush(self):
+        self.file_handle.flush()
+        if self.also_terminal:
+            self.original_stdout.flush()
+
+
+@contextlib.contextmanager
+def redirect_sampler_output(log_path: Path, also_terminal: bool = False):
+    """
+    Redirect stdout to a file, optionally also writing to terminal.
+
+    Sampler output is ALWAYS written to the log file. If also_terminal=True,
+    output is also displayed in the terminal (useful for debugging).
+
+    Parameters
+    ----------
+    log_path : Path
+        Path to the output log file.
+    also_terminal : bool
+        If True, output goes to both file and terminal.
+        If False (default), output goes to file only.
+
+    Examples
+    --------
+    >>> with redirect_sampler_output(Path("sampler.log")):
+    ...     sampler.run()  # Output captured to file only
+
+    >>> with redirect_sampler_output(Path("sampler.log"), also_terminal=True):
+    ...     sampler.run()  # Output to file AND terminal
+    """
+    # Ensure parent directory exists
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    original_stdout = sys.stdout
+    with open(log_path, 'w') as f:
+        sys.stdout = TeeWriter(
+            f, also_terminal=also_terminal, original_stdout=original_stdout
+        )
+        try:
+            yield
+        finally:
+            sys.stdout = original_stdout
 
 
 # ==============================================================================
@@ -39,6 +108,7 @@ class TestConfig:
         include_poisson_noise: bool = False,
         seed: int = 42,
         sersic_backend: str = 'scipy',
+        verbose_terminal: bool = False,
     ):
         self.output_dir = output_dir
         # plotting control
@@ -47,6 +117,8 @@ class TestConfig:
         self.include_poisson_noise = include_poisson_noise
         self.seed = seed
         self.sersic_backend = sersic_backend
+        # sampler output control
+        self.verbose_terminal = verbose_terminal
 
         # =========================================================================
         # LIKELIHOOD SLICE TEST TOLERANCES
@@ -129,7 +201,12 @@ class TestConfig:
             'vel_y0': 0.1,
             'int_x0': 0.1,
             'int_y0': 0.1,
+            'int_h_over_r': 0.01,  # low sensitivity at h/r=0.1
         }
+
+        # PSF tolerance multiplier -- with oversampled rendering (N=5), the
+        # forward model mismatch is eliminated; small residual from PSF smoothing
+        self.psf_tolerance_multiplier = 1.5
 
         # physical parameter boundaries
         self.param_bounds = {
@@ -154,6 +231,28 @@ class TestConfig:
 
         return
 
+    def get_sampler_log_path(self, test_name: str, sampler_name: str) -> Path:
+        """
+        Get path for sampler output log file.
+
+        Sampler output is always written to files in the test output directory.
+
+        Parameters
+        ----------
+        test_name : str
+            Name of the test (used as subdirectory).
+        sampler_name : str
+            Name of the sampler (e.g., 'emcee', 'nautilus', 'blackjax').
+
+        Returns
+        -------
+        Path
+            Path to the log file.
+        """
+        test_dir = self.output_dir / test_name
+        test_dir.mkdir(parents=True, exist_ok=True)
+        return test_dir / f"{sampler_name}_output.txt"
+
     def get_tolerance(
         self,
         snr: float,
@@ -161,6 +260,7 @@ class TestConfig:
         param_value: float,
         data_type: str,
         test_type: str,
+        has_psf: bool = False,
     ) -> Dict[str, float]:
         """
         Get tolerance for parameter at given SNR.
@@ -181,6 +281,8 @@ class TestConfig:
         test_type : str
             'likelihood_slice' or 'optimizer'. Determines which tolerance set to use.
             Optimizer tests use looser tolerances due to local optima & degeneracies.
+        has_psf : bool
+            If True, apply psf_tolerance_multiplier to loosen tolerances.
 
         Returns
         -------
@@ -209,16 +311,60 @@ class TestConfig:
         else:
             relative_tol = base_tol
 
+        # Apply PSF tolerance multiplier
+        if has_psf:
+            relative_tol *= self.psf_tolerance_multiplier
+
         # compute absolute tolerance
         # use the larger of: (relative_tol × |value|) or absolute_floor
         absolute_from_relative = relative_tol * abs(param_value)
         absolute_floor = self.absolute_tolerance_floor.get(param_name, 0.0)
         absolute_tol = max(absolute_from_relative, absolute_floor)
 
+        if has_psf:
+            absolute_tol *= self.psf_tolerance_multiplier
+
         return {
             'relative': relative_tol,
             'absolute': absolute_tol,
         }
+
+
+def _quadratic_peak_interp(param_values, log_probs):
+    """Sub-grid-point peak finding via 3-point parabolic interpolation.
+
+    Fits a quadratic to the argmax and its two neighbors, returns the
+    vertex location. Falls back to discrete argmax at boundaries or
+    when curvature is degenerate.
+    """
+    best_idx = int(jnp.argmax(log_probs))
+    n = len(param_values)
+
+    # boundary — can't interpolate
+    if best_idx == 0 or best_idx == n - 1:
+        return float(param_values[best_idx])
+
+    x0 = float(param_values[best_idx - 1])
+    x1 = float(param_values[best_idx])
+    x2 = float(param_values[best_idx + 1])
+    y0 = float(log_probs[best_idx - 1])
+    y1 = float(log_probs[best_idx])
+    y2 = float(log_probs[best_idx + 1])
+
+    denom = 2.0 * (y0 - 2.0 * y1 + y2)
+
+    # flat or degenerate curvature
+    if abs(denom) < 1e-30:
+        return x1
+
+    # vertex of parabola through the 3 points
+    dx = (y0 - y2) / denom
+    peak = x1 + dx * (x2 - x0) / 2.0
+
+    # clamp to the interval [x0, x2]
+    peak = max(x0, min(x2, peak))
+
+    return peak
 
 
 def check_parameter_recovery(
@@ -624,7 +770,7 @@ def slice_all_parameters(
 
 
 # ==============================================================================
-# Diagnostic Plotting
+# Diagnostic Plotting (DEPRECATED - use kl_pipe.diagnostics instead)
 # ==============================================================================
 
 
@@ -641,6 +787,10 @@ def plot_data_comparison_panels(
 ) -> None:
     """
     Create 2x3 panel diagnostic plot.
+
+    .. deprecated::
+        Use kl_pipe.diagnostics.plot_data_comparison_panels instead.
+        This function is kept for backward compatibility.
 
     Row 1: noisy | true | noisy - true
     Row 2: model - true | model | noisy - model
@@ -666,6 +816,12 @@ def plot_data_comparison_panels(
     model_label : str, optional
         Label for model panel ('Model' or 'Optimized Model'). Default is 'Model'.
     """
+    warnings.warn(
+        "plot_data_comparison_panels in test_utils.py is deprecated. "
+        "Use kl_pipe.diagnostics.plot_data_comparison_panels instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     if not config.enable_plots:
         return
@@ -1190,6 +1346,209 @@ def plot_parameter_comparison(
     plt.close(fig)
 
 
+def plot_combined_data_comparison(
+    data_vel_noisy: jnp.ndarray,
+    data_vel_true: jnp.ndarray,
+    model_vel: jnp.ndarray,
+    data_int_noisy: jnp.ndarray,
+    data_int_true: jnp.ndarray,
+    model_int: jnp.ndarray,
+    test_name: str,
+    config: TestConfig,
+    variance_vel: Optional[float] = None,
+    variance_int: Optional[float] = None,
+    n_params: Optional[int] = None,
+    model_label: str = 'MAP Model',
+) -> None:
+    """
+    Create combined 4x3 panel diagnostic plot for velocity + intensity.
+
+    .. deprecated::
+        Use kl_pipe.diagnostics.plot_combined_data_comparison instead.
+        This function is kept for backward compatibility.
+
+    Stacks velocity (top 2 rows) and intensity (bottom 2 rows) comparisons
+    into a single output figure.
+
+    Layout:
+        Row 0: Velocity - noisy | true | noisy - true
+        Row 1: Velocity - model - true | model | noisy - model
+        Row 2: Intensity - noisy | true | noisy - true
+        Row 3: Intensity - model - true | model | noisy - model
+
+    Parameters
+    ----------
+    data_vel_noisy, data_vel_true, model_vel : jnp.ndarray
+        Velocity data arrays.
+    data_int_noisy, data_int_true, model_int : jnp.ndarray
+        Intensity data arrays.
+    test_name : str
+        Name of test (for title and filename).
+    config : TestConfig
+        Test configuration.
+    variance_vel, variance_int : float, optional
+        Variances for chi-squared computation.
+    n_params : int, optional
+        Number of fitted parameters (for reduced chi-squared).
+    model_label : str, optional
+        Label for model panels. Default is 'MAP Model'.
+    """
+    warnings.warn(
+        "plot_combined_data_comparison in test_utils.py is deprecated. "
+        "Use kl_pipe.diagnostics.plot_combined_data_comparison instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    if not config.enable_plots:
+        return
+
+    # Create output directory for this test
+    test_dir = config.output_dir / test_name
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set up figure with 4 rows x 3 cols
+    fig, axes = plt.subplots(4, 3, figsize=(15, 18))
+
+    # Helper function to plot a 2x3 block
+    def plot_data_block(
+        axes_block,
+        data_noisy,
+        data_true,
+        model_eval,
+        variance,
+        data_type,
+    ):
+        # Compute residuals & chi2
+        residual_true = np.array(data_noisy - data_true)
+        residual_model = np.array(data_noisy - model_eval)
+        residual_model_true = np.array(model_eval - data_true)
+
+        chi2_true = None
+        chi2_model = None
+        if variance is not None:
+            chi2_true = np.sum(residual_true**2 / variance)
+            chi2_model = np.sum(residual_model**2 / variance)
+            if n_params is not None:
+                dof = data_noisy.size - n_params
+                chi2_true /= dof
+                chi2_model /= dof
+
+        # Common colorbar limits for data
+        data_arrays = [data_noisy, data_true, model_eval]
+        vmin_data = min(np.percentile(arr, 1) for arr in data_arrays)
+        vmax_data = max(np.percentile(arr, 99) for arr in data_arrays)
+        norm_data = MidpointNormalize(vmin=vmin_data, vmax=vmax_data, midpoint=0)
+
+        # Common colorbar limits for residuals
+        residual_arrays = [residual_true, residual_model]
+        abs_max = max(
+            np.abs(np.percentile(arr, [1, 99])).max() for arr in residual_arrays
+        )
+        norm_resid = MidpointNormalize(vmin=-abs_max, vmax=abs_max, midpoint=0)
+
+        # Row 0: noisy | true | noisy - true
+        im00 = axes_block[0, 0].imshow(
+            np.array(data_noisy), origin='lower', cmap='RdBu_r', norm=norm_data
+        )
+        axes_block[0, 0].set_title(f'{data_type}: Noisy Data')
+        divider = make_axes_locatable(axes_block[0, 0])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im00, cax=cax)
+
+        im01 = axes_block[0, 1].imshow(
+            np.array(data_true), origin='lower', cmap='RdBu_r', norm=norm_data
+        )
+        axes_block[0, 1].set_title(f'{data_type}: True')
+        divider = make_axes_locatable(axes_block[0, 1])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im01, cax=cax)
+
+        im02 = axes_block[0, 2].imshow(
+            residual_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
+        axes_block[0, 2].set_title(f'{data_type}: Noisy - True')
+        divider = make_axes_locatable(axes_block[0, 2])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im02, cax=cax)
+        if variance is not None:
+            axes_block[0, 2].text(
+                0.02,
+                0.98,
+                f'χ²={chi2_true:.1f}',
+                transform=axes_block[0, 2].transAxes,
+                fontsize=9,
+                color='white',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
+            )
+
+        # Row 1: model - true | model | noisy - model
+        im10 = axes_block[1, 0].imshow(
+            residual_model_true, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
+        axes_block[1, 0].set_title(f'{data_type}: {model_label} - True')
+        divider = make_axes_locatable(axes_block[1, 0])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im10, cax=cax)
+
+        im11 = axes_block[1, 1].imshow(
+            np.array(model_eval), origin='lower', cmap='RdBu_r', norm=norm_data
+        )
+        axes_block[1, 1].set_title(f'{data_type}: {model_label}')
+        divider = make_axes_locatable(axes_block[1, 1])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im11, cax=cax)
+
+        im12 = axes_block[1, 2].imshow(
+            residual_model, origin='lower', cmap='RdBu_r', norm=norm_resid
+        )
+        axes_block[1, 2].set_title(f'{data_type}: Noisy - {model_label}')
+        divider = make_axes_locatable(axes_block[1, 2])
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im12, cax=cax)
+        if variance is not None:
+            axes_block[1, 2].text(
+                0.02,
+                0.98,
+                f'χ²={chi2_model:.1f}',
+                transform=axes_block[1, 2].transAxes,
+                fontsize=9,
+                color='white',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='black', alpha=0.5),
+            )
+
+        # Labels
+        for ax in axes_block.flat:
+            ax.set_xlabel('x (pixels)')
+            ax.set_ylabel('y (pixels)')
+
+    # Plot velocity block (rows 0-1)
+    plot_data_block(
+        axes[0:2, :], data_vel_noisy, data_vel_true, model_vel, variance_vel, 'Velocity'
+    )
+
+    # Plot intensity block (rows 2-3)
+    plot_data_block(
+        axes[2:4, :],
+        data_int_noisy,
+        data_int_true,
+        model_int,
+        variance_int,
+        'Intensity',
+    )
+
+    # Overall title
+    fig.suptitle(f'{test_name} - Combined Data Comparison', fontsize=14, y=1.01)
+    plt.tight_layout()
+
+    # Save
+    outfile = test_dir / f"{test_name}_combined_panels.png"
+    plt.savefig(outfile, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def plot_likelihood_slices(
     slices: Dict[str, Tuple[jnp.ndarray, jnp.ndarray]],
     true_pars: Dict[str, float],
@@ -1197,6 +1556,7 @@ def plot_likelihood_slices(
     config: TestConfig,
     snr: float,
     data_type: str,
+    has_psf: bool = False,
 ) -> Dict[str, Dict[str, float]]:
     """
     Plot likelihood slices for all parameters.
@@ -1227,13 +1587,17 @@ def plot_likelihood_slices(
     for param_name, (param_values, log_probs) in slices.items():
         true_val = true_pars[param_name]
 
-        best_idx = jnp.argmax(log_probs)
-        recovered_val = float(param_values[best_idx])
+        recovered_val = _quadratic_peak_interp(param_values, log_probs)
         true_value = true_pars[param_name]
 
         # Get tolerance (both relative and absolute)
         tolerance = config.get_tolerance(
-            snr, param_name, true_value, data_type, test_type='likelihood_slice'
+            snr,
+            param_name,
+            true_value,
+            data_type,
+            test_type='likelihood_slice',
+            has_psf=has_psf,
         )
 
         # Check recovery
@@ -1337,3 +1701,61 @@ def plot_likelihood_slices(
     plt.close(fig)
 
     return recovery_stats
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _quadratic_peak_interp
+# ---------------------------------------------------------------------------
+
+
+class TestQuadraticPeakInterp:
+    """Tests for sub-grid parabolic peak interpolation."""
+
+    def test_exact_parabola(self):
+        """Exact parabola sampled on integer grid recovers true peak."""
+        import numpy as np
+
+        true_peak = 3.7
+        x = np.arange(7, dtype=float)
+        y = -((x - true_peak) ** 2)
+        result = _quadratic_peak_interp(x, y)
+        assert abs(result - true_peak) < 1e-12, f"got {result}, expected {true_peak}"
+
+    def test_boundary_argmax_left(self):
+        """Peak at idx=0 returns discrete argmax."""
+        import numpy as np
+
+        x = np.array([0.0, 1.0, 2.0, 3.0])
+        y = np.array([10.0, 5.0, 2.0, 1.0])
+        result = _quadratic_peak_interp(x, y)
+        assert result == 0.0
+
+    def test_boundary_argmax_right(self):
+        """Peak at last idx returns discrete argmax."""
+        import numpy as np
+
+        x = np.array([0.0, 1.0, 2.0, 3.0])
+        y = np.array([1.0, 2.0, 5.0, 10.0])
+        result = _quadratic_peak_interp(x, y)
+        assert result == 3.0
+
+    def test_flat_log_probs(self):
+        """All equal values returns discrete argmax without crashing."""
+        import numpy as np
+
+        x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        y = np.full(5, -100.0)
+        result = _quadratic_peak_interp(x, y)
+        assert result in x
+
+    def test_asymmetric_peak(self):
+        """Asymmetric peak returns value between neighbors of argmax."""
+        import numpy as np
+
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        # steeper on left than right — peak should shift right of idx=2
+        y = np.array([-10.0, -2.0, 0.0, -0.5, -5.0])
+        result = _quadratic_peak_interp(x, y)
+        assert 1.0 <= result <= 3.0, f"result {result} outside neighbor range"
+        # peak should be right of center since right side is shallower
+        assert result > 2.0

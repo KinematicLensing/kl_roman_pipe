@@ -29,8 +29,105 @@ class Model(ABC):
     def __init__(self, meta_pars=None) -> None:
         self.meta_pars = meta_pars or {}
         self._param_indices = {name: i for i, name in enumerate(self.PARAMETER_NAMES)}
+        self._psf_data = None
+        self._psf_frozen = False
+        self._psf_oversample = 1
+        self._psf_fine_X = None
+        self._psf_fine_Y = None
 
         return
+
+    def configure_psf(
+        self,
+        gsobj,
+        image_pars: 'ImagePars' = None,
+        *,
+        image_shape: tuple = None,
+        pixel_scale: float = None,
+        oversample: int = 5,
+        gsparams=None,
+        freeze: bool = False,
+    ):
+        """
+        Configure PSF for rendering. Call BEFORE creating likelihood.
+
+        Two calling conventions (image_pars is preferred):
+        - configure_psf(gsobj, image_pars=image_pars)
+        - configure_psf(gsobj, image_shape=(Ny, Nx), pixel_scale=scale)
+
+        Parameters
+        ----------
+        gsobj : galsim.GSObject
+            PSF profile.
+        image_pars : ImagePars, optional
+            Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
+        image_shape : tuple, optional
+            (Ny, Nx) of data images.
+        pixel_scale : float, optional
+            arcsec/pixel.
+        oversample : int
+            Oversampling factor for source evaluation. Must be a positive odd
+            integer. Default is 5. Set to 1 to disable oversampling.
+        gsparams : galsim.GSParams, optional
+            Override GSParams for PSF kernel rendering. Controls truncation
+            (folding_threshold) and accuracy.
+        freeze : bool
+            If True, prevent reconfiguration (set by factory methods).
+        """
+        if self._psf_frozen:
+            raise ValueError(
+                "PSF is frozen (bound to a likelihood). Call clear_psf() first."
+            )
+        from kl_pipe.psf import precompute_psf_fft
+
+        # extract coarse-scale image params
+        if image_pars is not None:
+            coarse_shape = (image_pars.Nrow, image_pars.Ncol)
+            ps = image_pars.pixel_scale
+        elif image_shape is not None and pixel_scale is not None:
+            coarse_shape = image_shape
+            ps = pixel_scale
+        else:
+            raise ValueError("Provide image_pars OR both image_shape and pixel_scale")
+
+        self._psf_data = precompute_psf_fft(
+            gsobj,
+            image_shape=coarse_shape,
+            pixel_scale=ps,
+            oversample=oversample,
+            gsparams=gsparams,
+        )
+        self._psf_oversample = oversample
+        self._psf_frozen = freeze
+
+        # pre-build fine-scale grids for oversampled evaluation
+        if oversample > 1:
+            if image_pars is not None:
+                fine_image_pars = image_pars.make_fine_scale(oversample)
+            else:
+                fine_image_pars = ImagePars(
+                    shape=(coarse_shape[0] * oversample, coarse_shape[1] * oversample),
+                    pixel_scale=ps / oversample,
+                    indexing='ij',
+                )
+            self._psf_fine_X, self._psf_fine_Y = build_map_grid_from_image_pars(
+                fine_image_pars
+            )
+        else:
+            self._psf_fine_X = None
+            self._psf_fine_Y = None
+
+    def clear_psf(self):
+        """Remove PSF config and unfreeze."""
+        self._psf_data = None
+        self._psf_frozen = False
+        self._psf_oversample = 1
+        self._psf_fine_X = None
+        self._psf_fine_Y = None
+
+    @property
+    def has_psf(self):
+        return self._psf_data is not None
 
     def get_param(self, name: str, theta: jnp.ndarray) -> float:
         idx = self._param_indices[name]
@@ -101,36 +198,64 @@ class Model(ABC):
             )
 
     def render_image(
-        self, theta: jnp.ndarray, image_pars: ImagePars, plane: str = 'obs', **kwargs
+        self,
+        theta: jnp.ndarray,
+        image_pars: ImagePars = None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        **kwargs,
     ) -> jnp.ndarray:
         """
-        Render model as a 2D image.
+        Render model as a 2D image, including observational effects (PSF).
 
-        NOTE: Some model subclasses may override this method due to special rendering
-        needs.
+        Two calling conventions:
+        - render_image(theta, image_pars) -- builds grids (scripts, notebooks)
+        - render_image(theta, X=X, Y=Y) -- pre-computed grids (likelihood hot path)
+
+        When PSF is configured with oversample > 1, the model is evaluated on
+        a fine-scale grid and convolved at that resolution; convolve_fft bins
+        the result back to coarse scale automatically.
 
         Parameters
         ----------
         theta : jnp.ndarray
             Parameter array.
-        image_pars : ImagePars
+        image_pars : ImagePars, optional
             Image parameters defining grid, pixel scale, etc.
         plane : str
             Coordinate plane for evaluation. Default is 'obs'.
+        X, Y : jnp.ndarray, optional
+            Pre-computed coordinate grids (coarse-scale).
         **kwargs
             Additional model-specific arguments.
 
         Returns
         -------
         jnp.ndarray
-            2D image array with shape matching image_pars.shape.
+            2D image array (coarse-scale).
         """
+        if self._psf_data is not None and self._psf_oversample > 1:
+            # oversampled path: evaluate on fine grids
+            model_map = self(theta, plane, self._psf_fine_X, self._psf_fine_Y, **kwargs)
+            from kl_pipe.psf import convolve_fft
 
-        # build coordinate grids from ImagePars
-        X, Y = build_map_grid_from_image_pars(image_pars)
+            return convolve_fft(model_map, self._psf_data)
 
-        # evaluate model on grid
-        return self(theta, plane, X, Y)
+        # non-oversampled path
+        if X is None or Y is None:
+            if image_pars is None:
+                raise ValueError("Provide image_pars or (X, Y)")
+            X, Y = build_map_grid_from_image_pars(image_pars)
+
+        model_map = self(theta, plane, X, Y, **kwargs)
+
+        if self._psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            model_map = convolve_fft(model_map, self._psf_data)
+
+        return model_map
 
     @abstractmethod
     def __call__(
@@ -155,6 +280,14 @@ class VelocityModel(Model):
     that must be projected along the line of sight. The projection depends on
     the viewing geometry (inclination and azimuthal angle).
     """
+
+    def __init__(self, meta_pars=None) -> None:
+        super().__init__(meta_pars)
+        self._psf_flux_model = None
+        self._psf_flux_theta = None
+        self._psf_flux_image = None
+
+        return
 
     def __call__(
         self,
@@ -256,39 +389,208 @@ class VelocityModel(Model):
             "Subclasses must implement evaluate_circular_velocity method."
         )
 
+    def configure_velocity_psf(
+        self,
+        gsobj,
+        image_pars: 'ImagePars' = None,
+        *,
+        image_shape: tuple = None,
+        pixel_scale: float = None,
+        oversample: int = 5,
+        gsparams=None,
+        flux_model=None,
+        flux_theta=None,
+        flux_image=None,
+        flux_image_pars=None,
+        freeze: bool = False,
+    ):
+        """
+        Configure velocity PSF with flux weighting.
+
+        Must provide ONE of:
+        - flux_model + flux_theta: IntensityModel + fixed params
+        - flux_image: pre-rendered intensity map
+        In joint mode (KLModel), neither needed -- uses fitted intensity.
+
+        Two calling conventions (image_pars is preferred):
+        - configure_velocity_psf(gsobj, image_pars=image_pars, ...)
+        - configure_velocity_psf(gsobj, image_shape=(Ny, Nx), pixel_scale=scale, ...)
+
+        Parameters
+        ----------
+        gsobj : galsim.GSObject
+            PSF profile.
+        image_pars : ImagePars, optional
+            Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
+        image_shape : tuple, optional
+            (Ny, Nx) of velocity data images.
+        pixel_scale : float, optional
+            arcsec/pixel.
+        oversample : int
+            Oversampling factor. Default is 5.
+        gsparams : galsim.GSParams, optional
+            Override GSParams for PSF kernel rendering.
+        flux_model : IntensityModel, optional
+            Intensity model for rendering flux on velocity grid.
+        flux_theta : jnp.ndarray, optional
+            Fixed intensity params (used with flux_model).
+        flux_image : ndarray, optional
+            Pre-rendered intensity map for flux weighting.
+        flux_image_pars : ImagePars, optional
+            Image parameters of flux_image (for resampling if shape differs).
+        freeze : bool
+            If True, prevent reconfiguration.
+        """
+        self.configure_psf(
+            gsobj,
+            image_pars=image_pars,
+            image_shape=image_shape,
+            pixel_scale=pixel_scale,
+            oversample=oversample,
+            gsparams=gsparams,
+            freeze=freeze,
+        )
+        self._psf_flux_model = flux_model
+        self._psf_flux_theta = flux_theta
+
+        if flux_model is None and flux_image is None:
+            raise ValueError(
+                "Velocity PSF requires flux weighting. Provide flux_model + "
+                "flux_theta, or flux_image. For joint inference use KLModel."
+            )
+
+        # extract target shape/scale for resampling check
+        if image_pars is not None:
+            target_shape = (image_pars.Nrow, image_pars.Ncol)
+            target_pixel_scale = image_pars.pixel_scale
+        else:
+            target_shape = image_shape
+            target_pixel_scale = pixel_scale
+
+        if flux_image is not None:
+            # first resample to coarse-scale if shapes differ
+            if flux_image.shape != target_shape:
+                if flux_image_pars is None:
+                    raise ValueError(
+                        f"flux_image shape {flux_image.shape} != velocity grid "
+                        f"{target_shape}. Provide flux_image_pars for resampling."
+                    )
+                from kl_pipe.psf import _resample_to_grid
+
+                flux_image = _resample_to_grid(
+                    flux_image,
+                    flux_image_pars,
+                    target_shape=target_shape,
+                    target_pixel_scale=target_pixel_scale,
+                )
+
+            # upsample to fine-scale if oversampled
+            if oversample > 1:
+                from kl_pipe.psf import _resample_to_grid
+
+                coarse_pars = ImagePars(
+                    shape=target_shape, pixel_scale=target_pixel_scale, indexing='ij'
+                )
+                fine_shape = (
+                    target_shape[0] * oversample,
+                    target_shape[1] * oversample,
+                )
+                fine_ps = target_pixel_scale / oversample
+                flux_image = _resample_to_grid(
+                    flux_image,
+                    coarse_pars,
+                    target_shape=fine_shape,
+                    target_pixel_scale=fine_ps,
+                )
+
+            self._psf_flux_image = jnp.asarray(flux_image)
+        else:
+            self._psf_flux_image = None
+
     def render_image(
         self,
         theta: jnp.ndarray,
-        image_pars: ImagePars,
+        image_pars: ImagePars = None,
         plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
         return_speed: bool = False,
+        flux_theta_override: jnp.ndarray = None,
+        **kwargs,
     ) -> jnp.ndarray:
         """
-        Render velocity model as a 2D image.
+        Render velocity model as a 2D image, with optional PSF convolution.
+
+        When PSF is configured with oversample > 1, velocity and flux are
+        evaluated on fine-scale grids; convolve_flux_weighted handles
+        sum-then-divide binning back to coarse scale.
 
         Parameters
         ----------
         theta : jnp.ndarray
             Parameter array.
-        image_pars : ImagePars
+        image_pars : ImagePars, optional
             Image parameters defining the grid.
         plane : str
             Coordinate plane for evaluation. Default is 'obs'.
+        X, Y : jnp.ndarray, optional
+            Pre-computed coordinate grids (coarse-scale).
         return_speed : bool
-            If True, return speed map. If False, return line-of-sight velocity map.
-            Default is False.
+            If True, return speed map. Default is False.
+        flux_theta_override : jnp.ndarray, optional
+            Intensity params for joint mode flux weighting.
 
         Returns
         -------
         jnp.ndarray
-            2D velocity or speed map with shape image_pars.shape.
+            2D velocity or speed map (coarse-scale).
         """
+        if self._psf_data is not None and self._psf_oversample > 1:
+            # oversampled path: evaluate on fine grids
+            fine_X, fine_Y = self._psf_fine_X, self._psf_fine_Y
+            model_vel = self(theta, plane, fine_X, fine_Y, return_speed=return_speed)
 
-        # build coordinate grids from ImagePars
-        X, Y = build_map_grid_from_image_pars(image_pars)
+            from kl_pipe.psf import convolve_flux_weighted
 
-        # evaluate model on grid
-        return self(theta, plane, X, Y, return_speed=return_speed)
+            if flux_theta_override is not None and self._psf_flux_model is not None:
+                flux_map = self._psf_flux_model(
+                    flux_theta_override, plane, fine_X, fine_Y
+                )
+            elif self._psf_flux_image is not None:
+                # already upsampled at configure time
+                flux_map = self._psf_flux_image
+            elif self._psf_flux_model is not None and self._psf_flux_theta is not None:
+                flux_map = self._psf_flux_model(
+                    self._psf_flux_theta, plane, fine_X, fine_Y
+                )
+            else:
+                raise ValueError("No flux source for velocity PSF weighting")
+
+            return convolve_flux_weighted(model_vel, flux_map, self._psf_data)
+
+        # non-oversampled path
+        if X is None or Y is None:
+            if image_pars is None:
+                raise ValueError("Provide image_pars or (X, Y)")
+            X, Y = build_map_grid_from_image_pars(image_pars)
+
+        model_vel = self(theta, plane, X, Y, return_speed=return_speed)
+
+        if self._psf_data is not None:
+            from kl_pipe.psf import convolve_flux_weighted
+
+            if flux_theta_override is not None and self._psf_flux_model is not None:
+                flux_map = self._psf_flux_model(flux_theta_override, plane, X, Y)
+            elif self._psf_flux_image is not None:
+                flux_map = self._psf_flux_image
+            elif self._psf_flux_model is not None and self._psf_flux_theta is not None:
+                flux_map = self._psf_flux_model(self._psf_flux_theta, plane, X, Y)
+            else:
+                raise ValueError("No flux source for velocity PSF weighting")
+
+            model_vel = convolve_flux_weighted(model_vel, flux_map, self._psf_data)
+
+        return model_vel
 
 
 class IntensityModel(Model):
@@ -409,6 +711,82 @@ class KLModel(object):
         self._build_parameter_structure()
 
         return
+
+    def configure_joint_psf(
+        self,
+        psf_vel=None,
+        psf_int=None,
+        image_pars_vel: 'ImagePars' = None,
+        image_pars_int: 'ImagePars' = None,
+        *,
+        image_shape_vel: tuple = None,
+        pixel_scale_vel: float = None,
+        image_shape_int: tuple = None,
+        pixel_scale_int: float = None,
+        oversample: int = 5,
+        freeze: bool = False,
+        gsparams=None,
+    ):
+        """
+        Configure PSF for joint model.
+
+        Velocity PSF: sets flux_model = self.intensity_model (rendered on
+        velocity grid via flux_theta_override in joint likelihood).
+
+        Two calling conventions (image_pars is preferred):
+        - configure_joint_psf(..., image_pars_vel=pars_vel, image_pars_int=pars_int)
+        - configure_joint_psf(..., image_shape_vel=(Ny,Nx), pixel_scale_vel=..., ...)
+
+        Parameters
+        ----------
+        psf_vel : galsim.GSObject, optional
+            PSF for velocity channel.
+        psf_int : galsim.GSObject, optional
+            PSF for intensity channel.
+        image_pars_vel : ImagePars, optional
+            Image parameters for velocity data.
+        image_pars_int : ImagePars, optional
+            Image parameters for intensity data.
+        image_shape_vel : tuple, optional
+            (Ny, Nx) of velocity data.
+        pixel_scale_vel : float, optional
+            arcsec/pixel for velocity grid.
+        image_shape_int : tuple, optional
+            (Ny, Nx) of intensity data.
+        pixel_scale_int : float, optional
+            arcsec/pixel for intensity grid.
+        oversample : int
+            Oversampling factor for source evaluation. Default is 5.
+        freeze : bool
+            If True, prevent reconfiguration.
+        gsparams : galsim.GSParams, optional
+            GalSim rendering parameters for PSF kernel accuracy.
+        """
+        if psf_vel is not None:
+            self.velocity_model.configure_psf(
+                psf_vel,
+                image_pars=image_pars_vel,
+                image_shape=image_shape_vel,
+                pixel_scale=pixel_scale_vel,
+                oversample=oversample,
+                freeze=freeze,
+                gsparams=gsparams,
+            )
+            # in joint mode, intensity model provides flux weighting
+            self.velocity_model._psf_flux_model = self.intensity_model
+            self.velocity_model._psf_flux_theta = None
+            self.velocity_model._psf_flux_image = None
+
+        if psf_int is not None:
+            self.intensity_model.configure_psf(
+                psf_int,
+                image_pars=image_pars_int,
+                image_shape=image_shape_int,
+                pixel_scale=pixel_scale_int,
+                oversample=oversample,
+                freeze=freeze,
+                gsparams=gsparams,
+            )
 
     def _build_parameter_structure(self):
         """

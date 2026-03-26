@@ -20,6 +20,9 @@ CYVERSE_DATA_MARKER = $(CYVERSE_DATA_DIR)/.cyverse_data_downloaded
 
 TNG50_DATA_DIR = $(DATA_DIR)/tng50
 
+DIAGNOSTICS_DIR = $(TEST_DIR)/out/diagnostics
+
+
 # NOTE: I cannot currently get this to automatically download due to
 # issues with sharepoint; easiest solution is to move this somewhere
 # easier to access, such as a UA server
@@ -58,6 +61,18 @@ tutorials:
 	@echo "Converting tutorial markdown files to Jupyter notebooks..."
 	@conda run -n klpipe jupytext --to ipynb docs/tutorials/*.md
 	@echo "Notebooks created in docs/tutorials/"
+
+# Execute all tutorials (TNG sections skip gracefully if data unavailable)
+.PHONY: test-tutorials
+test-tutorials:
+	@echo "Converting and executing tutorials..."
+	@conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg \
+		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/tng50_data.md && \
+		jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 \
+			docs/tutorials/quickstart.ipynb \
+			docs/tutorials/sampling.ipynb \
+			docs/tutorials/tng50_data.ipynb'
+	@echo "All tutorials executed successfully."
 
 #-------------------------------------------------------------------------------
 # data file downloads
@@ -113,16 +128,16 @@ test-data: $(UNIT_TEST_FILES)
 
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
-	@echo "Running all tests (excluding slow diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics"
+	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
+	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics"
 
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
 	@echo "Running ALL tests (including slow diagnostics)..."
 	@conda run -n klpipe pytest tests/ -v
 
-.PHONY: test-tng50
-test-tng50: $(CYVERSE_DATA_MARKER)
+.PHONY: test-tng
+test-tng: $(CYVERSE_DATA_MARKER)
 	@echo "Running TNG50 tests only..."
 	@conda run -n klpipe pytest tests/ -v -m tng50
 
@@ -136,10 +151,20 @@ test-tng-diagnostics: $(CYVERSE_DATA_MARKER)
 	@echo "Running TNG50 diagnostic plotting tests (slow)..."
 	@conda run -n klpipe pytest tests/ -v -m tng_diagnostics
 
+.PHONY: test-sampling
+test-sampling:
+	@echo "Running MCMC sampling tests (excluding nautilus)..."
+	@conda run -n klpipe pytest tests/test_sampling_diagnostics.py -v
+
+.PHONY: test-sampling-all
+test-sampling-all:
+	@echo "Running ALL MCMC sampling tests (including nautilus - slow)..."
+	@INCLUDE_NAUTILUS=1 conda run -n klpipe pytest tests/test_sampling_diagnostics.py -v
+
 .PHONY: test-basic
 test-basic:
-	@echo "Running tests (excluding TNG50, no download required)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng50"
+	@echo "Running fast tests (excluding TNG50 and slow, no download required)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow"
 
 .PHONY: test-coverage
 test-coverage: $(CYVERSE_DATA_MARKER)
@@ -172,11 +197,30 @@ COLLATE_SCRIPT = scripts/collate_diagnostics.py
 # DIAGNOSTICS_REMOTE_DIR = /path/to/remote/diagnostics
 
 # generate HTML report and open in browser
-.PHONY: show-diagnostics
-show-diagnostics:
+.PHONY: diagnostics
+diagnostics:
 	@echo "Generating HTML diagnostic report..."
 	@conda run -n klpipe python $(COLLATE_SCRIPT) --html --open
 	@echo "HTML report opened in browser"
+
+# open most recent existing HTML report (no generation)
+.PHONY: show-diagnostics
+show-diagnostics:
+	@if [ -d "$(DIAGNOSTICS_DIR)" ]; then \
+                LATEST=$$(ls -t $(DIAGNOSTICS_DIR)/diagnostics_*.html 2>/dev/null | head -n 1); \
+                if [ -n "$$LATEST" ]; then \
+                        echo "Opening most recent diagnostic report: $$(basename $$LATEST)"; \
+                        open "$$LATEST"; \
+                else \
+                        echo "ERROR: No diagnostic reports found in $(DIAGNOSTICS_DIR)"; \
+                        echo "Run 'make diagnostics' to generate a new report"; \
+                        exit 1; \
+                fi; \
+        else \
+                echo "ERROR: Diagnostics directory does not exist: $(DIAGNOSTICS_DIR)"; \
+                echo "Run 'make diagnostics' to generate a new report"; \
+                exit 1; \
+        fi
 
 # generate timestamped PDF report
 .PHONY: diagnostics-pdf
@@ -184,6 +228,35 @@ diagnostics-pdf:
 	@echo "Generating PDF diagnostic report..."
 	@conda run -n klpipe python $(COLLATE_SCRIPT) --pdf
 	@echo "PDF report saved to $(DIAGNOSTICS_DIR)/"
+
+# keep only the latest file per day per extension, freeing disk space
+.PHONY: prune-diagnostics
+prune-diagnostics:
+	@if [ ! -d "$(DIAGNOSTICS_DIR)" ]; then \
+		echo "No diagnostics directory: $(DIAGNOSTICS_DIR)"; \
+		exit 0; \
+	fi; \
+	total_pruned=0; \
+	total_bytes=0; \
+	for ext in html pdf; do \
+		dates=$$(ls $(DIAGNOSTICS_DIR)/diagnostics_*.$$ext 2>/dev/null \
+			| sed 's|.*/diagnostics_\([0-9-]*\)_.*|\1|' | sort -u); \
+		for date in $$dates; do \
+			files=$$(ls $(DIAGNOSTICS_DIR)/diagnostics_$${date}_*.$$ext 2>/dev/null | sort); \
+			count=$$(echo "$$files" | wc -l | tr -d ' '); \
+			if [ "$$count" -gt 1 ]; then \
+				to_rm=$$(echo "$$files" | head -n $$((count - 1))); \
+				for f in $$to_rm; do \
+					sz=$$(stat -f%z "$$f" 2>/dev/null || stat --printf="%s" "$$f" 2>/dev/null); \
+					total_bytes=$$((total_bytes + sz)); \
+					total_pruned=$$((total_pruned + 1)); \
+					rm "$$f"; \
+				done; \
+			fi; \
+		done; \
+	done; \
+	mb=$$((total_bytes / 1048576)); \
+	echo "Pruned $$total_pruned files ($$mb MB freed)"
 
 # generate HTML + PDF and sync both to remote server (with confirmation)
 # NOTE: Turn on if useful

@@ -4,8 +4,8 @@ set -e
 REPO_DIR="$(realpath "$(dirname "$0")")"
 CWD=$(pwd)
 
-# not all users can change their conda base environment (e.g. on HPCs), so we 
-# allow specifying which base environment to use via an env var:
+# not all users can control their conda base environment (e.g. at HPCs), so we
+# allow the user to specify a different conda environment to use for the base
 BASE_ENV=${BASE_ENV:-base}
 
 ENVFILE="$(dirname "$0")"/environment.yaml
@@ -45,6 +45,9 @@ pip install --no-build-isolation --no-deps --editable "$REPO_DIR/."
 
 #echo "Pip installing my special repo..."
 #pip install --no-build-isolation --no-deps --editable "$PATH_TO_REPO/."
+
+echo "Installing pre-commit hooks..."
+pre-commit install
 
 echo "cd $CWD"
 cd "$CWD"
