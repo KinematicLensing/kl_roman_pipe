@@ -69,6 +69,20 @@ class InclinedExponentialModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_exp'
 
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Calls _render_kspace without psf_kernel_fft.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
     def evaluate_in_disk_plane(
         self,
         theta: jnp.ndarray,
@@ -197,6 +211,7 @@ class InclinedExponentialModel(IntensityModel):
         pixel_scale: float,
         pad_factor: int = None,
         oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
     ) -> jnp.ndarray:
         """
         Core k-space FFT rendering (analytic FT of 3D inclined exponential).
@@ -209,6 +224,11 @@ class InclinedExponentialModel(IntensityModel):
         to suppress periodic boundary wrap-around, then cropped to (Nrow, Ncol).
         Analogous to the zero-padding in convolve_fft for linear convolution.
 
+        When ``psf_kernel_fft`` is provided, the PSF is multiplied in k-space
+        BEFORE the IFFT crop, so edge pixels see PSF-scattered light from
+        source regions beyond the image boundary. This fuses rendering +
+        convolution into a single FFT pass and eliminates boundary flux loss.
+
         When ``oversample > 1``, the k-grid extends to N × Nyquist, reducing
         cusp aliasing by ~N³ (exponential FT decays as k⁻³). The IFFT is
         computed at fine resolution and subsampled back to (Nrow, Ncol).
@@ -217,9 +237,9 @@ class InclinedExponentialModel(IntensityModel):
 
         Axis convention
         ---------------
-        krow = fftfreq(Nrow) is conjugate to rows (axis 0 = X, horizontal).
-        kcol = fftfreq(Ncol) is conjugate to cols (axis 1 = Y, vertical).
-        gal2disk compresses Y (cols), so cosi acts on kcol in k-space.
+        ky = fftfreq(Nrow) is conjugate to rows (axis 0 = Y, vertical).
+        kx = fftfreq(Ncol) is conjugate to cols (axis 1 = X, horizontal).
+        gal2disk compresses Y (rows), so cosi acts on ky in k-space.
 
         Parameters
         ----------
@@ -235,6 +255,10 @@ class InclinedExponentialModel(IntensityModel):
         oversample : int, optional
             Oversampling factor for cusp anti-aliasing. Pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³. Default 1.
+        psf_kernel_fft : jnp.ndarray, optional
+            Pre-computed PSF kernel FFT on the same padded grid. When provided,
+            ``I_hat * psf_kernel_fft`` is computed before the IFFT, fusing
+            rendering and PSF convolution. Shape must match the padded grid.
 
         Returns
         -------
@@ -262,49 +286,51 @@ class InclinedExponentialModel(IntensityModel):
         sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
 
         # padded FFT grid for anti-aliasing (reduces periodic boundary wrap-around)
-        if pad_factor > 1:
+        if psf_kernel_fft is not None:
+            # fused path: padded grid must match the pre-computed PSF kernel FFT
+            pad_row, pad_col = psf_kernel_fft.shape
+        elif pad_factor > 1:
             pad_row = next_fast_len(pad_factor * eff_Nrow)
             pad_col = next_fast_len(pad_factor * eff_Ncol)
         else:
             pad_row = eff_Nrow
             pad_col = eff_Ncol
 
-        # 1. k-grid at effective resolution (higher Nyquist when oversampled)
-        krow = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
-        kcol = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
-        KROW, KCOL = jnp.meshgrid(krow, kcol, indexing='ij')
+        # 1. k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
 
-        # 2. centroid phase + half-pixel grid alignment correction
-        #    based on OUTPUT grid (Nrow, pixel_scale), not effective grid,
-        #    so that subsampled fine pixels align with the coarse centered grid
-        hrow = 0.5 * pixel_scale * (1 - Nrow % 2)
-        hcol = 0.5 * pixel_scale * (1 - Ncol % 2)
-        phase = jnp.exp(-1j * (KROW * (x0 - hrow) + KCOL * (y0 - hcol)))
+        # 2. centroid phase: pair kx with x0 (horizontal), ky with y0 (vertical)
+        #    half-pixel correction based on OUTPUT grid centering
+        hx = 0.5 * pixel_scale * (1 - Ncol % 2)
+        hy = 0.5 * pixel_scale * (1 - Nrow % 2)
+        phase = jnp.exp(-1j * (KX * (x0 - hx) + KY * (y0 - hy)))
 
         # 3. shear: area-preserving M = (1/sqrt(1-|g|^2)) * [[1+g1, g2], [g2, 1-g1]]
-        #    matches GalSim .shear() (det=1, flux-preserving, no prefactor on I_hat)
+        #    (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
         norm_shear = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
-        krow_s = norm_shear * ((1.0 + g1) * KROW + g2 * KCOL)
-        kcol_s = norm_shear * (g2 * KROW + (1.0 - g1) * KCOL)
+        kx_s = norm_shear * ((1.0 + g1) * KX + g2 * KY)
+        ky_s = norm_shear * (g2 * KX + (1.0 - g1) * KY)
 
-        # rotation: R(-theta_int) on (krow, kcol)
+        # rotation: R(-theta_int) on (kx, ky)
         c = jnp.cos(-theta_int)
         s = jnp.sin(-theta_int)
-        krow_gal = c * krow_s - s * kcol_s
-        kcol_gal = s * krow_s + c * kcol_s
+        kx_gal = c * kx_s - s * ky_s
+        ky_gal = s * kx_s + c * ky_s
 
         # 4. analytic FT in galaxy frame
-        krow_scaled = krow_gal * rscale
-        kcol_scaled = kcol_gal * rscale
+        kx_scaled = kx_gal * rscale
+        ky_scaled = ky_gal * rscale
 
-        # radial FT: (1 + krow² + (kcol*cosi)²)^{-3/2}  [cosi compresses cols]
-        k_sq = krow_scaled**2 + (kcol_scaled * cosi) ** 2
+        # radial FT: (1 + kx² + (ky*cosi)²)^{-3/2}  [cosi compresses rows=vertical]
+        k_sq = kx_scaled**2 + (ky_scaled * cosi) ** 2
         ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
 
-        # vertical FT: u/sinh(u), u = (pi/2)*h_over_r*kcol_scaled*sini
+        # vertical FT: u/sinh(u), u = (pi/2)*h_over_r*ky_scaled*sini
         # safe-where pattern: substitute finite dummy in non-selected branch
         # so JAX autodiff never sees 0/sinh(0) = 0/0 = NaN
-        u = (jnp.pi / 2.0) * h_over_r * kcol_scaled * sini
+        u = (jnp.pi / 2.0) * h_over_r * ky_scaled * sini
         u_safe = jnp.where(jnp.abs(u) < 1e-4, jnp.ones_like(u), u)
         ft_vertical = jnp.where(
             jnp.abs(u) < 1e-4,
@@ -314,9 +340,17 @@ class InclinedExponentialModel(IntensityModel):
 
         I_hat = flux * ft_radial * ft_vertical * phase
 
+        # fused PSF convolution: multiply in k-space BEFORE IFFT crop
+        if psf_kernel_fft is not None:
+            I_hat = I_hat * psf_kernel_fft
+
         # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
+        # roll amount must align with subsampling grid: (Nrow//2)*oversample
+        # ensures DC lands on a subsampled pixel for correct centering
         full = jnp.fft.ifft2(I_hat).real
-        full = jnp.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
+        roll_row = (Nrow // 2) * oversample
+        roll_col = (Ncol // 2) * oversample
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
         image = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
 
         if oversample > 1:
@@ -332,26 +366,73 @@ class InclinedExponentialModel(IntensityModel):
         X: jnp.ndarray = None,
         Y: jnp.ndarray = None,
         oversample: int = 1,
+        *,
+        obs=None,
         **kwargs,
     ) -> jnp.ndarray:
         """
         Render via k-space FFT, with optional PSF convolution.
 
-        When PSF is configured with oversampling, renders at fine scale
-        so convolve_fft can bin down to coarse scale.
+        When obs has oversampling, renders at fine scale so convolve_fft
+        can bin down to coarse scale.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
 
         Parameters
         ----------
+        obs : ImageObs, optional
+            Observation object. When obs.kspace_psf_fft is set, uses fused
+            k-space path. When obs.psf_data is set, uses fallback real-space.
         oversample : int, optional
             Cusp anti-aliasing factor for the non-PSF path. The exponential
             profile has a cusp at R=0 whose FT decays as k⁻³; power above
             Nyquist aliases into the image. Oversampling pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³.
-            Ignored when PSF is configured (PSF convolution suppresses
-            high-k aliasing naturally). Default 2.
+            Ignored when PSF is configured via obs (PSF convolution suppresses
+            high-k aliasing naturally). Default 1.
         """
+        if obs is not None:
+            pixel_scale = obs.image_pars.pixel_scale
+            Nrow = obs.image_pars.Nrow
+            Ncol = obs.image_pars.Ncol
+
+            if obs.kspace_psf_fft is not None:
+                # fused k-space path: render + convolve in one FFT pass
+                N = max(obs.oversample, 1)
+                image = self._render_kspace(
+                    theta,
+                    Nrow * N,
+                    Ncol * N,
+                    pixel_scale / N,
+                    psf_kernel_fft=obs.kspace_psf_fft,
+                )
+                if N > 1:
+                    image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                return image
+
+            if obs.psf_data is not None:
+                # fallback real-space path
+                from kl_pipe.psf import convolve_fft
+
+                if obs.oversample > 1:
+                    N = obs.oversample
+                    image = self._render_kspace(
+                        theta, Nrow * N, Ncol * N, pixel_scale / N
+                    )
+                else:
+                    image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
+                return convolve_fft(image, obs.psf_data)
+
+            # no PSF on obs
+            return self._render_kspace(
+                theta, Nrow, Ncol, pixel_scale, oversample=oversample
+            )
+
+        # legacy/convenience path (no obs)
         if image_pars is None and (X is None or Y is None):
-            raise ValueError("Provide image_pars or (X, Y)")
+            raise ValueError("Provide obs, image_pars, or (X, Y)")
 
         if image_pars is not None:
             pixel_scale = image_pars.pixel_scale
@@ -359,18 +440,7 @@ class InclinedExponentialModel(IntensityModel):
             Ncol = image_pars.Ncol
         else:
             Nrow, Ncol = X.shape
-            pixel_scale = jnp.abs(X[1, 0] - X[0, 0])
-
-        if self._psf_data is not None:
-            from kl_pipe.psf import convolve_fft
-
-            if self._psf_oversample > 1:
-                # render at fine scale so convolve_fft can bin down
-                N = self._psf_oversample
-                image = self._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
-            else:
-                image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
-            return convolve_fft(image, self._psf_data)
+            pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
         # warn if cusp aliasing likely exceeds 1% even with current oversample
         try:

@@ -208,7 +208,7 @@ def test_centered_circular_velocity_evaluation(centered_theta):
 
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     v_circ = model.evaluate_circular_velocity(centered_theta, X_grid, Y_grid)
 
@@ -223,7 +223,7 @@ def test_offset_circular_velocity_evaluation(offset_theta):
 
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     v_circ = model.evaluate_circular_velocity(offset_theta, X_grid, Y_grid)
 
@@ -238,7 +238,7 @@ def test_centered_velocity_map_evaluation(centered_theta):
 
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     v_map = model(centered_theta, 'obs', X_grid, Y_grid)
 
@@ -254,7 +254,7 @@ def test_offset_velocity_map_evaluation(offset_theta):
 
     X = jnp.linspace(-5, 5, 20)
     Y = jnp.linspace(-5, 5, 20)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     v_map = model(offset_theta, 'obs', X_grid, Y_grid)
 
@@ -268,7 +268,7 @@ def test_velocity_map_different_planes(centered_theta):
 
     X = jnp.linspace(-10, 10, 15)
     Y = jnp.linspace(-10, 10, 15)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     planes = ['disk', 'gal', 'source', 'obs']
 
@@ -534,7 +534,7 @@ def test_zero_circular_velocity():
 
     X = jnp.linspace(-5, 5, 10)
     Y = jnp.linspace(-5, 5, 10)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     v_map = model(theta, 'obs', X_grid, Y_grid)
 
@@ -684,7 +684,7 @@ def test_return_speed_parameter(centered_theta):
 
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     # Get velocity (default)
     v_map = model(centered_theta, 'obs', X_grid, Y_grid, return_speed=False)
@@ -708,7 +708,7 @@ def test_disk_plane_velocity_vs_speed(centered_theta):
 
     X = jnp.linspace(-10, 10, 20)
     Y = jnp.linspace(-10, 10, 20)
-    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='ij')
+    X_grid, Y_grid = jnp.meshgrid(X, Y, indexing='xy')
 
     # Velocity in disk plane should be ~v0 (no line-of-sight component)
     v_map = model(centered_theta, 'disk', X_grid, Y_grid, return_speed=False)
@@ -735,7 +735,7 @@ def test_plot_rendered_image(offset_theta, test_image_pars, output_dir):
 
     # Plot
     fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(image.T, origin='lower', cmap='RdBu_r')
+    im = ax.imshow(image, origin='lower', cmap='RdBu_r')
     plt.colorbar(im, ax=ax, label='km/s')
     ax.set_title('Rendered Velocity Image')
     ax.set_xlabel('x (pixels)')
@@ -765,11 +765,11 @@ def test_plot_speed_vs_velocity_comparison(centered_theta, test_image_pars, outp
     # Plot side by side
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-    im1 = ax1.imshow(velocity_map.T, origin='lower', cmap='RdBu_r')
+    im1 = ax1.imshow(velocity_map, origin='lower', cmap='RdBu_r')
     plt.colorbar(im1, ax=ax1, label='km/s')
     ax1.set_title('Line-of-sight Velocity')
 
-    im2 = ax2.imshow(speed_map.T, origin='lower', cmap='viridis')
+    im2 = ax2.imshow(speed_map, origin='lower', cmap='viridis')
     plt.colorbar(im2, ax=ax2, label='km/s')
     ax2.set_title('Circular Speed')
 

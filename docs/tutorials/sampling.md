@@ -129,17 +129,17 @@ The `InferenceTask` bundles everything needed for sampling: model, likelihood fu
 
 ```{code-cell} python
 from kl_pipe.sampling import InferenceTask
+from kl_pipe.observation import build_velocity_obs
 
 # Create the velocity model
 model = CenteredVelocityModel()
 
-# Create the inference task
-task = InferenceTask.from_velocity_model(
+# Build observation and create the inference task
+obs_vel = build_velocity_obs(image_pars, data=jnp.array(data_noisy), variance=variance)
+task = InferenceTask.from_velocity_obs(
     model=model,
     priors=priors,
-    data_vel=jnp.array(data_noisy),
-    variance_vel=variance,
-    image_pars=image_pars,
+    obs=obs_vel,
 )
 
 print(f"Sampled parameters: {task.sampled_names}")
@@ -485,15 +485,18 @@ for name in priors_joint.sampled_names:
 ### 5.4 Create Joint InferenceTask
 
 ```{code-cell} python
-task_joint = InferenceTask.from_joint_model(
+from kl_pipe.observation import build_joint_obs
+
+obs_vel, obs_int = build_joint_obs(
+    image_pars_vel, image_pars_int, joint_model.intensity_model,
+    data_vel=jnp.array(data_vel), variance_vel=var_vel,
+    data_int=jnp.array(data_int), variance_int=var_int,
+)
+task_joint = InferenceTask.from_joint_obs(
     model=joint_model,
     priors=priors_joint,
-    data_vel=jnp.array(data_vel),
-    data_int=jnp.array(data_int),
-    variance_vel=var_vel,
-    variance_int=var_int,
-    image_pars_vel=image_pars_vel,
-    image_pars_int=image_pars_int,
+    obs_vel=obs_vel,
+    obs_int=obs_int,
 )
 
 print(f"Joint task has {task_joint.n_params} sampled parameters")
@@ -671,15 +674,17 @@ if TNG_AVAILABLE:
         shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
     )
 
-    task_tng = InferenceTask.from_joint_model(
+    obs_vel_tng, obs_int_tng = build_joint_obs(
+        image_pars_tng, image_pars_tng, int_model_tng,
+        data_vel=jnp.array(velocity_map), variance_vel=var_vel_tng,
+        data_int=jnp.array(intensity_normalized),
+        variance_int=var_int_tng / flux_estimate**2,
+    )
+    task_tng = InferenceTask.from_joint_obs(
         model=joint_model_tng,
         priors=priors_tng,
-        data_vel=jnp.array(velocity_map),
-        data_int=jnp.array(intensity_normalized),
-        variance_vel=var_vel_tng,
-        variance_int=var_int_tng / flux_estimate**2,
-        image_pars_vel=image_pars_tng,
-        image_pars_int=image_pars_tng,
+        obs_vel=obs_vel_tng,
+        obs_int=obs_int_tng,
     )
 
     config_tng = NumpyroSamplerConfig(

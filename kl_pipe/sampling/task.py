@@ -6,23 +6,29 @@ components needed for MCMC sampling:
 - Model (velocity, intensity, or joint)
 - Likelihood function
 - Priors for sampled parameters
-- Fixed parameter values
-- Data and variance
-- Optional metadata (PSF, systematics, etc.)
+- Observation objects (ImageObs, VelocityObs)
+- Optional metadata (systematics, etc.)
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Callable, Union, Tuple, Any, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 
+
+class NoPSFWarning(UserWarning):
+    """Inference task created without PSF — model will be unconvolved."""
+
+
 if TYPE_CHECKING:
     from kl_pipe.model import Model, VelocityModel, IntensityModel, KLModel
     from kl_pipe.parameters import ImagePars
     from kl_pipe.priors import PriorDict
+    from kl_pipe.observation import ImageObs, VelocityObs
 
 
 @dataclass
@@ -36,7 +42,7 @@ class InferenceTask:
     - Priors: PriorDict specifying sampled vs fixed parameters
     - Data: Observed data arrays
     - Variance: Observation variance (same shape as data, or scalar)
-    - Meta parameters: Optional metadata (PSF, systematics, etc.)
+    - Meta parameters: Optional metadata (systematics, etc.)
 
     Provides methods for computing the log posterior and its gradient,
     which are used by sampler backends.
@@ -56,32 +62,30 @@ class InferenceTask:
     variance : dict
         Dictionary containing variance arrays or scalars.
         Keys should match data dict.
+    mask : dict, optional
+        Dictionary of boolean masks (True=valid). Keys match data dict.
     meta_pars : dict, optional
-        Additional metadata (PSF parameters, systematics, etc.).
+        Additional metadata (systematics, etc.).
 
     Examples
     --------
     >>> from kl_pipe.velocity import OffsetVelocityModel
-    >>> from kl_pipe.priors import Uniform, Gaussian, PriorDict
+    >>> from kl_pipe.priors import Uniform, PriorDict
+    >>> from kl_pipe.observation import build_velocity_obs
     >>> from kl_pipe.sampling import InferenceTask
     >>>
-    >>> # Define priors (sampled) and fixed values
     >>> priors = PriorDict({
     ...     'vcirc': Uniform(100, 350),
     ...     'cosi': Uniform(0.1, 0.99),
     ...     'v0': 10.0,  # Fixed
     ... })
     >>>
-    >>> # Create inference task
-    >>> task = InferenceTask.from_velocity_model(
+    >>> obs = build_velocity_obs(image_pars, data=data_vel, variance=25.0)
+    >>> task = InferenceTask.from_velocity_obs(
     ...     model=OffsetVelocityModel(),
     ...     priors=priors,
-    ...     data_vel=observed_velocity,
-    ...     variance_vel=25.0,
-    ...     image_pars=image_pars,
+    ...     obs=obs,
     ... )
-    >>>
-    >>> # Get log posterior function for sampling
     >>> log_prob_fn = task.get_log_posterior_fn()
     """
 
@@ -90,6 +94,7 @@ class InferenceTask:
     priors: 'PriorDict'
     data: Dict[str, jnp.ndarray]
     variance: Dict[str, Union[jnp.ndarray, float]]
+    mask: Dict[str, Optional[jnp.ndarray]] = field(default_factory=dict)
     meta_pars: Dict[str, Any] = field(default_factory=dict)
 
     # Cached functions (computed lazily)
@@ -239,10 +244,6 @@ class InferenceTask:
             Log posterior probability.
         """
         log_prior = self.log_prior(theta_sampled)
-
-        # Short-circuit if prior is -inf (outside support)
-        # Note: This check is not JIT-compatible, but we handle it
-        # in the jitted version using jnp.where
         log_like = self.log_likelihood(theta_sampled)
 
         return log_prior + log_like
@@ -256,7 +257,6 @@ class InferenceTask:
         log_prior = self.log_prior(theta_sampled)
         log_like = self.log_likelihood(theta_sampled)
 
-        # Return -inf if prior is -inf, otherwise return sum
         return jnp.where(jnp.isfinite(log_prior), log_prior + log_like, -jnp.inf)
 
     def get_log_posterior_fn(self) -> Callable:
@@ -329,23 +329,179 @@ class InferenceTask:
     # =========================================================================
 
     @classmethod
+    def from_velocity_obs(
+        cls,
+        model: 'VelocityModel',
+        priors: 'PriorDict',
+        obs: 'VelocityObs',
+        meta_pars: Optional[Dict] = None,
+    ) -> 'InferenceTask':
+        """
+        Create inference task for velocity-only inference.
+
+        Parameters
+        ----------
+        model : VelocityModel
+            Velocity model instance.
+        priors : PriorDict
+            Prior specifications.
+        obs : VelocityObs
+            Velocity observation (with data, variance, PSF, flux weighting).
+        meta_pars : dict, optional
+            Additional metadata.
+        """
+        if obs.data is None:
+            raise ValueError("VelocityObs has no data; cannot create inference task")
+
+        if obs.psf_data is None:
+            warnings.warn(
+                "\nNo PSF configured — velocity model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
+
+        from kl_pipe.likelihood import create_jitted_likelihood_velocity
+
+        likelihood_fn = create_jitted_likelihood_velocity(model, obs)
+
+        return cls(
+            model=model,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={'velocity': obs.data},
+            variance={'velocity': obs.variance},
+            mask={'velocity': obs.mask},
+            meta_pars=meta_pars or {},
+        )
+
+    @classmethod
+    def from_intensity_obs(
+        cls,
+        model: 'IntensityModel',
+        priors: 'PriorDict',
+        obs: 'ImageObs',
+        meta_pars: Optional[Dict] = None,
+    ) -> 'InferenceTask':
+        """
+        Create inference task for intensity-only inference.
+
+        Parameters
+        ----------
+        model : IntensityModel
+            Intensity model instance.
+        priors : PriorDict
+            Prior specifications.
+        obs : ImageObs
+            Image observation (with data, variance, PSF).
+        meta_pars : dict, optional
+            Additional metadata.
+        """
+        if obs.data is None:
+            raise ValueError("ImageObs has no data; cannot create inference task")
+
+        if obs.psf_data is None:
+            warnings.warn(
+                "\nNo PSF configured — intensity model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
+
+        from kl_pipe.likelihood import create_jitted_likelihood_intensity
+
+        likelihood_fn = create_jitted_likelihood_intensity(model, obs)
+
+        return cls(
+            model=model,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={'intensity': obs.data},
+            variance={'intensity': obs.variance},
+            mask={'intensity': obs.mask},
+            meta_pars=meta_pars or {},
+        )
+
+    @classmethod
+    def from_joint_obs(
+        cls,
+        model: 'KLModel',
+        priors: 'PriorDict',
+        obs_vel: 'VelocityObs',
+        obs_int: 'ImageObs',
+        meta_pars: Optional[Dict] = None,
+    ) -> 'InferenceTask':
+        """
+        Create inference task for joint velocity + intensity inference.
+
+        Parameters
+        ----------
+        model : KLModel
+            Combined kinematic-lensing model.
+        priors : PriorDict
+            Prior specifications.
+        obs_vel : VelocityObs
+            Velocity observation.
+        obs_int : ImageObs
+            Intensity observation.
+        meta_pars : dict, optional
+            Additional metadata.
+        """
+        if obs_vel.data is None:
+            raise ValueError("VelocityObs has no data; cannot create inference task")
+        if obs_int.data is None:
+            raise ValueError("ImageObs has no data; cannot create inference task")
+
+        missing = []
+        if obs_vel.psf_data is None:
+            missing.append('velocity')
+        if obs_int.psf_data is None:
+            missing.append('intensity')
+        if missing:
+            channels = ' and '.join(missing)
+            warnings.warn(
+                f"\nNo PSF configured for {channels} channel(s) — model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
+
+        from kl_pipe.likelihood import create_jitted_likelihood_joint
+
+        likelihood_fn = create_jitted_likelihood_joint(model, obs_vel, obs_int)
+
+        return cls(
+            model=model,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={'velocity': obs_vel.data, 'intensity': obs_int.data},
+            variance={'velocity': obs_vel.variance, 'intensity': obs_int.variance},
+            mask={'velocity': obs_vel.mask, 'intensity': obs_int.mask},
+            meta_pars=meta_pars or {},
+        )
+
+    # =========================================================================
+    # Legacy Factory Methods (delegate to new ones)
+    # =========================================================================
+
+    @classmethod
     def from_velocity_model(
         cls,
         model: 'VelocityModel',
         priors: 'PriorDict',
         data_vel: jnp.ndarray,
-        variance_vel: Union[jnp.ndarray, float],
+        variance_vel,
         image_pars: 'ImagePars',
         meta_pars: Optional[Dict] = None,
-        psf: Any = None,
-        flux_model: Any = None,
-        flux_theta: Any = None,
-        flux_image: Any = None,
-        flux_image_pars: Any = None,
-        psf_gsparams: Any = None,
+        psf=None,
+        flux_model=None,
+        flux_theta=None,
+        flux_image=None,
+        flux_image_pars=None,
+        psf_gsparams=None,
+        mask_vel=None,
     ) -> 'InferenceTask':
         """
-        Create inference task for velocity-only inference.
+        Create inference task for velocity-only inference (legacy API).
+
+        Delegates to from_velocity_obs() after constructing a VelocityObs.
 
         Parameters
         ----------
@@ -373,38 +529,38 @@ class InferenceTask:
             Image parameters of flux_image (for resampling if needed).
         psf_gsparams : galsim.GSParams, optional
             GalSim rendering parameters for PSF kernel accuracy.
+        mask_vel : jnp.ndarray, optional
+            Boolean mask (True=valid, False=masked). Same shape as data_vel.
 
         Returns
         -------
         InferenceTask
             Configured task ready for sampling.
         """
+        from kl_pipe.observation import build_velocity_obs
+
         if psf is not None:
-            model.configure_velocity_psf(
-                psf,
-                image_pars=image_pars,
+            obs = build_velocity_obs(
+                image_pars,
+                psf=psf,
+                gsparams=psf_gsparams,
+                data=data_vel,
+                variance=variance_vel,
+                mask=mask_vel,
                 flux_model=flux_model,
                 flux_theta=flux_theta,
                 flux_image=flux_image,
                 flux_image_pars=flux_image_pars,
-                freeze=True,
-                gsparams=psf_gsparams,
+            )
+        else:
+            obs = build_velocity_obs(
+                image_pars,
+                data=data_vel,
+                variance=variance_vel,
+                mask=mask_vel,
             )
 
-        from kl_pipe.likelihood import create_jitted_likelihood_velocity
-
-        likelihood_fn = create_jitted_likelihood_velocity(
-            model, image_pars, variance_vel, data_vel
-        )
-
-        return cls(
-            model=model,
-            likelihood_fn=likelihood_fn,
-            priors=priors,
-            data={'velocity': data_vel},
-            variance={'velocity': variance_vel},
-            meta_pars=meta_pars or {},
-        )
+        return cls.from_velocity_obs(model, priors, obs, meta_pars=meta_pars)
 
     @classmethod
     def from_intensity_model(
@@ -412,14 +568,17 @@ class InferenceTask:
         model: 'IntensityModel',
         priors: 'PriorDict',
         data_int: jnp.ndarray,
-        variance_int: Union[jnp.ndarray, float],
+        variance_int,
         image_pars: 'ImagePars',
         meta_pars: Optional[Dict] = None,
-        psf: Any = None,
-        psf_gsparams: Any = None,
+        psf=None,
+        psf_gsparams=None,
+        mask_int=None,
     ) -> 'InferenceTask':
         """
-        Create inference task for intensity-only inference.
+        Create inference task for intensity-only inference (legacy API).
+
+        Delegates to from_intensity_obs() after constructing an ImageObs.
 
         Parameters
         ----------
@@ -439,31 +598,27 @@ class InferenceTask:
             PSF for intensity channel.
         psf_gsparams : galsim.GSParams, optional
             GalSim rendering parameters for PSF kernel accuracy.
+        mask_int : jnp.ndarray, optional
+            Boolean mask (True=valid, False=masked). Same shape as data_int.
 
         Returns
         -------
         InferenceTask
             Configured task ready for sampling.
         """
-        if psf is not None:
-            model.configure_psf(
-                psf, image_pars=image_pars, freeze=True, gsparams=psf_gsparams
-            )
+        from kl_pipe.observation import build_image_obs
 
-        from kl_pipe.likelihood import create_jitted_likelihood_intensity
-
-        likelihood_fn = create_jitted_likelihood_intensity(
-            model, image_pars, variance_int, data_int
+        obs = build_image_obs(
+            image_pars,
+            psf=psf,
+            gsparams=psf_gsparams,
+            data=data_int,
+            variance=variance_int,
+            mask=mask_int,
+            int_model=model if psf is not None else None,
         )
 
-        return cls(
-            model=model,
-            likelihood_fn=likelihood_fn,
-            priors=priors,
-            data={'intensity': data_int},
-            variance={'intensity': variance_int},
-            meta_pars=meta_pars or {},
-        )
+        return cls.from_intensity_obs(model, priors, obs, meta_pars=meta_pars)
 
     @classmethod
     def from_joint_model(
@@ -472,17 +627,21 @@ class InferenceTask:
         priors: 'PriorDict',
         data_vel: jnp.ndarray,
         data_int: jnp.ndarray,
-        variance_vel: Union[jnp.ndarray, float],
-        variance_int: Union[jnp.ndarray, float],
+        variance_vel,
+        variance_int,
         image_pars_vel: 'ImagePars',
         image_pars_int: 'ImagePars',
         meta_pars: Optional[Dict] = None,
-        psf_vel: Any = None,
-        psf_int: Any = None,
-        psf_gsparams: Any = None,
+        psf_vel=None,
+        psf_int=None,
+        psf_gsparams=None,
+        mask_vel=None,
+        mask_int=None,
     ) -> 'InferenceTask':
         """
-        Create inference task for joint velocity + intensity inference.
+        Create inference task for joint velocity + intensity inference (legacy API).
+
+        Delegates to from_joint_obs() after constructing obs objects.
 
         Parameters
         ----------
@@ -510,39 +669,31 @@ class InferenceTask:
             PSF for intensity channel.
         psf_gsparams : galsim.GSParams, optional
             GalSim rendering parameters for PSF kernel accuracy.
+        mask_vel : jnp.ndarray, optional
+            Boolean mask for velocity data (True=valid). Same shape as data_vel.
+        mask_int : jnp.ndarray, optional
+            Boolean mask for intensity data (True=valid). Same shape as data_int.
 
         Returns
         -------
         InferenceTask
             Configured task ready for sampling.
         """
-        if psf_vel is not None or psf_int is not None:
-            model.configure_joint_psf(
-                psf_vel=psf_vel,
-                psf_int=psf_int,
-                image_pars_vel=image_pars_vel,
-                image_pars_int=image_pars_int,
-                freeze=True,
-                gsparams=psf_gsparams,
-            )
+        from kl_pipe.observation import build_joint_obs
 
-        from kl_pipe.likelihood import create_jitted_likelihood_joint
-
-        likelihood_fn = create_jitted_likelihood_joint(
-            model,
+        obs_vel, obs_int = build_joint_obs(
             image_pars_vel,
             image_pars_int,
-            variance_vel,
-            variance_int,
-            data_vel,
-            data_int,
+            model.intensity_model,
+            psf_vel=psf_vel,
+            psf_int=psf_int,
+            gsparams=psf_gsparams,
+            data_vel=data_vel,
+            variance_vel=variance_vel,
+            mask_vel=mask_vel,
+            data_int=data_int,
+            variance_int=variance_int,
+            mask_int=mask_int,
         )
 
-        return cls(
-            model=model,
-            likelihood_fn=likelihood_fn,
-            priors=priors,
-            data={'velocity': data_vel, 'intensity': data_int},
-            variance={'velocity': variance_vel, 'intensity': variance_int},
-            meta_pars=meta_pars or {},
-        )
+        return cls.from_joint_obs(model, priors, obs_vel, obs_int, meta_pars=meta_pars)

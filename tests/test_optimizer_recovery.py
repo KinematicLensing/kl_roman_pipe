@@ -32,8 +32,9 @@ from kl_pipe.likelihood import (
     create_jitted_likelihood_intensity,
     create_jitted_likelihood_joint,
 )
+from kl_pipe.observation import build_image_obs, build_velocity_obs, build_joint_obs
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
-from kl_pipe.diagnostics import plot_data_comparison_panels
+from kl_pipe.diagnostics.imaging import plot_data_comparison_panels
 
 from test_utils import (
     TestConfig,
@@ -41,6 +42,7 @@ from test_utils import (
     assert_parameter_recovery,
     plot_parameter_comparison,
     check_degenerate_product_recovery,
+    make_aperture_mask,
 )
 
 
@@ -229,9 +231,10 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     )
 
     # Create likelihood with gradients
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     # Add small perturbation to initial guess (5% random noise)
     rng = np.random.RandomState(test_config.seed)
@@ -369,9 +372,10 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
     )
 
     # Create likelihood
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     # Initial guess with perturbation
     rng = np.random.RandomState(test_config.seed)
@@ -515,9 +519,10 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
     )
 
     # Create likelihood
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     # Initial guess
     rng = np.random.RandomState(test_config.seed)
@@ -642,14 +647,18 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     data_noisy = data_noisy / ps2
     variance = variance / ps2**2
 
-    # configure model with same PSF
+    # build obs with PSF
     model = InclinedExponentialModel()
-    model.configure_psf(psf, image_pars=test_config.image_pars_intensity)
     theta_true = model.pars2theta(true_pars)
 
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        psf=psf,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     # optimize
     rng = np.random.RandomState(test_config.seed)
@@ -700,7 +709,6 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
         exclude_params=['cosi', 'theta_int', 'g1', 'g2'],
     )
 
-    model.clear_psf()
     assert_parameter_recovery(
         recovery_stats,
         snr,
@@ -806,23 +814,20 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
     joint_model = KLModel(
         vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
     )
-    joint_model.configure_joint_psf(
-        psf_vel=psf,
-        psf_int=psf,
-        image_pars_vel=test_config.image_pars_velocity,
-        image_pars_int=test_config.image_pars_intensity,
-    )
     theta_true = joint_model.pars2theta(true_pars)
 
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        psf_vel=psf,
+        psf_int=psf,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     # optimize
     rng = np.random.RandomState(test_config.seed)
@@ -905,6 +910,398 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
         recovery_stats,
         snr,
         'Optimizer: Joint model (PSF)',
+        exclude_params=exclude_params,
+    )
+
+
+# ==============================================================================
+# Tests: Masked Optimizer Recovery
+# ==============================================================================
+
+
+def test_optimize_centered_velocity_masked(test_config, velocity_grids):
+    """Optimizer recovery with masked velocity data at SNR=1000."""
+    X, Y = velocity_grids
+    snr = 1000
+
+    true_pars = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'vel_rscale': 5.0,
+    }
+
+    model = CenteredVelocityModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_velocity_data(
+        CenteredVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
+    )
+
+    mask = make_aperture_mask(data_noisy.shape)
+
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity,
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
+    )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
+
+    rng = np.random.RandomState(test_config.seed)
+    theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
+
+    bounds = [
+        (0.1, 0.99),
+        (0.0, np.pi),
+        (-0.1, 0.1),
+        (-0.1, 0.1),
+        (0.0, 50.0),
+        (100.0, 350.0),
+        (1.0, 20.0),
+    ]
+
+    theta_opt, result = optimize_with_gradients(log_like, theta_init, bounds)
+    assert result.success, f"Optimization failed: {result.message}"
+
+    model_eval_opt = model(theta_opt, 'obs', X, Y)
+    test_name = f"opt_centered_vel_masked_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval_opt),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='velocity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
+        mask=mask,
+    )
+
+    recovery_stats = {}
+    pars_opt = model.theta2pars(theta_opt)
+    for param_name, true_val in true_pars.items():
+        tolerance = test_config.get_tolerance(
+            snr, param_name, true_val, 'velocity', test_type='optimizer'
+        )
+        passed, stats = check_parameter_recovery(
+            pars_opt[param_name], true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    product_passed, product_stats = check_degenerate_product_recovery(
+        true_pars, pars_opt, snr=snr
+    )
+
+    plot_parameter_comparison(
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        product_stats=product_stats,
+        exclude_params=['cosi', 'g1', 'g2'],
+    )
+
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'Optimizer: Centered velocity (masked)',
+        exclude_params=['cosi', 'g1', 'g2'],
+    )
+    assert product_passed, (
+        f"Degenerate product vcirc*sini not recovered: "
+        f"{product_stats['rel_error']:.1%} error"
+    )
+
+
+def test_optimize_inclined_exponential_masked(test_config, intensity_grids):
+    """Optimizer recovery with masked intensity data at SNR=1000."""
+    X, Y = intensity_grids
+    snr = 1000
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedExponentialModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedExponentialModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+    )
+
+    mask = make_aperture_mask(data_noisy.shape)
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    rng = np.random.RandomState(test_config.seed)
+    theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
+
+    extent = (
+        test_config.image_pars_intensity.shape[0]
+        * test_config.image_pars_intensity.pixel_scale
+        / 2
+    )
+    bounds = [
+        (0.1, 0.99),
+        (0.0, np.pi),
+        (-0.1, 0.1),
+        (-0.1, 0.1),
+        (0.1, 10.0),
+        (0.5, 10.0),
+        (0.1, 0.1),  # int_h_over_r fixed
+        (-extent, extent),
+        (-extent, extent),
+    ]
+
+    theta_opt, result = optimize_with_gradients(log_like, theta_init, bounds)
+    assert result.success, f"Optimization failed: {result.message}"
+
+    model_eval_opt = model(theta_opt, 'obs', X, Y)
+    test_name = f"opt_inclined_exp_masked_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval_opt),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
+        mask=mask,
+    )
+
+    recovery_stats = {}
+    pars_opt = model.theta2pars(theta_opt)
+    for param_name, true_val in true_pars.items():
+        tolerance = test_config.get_tolerance(
+            snr, param_name, true_val, 'intensity', test_type='optimizer'
+        )
+        passed, stats = check_parameter_recovery(
+            pars_opt[param_name], true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    plot_parameter_comparison(
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        product_stats=None,
+        exclude_params=['cosi', 'g1', 'g2'],
+    )
+
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'Optimizer: Inclined exponential (masked)',
+        exclude_params=['cosi', 'g1', 'g2'],
+    )
+
+
+def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
+    """Optimizer recovery for joint model with both masks at SNR=1000."""
+    from kl_pipe.model import KLModel
+
+    snr = 1000
+    X_vel, Y_vel = velocity_grids
+    X_int, Y_int = intensity_grids
+
+    true_pars = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'vel_rscale': 5.0,
+        'vel_x0': 0.0,
+        'vel_y0': 0.0,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    vel_model = OffsetVelocityModel()
+    int_model = InclinedExponentialModel()
+    joint_model = KLModel(
+        vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
+    )
+    theta_true = joint_model.pars2theta(true_pars)
+
+    data_vel_true, data_vel_noisy, variance_vel = generate_synthetic_velocity_data(
+        OffsetVelocityModel,
+        true_pars,
+        test_config.image_pars_velocity,
+        snr,
+        test_config,
+    )
+    data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
+        InclinedExponentialModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+    )
+
+    mask_vel = make_aperture_mask(data_vel_noisy.shape)
+    mask_int = make_aperture_mask(data_int_noisy.shape)
+
+    obs_vel, obs_int = build_joint_obs(
+        test_config.image_pars_velocity,
+        test_config.image_pars_intensity,
+        joint_model.intensity_model,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
+        mask_vel=jnp.array(mask_vel),
+        mask_int=jnp.array(mask_int),
+    )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
+
+    rng = np.random.RandomState(test_config.seed)
+    theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
+
+    extent_vel = (
+        test_config.image_pars_velocity.shape[0]
+        * test_config.image_pars_velocity.pixel_scale
+        / 2
+    )
+    extent_int = (
+        test_config.image_pars_intensity.shape[0]
+        * test_config.image_pars_intensity.pixel_scale
+        / 2
+    )
+
+    # build bounds following joint model parameter ordering
+    bounds = []
+    for name in joint_model.PARAMETER_NAMES:
+        if name == 'cosi':
+            bounds.append((0.1, 0.99))
+        elif name == 'theta_int':
+            bounds.append((0.0, np.pi))
+        elif name in ('g1', 'g2'):
+            bounds.append((-0.1, 0.1))
+        elif name == 'v0':
+            bounds.append((0.0, 50.0))
+        elif name == 'vcirc':
+            bounds.append((100.0, 350.0))
+        elif name == 'vel_rscale':
+            bounds.append((1.0, 20.0))
+        elif name in ('vel_x0', 'vel_y0'):
+            bounds.append((-extent_vel, extent_vel))
+        elif name == 'flux':
+            bounds.append((0.1, 10.0))
+        elif name == 'int_rscale':
+            bounds.append((0.5, 10.0))
+        elif name == 'int_h_over_r':
+            bounds.append((0.1, 0.1))
+        elif name in ('int_x0', 'int_y0'):
+            bounds.append((-extent_int, extent_int))
+
+    theta_opt, result = optimize_with_gradients(log_like, theta_init, bounds)
+    assert result.success, f"Optimization failed: {result.message}"
+
+    theta_vel_opt = vel_model.pars2theta(joint_model.theta2pars(theta_opt))
+    theta_int_opt = int_model.pars2theta(joint_model.theta2pars(theta_opt))
+    model_vel_opt = vel_model(theta_vel_opt, 'obs', X_vel, Y_vel)
+    model_int_opt = int_model(theta_int_opt, 'obs', X_int, Y_int)
+
+    test_name = f"opt_joint_masked_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_vel_noisy),
+        data_true=np.asarray(data_vel_true),
+        model_eval=np.asarray(model_vel_opt),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='velocity',
+        variance=variance_vel,
+        n_params=len(vel_model.PARAMETER_NAMES),
+        model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
+        mask=mask_vel,
+    )
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_int_noisy),
+        data_true=np.asarray(data_int_true),
+        model_eval=np.asarray(model_int_opt),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance_int,
+        n_params=len(int_model.PARAMETER_NAMES),
+        model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
+        mask=mask_int,
+    )
+
+    recovery_stats = {}
+    pars_opt = joint_model.theta2pars(theta_opt)
+    for param_name, true_val in true_pars.items():
+        model_type = 'joint'
+        tolerance = test_config.get_tolerance(
+            snr, param_name, true_val, model_type, test_type='optimizer'
+        )
+        passed, stats = check_parameter_recovery(
+            pars_opt[param_name], true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    product_passed, product_stats = check_degenerate_product_recovery(
+        true_pars, pars_opt, snr=snr
+    )
+    exclude_params = ['cosi', 'g1', 'g2']
+    plot_parameter_comparison(
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        product_stats=product_stats,
+        exclude_params=exclude_params,
+    )
+
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'Optimizer: Joint model (masked)',
         exclude_params=exclude_params,
     )
 

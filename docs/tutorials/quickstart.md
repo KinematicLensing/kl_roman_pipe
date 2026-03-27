@@ -171,16 +171,14 @@ The library provides helper functions to create JIT-compiled likelihood function
 
 ```{code-cell} python
 from kl_pipe.likelihood import create_jitted_likelihood_velocity
+from kl_pipe.observation import build_velocity_obs
+
+# Build an observation object bundling grids + data + variance
+obs_vel = build_velocity_obs(image_pars, data=data_noisy, variance=synth.variance)
 
 # Create a JIT-compiled likelihood function
 # This compiles once, then runs very fast on subsequent calls
-# NOTE: This allows for arbitrary `meta_pars` passed at `model` instantiation
-log_likelihood = create_jitted_likelihood_velocity(
-    vel_model=model,
-    image_pars_vel=image_pars,
-    variance_vel=synth.variance,
-    data_vel=data_noisy
-)
+log_likelihood = create_jitted_likelihood_velocity(model, obs_vel)
 
 # Evaluate at true parameters
 log_prob_true = log_likelihood(theta_true)
@@ -313,15 +311,13 @@ print(f"Total parameters: {len(kl_model.PARAMETER_NAMES)}")
 joint_true_pars = {**true_params, **int_params}
 theta_joint = kl_model.pars2theta(joint_true_pars)
 
-log_like_joint = create_jitted_likelihood_joint(
-    kl_model=kl_model,
-    image_pars_vel=image_pars,
-    image_pars_int=image_pars,
-    variance_vel=synth.variance,
-    variance_int=synth_int.variance,
-    data_vel=data_noisy,
-    data_int=data_int
+from kl_pipe.observation import build_joint_obs
+obs_vel, obs_int = build_joint_obs(
+    image_pars, image_pars, int_model,
+    data_vel=data_noisy, variance_vel=synth.variance,
+    data_int=data_int, variance_int=synth_int.variance,
 )
+log_like_joint = create_jitted_likelihood_joint(kl_model, obs_vel, obs_int)
 
 log_prob_joint = log_like_joint(theta_joint)
 print(f"\nJoint log-likelihood: {log_prob_joint:.2f}")

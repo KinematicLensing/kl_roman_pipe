@@ -1,0 +1,141 @@
+# =============================================================================
+# Grism cross-code validation configuration
+# Single source of truth for all rendering scripts and comparison tests.
+# =============================================================================
+# YAML null → Python None via yaml.safe_load()
+
+# ---- Shared base parameters (all tests start from these unless overridden) ----
+base_params:
+  # source properties
+  z: 1.0                    # redshift; places Ha at ~1313 nm (Roman grism range)
+  vcirc: 0.0                # asymptotic circular velocity, km/s; 0 = non-rotating
+  vel_rscale: 0.5           # velocity turnover radius, arcsec
+  v0: 0.0                   # systemic velocity, km/s
+  flux: 100.0               # total integrated emission line flux (arbitrary units)
+  int_rscale: 0.3           # intensity scale radius, arcsec
+  int_h_over_r: 0.1         # disk scale height / scale radius (3D thickness)
+  n_sersic: 1.0             # Sersic index (1.0 = exponential disk)
+  cosi: 0.5                 # cos(inclination); 1=face-on, 0=edge-on; 0.5 ~ 60 deg
+  theta_int: 0.0            # intrinsic position angle, radians from +x axis
+  g1: 0.0                   # reduced shear component 1 (fixed at 0 for all tests;
+  g2: 0.0                   #   geko has no shear; shear validation is kl_pipe-internal)
+  vel_dispersion: 50.0      # intrinsic velocity dispersion of ionized gas, km/s
+  continuum: 0.0            # per-line continuum level (flat spectral density)
+
+# ---- Observation parameters ----
+observation:
+  pixel_scale: 0.11         # arcsec/pix (Roman WFI)
+  Nrow: 32                  # rows (spatial Y); rectangular grid catches row/col bugs
+  Ncol: 48                  # cols (spatial X); Nrow != Ncol intentionally
+  dispersion: 1.1           # nm/pix (Roman grism)
+  dispersion_angle: 0.0     # grism dispersion direction, radians
+  lambda_ref: null           # reference wavelength, nm; null = auto-compute as Ha*(1+z)
+  psf_fwhm: null            # PSF FWHM, arcsec; null = no PSF
+  psf_type: gaussian         # PSF model type
+  lines:                     # emission lines to include
+    - {name: Ha, lambda_rest: 656.28}  # nm
+
+# ---- Rendering parameters (for fair cross-code comparison) ----
+rendering:
+  kl_pipe:
+    # number of sub-bins per wavelength pixel for Gaussian line integration.
+    # reduces spectral aliasing when line is narrow relative to pixel.
+    # 5 gives <0.5% error vs converged (osf=25) truth.
+    spectral_oversample: 5
+
+    # number of sub-pixels per pixel for k-space FFT intensity rendering.
+    # reduces spatial aliasing from sampling the exponential profile.
+    # 5 gives ~7e-5 max error vs GalSim continuous rendering.
+    spatial_oversample: 5
+
+    # half-width of wavelength window around each line, in km/s.
+    # determines spectral grid extent. 3000 captures >99.99% of
+    # Gaussian tails for vel_disp in [30, 100] km/s.
+    velocity_window_kms: 3000.0
+
+  geko:
+    # geko uses 25x real-space spatial oversampling internally.
+    # spectral handling is via Gaussian CDF integration (no oversampling knob).
+    spectral_oversample: 5
+    # geko requires square im_shape. render max(Nrow,Ncol) square, crop to (Nrow, Ncol).
+    square_pad: true
+
+  kl_tools:
+    # Jiachuan to specify rendering parameters for kl-tools/tng-grism
+
+  grizli:
+    # Fabian to specify rendering parameters for grizli
+
+# ---- Tests (each overrides base_params and/or observation) ----
+tests:
+  # --- Test group 1: Static Galaxy (non-rotating baselines) ---
+  static_base: {}
+  static_psf:
+    observation: {psf_fwhm: 0.15}
+  static_compact: {int_rscale: 0.15}
+  static_extended: {int_rscale: 0.6}
+
+  # --- Test group 2: Rotating Galaxy ---
+  rotating_base: {vcirc: 200.0}
+  rotating_edgeon: {vcirc: 200.0, cosi: 0.2}
+  rotating_edgeon_ortho_pa: {vcirc: 200.0, cosi: 0.2, theta_int: 1.5708}
+  rotating_psf: {vcirc: 200.0, observation: {psf_fwhm: 0.15}}
+  rotating_compact: {vcirc: 200.0, int_rscale: 0.15}
+  rotating_extended: {vcirc: 200.0, int_rscale: 0.6}
+
+  # --- Test group 3: Inclination Sweep (rotating, aligned, cosi in [0.1, 0.9]) ---
+  incl_sweep_cosi01: {vcirc: 200.0, cosi: 0.1}
+  incl_sweep_cosi03: {vcirc: 200.0, cosi: 0.3}
+  incl_sweep_cosi05: {vcirc: 200.0, cosi: 0.5}
+  incl_sweep_cosi07: {vcirc: 200.0, cosi: 0.7}
+  incl_sweep_cosi09: {vcirc: 200.0, cosi: 0.9}
+
+  # --- Test group 4: PA Sweep, 0 -> pi (rotating, aligned dispersion) ---
+  pa_sweep_0: {vcirc: 200.0, theta_int: 0.0}
+  pa_sweep_30: {vcirc: 200.0, theta_int: 0.5236}
+  pa_sweep_45: {vcirc: 200.0, theta_int: 0.7854}
+  pa_sweep_90: {vcirc: 200.0, theta_int: 1.5708}
+  pa_sweep_120: {vcirc: 200.0, theta_int: 2.0944}
+  pa_sweep_150: {vcirc: 200.0, theta_int: 2.6180}
+  pa_sweep_180: {vcirc: 200.0, theta_int: 3.1416}
+
+  # --- Test group 5: Dispersion Angle Sweep ---
+  # REMOVED from cross-code validation (geko uses fixed dispersion along x).
+  # Dispersion angle sweep tests kl_pipe-internal cos/sin decomposition;
+  # retained in tests/test_grism_core.py for unit testing.
+  # All cross-code tests use dispersion_angle=0 (standard Roman cutout).
+
+  # --- Test group 6: Spectral Properties ---
+  narrow_lines: {vel_dispersion: 30.0}
+  broad_lines: {vel_dispersion: 100.0}
+
+  # --- Test group 7: Redshift Sweep (rotating) ---
+  redshift_sweep_05: {vcirc: 200.0, z: 0.5}
+  redshift_sweep_08: {vcirc: 200.0, z: 0.8}
+  redshift_sweep_10: {vcirc: 200.0, z: 1.0}
+  redshift_sweep_15: {vcirc: 200.0, z: 1.5}
+
+# ---- Acceptance criteria ----
+tolerances:
+  # primary: kl_pipe vs geko or kl_pipe vs kl-tools
+  primary:
+    total_flux_rtol: 0.005       # |sum(A)-sum(B)| / sum(A)
+    peak_pixel_rtol: 0.01        # |max(A)-max(B)| / max(A)
+    max_pixel_residual: 0.01     # max(|A-B|) / max(A)  (peak-normalized)
+    rms_residual: 0.01           # rms(A-B) / rms(A)
+    spatial_centroid_pix: 0.25   # |centroid(A)-centroid(B)| in pixels
+    spectral_centroid_nm: 0.05   # per-spaxel first-moment agreement (datacube only)
+
+  # secondary: kl_pipe vs grizli (fundamentally different dispersion model)
+  secondary:
+    total_flux_rtol: 0.05
+    peak_pixel_rtol: 0.10
+    max_pixel_residual: 0.15
+    rms_residual: 0.10
+    spatial_centroid_pix: 1.0
+    spectral_centroid_nm: 0.5
+
+  notes: >
+    Initial estimates. Primary assumes same physics (arctan velocity,
+    exponential disk, Gaussian emission). Secondary for grizli (polynomial
+    trace, empirical sensitivity). All refined after first comparison run.
