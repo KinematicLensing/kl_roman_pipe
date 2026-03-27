@@ -1179,9 +1179,9 @@ class TNGDataVectorGenerator:
         config: TNGRenderConfig,
         cube_pars: Any,
         spectral_config: Any,
-        z: float,
-        vel_dispersion: float,
         line_fluxes: Dict[str, float],
+        z: Optional[float] = None,
+        vel_dispersion: float = 30.0,
         line_continua: Optional[Dict[str, float]] = None,
         v0: float = 0.0,
         min_particle_weight: float = 0.0,
@@ -1202,15 +1202,20 @@ class TNGDataVectorGenerator:
         spectral_config : SpectralConfig-like object
             Must provide ``lines``, ``spectral_oversample``, ``lsf_mode``, and
             ``effective_R_func``.
-        z : float
-            Systemic redshift.
-        vel_dispersion : float
-            Intrinsic velocity dispersion in km/s.
         line_fluxes : dict
             Mapping from line param prefix (for example ``Ha``, ``NII_6583``)
-            to total integrated line flux normalization.
+            to total integrated observed line flux for the full galaxy
+            (erg s^-1 cm^-2). This total is distributed across particles
+            according to the chosen particle weights.
+        z : float, optional
+            Systemic redshift. If None, uses ``config.target_redshift`` when set,
+            otherwise falls back to the native TNG snapshot redshift.
+        vel_dispersion : float, default=30.0
+            Intrinsic velocity dispersion in km/s.
         line_continua : dict, optional
-            Mapping from line param prefix to local continuum coefficient.
+            Mapping from line param prefix to total observed continuum flux
+            density normalization near each line (erg s^-1 cm^-2 nm^-1).
+            This total is distributed spatially by the stellar intensity template.
         v0 : float, default=0.0
             Systemic velocity offset in km/s subtracted from particle LOS velocity.
         min_particle_weight : float, default=0.0
@@ -1223,6 +1228,14 @@ class TNGDataVectorGenerator:
         """
         if self.gas is None:
             raise ValueError("Gas data required for particle-based cube generation")
+
+        if z is None:
+            z = (
+                config.target_redshift
+                if config.target_redshift is not None
+                else self.native_redshift
+            )
+        z = float(z)
 
         if vel_dispersion < 0:
             raise ValueError(f"vel_dispersion must be >= 0, got {vel_dispersion}")
@@ -1385,11 +1398,34 @@ class TNGDataVectorGenerator:
         # Continuum from stellar particle-rendered intensity map, added per line.
         if len(line_continua) > 0:
             intensity_map, _ = self.generate_intensity_map(config, snr=None)
+
+            # Convert intrinsic luminosity-like intensity (erg/s per pixel) to
+            # observed flux-like map (erg/s/cm^2 per pixel) using D_L(z) from
+            # the module cosmology, then keep only morphology via normalization.
+            d_l_mpc = TNG_COSMOLOGY.luminosity_distance(z).to_value(u.Mpc)  # type: ignore[attr-defined]
+            if d_l_mpc <= 0:
+                raise ValueError(
+                    f"Redshift z={z} gives non-positive luminosity distance"
+                )
+
+            mpc_to_cm = 3.085677581491367e24
+            d_l_cm = d_l_mpc * mpc_to_cm
+            intensity_flux = intensity_map / (4.0 * np.pi * d_l_cm**2)
+
+            # Use continuum morphology only (dimensionless spatial template).
+            # line_continua[prefix] then controls the absolute normalization.
+            template_norm = np.sum(intensity_flux)
+            if not np.isfinite(template_norm) or template_norm <= 0:
+                raise ValueError(
+                    "Continuum intensity template has invalid normalization after conversion"
+                )
+            intensity_template = intensity_flux / template_norm
+
             for line in spectral_config.lines:
                 prefix = line.line_spec.param_prefix
                 cont = float(line_continua.get(prefix, 0.0))
                 if cont != 0.0:
-                    cube_fine += intensity_map[:, :, None] * cont
+                    cube_fine += intensity_template[:, :, None] * cont
 
         # Bin oversampled cube to coarse wavelength grid.
         if osf > 1 and n_lam >= 2:

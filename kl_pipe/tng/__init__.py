@@ -20,6 +20,7 @@ from .fiber import (
     EmissionConfig,
     FiberSimulationResult,
     FiberSpectraSimulator,
+    FiberDataVector,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "EmissionConfig",
     "FiberSimulationResult",
     "FiberSpectraSimulator",
+    "FiberDataVector",
 ]
