@@ -599,6 +599,7 @@ class TestDiagnostics:
 
         ns = [1, 3, 5, 7]
         residuals = {}
+        rms_residuals = {}
         slices = {}
 
         for N in ns:
@@ -607,6 +608,7 @@ class TestDiagnostics:
             test_slice = cube_n[:, :, peak_k]
             slices[N] = test_slice
             residuals[N] = np.max(np.abs(test_slice - ref_slice)) / peak
+            rms_residuals[N] = np.sqrt(np.mean((test_slice - ref_slice) ** 2)) / peak
 
         # diagnostic plot
         n_cols = len(ns) + 1  # +1 for reference
@@ -640,8 +642,18 @@ class TestDiagnostics:
             axes[1, col].set_title(f'|N={N} - ref|', fontsize=9)
         axes[1, -1].axis('off')
 
-        # check monotonic convergence (N=3 < N=1, N=5 < N=3)
-        mono = residuals[3] < residuals[1] and residuals[5] < residuals[3]
+        # convergence check: big improvement N=1→N=3, then all N>=3 below
+        # absolute threshold (max-norm oscillates at the numerical floor due to
+        # single-pixel aliasing at different odd oversampling factors)
+        max_thresh = 1e-4
+        rms_thresh = 1e-5
+        big_jump = rms_residuals[3] < 0.01 * rms_residuals[1]
+        all_converged = all(
+            residuals[N] < max_thresh and rms_residuals[N] < rms_thresh
+            for N in ns
+            if N >= 3
+        )
+        mono = big_jump and all_converged
         status = 'PASS' if mono else 'FAIL'
         status_color = 'green' if status == 'PASS' else 'red'
         fig.suptitle(
@@ -653,13 +665,23 @@ class TestDiagnostics:
         fig.savefig(os.path.join(output_dir, 'oversample_convergence.png'), dpi=150)
         plt.close(fig)
 
-        # assert monotonic decrease (at least first few steps)
-        assert (
-            residuals[3] < residuals[1]
-        ), f"N=3 ({residuals[3]:.2e}) not better than N=1 ({residuals[1]:.2e})"
-        assert (
-            residuals[5] < residuals[3]
-        ), f"N=5 ({residuals[5]:.2e}) not better than N=3 ({residuals[3]:.2e})"
+        # oversampling must produce large improvement over point-sampling
+        assert rms_residuals[3] < 0.01 * rms_residuals[1], (
+            f"N=3 RMS ({rms_residuals[3]:.2e}) not 100x better than "
+            f"N=1 ({rms_residuals[1]:.2e})"
+        )
+
+        # all N>=3 must be below absolute convergence thresholds
+        # (max-norm can oscillate at the numerical floor due to single-pixel
+        # aliasing at different odd oversampling factors)
+        for N in ns:
+            if N >= 3:
+                assert (
+                    residuals[N] < max_thresh
+                ), f"N={N} max resid ({residuals[N]:.2e}) exceeds {max_thresh:.0e}"
+                assert (
+                    rms_residuals[N] < rms_thresh
+                ), f"N={N} RMS resid ({rms_residuals[N]:.2e}) exceeds {rms_thresh:.0e}"
 
     def test_cube_psf_radial_profiles(
         self, kl_model, cube_pars, theta, gaussian_psf, output_dir
