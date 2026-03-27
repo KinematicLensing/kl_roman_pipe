@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Tuple, FrozenSet, Optional, Callable
+import os
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import galsim as gs
 
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel, VelocityModel
@@ -173,10 +175,9 @@ class FiberPars:
     @classmethod
     def from_cube_pars(cls, cube_pars, obs_conf):
         cls.is_dispersed = obs_conf['OBSTYPE'] == 1
-        cls.obs_index = obs_conf['OBSINDEX']
         cls.pix_scale = cube_pars.image_pars.pixel_scale
         cls.spatial_shape = cube_pars.spatial_shape
-        cls.X, cls.Y = utils.build_map_grid_from_image_pars(
+        cls.X, cls.Y = build_map_grid_from_image_pars(
             cube_pars.image_pars
         )  # need to figure out the units for this, whether it can be off-center
 
