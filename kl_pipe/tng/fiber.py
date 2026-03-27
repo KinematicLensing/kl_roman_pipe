@@ -602,10 +602,24 @@ class FiberDataVector(TNGDataVectorGenerator):
         """
         super().__init__(galaxy_data)
         self.fiber_pars = fiber_pars
+        self.psf = None
         self._fiber_psf_data = None
         self.ATMPSF_conv_fiber_mask = None
         self.resolution_mat = None
-        self.wave = None
+        self.wave = np.asarray(fiber_pars.lambda_grid)
+
+        self.psf = self._build_PSF_model_fiber(
+            fiber_pars.obs_conf,
+            lam_mean=fiber_pars.lambda_eff,
+        )
+
+        if self.psf is not None:
+            self.configure_fiber_psf(
+                self.psf,
+                fiber_pars.cube_pars,
+                oversample=psf_oversample,
+                gsparams=gsparams,
+            )
 
         self.precompute_PSF_convolved_fiber_mask(fiber_pars)
         self.get_resolution_matrix_fiber(fiber_pars)
@@ -693,15 +707,11 @@ class FiberDataVector(TNGDataVectorGenerator):
         mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
         mscale = fiber_pars.pix_scale
 
-        galsim_psf = self._build_PSF_model_fiber(
-            fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff
-        )
-
         mask = galsim.InterpolatedImage(
             galsim.Image(array=self.get_fiber_mask(fiber_pars)), scale=mscale
         )
 
-        maskC = mask if galsim_psf is None else galsim.Convolve([mask, galsim_psf])
+        maskC = mask if self.psf is None else galsim.Convolve([mask, self.psf])
         ary = maskC.drawImage(nx=mNx, ny=mNy, scale=mscale).array
 
         self.ATMPSF_conv_fiber_mask = np.array(ary, dtype=np.float64)
@@ -762,7 +772,7 @@ class FiberDataVector(TNGDataVectorGenerator):
         fiber_pars = self.fiber_pars if fiber_pars is None else fiber_pars
         # Photometry mode (non-dispersed)
         if not fiber_pars.is_dispersed:
-            from ..psf import precompute_psf_fft, convolve_fft
+            from ..psf import convolve_fft
 
             self.ATMPSF_conv_fiber_mask = None
             self.resolution_mat = None

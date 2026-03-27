@@ -171,19 +171,30 @@ class CubePars:
 class FiberPars:
     cube_pars: CubePars
     obs_conf: dict  # meta_pars: MetaPars <-- could do this instead and get obs_conf from there
+    is_dispersed: bool
+    pix_scale: float
+    spatial_shape: Tuple[int, int]
+    X: jnp.ndarray
+    Y: jnp.ndarray
+    lambda_grid: jnp.ndarray
+    n_lambda: int
+    throughput: gs.Bandpass
+    _bp_array: jnp.ndarray
+    lambda_eff: float
 
     @classmethod
     def from_cube_pars(cls, cube_pars, obs_conf):
-        cls.is_dispersed = obs_conf['OBSTYPE'] == 1
-        cls.pix_scale = cube_pars.image_pars.pixel_scale
-        cls.spatial_shape = cube_pars.spatial_shape
-        cls.X, cls.Y = build_map_grid_from_image_pars(
+        is_dispersed = obs_conf['OBSTYPE'] == 1
+        pix_scale = cube_pars.image_pars.pixel_scale
+        spatial_shape = cube_pars.spatial_shape
+        X, Y = build_map_grid_from_image_pars(
             cube_pars.image_pars
         )  # need to figure out the units for this, whether it can be off-center
 
-        if cls.is_dispersed:  # fiber spectrum
-            cls.lambda_grid = cube_pars.lambda_grid
-            cls.n_lambda = len(cls.lambda_grid)
+        lambda_grid = cube_pars.lambda_grid
+        n_lambda = len(lambda_grid)
+
+        if is_dispersed:  # fiber spectrum
 
             # _bid = obs_conf['SEDBLKID'] #what is block ID?? it seems like it can alter the lambda range and resolution?
             ##_lrange = _pars['model_dimension']['lambda_range'][_bid]. #I need to make sure, is the model dimension what I'd expect in cube_pars?
@@ -191,37 +202,47 @@ class FiberPars:
             ##if isinstance(_dlam, list):
             ##_dlam = _dlam[_bid]
 
-            cls.throughput = gs.Bandpass(
+            throughput = gs.Bandpass(
                 obs_conf['BANDPASS'],
                 'nm',
-                blue_limit=cls.lambda_grid[0],
-                red_limit=cls.lambda_grid[-1],
+                blue_limit=lambda_grid[0],
+                red_limit=lambda_grid[-1],
             )
-            cls._bp_array = jnp.array(cls.throughput(cls.lambda_grid))
-            cls.lambda_eff = cls.throughput.effective_wavelength
+            _bp_array = jnp.array(throughput(lambda_grid))
+            lambda_eff = throughput.effective_wavelength
 
         else:  # photometry
-            cls.lambda_grid = cube_pars.lambda_grid
-            cls.n_lambda = len(cls.lambda_grid)
-
             _from_file_ = os.path.isfile(obs_conf['BANDPASS'])
             if _from_file_:
-                cls.throughput = gs.Bandpass(obs_conf['BANDPASS'], 'nm')
+                throughput = gs.Bandpass(obs_conf['BANDPASS'], 'nm')
             else:
-                _lrange = [np.min(cls.lambda_grid), np.max(cls.lambda_grid)]
-                cls.throughput = gs.Bandpass(
+                _lrange = [np.min(lambda_grid), np.max(lambda_grid)]
+                throughput = gs.Bandpass(
                     obs_conf['BANDPASS'],
                     'nm',
                     blue_limit=_lrange[0],
                     red_limit=_lrange[1],
                 )
-            cls._bp_array = jnp.array(cls.throughput(cls.lambda_grid))
-            cls.lambda_eff = cls.throughput.effective_wavelength
+            _bp_array = jnp.array(throughput(lambda_grid))
+            lambda_eff = throughput.effective_wavelength
 
             # this is how it's written in kl-tools but I think I need these even for photometry
             # cls.lambda_grid, cls.n_lambda, cls._bp_array = None, 1, None
 
-        return cls(cube_pars=cube_pars, obs_conf=obs_conf)
+        return cls(
+            cube_pars=cube_pars,
+            obs_conf=obs_conf,
+            is_dispersed=is_dispersed,
+            pix_scale=pix_scale,
+            spatial_shape=spatial_shape,
+            X=X,
+            Y=Y,
+            lambda_grid=lambda_grid,
+            n_lambda=n_lambda,
+            throughput=throughput,
+            _bp_array=_bp_array,
+            lambda_eff=lambda_eff,
+        )
 
 
 # =============================================================================
