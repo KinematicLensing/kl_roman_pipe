@@ -1136,27 +1136,6 @@ class TNGDataVectorGenerator:
                 )
                 intensity_map, _ = self.generate_intensity_map(config, snr=None)
 
-            # Flux weighting assumes non-negative intensity. If a noisy map is
-            # passed (e.g. from generate_intensity_map with snr set), negative
-            # pixels can make the denominator unstable and blow up velocities.
-            intensity_map = np.asarray(intensity_map, dtype=np.float64)
-            if intensity_map.shape != velocity.shape:
-                raise ValueError(
-                    "intensity_map shape must match velocity map shape: "
-                    f"{intensity_map.shape} vs {velocity.shape}"
-                )
-            if not np.isfinite(intensity_map).all():
-                raise ValueError("intensity_map contains non-finite values")
-
-            if np.any(intensity_map < 0):
-                warnings.warn(
-                    "intensity_map has negative values. Clipping to zero before "
-                    "flux-weighted PSF convolution to avoid unstable velocities. "
-                    "For best results, pass a noiseless intensity map.",
-                    stacklevel=2,
-                )
-                intensity_map = np.clip(intensity_map, 0.0, None)
-
             kernel, padded_shape = gsobj_to_kernel(
                 config.psf, image_pars=config.image_pars
             )
