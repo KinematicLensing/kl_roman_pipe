@@ -12,16 +12,13 @@ Design goals:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import galsim
 from scipy.sparse import dia_matrix
 
-from ..parameters import ImagePars
-from .data_vectors import TNGDataVectorGenerator, TNGRenderConfig
+from .data_vectors import TNGDataVectorGenerator
 
 # Speed of light in km/s
 _C_KMS = 299792.458
@@ -245,6 +242,12 @@ class FiberDataVector(TNGDataVectorGenerator):
             self.resolution_mat = None
             psfdata = self._fiber_psf_data
 
+            if psfdata is None:
+                raise ValueError(
+                    "PSF data is not configured for photometry mode; "
+                    "ensure PSFTYPE is not 'none' and configure_fiber_psf() has run."
+                )
+
             if run_mode == 'ETC':
                 cube_bp = np.array(cube) * np.array(fiber_pars._bp_array)
                 raw_img = np.sum(cube_bp, axis=2)
@@ -262,6 +265,10 @@ class FiberDataVector(TNGDataVectorGenerator):
 
                 photometric_image = factor * convolve_fft(highres_img, psfdata)
                 return photometric_image
+
+            raise ValueError(
+                f"Unsupported run_mode '{run_mode}' for photometry mode; expected 'ETC'."
+            )
 
         # Spectroscopy mode (dispersed, 1D spectrum)
         else:
@@ -325,3 +332,5 @@ class FiberDataVector(TNGDataVectorGenerator):
                     return spec_1D + noise, noise
                 else:
                     return spec_1D, noise
+
+        raise RuntimeError("Unhandled control path in fiber_observe_cube")

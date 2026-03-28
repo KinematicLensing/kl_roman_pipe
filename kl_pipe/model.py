@@ -12,8 +12,6 @@ from kl_pipe.utils import build_map_grid_from_image_pars
 # from kl_pipe.spectral import SpectralModel
 # from kl_pipe.spectral import FiberPars
 
-import galsim
-
 
 class Model(ABC):
     """
