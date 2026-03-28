@@ -242,25 +242,24 @@ class FiberDataVector(TNGDataVectorGenerator):
             self.resolution_mat = None
             psfdata = self._fiber_psf_data
 
-            if psfdata is None:
-                raise ValueError(
-                    "PSF data is not configured for photometry mode; "
-                    "ensure PSFTYPE is not 'none' and configure_fiber_psf() has run."
-                )
-
             if run_mode == 'ETC':
                 cube_bp = np.array(cube) * np.array(fiber_pars._bp_array)
                 raw_img = np.sum(cube_bp, axis=2)
-                highres_img = np.repeat(
-                    np.repeat(raw_img, psfdata.oversample, axis=0),
-                    psfdata.oversample,
-                    axis=1,
-                )
                 factor = (
                     np.pi
                     * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
                     * fiber_pars.obs_conf['EXPTIME']
                     / fiber_pars.obs_conf['GAIN']
+                )
+
+                # If no PSF is configured, return direct photometric image.
+                if psfdata is None:
+                    return factor * raw_img
+
+                highres_img = np.repeat(
+                    np.repeat(raw_img, psfdata.oversample, axis=0),
+                    psfdata.oversample,
+                    axis=1,
                 )
 
                 photometric_image = factor * convolve_fft(highres_img, psfdata)
