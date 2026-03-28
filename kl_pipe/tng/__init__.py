@@ -14,14 +14,7 @@ from .loaders import (
     TNG50Galaxy,
 )
 from .data_vectors import TNGDataVectorGenerator, TNGRenderConfig
-from .fiber import (
-    FiberPlacement,
-    FiberObservationConfig,
-    EmissionConfig,
-    FiberSimulationResult,
-    FiberSpectraSimulator,
-    FiberDataVector,
-)
+from .fiber import FiberDataVector
 
 __all__ = [
     "load_gas_data",
@@ -32,10 +25,5 @@ __all__ = [
     "TNG50Galaxy",
     "TNGDataVectorGenerator",
     "TNGRenderConfig",
-    "FiberPlacement",
-    "FiberObservationConfig",
-    "EmissionConfig",
-    "FiberSimulationResult",
-    "FiberSpectraSimulator",
     "FiberDataVector",
 ]
