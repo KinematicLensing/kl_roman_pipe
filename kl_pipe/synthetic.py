@@ -97,6 +97,16 @@ REQUIRED_PARAMS = {
         # 'int_x0',
         # 'int_y0',
     },
+    'spergel': {
+        'flux',
+        'int_rscale',
+        'nu',
+        'int_h_over_r',
+        'cosi',
+        'theta_int',
+        'g1',
+        'g2',
+    },
 }
 
 
@@ -204,6 +214,95 @@ def generate_arctan_velocity_3d():
 # ==============================================================================
 # Intensity profile generators
 # ==============================================================================
+
+
+def _generate_inclined_kspace_scipy(
+    radial_ft_fn,
+    image_pars,
+    flux,
+    int_rscale,
+    cosi,
+    theta_int,
+    g1,
+    g2,
+    int_x0,
+    int_y0,
+    int_h_over_r,
+    psf=None,
+    oversample=1,
+):
+    """Shared numpy k-space rendering with pluggable radial FT.
+
+    Independent numpy implementation matching JAX ``_kspace_render_core`` +
+    ``_inclined_sech2_ft``. Used by both Sersic (exponential) and Spergel
+    synthetic backends.
+
+    Parameters
+    ----------
+    radial_ft_fn : callable
+        k_sq -> radial FT array.
+        Exponential: ``lambda k_sq: 1/(1+k_sq)**1.5``
+        Spergel: ``lambda k_sq: 1/(1+k_sq)**(1+nu)``
+    """
+    sini = np.sqrt(1.0 - cosi**2)
+    Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
+    ps = image_pars.pixel_scale
+
+    eff_Nrow = Nrow * oversample
+    eff_Ncol = Ncol * oversample
+    eff_ps = ps / oversample
+
+    pad = 2
+    pr = int(np.ceil(pad * eff_Nrow / 2) * 2)
+    pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
+    ky = 2 * np.pi * np.fft.fftfreq(pr, d=eff_ps)
+    kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
+    KY, KX = np.meshgrid(ky, kx, indexing='ij')
+
+    # centroid phase: half-pixel correction uses COARSE grid centering
+    hx = 0.5 * ps * (1 - Ncol % 2)
+    hy = 0.5 * ps * (1 - Nrow % 2)
+    phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
+
+    # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
+    norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
+    kx_s = norm_s * ((1 + g1) * KX + g2 * KY)
+    ky_s = norm_s * (g2 * KX + (1 - g1) * KY)
+
+    # rotation by -theta_int
+    c, s = np.cos(-theta_int), np.sin(-theta_int)
+    kx_gal = c * kx_s - s * ky_s
+    ky_gal = s * kx_s + c * ky_s
+
+    # analytic FT
+    kx_sc = kx_gal * int_rscale
+    ky_sc = ky_gal * int_rscale
+    k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
+    ft_radial = radial_ft_fn(k_sq)
+
+    u = (np.pi / 2) * int_h_over_r * ky_sc * sini
+    u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
+    ft_vertical = np.where(np.abs(u) < 1e-4, 1.0 - u**2 / 6.0, u_safe / np.sinh(u_safe))
+
+    I_hat = flux * ft_radial * ft_vertical * phase
+    full = np.fft.ifft2(I_hat).real
+    roll_row = (Nrow // 2) * oversample
+    roll_col = (Ncol // 2) * oversample
+    full = np.roll(full, (roll_row, roll_col), axis=(0, 1))
+    intensity = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
+
+    if oversample > 1:
+        intensity = intensity.reshape(Nrow, oversample, Ncol, oversample).mean(
+            axis=(1, 3)
+        )
+
+    if psf is not None:
+        from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
+
+        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
+        intensity = convolve_fft_numpy(intensity, kernel, padded_shape)
+
+    return intensity
 
 
 def generate_sersic_intensity_2d(
@@ -330,70 +429,23 @@ def _generate_sersic_scipy(
     X_gal = cos_pa * X_shear - sin_pa * Y_shear
     Y_gal = sin_pa * X_shear + cos_pa * Y_shear
 
-    # analytic k-space rendering (independent numpy implementation)
-    # matches GalSim SBInclinedExponential via Fourier-slice theorem:
-    #   FT_radial = 1 / (1 + k_r²)^{3/2}
-    #   FT_vertical = u / sinh(u),  u = (π/2) · h/r · ky_gal · r_s · sin(i)
+    # analytic k-space rendering via shared core
     if int_h_over_r > 0 and n_sersic == 1.0:
-        Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
-        ps = image_pars.pixel_scale
-
-        # effective (fine) grid for anti-aliasing, matching JAX _render_kspace
-        eff_Nrow = Nrow * oversample
-        eff_Ncol = Ncol * oversample
-        eff_ps = ps / oversample
-
-        # padded k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
-        pad = 2
-        pr = int(np.ceil(pad * eff_Nrow / 2) * 2)  # even padded sizes
-        pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
-        ky = 2 * np.pi * np.fft.fftfreq(pr, d=eff_ps)
-        kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
-        KY, KX = np.meshgrid(ky, kx, indexing='ij')
-
-        # centroid phase: half-pixel correction uses COARSE grid centering
-        hx = 0.5 * ps * (1 - Ncol % 2)
-        hy = 0.5 * ps * (1 - Nrow % 2)
-        phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
-
-        # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
-        norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
-        kx_s = norm_s * ((1 + g1) * KX + g2 * KY)
-        ky_s = norm_s * (g2 * KX + (1 - g1) * KY)
-
-        # rotation by -theta_int
-        c, s = np.cos(-theta_int), np.sin(-theta_int)
-        kx_gal = c * kx_s - s * ky_s
-        ky_gal = s * kx_s + c * ky_s
-
-        # analytic FT
-        kx_sc = kx_gal * int_rscale
-        ky_sc = ky_gal * int_rscale
-        k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
-        ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
-
-        u = (np.pi / 2) * int_h_over_r * ky_sc * sini
-        # safe-where: substitute finite dummy to avoid 0/sinh(0) = 0/0 warning
-        u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
-        ft_vertical = np.where(
-            np.abs(u) < 1e-4, 1.0 - u**2 / 6.0, u_safe / np.sinh(u_safe)
+        return _generate_inclined_kspace_scipy(
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5,
+            image_pars,
+            flux,
+            int_rscale,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
+            int_h_over_r,
+            psf=psf,
+            oversample=oversample,
         )
-
-        I_hat = flux * ft_radial * ft_vertical * phase
-        full = np.fft.ifft2(I_hat).real
-        full = np.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
-        intensity_obs = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
-
-        if oversample > 1:
-            intensity_obs = intensity_obs[::oversample, ::oversample]
-
-        if psf is not None:
-            from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
-
-            kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
-            intensity_obs = convolve_fft_numpy(intensity_obs, kernel, padded_shape)
-
-        return intensity_obs
 
     # thin-disk path (original)
     # Step 4: Deproject inclination (gal -> disk) - divide by cosi
@@ -521,6 +573,182 @@ def _generate_sersic_galsim(
     intensity = image.array
 
     return intensity
+
+
+# ==============================================================================
+# Spergel intensity profile generators
+# ==============================================================================
+
+
+def generate_spergel_intensity_2d(
+    image_pars: ImagePars,
+    flux: float,
+    int_rscale: float,
+    nu: float,
+    cosi: float,
+    theta_int: float,
+    g1: float = 0.0,
+    g2: float = 0.0,
+    int_x0: float = 0.0,
+    int_y0: float = 0.0,
+    int_h_over_r: float = 0.1,
+    backend: str = 'scipy',
+    psf=None,
+    oversample: int = 1,
+) -> np.ndarray:
+    """Generate Spergel intensity profile.
+
+    Parameters
+    ----------
+    image_pars : ImagePars
+        Image parameters defining the coordinate grids.
+    flux : float
+        Total flux.
+    int_rscale : float
+        Spergel scale length c (arcsec).
+    nu : float
+        Spergel index. nu=0.5 is exponential, nu=-0.6 ~ de Vaucouleurs.
+    cosi : float
+        Cosine of inclination angle.
+    theta_int : float
+        Position angle in radians.
+    g1, g2 : float, optional
+        Shear components.
+    int_x0, int_y0 : float, optional
+        Centroid offsets.
+    int_h_over_r : float, optional
+        Scale height / scale radius. Default 0.1.
+    backend : str, optional
+        'scipy' (any inclination) or 'galsim' (face-on only).
+    psf : galsim.GSObject, optional
+        PSF to convolve with.
+    oversample : int, optional
+        Anti-aliasing oversampling factor. Default 1.
+
+    Returns
+    -------
+    ndarray
+        Intensity map.
+    """
+    if backend == 'galsim':
+        return _generate_spergel_galsim(
+            image_pars,
+            flux,
+            int_rscale,
+            nu,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
+            psf=psf,
+        )
+    else:
+        return _generate_spergel_scipy(
+            image_pars,
+            flux,
+            int_rscale,
+            nu,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
+            int_h_over_r,
+            psf=psf,
+            oversample=oversample,
+        )
+
+
+def _generate_spergel_scipy(
+    image_pars,
+    flux,
+    int_rscale,
+    nu,
+    cosi,
+    theta_int,
+    g1,
+    g2,
+    int_x0,
+    int_y0,
+    int_h_over_r=0.1,
+    psf=None,
+    oversample=1,
+):
+    """Generate Spergel profile via shared numpy k-space core.
+
+    Radial FT: ``(1 + k²)^{-(1+nu)}``. Works at all inclinations.
+    """
+    return _generate_inclined_kspace_scipy(
+        lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
+        image_pars,
+        flux,
+        int_rscale,
+        cosi,
+        theta_int,
+        g1,
+        g2,
+        int_x0,
+        int_y0,
+        int_h_over_r,
+        psf=psf,
+        oversample=oversample,
+    )
+
+
+def _generate_spergel_galsim(
+    image_pars,
+    flux,
+    int_rscale,
+    nu,
+    cosi,
+    theta_int,
+    g1,
+    g2,
+    int_x0,
+    int_y0,
+    gsparams=None,
+    psf=None,
+    method='no_pixel',
+):
+    """Generate face-on Spergel profile via galsim.Spergel.
+
+    GalSim has no InclinedSpergel, so this only supports face-on (cosi >= 0.99).
+    For inclined Spergel, use the scipy backend.
+
+    Raises
+    ------
+    ValueError
+        If cosi < 0.99 (inclined).
+    """
+    if cosi < 0.99:
+        raise ValueError(
+            f"GalSim Spergel backend only supports face-on (cosi >= 0.99), "
+            f"got cosi={cosi}. Use backend='scipy' for inclined profiles."
+        )
+
+    profile = gs.Spergel(
+        nu=nu,
+        scale_radius=int_rscale,
+        flux=flux,
+        gsparams=gsparams,
+    )
+
+    # apply position angle, area-preserving shear, centroid offset
+    profile = profile.rotate(theta_int * gs.radians)
+    mu = 1.0 / (1.0 - (g1**2 + g2**2))
+    profile = profile.lens(g1=g1, g2=g2, mu=mu)
+    profile = profile.shift(int_x0, int_y0)
+
+    if psf is not None:
+        profile = gs.Convolve(profile, psf)
+
+    nx, ny = image_pars.Nx, image_pars.Ny
+    image = profile.drawImage(nx=nx, ny=ny, scale=image_pars.pixel_scale, method=method)
+
+    return image.array
 
 
 # ==============================================================================
@@ -911,6 +1139,13 @@ class SyntheticIntensity:
             params['n_sersic'] = 1.0
             self.data_true = generate_sersic_intensity_2d(
                 image_pars, backend=sersic_backend, psf=self.psf, **params
+            )
+        elif self.model_type == 'spergel':
+            self.data_true = generate_spergel_intensity_2d(
+                image_pars,
+                backend=sersic_backend,
+                psf=self.psf,
+                **self.true_params,
             )
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")

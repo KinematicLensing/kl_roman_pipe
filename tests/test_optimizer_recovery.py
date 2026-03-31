@@ -23,7 +23,7 @@ from scipy.optimize import minimize
 from typing import Dict, Tuple
 
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
-from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.intensity import InclinedExponentialModel, InclinedSpergelModel
 from kl_pipe.model import KLModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
@@ -113,12 +113,13 @@ def generate_synthetic_intensity_data(
     image_pars: ImagePars,
     snr: float,
     config: TestConfig,
+    model_type: str = 'exponential',
 ) -> Tuple[jnp.ndarray, jnp.ndarray, float]:
     """Generate synthetic intensity data with noise."""
     model = model_class()
     int_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
 
-    synth = SyntheticIntensity(int_pars, model_type='exponential', seed=config.seed)
+    synth = SyntheticIntensity(int_pars, model_type=model_type, seed=config.seed)
     data_noisy = synth.generate(
         image_pars,
         snr=snr,
@@ -1302,6 +1303,246 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
         recovery_stats,
         snr,
         'Optimizer: Joint model (masked)',
+        exclude_params=exclude_params,
+    )
+
+
+# ==============================================================================
+# Spergel Intensity Model Optimizer Recovery
+# ==============================================================================
+
+
+@pytest.mark.parametrize("snr", [1000, 50])
+def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
+    """Test optimizer recovery for InclinedSpergelModel."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'nu': 0.5,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+    test_name = f"opt_inclined_spergel_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    rng = np.random.RandomState(test_config.seed)
+    theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
+
+    extent = (
+        test_config.image_pars_intensity.shape[0]
+        * test_config.image_pars_intensity.pixel_scale
+        / 2
+    )
+    bounds = [
+        (0.1, 0.99),  # cosi
+        (0.0, np.pi),  # theta_int
+        (-0.1, 0.1),  # g1
+        (-0.1, 0.1),  # g2
+        (0.1, 10.0),  # flux
+        (0.5, 10.0),  # int_rscale
+        (0.1, 0.1),  # int_h_over_r (fixed)
+        (-0.85, 4.0),  # nu
+        (-extent, extent),  # int_x0
+        (-extent, extent),  # int_y0
+    ]
+
+    theta_opt, result = optimize_with_gradients(log_like, theta_init, bounds)
+    assert result.success, f"Optimization failed: {result.message}"
+
+    model_eval_opt = model(theta_opt, 'obs', X, Y)
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval_opt),
+        test_name=f"{test_name}_optimized",
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        model_label='Optimized Model',
+        enable_plots=test_config.enable_plots,
+    )
+
+    recovery_stats = {}
+    pars_opt = model.theta2pars(theta_opt)
+
+    for param_name, true_val in true_pars.items():
+        recovered_val = pars_opt[param_name]
+        tolerance = test_config.get_tolerance(
+            snr, param_name, true_val, 'intensity', test_type='optimizer'
+        )
+        passed, stats = check_parameter_recovery(
+            recovered_val, true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    exclude_params = ['cosi', 'g1', 'g2']
+    plot_parameter_comparison(
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        product_stats=None,
+        exclude_params=exclude_params,
+    )
+
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'Optimizer: Inclined Spergel',
+        exclude_params=exclude_params,
+    )
+
+
+def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
+    """Test optimizer recovery for InclinedSpergelModel with PSF (SNR=1000 only)."""
+    import galsim as gs
+
+    snr = 1000
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'nu': 0.5,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    psf = gs.Gaussian(fwhm=0.625)
+
+    # generate PSF-convolved data using scipy k-space backend
+    from kl_pipe.synthetic import SyntheticIntensity
+
+    synth = SyntheticIntensity(
+        true_pars, model_type='spergel', seed=test_config.seed, psf=psf
+    )
+    data_noisy = synth.generate(
+        test_config.image_pars_intensity,
+        snr=snr,
+        seed=test_config.seed,
+        include_poisson=test_config.include_poisson_noise,
+    )
+    variance = synth.variance
+    data_true = synth.data_true
+
+    # scipy returns surface brightness; no ps² conversion needed
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        psf=psf,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
+    )
+
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    rng = np.random.RandomState(test_config.seed)
+    theta_init = theta_true + 0.05 * theta_true * rng.randn(len(theta_true))
+
+    extent = (
+        test_config.image_pars_intensity.shape[0]
+        * test_config.image_pars_intensity.pixel_scale
+        / 2
+    )
+    bounds = [
+        (0.1, 0.99),  # cosi
+        (0.0, np.pi),  # theta_int
+        (-0.1, 0.1),  # g1
+        (-0.1, 0.1),  # g2
+        (0.1, 10.0),  # flux
+        (0.5, 10.0),  # int_rscale
+        (0.1, 0.1),  # int_h_over_r (fixed)
+        (-0.85, 4.0),  # nu
+        (-extent, extent),  # int_x0
+        (-extent, extent),  # int_y0
+    ]
+
+    theta_opt, result = optimize_with_gradients(log_like, theta_init, bounds)
+    assert result.success, f"Optimization failed: {result.message}"
+
+    recovery_stats = {}
+    pars_opt = model.theta2pars(theta_opt)
+
+    for param_name, true_val in true_pars.items():
+        recovered_val = pars_opt[param_name]
+        tolerance = test_config.get_tolerance(
+            snr,
+            param_name,
+            true_val,
+            'intensity',
+            test_type='optimizer',
+            has_psf=True,
+        )
+        passed, stats = check_parameter_recovery(
+            recovered_val, true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    exclude_params = ['cosi', 'g1', 'g2']
+    test_name = f"opt_inclined_spergel_psf_snr{snr}"
+    plot_parameter_comparison(
+        true_pars,
+        pars_opt,
+        recovery_stats,
+        test_name,
+        test_config,
+        snr,
+        product_stats=None,
+        exclude_params=exclude_params,
+    )
+
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'Optimizer: Inclined Spergel (PSF)',
         exclude_params=exclude_params,
     )
 

@@ -22,7 +22,7 @@ from typing import Dict, Tuple
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
-from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.intensity import InclinedExponentialModel, InclinedSpergelModel
 from kl_pipe.model import KLModel
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
 from kl_pipe.likelihood import (
@@ -152,6 +152,7 @@ def generate_synthetic_intensity_data(
     image_pars: ImagePars,
     snr: float,
     config: TestConfig,
+    model_type: str = 'exponential',
 ) -> Tuple[jnp.ndarray, jnp.ndarray, float]:
     """
     Generate synthetic intensity data with noise.
@@ -162,28 +163,23 @@ def generate_synthetic_intensity_data(
         Intensity model class (e.g., InclinedExponentialModel).
     true_pars : dict
         True parameter values (using model's parameter names).
-        Can contain extra parameters that will be filtered out (e.g. joint models).
     image_pars : ImagePars
         Image parameters defining the grid.
     snr : float
         Target signal-to-noise ratio.
     config : TestConfig
         Test configuration.
+    model_type : str, optional
+        Synthetic model type ('exponential' or 'spergel'). Default 'exponential'.
 
     Returns
     -------
-    data_true : jnp.ndarray
-        Noiseless synthetic data.
-    data_noisy : jnp.ndarray
-        Noisy synthetic data.
-    variance : float
-        Noise variance used.
+    data_true, data_noisy, variance
     """
 
     model = model_class()
 
     # filter parameters to only include those needed by intensity model
-    # this is relevant for joint models
     int_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
 
     theta_true = model.pars2theta(int_pars)
@@ -191,7 +187,7 @@ def generate_synthetic_intensity_data(
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
-    synth = SyntheticIntensity(int_pars, model_type='exponential', seed=config.seed)
+    synth = SyntheticIntensity(int_pars, model_type=model_type, seed=config.seed)
     data_noisy = synth.generate(
         image_pars,
         snr=snr,
@@ -1645,6 +1641,209 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
     )
 
     assert_parameter_recovery(recovery_stats, snr, 'Joint model (masked)')
+
+
+# ==============================================================================
+# Spergel Intensity Model Recovery
+# ==============================================================================
+
+
+@pytest.mark.parametrize("snr", [1000, 50])
+def test_recover_inclined_spergel(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedSpergelModel (nu=0.5)."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'nu': 0.5,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    test_name = f"inclined_spergel_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (base)')
+
+
+@pytest.mark.parametrize("snr", [1000, 50])
+def test_recover_inclined_spergel_devac(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedSpergelModel (nu=-0.6, de Vaucouleurs)."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'flux': 1.0,
+        'int_rscale': 1.5,  # more concentrated for de Vaucouleurs
+        'int_h_over_r': 0.1,
+        'nu': -0.6,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    test_name = f"inclined_spergel_devac_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (de Vauc)')
+
+
+@pytest.mark.parametrize("snr", [1000, 50])
+def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedSpergelModel with shear."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'nu': 0.5,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    test_name = f"inclined_spergel_shear_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (w/ shear)')
 
 
 if __name__ == "__main__":

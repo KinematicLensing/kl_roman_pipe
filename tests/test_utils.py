@@ -235,6 +235,8 @@ class TestConfig:
             'g2': {1000: 1.0, 500: 1.0, 100: 1.0, 50: 1.5, 10: 1.0},
             # v0 is small - harder to measure relative error
             'v0': {1000: 1.0, 500: 1.0, 100: 1.0, 50: 1.0, 10: 1.5},
+            # nu-rscale degeneracy makes nu harder to constrain at low SNR
+            'nu': {1000: 1.0, 500: 1.0, 100: 1.5, 50: 2.0, 10: 2.5},
         }
 
         # Optimizer test scaling (more lenient for weakly constrained params)
@@ -249,6 +251,8 @@ class TestConfig:
             'vel_y0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
             'int_x0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
             'int_y0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
+            # nu-rscale degeneracy in optimization
+            'nu': {1000: 1.5, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
         }
 
         # absolute tolerance floor (for parameters near zero)
@@ -261,6 +265,7 @@ class TestConfig:
             'int_x0': 0.1,
             'int_y0': 0.1,
             'int_h_over_r': 0.01,  # low sensitivity at h/r=0.1
+            'nu': 0.05,  # Spergel index absolute floor
         }
 
         # PSF tolerance multiplier -- with oversampled rendering (N=5), the
