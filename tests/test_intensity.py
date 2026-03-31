@@ -1638,17 +1638,8 @@ def test_galsim_regression_spergel_inclined_nu05(cosi, theta_int, galsim_image_p
     )
 
 
-@pytest.mark.parametrize(
-    "nu,n_sersic,must_pass",
-    [
-        (0.5, 1.0, True),  # exact equivalence
-        (-0.6, 4.0, False),  # informational: Spergel approx to de Vaucouleurs
-    ],
-)
-def test_spergel_vs_inclined_sersic_mismatch(
-    nu, n_sersic, must_pass, galsim_image_pars
-):
-    """Quantify Spergel vs InclinedSersic mismatch. Only nu=0.5/n=1 must pass."""
+def test_spergel_nu05_vs_inclined_sersic_n1(galsim_image_pars):
+    """Spergel(nu=0.5) must match InclinedSersic(n=1) — exact equivalence."""
     from kl_pipe.synthetic import _generate_sersic_galsim
     import galsim as gs
 
@@ -1659,14 +1650,14 @@ def test_spergel_vs_inclined_sersic_mismatch(
     gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
 
     model = InclinedSpergelModel()
-    theta = jnp.array([cosi, 0.0, 0.0, 0.0, flux, rscale, h_over_r, nu, 0.0, 0.0])
+    theta = jnp.array([cosi, 0.0, 0.0, 0.0, flux, rscale, h_over_r, 0.5, 0.0, 0.0])
     our_image = np.array(model.render_image(theta, image_pars=galsim_image_pars))
 
     gs_image = _generate_sersic_galsim(
         galsim_image_pars,
         flux=flux,
         int_rscale=rscale,
-        n_sersic=n_sersic,
+        n_sersic=1.0,
         cosi=cosi,
         theta_int=0.0,
         g1=0.0,
@@ -1682,11 +1673,71 @@ def test_spergel_vs_inclined_sersic_mismatch(
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
 
-    if must_pass:
-        assert max_frac < 1e-3, (
-            f"Spergel(nu={nu}) vs Sersic(n={n_sersic}): "
-            f"max|resid|/peak = {max_frac:.2e} (MUST PASS)"
-        )
+    assert (
+        max_frac < 1e-3
+    ), f"Spergel(nu=0.5) vs InclinedSersic(n=1): max|resid|/peak = {max_frac:.2e}"
+
+
+def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
+    """Quantify Spergel(nu=-0.6) vs InclinedSersic(n=4) mismatch (informational).
+
+    Profiles matched at half_light_radius=2.0 for fair shape comparison.
+    Uses PSF + method='auto' + coarser grid because InclinedSersic(n=4)
+    needs enormous FFT grids at fine pixel scales.
+    """
+    import galsim as gs
+
+    cosi = 0.7
+    inc = gs.Angle(np.arccos(cosi), gs.radians)
+    flux = 1.0
+    hlr = 2.0
+    h_over_r = 0.1
+    fwhm = 0.5
+
+    gsp = gs.GSParams(folding_threshold=1e-3, maxk_threshold=1e-3, kvalue_accuracy=1e-5)
+    psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
+
+    # GalSim InclinedSersic(n=4) matched at half_light_radius
+    gs_prof = gs.InclinedSersic(
+        n=4.0,
+        inclination=inc,
+        half_light_radius=hlr,
+        scale_h_over_r=h_over_r,
+        flux=flux,
+        gsparams=gsp,
+    )
+    gs_prof = gs.Convolve(gs_prof, psf)
+
+    # coarser grid for tractable GalSim FFT
+    ip = ImagePars(shape=(64, 64), pixel_scale=0.5, indexing='ij')
+    gs_im = gs_prof.drawImage(
+        nx=ip.Ncol,
+        ny=ip.Nrow,
+        scale=ip.pixel_scale,
+        method='auto',
+    )
+    gs_sb = gs_im.array / ip.pixel_scale**2
+
+    # our Spergel(nu=-0.6) matched at same half_light_radius
+    spergel_rscale = gs.Spergel(nu=-0.6, half_light_radius=hlr).scale_radius
+    model = InclinedSpergelModel()
+    theta = jnp.array(
+        [cosi, 0.0, 0.0, 0.0, flux, spergel_rscale, h_over_r, -0.6, 0.0, 0.0]
+    )
+    obs = build_image_obs(ip, psf=psf, oversample=5, int_model=model, gsparams=gsp)
+    our_image = np.array(model.render_image(theta, obs=obs))
+
+    peak = np.max(np.abs(gs_sb))
+    max_frac = np.max(np.abs(our_image - gs_sb)) / peak
+    rms_frac = np.sqrt(np.mean(((our_image - gs_sb) / peak) ** 2))
+
+    # informational — Spergel != Sersic, so we just record the mismatch
+    print(
+        f"\nSpergel(nu=-0.6) vs InclinedSersic(n=4) at hlr={hlr}:\n"
+        f"  max|resid|/peak = {max_frac:.4f}\n"
+        f"  rms|resid|/peak = {rms_frac:.4f}\n"
+        f"  spergel_rscale = {spergel_rscale:.4f}"
+    )
 
 
 if __name__ == "__main__":
