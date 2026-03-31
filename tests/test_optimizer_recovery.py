@@ -1455,7 +1455,7 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
 
     psf = gs.Gaussian(fwhm=0.625)
 
-    # generate PSF-convolved data using scipy k-space backend
+    # generate PSF-convolved data with oversample=5 to match model's pixel response
     from kl_pipe.synthetic import SyntheticIntensity
 
     synth = SyntheticIntensity(
@@ -1466,11 +1466,10 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
         snr=snr,
         seed=test_config.seed,
         include_poisson=test_config.include_poisson_noise,
+        oversample=5,
     )
     variance = synth.variance
     data_true = synth.data_true
-
-    # scipy returns surface brightness; no ps² conversion needed
     model = InclinedSpergelModel()
     theta_true = model.pars2theta(true_pars)
 

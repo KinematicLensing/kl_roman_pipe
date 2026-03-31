@@ -244,6 +244,8 @@ def _generate_inclined_kspace_scipy(
         Exponential: ``lambda k_sq: 1/(1+k_sq)**1.5``
         Spergel: ``lambda k_sq: 1/(1+k_sq)**(1+nu)``
     """
+    from scipy.fft import next_fast_len as _next_fast_len
+
     sini = np.sqrt(1.0 - cosi**2)
     Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
     ps = image_pars.pixel_scale
@@ -253,8 +255,14 @@ def _generate_inclined_kspace_scipy(
     eff_ps = ps / oversample
 
     pad = 2
-    pr = int(np.ceil(pad * eff_Nrow / 2) * 2)
-    pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
+    if psf is not None:
+        # square padding matching model's fused k-space path
+        pad_sq = _next_fast_len(pad * max(eff_Nrow, eff_Ncol))
+        pr = pc = pad_sq
+    else:
+        pr = int(np.ceil(pad * eff_Nrow / 2) * 2)
+        pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
+
     ky = 2 * np.pi * np.fft.fftfreq(pr, d=eff_ps)
     kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
     KY, KX = np.meshgrid(ky, kx, indexing='ij')
@@ -285,6 +293,24 @@ def _generate_inclined_kspace_scipy(
     ft_vertical = np.where(np.abs(u) < 1e-4, 1.0 - u**2 / 6.0, u_safe / np.sinh(u_safe))
 
     I_hat = flux * ft_radial * ft_vertical * phase
+
+    if psf is not None:
+        # fuse PSF on the profile's k-grid before IFFT
+        # real-space kernel (independent from model's drawKImage path)
+        kern_size = psf.getGoodImageSize(eff_ps)
+        kern_img = psf.drawImage(
+            nx=kern_size, ny=kern_size, scale=eff_ps, method='no_pixel'
+        )
+        kernel = kern_img.array.astype(np.float64)
+        kernel /= kernel.sum()
+
+        # pad to profile's FFT grid and multiply in k-space
+        kernel_padded = np.zeros((pr, pc))
+        kr, kc = kernel.shape
+        kernel_padded[:kr, :kc] = kernel
+        kernel_padded = np.roll(kernel_padded, (-(kr // 2), -(kc // 2)), axis=(0, 1))
+        I_hat = I_hat * np.fft.fft2(kernel_padded)
+
     full = np.fft.ifft2(I_hat).real
     roll_row = (Nrow // 2) * oversample
     roll_col = (Ncol // 2) * oversample
@@ -295,12 +321,6 @@ def _generate_inclined_kspace_scipy(
         intensity = intensity.reshape(Nrow, oversample, Ncol, oversample).mean(
             axis=(1, 3)
         )
-
-    if psf is not None:
-        from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
-
-        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
-        intensity = convolve_fft_numpy(intensity, kernel, padded_shape)
 
     return intensity
 
@@ -1101,6 +1121,7 @@ class SyntheticIntensity:
         seed: Optional[int] = None,
         include_poisson: bool = True,
         sersic_backend: str = 'scipy',
+        oversample: int = 1,
     ) -> np.ndarray:
         """
         Generate synthetic intensity data.
@@ -1118,6 +1139,8 @@ class SyntheticIntensity:
         sersic_backend : str, optional
             Backend for Sersic profile generation ('scipy' or 'galsim'). Default is
             'scipy'.
+        oversample : int, optional
+            Oversampling factor for pixel integration. Default 1.
 
         Returns
         -------
@@ -1131,20 +1154,29 @@ class SyntheticIntensity:
         # Generate true intensity field
         if self.model_type == 'sersic':
             self.data_true = generate_sersic_intensity_2d(
-                image_pars, backend=sersic_backend, psf=self.psf, **self.true_params
+                image_pars,
+                backend=sersic_backend,
+                psf=self.psf,
+                oversample=oversample,
+                **self.true_params,
             )
         elif self.model_type == 'exponential':
             # Exponential is Sersic with n=1
             params = self.true_params.copy()
             params['n_sersic'] = 1.0
             self.data_true = generate_sersic_intensity_2d(
-                image_pars, backend=sersic_backend, psf=self.psf, **params
+                image_pars,
+                backend=sersic_backend,
+                psf=self.psf,
+                oversample=oversample,
+                **params,
             )
         elif self.model_type == 'spergel':
             self.data_true = generate_spergel_intensity_2d(
                 image_pars,
                 backend=sersic_backend,
                 psf=self.psf,
+                oversample=oversample,
                 **self.true_params,
             )
         else:
