@@ -16,6 +16,184 @@ _DEVAUCOULEURS_NU = -0.6
 
 
 # ==============================================================================
+# Spergel nu <-> Sersic n mapping
+# Pre-computed by scripts/compute_nu_n_mapping.py (flux-weighted L2 matching).
+# Two tables: face-on (galsim.Spergel vs galsim.Sersic) and inclined
+# (our InclinedSpergelModel vs galsim.InclinedSersic, averaged over cosi).
+# Exact at n=1/nu=0.5. Valid for n in [0.65, 4.0] (saturates at nu~4 for n<0.65).
+# ==============================================================================
+
+_N_GRID = np.array(
+    [
+        0.300000,
+        0.350000,
+        0.400000,
+        0.450000,
+        0.500000,
+        0.550000,
+        0.600000,
+        0.650000,
+        0.700000,
+        0.750000,
+        0.800000,
+        0.850000,
+        0.900000,
+        0.950000,
+        1.000000,
+        1.100000,
+        1.200000,
+        1.300000,
+        1.400000,
+        1.500000,
+        1.600000,
+        1.700000,
+        1.800000,
+        1.900000,
+        2.000000,
+        2.200000,
+        2.400000,
+        2.600000,
+        2.800000,
+        3.000000,
+        3.200000,
+        3.400000,
+        3.600000,
+        3.800000,
+        4.000000,
+    ]
+)
+
+_NU_TABLE_FACEON = np.array(
+    [
+        4.000000,
+        4.000000,
+        4.000000,
+        3.999999,
+        4.000000,
+        4.000000,
+        3.999985,
+        2.565989,
+        1.839106,
+        1.400138,
+        1.104737,
+        0.891520,
+        0.729871,
+        0.602743,
+        0.500000,
+        0.343574,
+        0.229593,
+        0.142302,
+        0.072840,
+        0.015778,
+        -0.032252,
+        -0.073571,
+        -0.109774,
+        -0.141940,
+        -0.170920,
+        -0.221439,
+        -0.264560,
+        -0.302262,
+        -0.335768,
+        -0.365888,
+        -0.393272,
+        -0.418261,
+        -0.441244,
+        -0.462466,
+        -0.482161,
+    ]
+)
+
+_NU_TABLE_INCLINED = np.array(
+    [
+        3.999974,
+        3.999980,
+        3.999949,
+        3.999972,
+        3.999984,
+        3.999981,
+        3.999952,
+        3.999987,
+        3.087383,
+        2.098241,
+        1.509082,
+        1.122171,
+        0.850920,
+        0.651659,
+        0.500000,
+        0.285832,
+        0.142495,
+        0.039635,
+        -0.037857,
+        -0.097893,
+        -0.144339,
+        -0.180206,
+        -0.209292,
+        -0.234021,
+        -0.255682,
+        -0.296949,
+        -0.332018,
+        -0.357537,
+        -0.381879,
+        -0.404837,
+        -0.423129,
+        -0.439844,
+        -0.456175,
+        -0.470317,
+        -0.482003,
+    ]
+)
+
+
+def sersic_to_spergel(n_sersic, inclined=False):
+    """Best-fit Spergel nu for a given Sersic n.
+
+    Interpolates a pre-computed lookup table from flux-weighted L2
+    profile matching. Exact at n=1 (nu=0.5). Valid for n in [0.65, 4.0].
+
+    Parameters
+    ----------
+    n_sersic : float or array
+        Sersic index.
+    inclined : bool, optional
+        If True, use the inclined table (our 3D model vs GalSim
+        InclinedSersic, averaged over cosi). Default False (face-on).
+
+    Returns
+    -------
+    float or array
+        Best-fit Spergel nu.
+    """
+    table = _NU_TABLE_INCLINED if inclined else _NU_TABLE_FACEON
+    return np.interp(n_sersic, _N_GRID, table)
+
+
+def spergel_to_sersic(nu, inclined=False):
+    """Best-fit Sersic n for a given Spergel nu.
+
+    Inverse of ``sersic_to_spergel``. Valid for nu in [-0.48, 2.6]
+    (face-on) or [-0.16, 1.4] (inclined).
+
+    Parameters
+    ----------
+    nu : float or array
+        Spergel index.
+    inclined : bool, optional
+        If True, use the inclined table. Default False (face-on).
+
+    Returns
+    -------
+    float or array
+        Best-fit Sersic n.
+    """
+    table = _NU_TABLE_INCLINED if inclined else _NU_TABLE_FACEON
+    # tables are monotonically decreasing for n >= ~0.65; reverse for interp
+    mask = table < 3.99  # exclude saturated region
+    n_valid = _N_GRID[mask]
+    nu_valid = table[mask]
+    return np.interp(nu, nu_valid[::-1], n_valid[::-1])
+
+
+# ==============================================================================
 # Shared k-space rendering
 # ==============================================================================
 

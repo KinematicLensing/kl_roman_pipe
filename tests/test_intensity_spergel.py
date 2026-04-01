@@ -21,6 +21,8 @@ from kl_pipe.intensity import (
     InclinedSpergelModel,
     InclinedDeVaucouleursModel,
     build_intensity_model,
+    sersic_to_spergel,
+    spergel_to_sersic,
 )
 from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
@@ -393,6 +395,47 @@ def test_spergel_klmodel_composition():
     theta_int = kl.get_intensity_pars(theta_kl)
     assert len(theta_vel) == 7
     assert len(theta_int) == 10
+
+
+# --- nu <-> n mapping ---
+
+
+@pytest.mark.parametrize(
+    "n,expected_nu,tol",
+    [
+        (1.0, 0.5, 1e-6),  # exact
+        (2.0, -0.17, 0.02),
+        (4.0, -0.48, 0.02),
+    ],
+)
+def test_sersic_to_spergel(n, expected_nu, tol):
+    """sersic_to_spergel returns expected values."""
+    nu = sersic_to_spergel(n)
+    assert (
+        abs(nu - expected_nu) < tol
+    ), f"sersic_to_spergel({n}) = {nu:.4f}, expected ~{expected_nu}"
+
+
+@pytest.mark.parametrize("n_input", [0.7, 1.0, 1.5, 2.0, 3.0, 4.0])
+def test_nu_n_roundtrip_faceon(n_input):
+    """n -> nu -> n roundtrip within 1% for face-on table."""
+    nu = sersic_to_spergel(n_input, inclined=False)
+    n_back = spergel_to_sersic(nu, inclined=False)
+    rel_err = abs(n_back - n_input) / n_input
+    assert (
+        rel_err < 0.01
+    ), f"Roundtrip: n={n_input} -> nu={nu:.4f} -> n={n_back:.4f} ({rel_err:.1%})"
+
+
+@pytest.mark.parametrize("n_input", [1.0, 1.5, 2.0, 3.0, 4.0])
+def test_nu_n_roundtrip_inclined(n_input):
+    """n -> nu -> n roundtrip within 1% for inclined table."""
+    nu = sersic_to_spergel(n_input, inclined=True)
+    n_back = spergel_to_sersic(nu, inclined=True)
+    rel_err = abs(n_back - n_input) / n_input
+    assert (
+        rel_err < 0.01
+    ), f"Roundtrip: n={n_input} -> nu={nu:.4f} -> n={n_back:.4f} ({rel_err:.1%})"
 
 
 # --- nu=0.5 Cross-Check (Step 2) ---
@@ -918,20 +961,20 @@ def _render_spergel_vs_sersic_panel(
 ):
     """Render a 4-row x 3-col diagnostic comparing Spergel vs InclinedSersic.
 
-    Returns dict of (n, cosi) -> max_frac for summary statistics.
+    Returns dict of (n, cosi) -> {max, rms} for summary statistics.
     """
     import galsim as gs
 
     hlr = 2.0
     flux = 1.0
     h_over_r = 0.1
-    npix = 64
-    ps = 0.5
+
+    # per-n grid: fine for n<=2, coarser for n=4 (GalSim FFT limits)
+    grid_configs = {1.0: (128, 0.2), 2.0: (128, 0.2), 4.0: (64, 0.5)}
 
     gsp = gs.GSParams(
-        folding_threshold=1e-3, maxk_threshold=1e-3, maximum_fft_size=16384
+        folding_threshold=1e-3, maxk_threshold=1e-3, maximum_fft_size=65536
     )
-    ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
     model = InclinedSpergelModel()
 
     fig, axes = plt.subplots(
@@ -944,6 +987,8 @@ def _render_spergel_vs_sersic_panel(
     stats = {}
     for j, (n, nu) in enumerate(zip(n_values, nu_values)):
         spergel_rscale = gs.Spergel(nu=nu, half_light_radius=hlr).scale_radius
+        npix, ps = grid_configs.get(n, (64, 0.5))
+        ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
 
         for i, cosi in enumerate(cosi_values):
             ax_main = axes[i * 2, j]
@@ -952,6 +997,8 @@ def _render_spergel_vs_sersic_panel(
             inc = gs.Angle(np.arccos(cosi), gs.radians)
 
             # GalSim InclinedSersic (3D)
+            # both sides use k-space FFT (InclinedSersic.is_analytic_x=False),
+            # so no_pixel + oversample=1 gives a clean shape comparison
             gs_prof = gs.InclinedSersic(
                 n=n,
                 inclination=inc,
@@ -1071,8 +1118,8 @@ def test_spergel_vs_sersic_inclination_diagnostic(spergel_output_dir):
     n_values = [1.0, 2.0, 4.0]
     cosi_values = [1.0, 0.75, 0.25, 0.1]
 
-    # mapping 1: canonical face-on (from flux-weighted L2)
-    nu_faceon = [0.5, -0.17, -0.48]
+    # mapping 1: face-on (from flux-weighted L2)
+    nu_faceon = [float(sersic_to_spergel(n, inclined=False)) for n in n_values]
     stats_faceon = _render_spergel_vs_sersic_panel(
         n_values,
         nu_faceon,
@@ -1081,9 +1128,8 @@ def test_spergel_vs_sersic_inclination_diagnostic(spergel_output_dir):
         spergel_output_dir,
     )
 
-    # mapping 2: inclined (placeholder values until script finishes)
-    # these will be updated with the inclined table results
-    nu_inclined = [0.5, -0.53, -0.69]
+    # mapping 2: inclined (3D model vs GalSim InclinedSersic, avg over cosi)
+    nu_inclined = [float(sersic_to_spergel(n, inclined=True)) for n in n_values]
     stats_inclined = _render_spergel_vs_sersic_panel(
         n_values,
         nu_inclined,
