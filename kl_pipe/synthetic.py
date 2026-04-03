@@ -408,6 +408,64 @@ def generate_sersic_intensity_2d(
         )
 
 
+def _build_sersic_ft_galsim(n_sersic, int_rscale):
+    """Build a Sersic radial FT function using GalSim's numerical kValue.
+
+    Uses GalSim's Ogata-based Hankel transform (precomputed + spline cache)
+    as the radial FT source. Independent of the Miller & Pasha emulator
+    used in the JAX model code.
+
+    The scipy synthetic path uses this to test the numpy k-space rendering
+    pipeline independently from the JAX rendering + emulator path.
+
+    Parameters
+    ----------
+    n_sersic : float
+        Sersic index.
+    int_rscale : float
+        Sersic scale radius r_s (arcsec), where I(r) = I_0 * exp(-(r/r_s)^{1/n}).
+        Related to half-light radius by R_e = b_n^n * r_s.
+
+    Returns
+    -------
+    callable
+        k_sq -> FT array (normalized: FT(0) = 1).
+        k_sq is dimensionless: (k_physical * int_rscale)^2.
+    """
+    # convert r_s to R_e for GalSim
+    n = n_sersic
+    bn = 2.0 * n - 1.0 / 3.0 + 4.0 / (405.0 * n) + 46.0 / (25515.0 * n**2)
+    Re = int_rscale * bn**n
+
+    # GalSim Sersic with this R_e (flux=1 gives normalized FT)
+    gs_prof = gs.Sersic(n=n_sersic, half_light_radius=Re, flux=1.0)
+
+    def radial_ft_fn(k_sq):
+        # k_sq = (k_physical * int_rscale)^2, so k_physical = sqrt(k_sq)/int_rscale
+        k_phys = np.sqrt(np.maximum(k_sq, 0.0)) / int_rscale
+        # the FT is radially symmetric — evaluate on unique |k| values
+        # and interpolate back to the full grid
+        k_flat = k_phys.ravel()
+        k_unique = np.unique(np.round(k_flat, decimals=10))
+        ft_unique = np.ones(len(k_unique))
+        for i, kv in enumerate(k_unique):
+            if kv > 1e-15:
+                ft_unique[i] = gs_prof.kValue(kv, 0.0).real
+        # map back via sorted lookup
+        from scipy.interpolate import interp1d
+
+        interp = interp1d(
+            k_unique,
+            ft_unique,
+            kind='linear',
+            fill_value=0.0,
+            bounds_error=False,
+        )
+        return interp(k_flat).reshape(k_sq.shape)
+
+    return radial_ft_fn
+
+
 def _generate_sersic_scipy(
     image_pars: ImagePars,
     flux: float,
@@ -449,10 +507,17 @@ def _generate_sersic_scipy(
     X_gal = cos_pa * X_shear - sin_pa * Y_shear
     Y_gal = sin_pa * X_shear + cos_pa * Y_shear
 
-    # analytic k-space rendering via shared core
-    if int_h_over_r > 0 and n_sersic == 1.0:
+    # 3D k-space rendering via shared core
+    if int_h_over_r > 0:
+        if n_sersic == 1.0:
+            # exact exponential FT
+            radial_ft = lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5
+        else:
+            # numerical Sersic FT via GalSim kValue (independent of emulator)
+            radial_ft = _build_sersic_ft_galsim(n_sersic, int_rscale)
+
         return _generate_inclined_kspace_scipy(
-            lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5,
+            radial_ft,
             image_pars,
             flux,
             int_rscale,

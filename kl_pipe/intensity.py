@@ -11,7 +11,8 @@ from kl_pipe.transformation import obs2cen, cen2source, source2gal
 # default number of Gauss-Legendre quadrature points for LOS integration
 _DEFAULT_N_QUAD = 200
 
-# best-fit Spergel nu for Sersic n=4 (de Vaucouleurs)
+# community convention Spergel nu for Sersic n=4 (de Vaucouleurs);
+# flux-weighted L2 matching gives -0.48 — see scripts/compute_nu_n_mapping.py
 _DEVAUCOULEURS_NU = -0.6
 
 
@@ -190,6 +191,13 @@ def spergel_to_sersic(nu, inclined=False):
     mask = table < 3.99  # exclude saturated region
     n_valid = _N_GRID[mask]
     nu_valid = table[mask]
+    nu_lo, nu_hi = float(nu_valid[-1]), float(nu_valid[0])
+    nu_arr = np.asarray(nu)
+    if np.any(nu_arr < nu_lo) or np.any(nu_arr > nu_hi):
+        raise ValueError(
+            f"nu={nu} outside valid range [{nu_lo:.2f}, {nu_hi:.2f}] "
+            f"for {'inclined' if inclined else 'face-on'} table"
+        )
     return np.interp(nu, nu_valid[::-1], n_valid[::-1])
 
 
@@ -621,11 +629,10 @@ def _spergel_evaluate_faceon(flux, rscale, nu, x, y):
     return I0 * _spergel_radial(r, nu, rscale)
 
 
-def _spergel_los_integrate(
-    flux,
-    rscale,
-    nu,
-    h_over_r,
+def _inclined_sech2_los_integrate(
+    rho0,
+    radial_fn,
+    h_z,
     cosi,
     sini,
     xp,
@@ -633,28 +640,23 @@ def _spergel_los_integrate(
     gl_nodes,
     gl_weights,
 ):
-    """3D LOS Gauss-Legendre integration with Spergel radial + sech² vertical.
+    """General LOS Gauss-Legendre integration: radial_fn(R) × sech²(z/h_z).
 
-    Integrates rho(R, z) = rho0 * (R/c)^nu * K_nu(R/c) * sech²(z/h_z)
-    along the line of sight at each pixel in the galaxy frame.
-
-    Volume density normalization::
-
-        rho0 = flux / (4*pi * h_z * c^2 * 2^nu * Gamma(nu+1))
-
-    For nu=0.5 this reduces to ``flux / (4*pi * h_z * r_s^2)``, matching
-    the exponential model.
+    Integrates rho(R, z) = rho0 * radial_fn(R) * sech²(z/h_z) along
+    the line of sight at each pixel in the galaxy frame. The radial
+    profile and normalization are model-specific; the GL plumbing is
+    shared across all inclined models with sech² vertical structure.
 
     Parameters
     ----------
-    flux : float
-        Total integrated flux.
-    rscale : float
-        Scale length c (arcsec).
-    nu : float
-        Spergel index.
-    h_over_r : float
-        Vertical scale height / radial scale length.
+    rho0 : float
+        Volume density normalization (model-specific).
+    radial_fn : callable
+        R -> radial profile array. Model-specific radial density.
+        Exponential: ``lambda R: exp(-R/r_s)``.
+        Spergel: ``lambda R: _spergel_radial(R, nu, c)``.
+    h_z : float
+        Vertical scale height (arcsec).
     cosi, sini : float
         Cosine and sine of inclination.
     xp, yp : jnp.ndarray
@@ -667,10 +669,6 @@ def _spergel_los_integrate(
     jnp.ndarray
         Surface brightness, same shape as xp/yp.
     """
-    h_z = h_over_r * rscale
-    # rho0 = flux / (4*pi * h_z * c^2 * 2^nu * Gamma(nu+1))
-    rho0 = flux / (2.0 * h_z * _spergel_norm_2d(rscale, nu))
-
     # per-pixel GL centering: sech²(z/h_z) peak at ell_center = y_gal*sini/cosi
     # integration half-width delta = 5*h_z/cosi captures >99.99% of sech²
     delta = 5.0 * h_z / jnp.maximum(cosi, 0.1)
@@ -686,13 +684,185 @@ def _spergel_los_integrate(
 
     R = jnp.sqrt(x_disk**2 + y_disk**2)
 
-    radial = _spergel_radial(R, nu, rscale)
+    radial = radial_fn(R)
     z_norm = z_val / h_z
     cosh_z = jnp.cosh(jnp.clip(z_norm, -20.0, 20.0))
     vertical = 1.0 / (cosh_z**2)
 
     integrand = rho0 * radial * vertical
     return jnp.sum(integrand * w, axis=-1)
+
+
+def _spergel_los_integrate(
+    flux,
+    rscale,
+    nu,
+    h_over_r,
+    cosi,
+    sini,
+    xp,
+    yp,
+    gl_nodes,
+    gl_weights,
+):
+    """3D LOS integration with Spergel radial + sech² vertical.
+
+    Thin wrapper around ``_inclined_sech2_los_integrate`` with Spergel-specific
+    normalization and radial profile.
+    """
+    h_z = h_over_r * rscale
+    rho0 = flux / (2.0 * h_z * _spergel_norm_2d(rscale, nu))
+    return _inclined_sech2_los_integrate(
+        rho0,
+        lambda R: _spergel_radial(R, nu, rscale),
+        h_z,
+        cosi,
+        sini,
+        xp,
+        yp,
+        gl_nodes,
+        gl_weights,
+    )
+
+
+# ==============================================================================
+# Sersic profile helpers
+# ==============================================================================
+
+
+def _sersic_bn(n):
+    """Sersic b_n via Ciotti & Bertin (1999) asymptotic expansion.
+
+    Solves the half-light condition: gamma(2n, b_n) = Gamma(2n)/2.
+    Accurate to < 1e-4 for n > 0.36. Pure arithmetic — JIT-safe.
+
+    Parameters
+    ----------
+    n : float or jnp.ndarray
+        Sersic index.
+
+    Returns
+    -------
+    float or jnp.ndarray
+        b_n coefficient.
+    """
+    return (
+        2.0 * n
+        - 1.0 / 3.0
+        + 4.0 / (405.0 * n)
+        + 46.0 / (25515.0 * n**2)
+        + 131.0 / (1148175.0 * n**3)
+        - 2194697.0 / (30690717750.0 * n**4)
+    )
+
+
+# Miller & Pasha (2025, arxiv:2508.20266) emulator constants
+_MP_A0 = 2.245374
+_MP_A1 = 0.029371526
+_MP_A2 = 2.1431181
+_MP_A3 = -3.7275262
+_MP_A4 = 0.091609545
+_MP_A5 = 0.32785136
+
+
+def _sersic_ft_emulator(k, n):
+    """Sersic radial FT via Miller & Pasha (2025) symbolic-regression emulator.
+
+    Returns the normalized Hankel transform of the Sersic profile at
+    dimensionless wavenumber ``k = k_physical * R_e`` (unit flux, unit R_e).
+    Valid for 0.5 <= n <= 6.0.
+
+    F_r(k, n) = 1 / (1 + exp(G(k, n)))
+
+    where G is built from elementary functions (exp, log, sqrt). Fully
+    differentiable w.r.t. both k and n via JAX autodiff.
+
+    Parameters
+    ----------
+    k : jnp.ndarray
+        Dimensionless wavenumber (k_physical * R_e). Must be >= 0.
+    n : float or jnp.ndarray
+        Sersic index. Valid range: [0.5, 6.0].
+
+    Returns
+    -------
+    jnp.ndarray
+        Normalized FT values in [0, 1]. F_r(0) = 1 (unit total flux).
+    """
+    # guard k=0 (log(0) = -inf) — DC component is exactly 1
+    k_safe = jnp.maximum(k, 1e-30)
+
+    # sub-expressions
+    H = _MP_A0 * jnp.sqrt(
+        n + _MP_A1 * (k_safe - _MP_A2) * jnp.exp(jnp.exp(jnp.sqrt(n) - n**3))
+    )
+    J = jnp.exp(_MP_A3 * k_safe - jnp.exp(n - n**2))
+    G = (1.0 / n) * ((H + J) * (jnp.log(k_safe) - _MP_A4) - _MP_A5)
+
+    F_r = 1.0 / (1.0 + jnp.exp(G))
+
+    # exact DC: F_r(0) = 1
+    return jnp.where(k < 1e-30, 1.0, F_r)
+
+
+def _sersic_norm_2d(Re, n):
+    """2D flux normalization factor for the Sersic profile.
+
+    Returns the factor N such that I_0 = flux / N gives a profile
+    ``I(r) = I_0 * exp(-b_n * (r/R_e)^{1/n})`` with total flux = flux.
+
+    N = 2*pi * n * R_e^2 * Gamma(2n) / b_n^{2n}
+
+    Parameters
+    ----------
+    Re : float
+        Half-light radius (arcsec).
+    n : float
+        Sersic index.
+
+    Returns
+    -------
+    float
+        Normalization factor (arcsec^2).
+    """
+    bn = _sersic_bn(n)
+    log_norm = (
+        jnp.log(2.0 * jnp.pi)
+        + jnp.log(n)
+        + 2.0 * jnp.log(Re)
+        + jax.scipy.special.gammaln(2.0 * n)
+        - 2.0 * n * jnp.log(bn)
+    )
+    return jnp.exp(log_norm)
+
+
+def _sersic_evaluate_faceon(flux, Re, n, x, y):
+    """Face-on Sersic surface brightness in the disk plane.
+
+    I(r) = I_0 * exp(-b_n * (r / R_e)^{1/n})
+
+    where I_0 = flux / (2*pi * n * R_e^2 * Gamma(2n) / b_n^{2n}).
+
+    Parameters
+    ----------
+    flux : float
+        Total integrated flux.
+    Re : float
+        Half-light radius (arcsec).
+    n : float
+        Sersic index.
+    x, y : jnp.ndarray
+        Coordinates in disk plane (arcsec).
+
+    Returns
+    -------
+    jnp.ndarray
+        Surface brightness array.
+    """
+    r = jnp.sqrt(x**2 + y**2)
+    bn = _sersic_bn(n)
+    I0 = flux / _sersic_norm_2d(Re, n)
+    return I0 * jnp.exp(-bn * (r / Re) ** (1.0 / n))
 
 
 # ==============================================================================
@@ -858,39 +1028,17 @@ class InclinedExponentialModel(IntensityModel):
         # rho0 = flux / (4 * pi * h_z * r_s^2)
         rho0 = flux / (4.0 * jnp.pi * h_z * rscale**2)
 
-        # Per-pixel GL centering: sech²(z/h_z) peak is at ell where
-        # z = ell*cosi - y_gal*sini = 0, i.e. ell_center = y_gal*sini/cosi.
-        # Integration half-width delta = 5*h_z/cosi captures >99.99% of sech².
-        delta = 5.0 * h_z / jnp.maximum(cosi, 0.1)
-        ell_center = yp * sini / jnp.maximum(cosi, 0.1)  # (...,)
-
-        # Gauss-Legendre on [ell_center - delta, ell_center + delta]
-        ell = ell_center[..., None] + delta * self._gl_nodes  # (..., N_QUAD)
-        w = delta * self._gl_weights  # (N_QUAD,)
-
-        # at each quadrature point, compute disk coords
-        # y_disk = y_gal * cosi + l * sini
-        # z = l * cosi - y_gal * sini
-        # x_disk = x_gal (unchanged)
-        y_disk = yp[..., None] * cosi + ell * sini  # (..., N_QUAD)
-        z_val = ell * cosi - yp[..., None] * sini  # (..., N_QUAD)
-        x_disk = xp[..., None]  # (..., N_QUAD)
-
-        R = jnp.sqrt(x_disk**2 + y_disk**2)  # (..., N_QUAD)
-
-        # rho = rho0 * exp(-R/r_s) * sech²(z/h_z)
-        radial = jnp.exp(-R / rscale)
-        z_norm = z_val / h_z
-        # sech²(x) = 1/cosh²(x); clip to avoid overflow
-        cosh_z = jnp.cosh(jnp.clip(z_norm, -20.0, 20.0))
-        vertical = 1.0 / (cosh_z**2)
-
-        integrand = rho0 * radial * vertical  # (..., N_QUAD)
-
-        # weighted sum over quadrature points
-        intensity = jnp.sum(integrand * w, axis=-1)
-
-        return intensity
+        return _inclined_sech2_los_integrate(
+            rho0,
+            lambda R: jnp.exp(-R / rscale),
+            h_z,
+            cosi,
+            sini,
+            xp,
+            yp,
+            self._gl_nodes,
+            self._gl_weights,
+        )
 
     def _render_kspace(
         self,
@@ -1104,6 +1252,22 @@ class InclinedSpergelModel(IntensityModel):
     """
     3D inclined Spergel model with sech² vertical profile.
 
+    .. warning::
+
+       For nu < 0 (concentrated profiles, Sersic n > 1), the Spergel
+       radial density diverges as R^{2nu} at R=0. This power-law cusp
+       produces fundamentally different inclined morphology from Sersic
+       profiles, which have finite central density. At high inclination,
+       the cusp causes unphysical broadening along the minor axis — light
+       spreads over ~5 pixels where the Sersic equivalent concentrates
+       into ~1 pixel. This is a mathematical limitation of the Spergel
+       functional form, not a rendering artifact.
+
+       **nu=0.5 (exponential / Sersic n=1) is exact and works perfectly
+       at all inclinations.** For concentrated bulge profiles (n >= 2),
+       use with caution and only face-on, or consider alternative
+       approaches (numerical Sersic FT, composite models).
+
     The Spergel profile (Spergel 2010) generalizes the exponential via an
     analytic FT ``(1+k²)^{-(1+nu)}`` in k-space. Native parameter is nu
     (Spergel index); nu=0.5 recovers the exponential exactly.
@@ -1239,6 +1403,11 @@ class InclinedSpergelModel(IntensityModel):
         rscale = self.get_param('int_rscale', theta)
         h_over_r = self.get_param('int_h_over_r', theta)
         nu = self.get_param('nu', theta)
+        if not isinstance(theta, jax.core.Tracer) and float(nu) <= -1.0:
+            raise ValueError(
+                f"nu={float(nu)} <= -1 is unphysical (Spergel profile has "
+                f"infinite spatial extent). Valid range: nu > -1."
+            )
 
         if plane == 'disk':
             return _spergel_evaluate_faceon(flux, rscale, nu, x, y)
@@ -1376,6 +1545,14 @@ class InclinedSpergelModel(IntensityModel):
         oversample : int, optional
             Cusp anti-aliasing factor for the non-PSF path. Default 1.
         """
+        # validate nu when theta is concrete (not inside JIT trace)
+        if not isinstance(theta, jax.core.Tracer):
+            nu = float(theta[self.PARAMETER_NAMES.index('nu')])
+            if nu <= -1.0:
+                raise ValueError(
+                    f"nu={nu} <= -1 is unphysical (Spergel profile has "
+                    f"infinite spatial extent). Valid range: nu > -1."
+                )
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
         )
@@ -1391,11 +1568,14 @@ class InclinedDeVaucouleursModel(IntensityModel):
     3D inclined de Vaucouleurs model via Spergel profile with fixed nu.
 
     Thin wrapper around the Spergel profile functions with ``nu`` fixed
-    at ``_DEVAUCOULEURS_NU`` (best-fit for Sersic n=4). Same
+    at ``_DEVAUCOULEURS_NU`` (community convention for Sersic n=4). Same
     PARAMETER_NAMES as InclinedExponentialModel (no ``nu`` parameter).
 
-    The Spergel approximation to de Vaucouleurs is not exact — see the
-    GalSim regression tests for quantification of the approximation error.
+    .. warning::
+
+       The Spergel approximation to de Vaucouleurs breaks down at high
+       inclination due to the divergent cusp (see InclinedSpergelModel
+       warning). Use face-on only, or consider alternative approaches.
 
     Parameters
     ----------
@@ -1641,6 +1821,295 @@ class InclinedDeVaucouleursModel(IntensityModel):
 
 
 # ==============================================================================
+# InclinedSersicModel
+# ==============================================================================
+
+
+class InclinedSersicModel(IntensityModel):
+    """
+    3D inclined Sersic model with sech² vertical profile.
+
+    Uses the Miller & Pasha (2025) symbolic-regression emulator for the
+    radial Fourier transform, giving a fully differentiable k-space
+    rendering path. The Sersic profile ``exp(-b_n (r/R_e)^{1/n})`` is
+    finite at R=0 (no cusp), so this model works correctly at all
+    inclinations — unlike the Spergel approximation which diverges for
+    n >= 2.
+
+    .. note::
+
+       For n=1 (exponential), ``InclinedExponentialModel`` uses an
+       exact analytic FT and is preferable. This model uses an emulator
+       approximation at all n including n=1.
+
+    Two evaluation paths:
+    - ``render_image``: k-space FFT with emulator radial FT. Fully
+      differentiable — use for gradient-based inference.
+    - ``__call__``: real-space Gauss-Legendre LOS quadrature with
+      exact ``exp(-b_n (r/R_e)^{1/n})`` radial profile.
+
+    Parameters
+    ----------
+    cosi : float
+        Cosine of inclination (0=edge-on, 1=face-on).
+    theta_int : float
+        Position angle (radians).
+    g1, g2 : float
+        Shear components.
+    flux : float
+        Total integrated flux.
+    int_hlr : float
+        Half-light radius R_e (arcsec).
+    int_h_over_hlr : float
+        Vertical scale height / half-light radius. h_z = int_h_over_hlr * int_hlr.
+    n_sersic : float
+        Sersic index. Valid range: [0.5, 6.0].
+    int_x0, int_y0 : float
+        Centroid position (arcsec).
+    """
+
+    PARAMETER_NAMES = (
+        'cosi',
+        'theta_int',
+        'g1',
+        'g2',
+        'flux',
+        'int_hlr',
+        'int_h_over_hlr',
+        'n_sersic',
+        'int_x0',
+        'int_y0',
+    )
+
+    _kspace_pad_factor = 2
+
+    def __init__(self, meta_pars=None, n_quad=None):
+        super().__init__(meta_pars)
+        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
+        self._n_quad = n
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        self._gl_nodes = jnp.array(nodes)
+        self._gl_weights = jnp.array(weights)
+
+    @property
+    def name(self) -> str:
+        return 'inclined_sersic'
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
+    def evaluate_in_disk_plane(
+        self,
+        theta: jnp.ndarray,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate face-on Sersic profile in disk plane.
+
+        Computes I(r) = I_0 * exp(-b_n * (r/R_e)^{1/n}).
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Model parameters.
+        x, y : jnp.ndarray
+            Coordinates in disk plane (arcsec).
+        z : jnp.ndarray, optional
+            Currently unused.
+        """
+        flux = self.get_param('flux', theta)
+        hlr = self.get_param('int_hlr', theta)
+        n = self.get_param('n_sersic', theta)
+        return _sersic_evaluate_faceon(flux, hlr, n, x, y)
+
+    def __call__(
+        self,
+        theta: jnp.ndarray,
+        plane: str,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate 3D inclined Sersic via LOS Gauss-Legendre quadrature.
+
+        Integrates rho(R, z) = rho0 * exp(-b_n*(R/R_e)^{1/n}) * sech²(z/h_z)
+        along the line of sight at each pixel in the galaxy frame.
+        """
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        hlr = self.get_param('int_hlr', theta)
+        h_over_hlr = self.get_param('int_h_over_hlr', theta)
+        n = self.get_param('n_sersic', theta)
+
+        if not isinstance(theta, jax.core.Tracer):
+            n_val = float(n)
+            if n_val < 0.5 or n_val > 6.0:
+                raise ValueError(
+                    f"n_sersic={n_val} outside valid range [0.5, 6.0] "
+                    f"for the Sersic FT emulator."
+                )
+
+        if plane == 'disk':
+            return _sersic_evaluate_faceon(flux, hlr, n, x, y)
+
+        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+        h_z = h_over_hlr * hlr
+
+        # transform to galaxy frame (NOT disk — we integrate LOS ourselves)
+        xp, yp = x, y
+        if plane == 'obs':
+            xp, yp = obs2cen(x0, y0, xp, yp)
+        if plane in ('obs', 'cen'):
+            xp, yp = cen2source(g1, g2, xp, yp)
+        if plane in ('obs', 'cen', 'source'):
+            xp, yp = source2gal(pa, xp, yp)
+
+        # volume density normalization: rho0 = flux / (2 * h_z * norm_2d)
+        rho0 = flux / (2.0 * h_z * _sersic_norm_2d(hlr, n))
+        bn = _sersic_bn(n)
+
+        return _inclined_sech2_los_integrate(
+            rho0,
+            lambda R: jnp.exp(-bn * (R / hlr) ** (1.0 / n)),
+            h_z,
+            cosi,
+            sini,
+            xp,
+            yp,
+            self._gl_nodes,
+            self._gl_weights,
+        )
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        K-space FFT rendering with Sersic radial FT via emulator.
+
+        Builds a closure via ``_inclined_sech2_ft`` with the Miller & Pasha
+        emulator for the radial FT, then delegates IFFT plumbing to
+        ``_kspace_render_core``.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array (10 elements).
+        Nrow, Ncol : int
+            Output grid dimensions.
+        pixel_scale : float
+            Output pixel scale (arcsec/pixel).
+        pad_factor : int, optional
+            IFFT padding factor. Defaults to ``self._kspace_pad_factor``.
+        oversample : int, optional
+            Oversampling factor. Default 1.
+        psf_kernel_fft : jnp.ndarray, optional
+            Pre-computed PSF FFT for fused convolution.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+        """
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        hlr = self.get_param('int_hlr', theta)
+        h_over_hlr = self.get_param('int_h_over_hlr', theta)
+        n = self.get_param('n_sersic', theta)
+
+        def ft_image(KX, KY):
+            # sersic radial FT via emulator; k_sq is dimensionless (k*R_e)²
+            # safe-where: sqrt(0) has gradient inf — substitute dummy=1
+            # in the DC branch so autodiff never sees sqrt(0)
+            def _safe_sersic_ft(k_sq):
+                is_dc = k_sq < 1e-20
+                k = jnp.sqrt(jnp.where(is_dc, jnp.ones_like(k_sq), k_sq))
+                return jnp.where(is_dc, 1.0, _sersic_ft_emulator(k, n))
+
+            return _inclined_sech2_ft(
+                KX,
+                KY,
+                _safe_sersic_ft,
+                flux,
+                x0,
+                y0,
+                g1,
+                g2,
+                pa,
+                cosi,
+                hlr,
+                h_over_hlr,
+                pixel_scale,
+                Nrow,
+                Ncol,
+            )
+
+        return _kspace_render_core(
+            ft_image,
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+        )
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        *,
+        obs=None,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """
+        Render via k-space FFT, with optional PSF convolution.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
+        """
+        return _kspace_render_image(
+            self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
+        )
+
+
+# ==============================================================================
 # CompositeIntensityModel (stub)
 # ==============================================================================
 
@@ -1700,6 +2169,8 @@ INTENSITY_MODEL_TYPES = {
     'inclined_spergel': InclinedSpergelModel,
     'spergel': InclinedSpergelModel,
     'de_vaucouleurs': InclinedDeVaucouleursModel,
+    'inclined_sersic': InclinedSersicModel,
+    'sersic': InclinedSersicModel,
 }
 
 
