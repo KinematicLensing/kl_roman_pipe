@@ -1142,9 +1142,6 @@ def test_sersic_inclination_diagnostic(sersic_output_dir):
             is_last_row = row == len(cosi_values) - 1
             if is_last_row:
                 ax_resid.set_xlabel('$r / R_e$')
-            else:
-                ax_main.set_xticklabels([])
-                ax_resid.set_xticklabels([])
             ax_resid.text(
                 0.97,
                 0.85,
