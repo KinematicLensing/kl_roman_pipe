@@ -28,6 +28,20 @@ from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir, build_map_grid_from_image_pars
 
+# maximum GB for a single GalSim FFT allocation in tests
+_MAX_FFT_GB = 8.0
+
+
+def _galsim_fft_safe(profile, pixel_scale, max_gb=_MAX_FFT_GB):
+    """Check if a GalSim profile can render without exceeding FFT memory budget.
+
+    Returns (safe, fft_gb) tuple. GalSim InclinedSersic(n=4) segfaults
+    at the C level when the FFT is too large — try/except cannot catch it.
+    """
+    fft_n = int(2 * profile.maxk / profile.stepk)
+    fft_gb = fft_n**2 * 16 / 1e9  # complex128
+    return fft_gb <= max_gb, fft_gb
+
 
 # ==============================================================================
 # Fixtures
@@ -593,7 +607,12 @@ def test_galsim_regression_spergel_faceon(nu, galsim_image_pars):
 
     flux = 1.0
     rscale = 2.0
-    gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
 
     model = InclinedSpergelModel()
     theta = jnp.array([1.0, 0.0, 0.0, 0.0, flux, rscale, 0.1, nu, 0.0, 0.0])
@@ -634,7 +653,12 @@ def test_galsim_regression_spergel_faceon_cuspy(nu, galsim_image_pars):
     flux = 1.0
     rscale = 2.0
     fwhm = 0.3
-    gsp = gs.GSParams(folding_threshold=1e-5, maxk_threshold=1e-5, kvalue_accuracy=1e-7)
+    gsp = gs.GSParams(
+        folding_threshold=1e-5,
+        maxk_threshold=1e-5,
+        kvalue_accuracy=1e-7,
+        maximum_fft_size=32768,
+    )
     psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
 
     model = InclinedSpergelModel()
@@ -678,7 +702,12 @@ def test_galsim_regression_spergel_faceon_with_shear(nu, g1, g2, galsim_image_pa
 
     flux = 1.0
     rscale = 2.0
-    gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
 
     model = InclinedSpergelModel()
     theta = jnp.array([1.0, 0.0, g1, g2, flux, rscale, 0.1, nu, 0.0, 0.0])
@@ -720,7 +749,12 @@ def test_galsim_regression_spergel_faceon_with_shear_negative_nu(
     flux = 1.0
     rscale = 2.0
     fwhm = 0.3
-    gsp = gs.GSParams(folding_threshold=1e-5, maxk_threshold=1e-5, kvalue_accuracy=1e-7)
+    gsp = gs.GSParams(
+        folding_threshold=1e-5,
+        maxk_threshold=1e-5,
+        kvalue_accuracy=1e-7,
+        maximum_fft_size=32768,
+    )
     psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
 
     model = InclinedSpergelModel()
@@ -759,7 +793,12 @@ def test_galsim_regression_devaucouleurs_faceon(galsim_image_pars):
     flux = 1.0
     rscale = 2.0
     fwhm = 0.3
-    gsp = gs.GSParams(folding_threshold=1e-5, maxk_threshold=1e-5, kvalue_accuracy=1e-7)
+    gsp = gs.GSParams(
+        folding_threshold=1e-5,
+        maxk_threshold=1e-5,
+        kvalue_accuracy=1e-7,
+        maximum_fft_size=32768,
+    )
 
     psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
 
@@ -808,7 +847,12 @@ def test_galsim_regression_spergel_inclined_nu05(cosi, theta_int, galsim_image_p
     flux = 1.0
     rscale = 2.0
     h_over_r = 0.1
-    gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
 
     model = InclinedSpergelModel()
     theta = jnp.array(
@@ -851,7 +895,12 @@ def test_spergel_nu05_vs_inclined_sersic_n1(galsim_image_pars):
     flux = 1.0
     rscale = 2.0
     h_over_r = 0.1
-    gsp = gs.GSParams(folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6)
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
 
     model = InclinedSpergelModel()
     theta = jnp.array([cosi, 0.0, 0.0, 0.0, flux, rscale, h_over_r, 0.5, 0.0, 0.0])
@@ -898,11 +947,16 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
     h_over_r = 0.1
     fwhm = 0.5
 
-    gsp = gs.GSParams(folding_threshold=1e-3, maxk_threshold=1e-3, kvalue_accuracy=1e-5)
+    gsp = gs.GSParams(
+        folding_threshold=1e-3,
+        maxk_threshold=1e-3,
+        kvalue_accuracy=1e-5,
+        maximum_fft_size=32768,
+    )
     psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
 
     # GalSim InclinedSersic(n=4) matched at half_light_radius
-    gs_prof = gs.InclinedSersic(
+    gs_sersic = gs.InclinedSersic(
         n=4.0,
         inclination=inc,
         half_light_radius=hlr,
@@ -910,10 +964,19 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
         flux=flux,
         gsparams=gsp,
     )
-    gs_prof = gs.Convolve(gs_prof, psf)
 
     # coarser grid for tractable GalSim FFT
     ip = ImagePars(shape=(64, 64), pixel_scale=0.5, indexing='ij')
+
+    # pre-screen to avoid C-level segfault
+    safe, fft_gb = _galsim_fft_safe(gs_sersic, ip.pixel_scale)
+    if not safe:
+        pytest.skip(
+            f'GalSim InclinedSersic(n=4) FFT needs {fft_gb:.1f} GB '
+            f'(limit {_MAX_FFT_GB} GB)'
+        )
+
+    gs_prof = gs.Convolve(gs_sersic, psf)
     gs_im = gs_prof.drawImage(
         nx=ip.Ncol,
         ny=ip.Nrow,
@@ -944,51 +1007,75 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
     )
 
 
-@pytest.fixture
-def spergel_output_dir():
-    """Dedicated output directory for Spergel diagnostic plots."""
-    out_dir = get_test_dir() / "out" / "spergel"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir
-
-
 def _render_spergel_vs_sersic_panel(
     n_values,
     nu_values,
     cosi_values,
     label,
     spergel_output_dir,
+    col_labels=None,
+    psf_fwhm=None,
 ):
-    """Render a 4-row x 3-col diagnostic comparing Spergel vs InclinedSersic.
+    """Render diagnostic comparing Spergel vs InclinedSersic across inclinations.
 
-    Returns dict of (n, cosi) -> {max, rms} for summary statistics.
+    X-axis in units of R_e (half-light radius). Radial profiles are
+    azimuthally averaged using log-spaced bins to emphasize the core.
+
+    Parameters
+    ----------
+    psf_fwhm : float, optional
+        Gaussian PSF FWHM in arcsec. None = no PSF (point-sampled).
+
+    Returns dict of (n, cosi, col_idx) -> {max, rms} for summary statistics.
     """
     import galsim as gs
 
     hlr = 2.0
     flux = 1.0
     h_over_r = 0.1
-
-    # per-n grid: fine for n<=2, coarser for n=4 (GalSim FFT limits)
-    grid_configs = {1.0: (128, 0.2), 2.0: (128, 0.2), 4.0: (64, 0.5)}
+    npix = 128
+    ps = 0.11  # Roman pixel scale
 
     gsp = gs.GSParams(
-        folding_threshold=1e-3, maxk_threshold=1e-3, maximum_fft_size=65536
+        folding_threshold=1e-3,
+        maxk_threshold=1e-3,
+        maximum_fft_size=32768,
     )
+    ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
     model = InclinedSpergelModel()
+
+    use_psf = psf_fwhm is not None
+    psf_obj = gs.Gaussian(fwhm=psf_fwhm, gsparams=gsp) if use_psf else None
+    draw_method = 'auto' if use_psf else 'no_pixel'
+    oversample = 5 if use_psf else 1
+
+    # log-spaced radial bins in units of R_e
+    r_bin_edges = np.concatenate([[0], np.logspace(-1.5, np.log10(5.0), 40)])
+    r_mid = 0.5 * (r_bin_edges[:-1] + r_bin_edges[1:])
+
+    # pixel radius grid (reusable across panels)
+    center = npix // 2
+    y_idx, x_idx = np.mgrid[:npix, :npix]
+    r_re = np.sqrt(((x_idx - center) * ps) ** 2 + ((y_idx - center) * ps) ** 2) / hlr
 
     fig, axes = plt.subplots(
         len(cosi_values) * 2,
         len(n_values),
-        figsize=(4 * len(n_values), 2.5 * len(cosi_values) * 2),
+        figsize=(4.5 * len(n_values), 2.2 * len(cosi_values) * 2),
         gridspec_kw={'height_ratios': [3, 1] * len(cosi_values)},
     )
 
     stats = {}
     for j, (n, nu) in enumerate(zip(n_values, nu_values)):
-        spergel_rscale = gs.Spergel(nu=nu, half_light_radius=hlr).scale_radius
-        npix, ps = grid_configs.get(n, (64, 0.5))
-        ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
+        spergel_c = gs.Spergel(nu=nu, half_light_radius=hlr).scale_radius
+        sersic_rs = gs.InclinedSersic(
+            n=n,
+            inclination=0 * gs.radians,
+            half_light_radius=hlr,
+            scale_h_over_r=h_over_r,
+            flux=flux,
+            gsparams=gsp,
+        ).scale_radius
 
         for i, cosi in enumerate(cosi_values):
             ax_main = axes[i * 2, j]
@@ -996,9 +1083,7 @@ def _render_spergel_vs_sersic_panel(
 
             inc = gs.Angle(np.arccos(cosi), gs.radians)
 
-            # GalSim InclinedSersic (3D)
-            # both sides use k-space FFT (InclinedSersic.is_analytic_x=False),
-            # so no_pixel + oversample=1 gives a clean shape comparison
+            # GalSim InclinedSersic (3D), k-space FFT
             gs_prof = gs.InclinedSersic(
                 n=n,
                 inclination=inc,
@@ -1007,62 +1092,128 @@ def _render_spergel_vs_sersic_panel(
                 flux=flux,
                 gsparams=gsp,
             )
-            gs_im = gs_prof.drawImage(nx=npix, ny=npix, scale=ps, method='no_pixel')
+
+            # pre-screen FFT size to avoid C-level segfault
+            safe, fft_gb = _galsim_fft_safe(gs_prof, ps)
+            if not safe:
+                print(
+                    f'  SKIP n={n}, cosi={cosi}: GalSim FFT needs '
+                    f'{fft_gb:.1f} GB (limit {_MAX_FFT_GB} GB)'
+                )
+                ax_main.text(
+                    0.5,
+                    0.5,
+                    f'FFT too large\n({fft_gb:.1f} GB)',
+                    transform=ax_main.transAxes,
+                    ha='center',
+                    va='center',
+                    fontsize=9,
+                    color='red',
+                )
+                ax_resid.text(
+                    0.5,
+                    0.5,
+                    'skipped',
+                    transform=ax_resid.transAxes,
+                    ha='center',
+                    va='center',
+                    fontsize=9,
+                    color='red',
+                )
+                stats[(n, cosi, j)] = {'max': np.nan, 'rms': np.nan}
+                continue
+
+            gs_draw = gs.Convolve(gs_prof, psf_obj) if use_psf else gs_prof
+            gs_im = gs_draw.drawImage(nx=npix, ny=npix, scale=ps, method=draw_method)
             gs_sb = gs_im.array / ps**2
 
             # our InclinedSpergelModel (3D with sech²)
             theta = jnp.array(
-                [
-                    cosi,
-                    0.0,
-                    0.0,
-                    0.0,
-                    flux,
-                    spergel_rscale,
-                    h_over_r,
-                    nu,
-                    0.0,
-                    0.0,
-                ]
+                [cosi, 0.0, 0.0, 0.0, flux, spergel_c, h_over_r, nu, 0.0, 0.0]
             )
-            our_sb = np.array(model.render_image(theta, image_pars=ip))
+            if use_psf:
+                obs = build_image_obs(
+                    ip,
+                    psf=psf_obj,
+                    oversample=oversample,
+                    int_model=model,
+                    gsparams=gsp,
+                )
+                our_sb = np.array(model.render_image(theta, obs=obs))
+            else:
+                our_sb = np.array(model.render_image(theta, image_pars=ip))
 
-            # 1D major-axis cut
-            center = npix // 2
-            r_arcsec = (np.arange(npix) - center) * ps
-            sersic_cut = gs_sb[center, :]
-            spergel_cut = our_sb[center, :]
-            peak = np.max(np.abs(sersic_cut))
-            residual = spergel_cut - sersic_cut
+            # azimuthally averaged radial profiles in R_e units
+            sersic_prof = np.full(len(r_mid), np.nan)
+            spergel_prof = np.full(len(r_mid), np.nan)
+            for k in range(len(r_mid)):
+                mask = (r_re >= r_bin_edges[k]) & (r_re < r_bin_edges[k + 1])
+                if np.any(mask):
+                    sersic_prof[k] = np.mean(gs_sb[mask])
+                    spergel_prof[k] = np.mean(our_sb[mask])
+
+            valid = np.isfinite(sersic_prof) & (sersic_prof > 0)
+            peak = np.nanmax(sersic_prof[valid])
+            residual = np.where(valid, (spergel_prof - sersic_prof) / peak, np.nan)
 
             # 2D stats
             peak_2d = np.max(np.abs(gs_sb))
             max_frac = np.max(np.abs(our_sb - gs_sb)) / peak_2d
             rms_frac = np.sqrt(np.mean(((our_sb - gs_sb) / peak_2d) ** 2))
-            stats[(n, cosi)] = {'max': max_frac, 'rms': rms_frac}
+            stats[(n, cosi, j)] = {'max': max_frac, 'rms': rms_frac}
 
-            # main panel
+            # main panel: log-log radial profile
             ax_main.semilogy(
-                r_arcsec, np.maximum(sersic_cut, 1e-10), 'b-', label='Sersic'
+                r_mid[valid],
+                sersic_prof[valid],
+                'b-',
+                lw=1.5,
+                label='Sersic' if i == 0 else None,
             )
             ax_main.semilogy(
-                r_arcsec, np.maximum(spergel_cut, 1e-10), 'r--', label='Spergel'
+                r_mid[valid],
+                spergel_prof[valid],
+                'r--',
+                lw=1.5,
+                label='Spergel' if i == 0 else None,
             )
-            ax_main.axvline(hlr, color='grey', ls=':', alpha=0.5, label='$R_e$')
-            ax_main.axvline(-hlr, color='grey', ls=':', alpha=0.5)
             ax_main.axvline(
-                spergel_rscale, color='orange', ls=':', alpha=0.5, label='$c$'
+                1.0,
+                color='grey',
+                ls='-',
+                alpha=0.4,
+                lw=1.5,
+                label='$R_e$ (shared)' if (i == 0 and j == 0) else None,
             )
-            ax_main.axvline(-spergel_rscale, color='orange', ls=':', alpha=0.5)
-            ax_main.set_ylim(peak * 1e-4, peak * 2)
+            ax_main.axvline(
+                sersic_rs / hlr,
+                color='blue',
+                ls=':',
+                alpha=0.5,
+                lw=1,
+                label=f'Sersic $r_s$={sersic_rs:.2f}"' if i == 0 else None,
+            )
+            ax_main.axvline(
+                spergel_c / hlr,
+                color='red',
+                ls=':',
+                alpha=0.5,
+                lw=1,
+                label=f'Spergel $c$={spergel_c:.2f}"' if i == 0 else None,
+            )
+            ax_main.set_xlim(0.02, 5.0)
+            ax_main.set_xscale('log')
+            ax_main.set_ylim(peak * 1e-4, peak * 3)
             ax_main.set_ylabel('SB')
             if i == 0:
-                ax_main.set_title(f'n={n:.0f}, nu={nu:+.2f}')
-            if i == 0 and j == 0:
-                ax_main.legend(fontsize=7)
+                if col_labels is not None:
+                    ax_main.set_title(col_labels[j], fontsize=9)
+                else:
+                    ax_main.set_title(f'n={n:.0f}, nu={nu:+.2f}')
+                ax_main.legend(fontsize=6, loc='upper right')
             if j == 0:
                 ax_main.text(
-                    -0.25,
+                    -0.22,
                     0.5,
                     f'cosi={cosi}',
                     transform=ax_main.transAxes,
@@ -1073,12 +1224,14 @@ def _render_spergel_vs_sersic_panel(
                 )
 
             # residual panel
-            ax_resid.plot(r_arcsec, residual / peak, 'k-', lw=0.8)
+            ax_resid.plot(r_mid[valid], residual[valid], 'k-', lw=0.8)
             ax_resid.axhline(0, color='grey', ls='-', alpha=0.3)
             ax_resid.set_ylim(-0.15, 0.15)
-            ax_resid.set_ylabel('frac')
+            ax_resid.set_xlim(0.02, 5.0)
+            ax_resid.set_xscale('log')
+            ax_resid.set_ylabel('frac resid')
             if i == len(cosi_values) - 1:
-                ax_resid.set_xlabel('arcsec')
+                ax_resid.set_xlabel('$r / R_e$')
             ax_resid.text(
                 0.97,
                 0.85,
@@ -1089,79 +1242,738 @@ def _render_spergel_vs_sersic_panel(
                 fontsize=7,
             )
 
-    # summary statistic across all panels
-    all_max = [s['max'] for s in stats.values()]
-    all_rms = [s['rms'] for s in stats.values()]
-    mean_max = np.mean(all_max)
-    mean_rms = np.mean(all_rms)
+    # summary (exclude NaN from skipped panels)
+    all_max = [s['max'] for s in stats.values() if np.isfinite(s.get('max', np.nan))]
+    all_rms = [s['rms'] for s in stats.values() if np.isfinite(s.get('rms', np.nan))]
+    mean_max = np.mean(all_max) if all_max else np.nan
+    mean_rms = np.mean(all_rms) if all_rms else np.nan
 
     fig.suptitle(
         f'Spergel vs InclinedSersic — {label}\n'
-        f'(hlr-matched, no PSF | mean max={mean_max:.1%}, mean rms={mean_rms:.1%})',
-        fontsize=12,
+        f'(hlr-matched at {hlr}", {"PSF FWHM=" + str(psf_fwhm) + chr(34) if use_psf else "no PSF"}, {ps}"/pix '
+        f'| mean max={mean_max:.1%}, mean rms={mean_rms:.1%})',
+        fontsize=11,
+        y=1.02,
     )
     plt.tight_layout()
     fname = f'spergel_vs_sersic_{label.lower().replace(" ", "_")}.png'
-    plt.savefig(spergel_output_dir / fname, dpi=150)
+    plt.savefig(spergel_output_dir / fname, dpi=150, bbox_inches='tight')
     plt.close()
 
     return stats
 
 
 def test_spergel_vs_sersic_inclination_diagnostic(spergel_output_dir):
-    """Diagnostic: Spergel vs InclinedSersic with two nu mappings.
+    """Diagnostic: Spergel vs InclinedSersic in a single 4-column plot.
 
-    Generates two panel plots (canonical face-on mapping vs inclined mapping)
-    and prints summary statistics to compare which mapping works better
-    across inclinations. No assertion.
+    Columns: n=1, n=2, n=4 (L2-optimal nu=-0.48), n=4 (convention nu=-0.6)
+    Rows: one pair (profile + residual) per inclination.
+    L2-optimal = flux-weighted L2 profile matching (compute_nu_n_mapping.py).
+    No assertion — diagnostic only.
     """
-    n_values = [1.0, 2.0, 4.0]
-    cosi_values = [1.0, 0.75, 0.25, 0.1]
+    # 4 columns: n=1, n=2, n=4 at two different nu values
+    n_values = [1.0, 2.0, 4.0, 4.0]
+    nu_l2_n4 = float(sersic_to_spergel(4.0, inclined=False))
+    nu_values = [
+        0.5,  # n=1 (exact)
+        float(sersic_to_spergel(2.0, inclined=False)),  # n=2 (L2-optimal)
+        nu_l2_n4,  # n=4 (L2-optimal)
+        -0.6,  # n=4 (convention)
+    ]
+    col_labels = [
+        f'n=1, nu=+0.50',
+        f'n=2, nu={nu_values[1]:+.2f}',
+        f'n=4, nu={nu_l2_n4:+.2f} (L2-opt)',
+        f'n=4, nu=−0.60 (convention)',
+    ]
+    # cosi=0.1 excluded: InclinedSersic(n=4) needs ~45 GB FFT
+    cosi_values = [1.0, 0.75, 0.5, 0.25]
 
-    # mapping 1: face-on (from flux-weighted L2)
-    nu_faceon = [float(sersic_to_spergel(n, inclined=False)) for n in n_values]
-    stats_faceon = _render_spergel_vs_sersic_panel(
+    def _print_summary(tag, stats):
+        print(f'\nSpergel vs InclinedSersic — {tag}:')
+        print(f'  {"col":>25s} {"cosi":>5s}  {"max":>8s}  {"rms":>8s}')
+        for j, lab in enumerate(col_labels):
+            n = n_values[j]
+            for cosi in cosi_values:
+                s = stats.get((n, cosi, j))
+                if s is None or np.isnan(s.get('max', np.nan)):
+                    print(f'  {lab:>25s} {cosi:5.2f}  (skipped)')
+                    continue
+                print(f'  {lab:>25s} {cosi:5.2f}  {s["max"]:8.2%}  {s["rms"]:8.2%}')
+
+    # no PSF
+    stats_nopsf = _render_spergel_vs_sersic_panel(
         n_values,
-        nu_faceon,
+        nu_values,
         cosi_values,
-        'face-on mapping',
+        'L2-opt vs convention (no PSF)',
         spergel_output_dir,
+        col_labels=col_labels,
     )
+    _print_summary('no PSF', stats_nopsf)
 
-    # mapping 2: inclined (3D model vs GalSim InclinedSersic, avg over cosi)
-    nu_inclined = [float(sersic_to_spergel(n, inclined=True)) for n in n_values]
-    stats_inclined = _render_spergel_vs_sersic_panel(
+    # with PSF
+    stats_psf = _render_spergel_vs_sersic_panel(
         n_values,
-        nu_inclined,
+        nu_values,
         cosi_values,
-        'inclined mapping',
+        'L2-opt vs convention (PSF 0.15)',
         spergel_output_dir,
+        col_labels=col_labels,
+        psf_fwhm=0.15,
+    )
+    _print_summary('PSF FWHM=0.15"', stats_psf)
+
+
+# ==============================================================================
+# 2D image comparison diagnostics
+# ==============================================================================
+
+
+def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
+    """2D image comparison: Sersic(n=4) vs Spergel at nu=-0.6 and nu=-0.48.
+
+    Face-on layout (4 rows):
+      Row 1: GalSim Sersic(n=4) | GalSim Spergel(-0.6) | GalSim Spergel(-0.48)
+      Row 2: GS Spergel residuals from Sersic
+      Row 3: GalSim Sersic(n=4) | Our Spergel(-0.6) | Our Spergel(-0.48)
+      Row 4: Our Spergel residuals from Sersic
+
+    Inclined layout (2 rows — no GalSim inclined Spergel exists):
+      Row 1: GalSim InclinedSersic(n=4) | Our Spergel(-0.6) | Our Spergel(-0.48)
+      Row 2: Our Spergel residuals from InclinedSersic
+    """
+    import galsim as gs
+
+    hlr = 2.0
+    flux = 1.0
+    h_over_r = 0.1
+    npix = 128
+    ps = 0.11
+    nu_values = [-0.6, -0.48]
+
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
     )
 
-    # summary comparison
-    print('\nSpergel vs Sersic mapping comparison:')
-    print(
-        f'  {"n":>3s} {"cosi":>5s}  {"faceon max":>10s} {"incl max":>10s}  '
-        f'{"faceon rms":>10s} {"incl rms":>10s}'
+    use_psf = psf_fwhm is not None
+    psf_obj = gs.Gaussian(fwhm=psf_fwhm, gsparams=gsp) if use_psf else None
+    draw_method = 'auto' if use_psf else 'no_pixel'
+    oversample = 5 if use_psf else 1
+    is_faceon = abs(cosi - 1.0) < 0.01
+
+    ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
+    model = InclinedSpergelModel()
+    extent = np.array([-npix / 2, npix / 2, -npix / 2, npix / 2]) * ps
+
+    # GalSim Sersic(n=4) baseline
+    gsp_sersic = gs.GSParams(
+        folding_threshold=1e-3,
+        maxk_threshold=1e-3,
+        maximum_fft_size=32768,
     )
-    for n in n_values:
-        for cosi in cosi_values:
-            sf = stats_faceon[(n, cosi)]
-            si = stats_inclined[(n, cosi)]
-            winner_max = '<' if sf['max'] < si['max'] else '>'
-            print(
-                f'  {n:3.0f} {cosi:5.2f}  {sf["max"]:10.2%} '
-                f'{winner_max} {si["max"]:8.2%}  '
-                f'{sf["rms"]:10.2%}   {si["rms"]:8.2%}'
+    if is_faceon:
+        gs_sersic_base = gs.Sersic(n=4, half_light_radius=hlr, flux=flux, gsparams=gsp)
+    else:
+        inc = gs.Angle(np.arccos(cosi), gs.radians)
+        gs_sersic_base = gs.InclinedSersic(
+            n=4,
+            inclination=inc,
+            half_light_radius=hlr,
+            scale_h_over_r=h_over_r,
+            flux=flux,
+            gsparams=gsp_sersic,
+        )
+        safe, fft_gb = _galsim_fft_safe(gs_sersic_base, ps)
+        if not safe:
+            print(f'  SKIP: InclinedSersic(n=4) cosi={cosi} needs {fft_gb:.1f} GB')
+            return
+
+    gs_sersic_draw = gs.Convolve(gs_sersic_base, psf_obj) if use_psf else gs_sersic_base
+    sersic_sb = (
+        gs_sersic_draw.drawImage(
+            nx=npix,
+            ny=npix,
+            scale=ps,
+            method=draw_method,
+        ).array
+        / ps**2
+    )
+
+    # our Spergel renders (always available)
+    our_spergels = {}
+    for nu in nu_values:
+        rscale = gs.Spergel(nu=nu, half_light_radius=hlr).scale_radius
+        theta = jnp.array([cosi, 0.0, 0.0, 0.0, flux, rscale, h_over_r, nu, 0.0, 0.0])
+        if use_psf:
+            obs = build_image_obs(
+                ip,
+                psf=psf_obj,
+                oversample=oversample,
+                int_model=model,
+                gsparams=gsp,
+            )
+            our_spergels[nu] = np.array(model.render_image(theta, obs=obs))
+        else:
+            our_spergels[nu] = np.array(model.render_image(theta, image_pars=ip))
+
+    # GalSim Spergel renders (only for face-on — no inclined GalSim Spergel)
+    gs_spergels = {}
+    if is_faceon:
+        for nu in nu_values:
+            gs_sp = gs.Spergel(nu=nu, half_light_radius=hlr, flux=flux, gsparams=gsp)
+            gs_sp_draw = gs.Convolve(gs_sp, psf_obj) if use_psf else gs_sp
+            gs_spergels[nu] = (
+                gs_sp_draw.drawImage(
+                    nx=npix,
+                    ny=npix,
+                    scale=ps,
+                    method=draw_method,
+                ).array
+                / ps**2
             )
 
-    # aggregate
-    fo_max = np.mean([s['max'] for s in stats_faceon.values()])
-    in_max = np.mean([s['max'] for s in stats_inclined.values()])
-    fo_rms = np.mean([s['rms'] for s in stats_faceon.values()])
-    in_rms = np.mean([s['rms'] for s in stats_inclined.values()])
-    print(f'\n  Mean max: face-on={fo_max:.2%}  inclined={in_max:.2%}')
-    print(f'  Mean rms: face-on={fo_rms:.2%}  inclined={in_rms:.2%}')
+    peak = np.max(np.abs(sersic_sb))
+
+    def _plot_img(ax, img, title, vmin, vmax, cmap='viridis', is_resid=False):
+        if is_resid:
+            im = ax.imshow(
+                img, origin='lower', extent=extent, cmap=cmap, vmin=-vmax, vmax=vmax
+            )
+        else:
+            im = ax.imshow(
+                img,
+                origin='lower',
+                extent=extent,
+                cmap=cmap,
+                norm=plt.matplotlib.colors.LogNorm(vmin=vmin, vmax=vmax),
+            )
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel('arcsec')
+        ax.set_ylabel('arcsec')
+        plt.colorbar(im, ax=ax, shrink=0.8)
+        if is_resid and peak > 0:
+            mf = np.max(np.abs(img)) / peak
+            rf = np.sqrt(np.mean(img**2)) / peak
+            ax.text(
+                0.03,
+                0.97,
+                f'max={mf:.2%}\nrms={rf:.3%}',
+                transform=ax.transAxes,
+                ha='left',
+                va='top',
+                fontsize=7,
+                family='monospace',
+                color='white',
+                bbox=dict(facecolor='black', alpha=0.6),
+            )
+
+    vmax_img = np.max(sersic_sb)
+    vmin_img = vmax_img * 1e-4
+
+    # compute shared residual scale
+    all_resid = [np.max(np.abs(our_spergels[nu] - sersic_sb)) for nu in nu_values]
+    if gs_spergels:
+        all_resid += [np.max(np.abs(gs_spergels[nu] - sersic_sb)) for nu in nu_values]
+    vmax_resid = max(all_resid) * 0.8
+
+    psf_str = f'PSF FWHM={psf_fwhm}"' if use_psf else 'no PSF'
+    cosi_str = f'cosi={cosi}' if not is_faceon else 'face-on'
+    sersic_label = 'InclinedSersic(n=4)' if not is_faceon else 'Sersic(n=4)'
+
+    if is_faceon:
+        # 4-row layout: GalSim Spergel block + Our Spergel block
+        fig, axes = plt.subplots(
+            4, 3, figsize=(15, 18), gridspec_kw={'height_ratios': [1, 0.8, 1, 0.8]}
+        )
+
+        _plot_img(axes[0, 0], sersic_sb, f'GalSim {sersic_label}', vmin_img, vmax_img)
+        _plot_img(
+            axes[0, 1], gs_spergels[-0.6], 'GalSim Spergel(ν=−0.6)', vmin_img, vmax_img
+        )
+        _plot_img(
+            axes[0, 2],
+            gs_spergels[-0.48],
+            'GalSim Spergel(ν=−0.48)',
+            vmin_img,
+            vmax_img,
+        )
+
+        axes[1, 0].set_visible(False)
+        _plot_img(
+            axes[1, 1],
+            gs_spergels[-0.6] - sersic_sb,
+            'GS Spergel(−0.6) − Sersic',
+            0,
+            vmax_resid,
+            'RdBu_r',
+            True,
+        )
+        _plot_img(
+            axes[1, 2],
+            gs_spergels[-0.48] - sersic_sb,
+            'GS Spergel(−0.48) − Sersic',
+            0,
+            vmax_resid,
+            'RdBu_r',
+            True,
+        )
+
+        _plot_img(axes[2, 0], sersic_sb, f'GalSim {sersic_label}', vmin_img, vmax_img)
+        _plot_img(
+            axes[2, 1], our_spergels[-0.6], 'Our Spergel(ν=−0.6)', vmin_img, vmax_img
+        )
+        _plot_img(
+            axes[2, 2], our_spergels[-0.48], 'Our Spergel(ν=−0.48)', vmin_img, vmax_img
+        )
+
+        axes[3, 0].set_visible(False)
+        _plot_img(
+            axes[3, 1],
+            our_spergels[-0.6] - sersic_sb,
+            'Our Spergel(−0.6) − Sersic',
+            0,
+            vmax_resid,
+            'RdBu_r',
+            True,
+        )
+        _plot_img(
+            axes[3, 2],
+            our_spergels[-0.48] - sersic_sb,
+            'Our Spergel(−0.48) − Sersic',
+            0,
+            vmax_resid,
+            'RdBu_r',
+            True,
+        )
+    else:
+        # 2-row layout: our Spergel vs InclinedSersic only
+        fig, axes = plt.subplots(
+            2, 3, figsize=(15, 9), gridspec_kw={'height_ratios': [1, 0.8]}
+        )
+
+        _plot_img(axes[0, 0], sersic_sb, f'GalSim {sersic_label}', vmin_img, vmax_img)
+        _plot_img(
+            axes[0, 1], our_spergels[-0.6], 'Our Spergel(ν=−0.6)', vmin_img, vmax_img
+        )
+        _plot_img(
+            axes[0, 2], our_spergels[-0.48], 'Our Spergel(ν=−0.48)', vmin_img, vmax_img
+        )
+
+        axes[1, 0].set_visible(False)
+        _plot_img(
+            axes[1, 1],
+            our_spergels[-0.6] - sersic_sb,
+            'Our Spergel(−0.6) − Sersic',
+            0,
+            vmax_resid,
+            'RdBu_r',
+            True,
+        )
+        _plot_img(
+            axes[1, 2],
+            our_spergels[-0.48] - sersic_sb,
+            'Our Spergel(−0.48) − Sersic',
+            0,
+            vmax_resid,
+            'RdBu_r',
+            True,
+        )
+
+    fig.suptitle(
+        f'2D: {sersic_label} vs Spergel — {psf_str}, {cosi_str}\n'
+        f'hlr={hlr}", {ps}"/pix, {npix}×{npix}',
+        fontsize=12,
+    )
+    plt.tight_layout()
+    suffix_parts = ['2d']
+    suffix_parts.append('nopsf' if not use_psf else f'psf_{psf_fwhm}')
+    if not is_faceon:
+        suffix_parts.append(f'cosi{cosi}')
+    fname = f'n4_{"_".join(suffix_parts)}.png'
+    plt.savefig(spergel_output_dir / fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  Saved: {spergel_output_dir / fname}')
+
+
+def test_n4_2d_diagnostic(spergel_output_dir):
+    """2D image comparison: Sersic(n=4) vs Spergel.
+
+    Face-on: GalSim Spergel + our Spergel vs Sersic (no PSF and with PSF).
+    Inclined: our Spergel vs InclinedSersic at cosi=0.25, 0.5, 0.75 (with PSF).
+    """
+    # face-on, no PSF
+    _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0)
+    # face-on, with PSF
+    _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=0.15, cosi=1.0)
+    # inclined, with PSF
+    for cosi in [0.25, 0.5, 0.75]:
+        _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=0.15, cosi=cosi)
+
+
+# ==============================================================================
+# Rendering accuracy diagnostics (Tier 1-2)
+# ==============================================================================
+
+
+def _radial_profile(image, r_re, n_bins=100):
+    """Azimuthally averaged radial profile with log-spaced bins in R_e."""
+    edges = np.concatenate([[0], np.logspace(-1.5, np.log10(6.0), n_bins)])
+    mid = 0.5 * (edges[:-1] + edges[1:])
+    prof = np.full(len(mid), np.nan)
+    for k in range(len(mid)):
+        mask = (r_re >= edges[k]) & (r_re < edges[k + 1])
+        if np.any(mask):
+            prof[k] = np.mean(image[mask])
+    return mid, prof
+
+
+def _annular_stats(test, ref, r_re, bands):
+    """Residual stats by annular region in units of R_e."""
+    peak = np.max(np.abs(ref))
+    results = {}
+    for label, r_lo, r_hi in bands:
+        mask = (r_re >= r_lo) & (r_re < r_hi)
+        if not np.any(mask) or peak == 0:
+            results[label] = {'max_frac': np.nan, 'rms_frac': np.nan}
+            continue
+        diff = test[mask] - ref[mask]
+        results[label] = {
+            'max_frac': np.max(np.abs(diff)) / peak,
+            'rms_frac': np.sqrt(np.mean(diff**2)) / peak,
+        }
+    return results
+
+
+_BANDS = [
+    ('core', 0.0, 1.0),
+    ('mid', 1.0, 3.0),
+    ('wings', 3.0, 6.0),
+    ('total', 0.0, 6.0),
+]
+
+
+def _faceon_n4_diagnostic(
+    spergel_output_dir, psf_obj=None, psf_label='no PSF', fwhm_str=''
+):
+    """Comprehensive face-on Sersic(n=4) vs Spergel diagnostic.
+
+    2 cols (nu=-0.6, nu=-0.48) x 4 rows:
+      Row 1-2: GalSim Spergel vs GalSim Sersic(n=4) [approximation quality]
+      Row 3-4: Our Spergel vs GalSim Sersic(n=4) [total error]
+    """
+    import galsim as gs
+
+    hlr = 2.0
+    flux = 1.0
+    npix = 128
+    ps = 0.11
+    h_over_r = 0.1
+    nu_values = [-0.6, -0.48]
+    nu_labels = [r'$\nu$=−0.6 (convention)', r'$\nu$=−0.48 (L2-optimal)']
+
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
+
+    ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
+    model = InclinedSpergelModel()
+    center = npix // 2
+    y, x = np.mgrid[:npix, :npix]
+    r_re = np.sqrt(((x - center) * ps) ** 2 + ((y - center) * ps) ** 2) / hlr
+
+    use_psf = psf_obj is not None
+    draw_method = 'auto' if use_psf else 'no_pixel'
+    oversample = 5 if use_psf else 1
+
+    # GalSim Sersic(n=4) baseline
+    gs_sersic = gs.Sersic(n=4, half_light_radius=hlr, flux=flux, gsparams=gsp)
+    gs_sersic_draw = gs.Convolve(gs_sersic, psf_obj) if use_psf else gs_sersic
+    sersic_sb = (
+        gs_sersic_draw.drawImage(
+            nx=npix,
+            ny=npix,
+            scale=ps,
+            method=draw_method,
+        ).array
+        / ps**2
+    )
+    r_mid, sersic_prof = _radial_profile(sersic_sb, r_re)
+    valid = np.isfinite(sersic_prof) & (sersic_prof > 0)
+    peak = np.nanmax(sersic_prof[valid])
+
+    fig, axes = plt.subplots(
+        4, 2, figsize=(14, 16), gridspec_kw={'height_ratios': [3, 1.2, 3, 1.2]}
+    )
+
+    for j, (nu, nu_lab) in enumerate(zip(nu_values, nu_labels)):
+        # GalSim Spergel
+        gs_sp = gs.Spergel(nu=nu, half_light_radius=hlr, flux=flux, gsparams=gsp)
+        gs_sp_draw = gs.Convolve(gs_sp, psf_obj) if use_psf else gs_sp
+        gs_sp_sb = (
+            gs_sp_draw.drawImage(
+                nx=npix,
+                ny=npix,
+                scale=ps,
+                method=draw_method,
+            ).array
+            / ps**2
+        )
+        _, gs_sp_prof = _radial_profile(gs_sp_sb, r_re)
+        gs_stats = _annular_stats(gs_sp_sb, sersic_sb, r_re, _BANDS)
+
+        # Our Spergel
+        rscale = gs.Spergel(nu=nu, half_light_radius=hlr).scale_radius
+        theta = jnp.array([1.0, 0.0, 0.0, 0.0, flux, rscale, h_over_r, nu, 0.0, 0.0])
+        if use_psf:
+            obs = build_image_obs(
+                ip,
+                psf=psf_obj,
+                oversample=oversample,
+                int_model=model,
+                gsparams=gsp,
+            )
+            our_sb = np.array(model.render_image(theta, obs=obs))
+        else:
+            our_sb = np.array(model.render_image(theta, image_pars=ip))
+        _, our_prof = _radial_profile(our_sb, r_re)
+        our_stats = _annular_stats(our_sb, sersic_sb, r_re, _BANDS)
+
+        def _stat_text(stats):
+            return '\n'.join(
+                f'{lab}: max={s["max_frac"]:.3%}, rms={s["rms_frac"]:.3%}'
+                for lab, s in stats.items()
+            )
+
+        def _annotate(ax, stats):
+            ax.text(
+                0.97,
+                0.95,
+                _stat_text(stats),
+                transform=ax.transAxes,
+                ha='right',
+                va='top',
+                fontsize=6,
+                family='monospace',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='grey'),
+            )
+
+        # Row 1: GalSim Spergel vs Sersic profiles
+        ax = axes[0, j]
+        ax.semilogy(
+            r_mid[valid], sersic_prof[valid], 'b-', lw=1.5, label='GalSim Sersic(n=4)'
+        )
+        ax.semilogy(
+            r_mid[valid],
+            gs_sp_prof[valid],
+            'r--',
+            lw=1.5,
+            label=f'GalSim Spergel({nu})',
+        )
+        ax.axvline(1.0, color='grey', ls=':', alpha=0.4)
+        ax.axvline(3.0, color='grey', ls='--', alpha=0.3)
+        ax.set_xlim(0.02, 6.0)
+        ax.set_xscale('log')
+        ax.set_ylim(peak * 1e-5, peak * 3)
+        ax.set_ylabel('Surface brightness')
+        ax.set_title(f'{nu_lab}\nGalSim Spergel vs Sersic(n=4)', fontsize=10)
+        ax.legend(fontsize=7, loc='upper right')
+
+        # Row 2: GalSim Spergel residual
+        ax = axes[1, j]
+        gs_resid = np.where(valid, (gs_sp_prof - sersic_prof) / peak, np.nan)
+        ax.plot(r_mid[valid], gs_resid[valid], 'r-', lw=0.8)
+        ax.axhline(0, color='grey', ls='-', alpha=0.3)
+        ax.set_xlim(0.02, 6.0)
+        ax.set_xscale('log')
+        ylim = max(0.05, np.nanmax(np.abs(gs_resid[valid])) * 1.3)
+        ax.set_ylim(-ylim, ylim)
+        ax.set_ylabel('(GS Spergel − Sersic) / peak')
+        _annotate(ax, gs_stats)
+
+        # Row 3: Our Spergel vs Sersic profiles
+        ax = axes[2, j]
+        ax.semilogy(
+            r_mid[valid], sersic_prof[valid], 'b-', lw=1.5, label='GalSim Sersic(n=4)'
+        )
+        ax.semilogy(
+            r_mid[valid], our_prof[valid], 'm--', lw=1.5, label=f'Our Spergel({nu})'
+        )
+        ax.axvline(1.0, color='grey', ls=':', alpha=0.4)
+        ax.axvline(3.0, color='grey', ls='--', alpha=0.3)
+        ax.set_xlim(0.02, 6.0)
+        ax.set_xscale('log')
+        ax.set_ylim(peak * 1e-5, peak * 3)
+        ax.set_ylabel('Surface brightness')
+        ax.set_title(f'Our Spergel({nu}) vs Sersic(n=4)', fontsize=10)
+        ax.legend(fontsize=7, loc='upper right')
+
+        # Row 4: Our Spergel residual
+        ax = axes[3, j]
+        our_resid = np.where(valid, (our_prof - sersic_prof) / peak, np.nan)
+        ax.plot(r_mid[valid], our_resid[valid], 'm-', lw=0.8)
+        ax.axhline(0, color='grey', ls='-', alpha=0.3)
+        ax.set_xlim(0.02, 6.0)
+        ax.set_xscale('log')
+        ax.set_ylim(-ylim, ylim)
+        ax.set_ylabel('(Our Spergel − Sersic) / peak')
+        ax.set_xlabel('$r / R_e$')
+        _annotate(ax, our_stats)
+
+        # print
+        for src_label, st in [('GalSim Spergel', gs_stats), ('Our Spergel', our_stats)]:
+            print(f'\n  {src_label} (nu={nu}), {psf_label}:')
+            for band, s in st.items():
+                print(
+                    f'    {band:6s}: max={s["max_frac"]:.4%}, rms={s["rms_frac"]:.4%}'
+                )
+
+    fig.suptitle(
+        f'Face-on Sersic(n=4) vs Spergel approximation — {psf_label}\n'
+        f'hlr={hlr}", {ps}"/pix, {npix}×{npix} | '
+        f'L2-optimal = flux-weighted L2 profile matching',
+        fontsize=12,
+    )
+    plt.tight_layout()
+    suffix = 'nopsf' if not use_psf else f'psf_{fwhm_str}'
+    fname = f'faceon_n4_diagnostic_{suffix}.png'
+    plt.savefig(spergel_output_dir / fname, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def test_faceon_n4_diagnostic_nopsf(spergel_output_dir):
+    """Face-on Sersic(n=4) vs Spergel approximation diagnostic (no PSF)."""
+    _faceon_n4_diagnostic(spergel_output_dir, psf_obj=None, psf_label='no PSF')
+
+
+def test_faceon_n4_diagnostic_psf(spergel_output_dir):
+    """Face-on Sersic(n=4) vs Spergel approximation diagnostic (with PSF)."""
+    import galsim as gs
+
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
+    fwhm = 0.15
+    psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
+    _faceon_n4_diagnostic(
+        spergel_output_dir,
+        psf_obj=psf,
+        psf_label=f'PSF FWHM={fwhm}"',
+        fwhm_str=f'{fwhm}',
+    )
+
+
+def test_oversample_convergence(spergel_output_dir):
+    """Oversample convergence: face-on vs GalSim + inclined self-convergence.
+
+    Face-on: residuals against gs.Spergel(nu=-0.6) ground truth.
+    Inclined: self-convergence against oversample=15 (no external reference;
+    validates that inclined rendering converges without aliasing artifacts).
+    """
+    import galsim as gs
+
+    nu = -0.6
+    hlr = 2.0
+    flux = 1.0
+    npix = 128
+    ps = 0.11
+    h_over_r = 0.1
+    fwhm = 0.15
+
+    gsp = gs.GSParams(
+        folding_threshold=1e-4,
+        maxk_threshold=1e-4,
+        kvalue_accuracy=1e-6,
+        maximum_fft_size=32768,
+    )
+    gs_sp = gs.Spergel(nu=nu, half_light_radius=hlr, flux=flux, gsparams=gsp)
+    rscale = gs_sp.scale_radius
+    psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
+    ip = ImagePars(shape=(npix, npix), pixel_scale=ps, indexing='ij')
+    model = InclinedSpergelModel()
+
+    oversamples = [1, 3, 5, 7, 9, 15]
+    ref_osamp = 15
+    cosi_values = [1.0, 0.3, 0.5, 0.7]
+    col_labels = [
+        'Face-on vs GalSim',
+        'cosi=0.3 (self-conv, ref=os15)',
+        'cosi=0.5 (self-conv, ref=os15)',
+        'cosi=0.7 (self-conv, ref=os15)',
+    ]
+
+    fig, axes = plt.subplots(1, len(cosi_values), figsize=(4.5 * len(cosi_values), 5))
+
+    for ci, (cosi, col_lab) in enumerate(zip(cosi_values, col_labels)):
+        theta = jnp.array([cosi, 0.0, 0.0, 0.0, flux, rscale, h_over_r, nu, 0.0, 0.0])
+        ax = axes[ci]
+
+        if ci == 0:
+            gs_conv = gs.Convolve(gs_sp, psf)
+            ref_sb = (
+                gs_conv.drawImage(
+                    nx=npix,
+                    ny=npix,
+                    scale=ps,
+                    method='auto',
+                ).array
+                / ps**2
+            )
+            ref_label = 'GalSim'
+        else:
+            obs_ref = build_image_obs(
+                ip, psf=psf, oversample=ref_osamp, int_model=model, gsparams=gsp
+            )
+            ref_sb = np.array(model.render_image(theta, obs=obs_ref))
+            ref_label = f'oversample={ref_osamp}'
+
+        peak = np.max(np.abs(ref_sb))
+        max_fracs = []
+        rms_fracs = []
+
+        print(f'\n  cosi={cosi} (ref={ref_label}):')
+        for osamp in oversamples:
+            obs = build_image_obs(
+                ip, psf=psf, oversample=osamp, int_model=model, gsparams=gsp
+            )
+            our_sb = np.array(model.render_image(theta, obs=obs))
+            diff = our_sb - ref_sb
+            mf = np.max(np.abs(diff)) / peak
+            rf = np.sqrt(np.mean(diff**2)) / peak
+            max_fracs.append(mf)
+            rms_fracs.append(rf)
+            print(f'    os={osamp:2d}: max={mf:.4%}, rms={rf:.4%}')
+
+        ax.semilogy(oversamples, max_fracs, 'bo-', lw=2, ms=5, label='max |resid|/peak')
+        ax.semilogy(oversamples, rms_fracs, 'rs--', lw=2, ms=5, label='rms resid/peak')
+        ax.set_xlabel('Oversample factor')
+        ax.set_title(col_lab, fontsize=9)
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(oversamples)
+        if ci == 0:
+            ax.set_ylabel('Fractional residual')
+
+    fig.suptitle(
+        f'Oversample convergence: Spergel(nu={nu}) + PSF (FWHM={fwhm}")\n'
+        f'{ps}"/pix, {npix}×{npix} | face-on: vs GalSim; '
+        f'inclined: self-convergence vs os={ref_osamp}',
+        fontsize=11,
+    )
+    plt.tight_layout()
+    plt.savefig(
+        spergel_output_dir / 'oversample_convergence.png', dpi=150, bbox_inches='tight'
+    )
+    plt.close()
 
 
 if __name__ == "__main__":
