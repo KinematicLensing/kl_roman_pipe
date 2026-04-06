@@ -2074,14 +2074,6 @@ class TNGDataVectorGenerator:
             coords_2d, target_redshift=config.target_redshift
         )
 
-        print(
-            config.target_redshift,
-            np.min(coords_2d),
-            np.max(coords_2d),
-            np.min(coords_arcsec),
-            np.max(coords_arcsec),
-        )
-
         # Grid luminosities (sum, not weighted average)
         if config.use_cic_gridding:
             intensity = self._grid_particles_cic(
