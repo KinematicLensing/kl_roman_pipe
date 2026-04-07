@@ -894,6 +894,53 @@ class TestInclinationSymmetry:
         print(f"✓ Face-on intensity median_rel_diff = {int_median_rel_diff:.3f}")
 
 
+class TestDustAttenuation:
+    """Test dust attenuation effects."""
+
+    def test_dust_attenuation_reduces_flux(self, test_galaxy, image_pars_test):
+        """Dust attenuation should reduce total flux."""
+        gen = TNGDataVectorGenerator(test_galaxy)
+
+        config_dusted = TNGRenderConfig(
+            target_redshift=0.6, image_pars=image_pars_test, band="r", use_dusted=True
+        )
+        intensity_dusted, _ = gen.generate_intensity_map(config_dusted)
+
+        config_raw = TNGRenderConfig(
+            target_redshift=0.6, image_pars=image_pars_test, band="r", use_dusted=False
+        )
+        intensity_raw, _ = gen.generate_intensity_map(config_raw)
+
+        assert (
+            intensity_raw.sum() > intensity_dusted.sum()
+        ), "Dust should attenuate flux"
+
+    def test_dust_attenuation_model(self, test_galaxy):
+        gen = TNGDataVectorGenerator(test_galaxy)
+
+        # Compute the dust attenuation in the native coordinates for this galaxy and compared to the result stored in the TNG data.
+        # The two should give consistent results since they have the same dust attenuation model.
+
+        # Assuming using catalogues that fixed the line-of-sight to be along the z-axis.
+        coords_stellar_2d = gen.stellar["Coordinates"][:, :2]  # x,y positions
+        coords_gas_2d = gen.gas["Coordinates"][:, :2]
+        coords_galaxy_center_2d = gen.subhalo["SubhaloPos"][:2]  # x,y of galaxy center
+
+        # Using the native orientation to compute the dust attenuation and compare to the TNG data.
+        gen._estimate_magnitude_luminosity(
+            coords_stellar_2d, coords_gas_2d, coords_galaxy_center_2d, band="r"
+        )
+
+        assert np.allclose(
+            gen.stellar["Dusted_Luminosity_rotate_r"],
+            gen.stellar["Dusted_Luminosity_r"],
+        ), "Stellar luminosity after dust attenuation correction should match TNG data"
+        assert np.allclose(
+            gen.stellar["Dusted_Absolute_Magnitude_rotate_r"],
+            gen.stellar["Dusted_Absolute_Magnitude_r"],
+        ), "Stellar absolute magnitude after dust attenuation correction should match TNG data"
+
+
 @pytest.mark.tng_diagnostics
 class TestDiagnosticPlots:
     """Generate diagnostic plots for visual validation of TNG rendering.
