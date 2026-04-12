@@ -439,7 +439,7 @@ def test_galsim_regression_render_image(
     )
     our_image = model.render_image(theta, image_pars=galsim_image_pars)
 
-    # GalSim reference (no_pixel: skip pixel convolution for fair k-space comparison)
+    # GalSim reference (method='auto': pixel-integrated to match our sinc response)
     gs_image = _generate_sersic_galsim(
         galsim_image_pars,
         flux=flux,
@@ -453,7 +453,7 @@ def test_galsim_regression_render_image(
         int_y0=int_y0,
         int_h_over_r=int_h_over_r,
         gsparams=gsp,
-        method='no_pixel',
+        method='auto',
     )
 
     # convert GalSim flux/pixel → surface brightness (flux/arcsec²)
@@ -565,6 +565,7 @@ def test_scipy_vs_galsim_backend(galsim_image_pars):
         method='no_pixel',
     )
 
+    # pixel_response=None on both sides: point-sampled method comparison
     scipy_image = _generate_sersic_scipy(
         galsim_image_pars,
         flux=flux,
@@ -577,6 +578,7 @@ def test_scipy_vs_galsim_backend(galsim_image_pars):
         int_x0=0.0,
         int_y0=0.0,
         int_h_over_r=int_h_over_r,
+        pixel_response=None,
     )
 
     # convert GalSim flux/pixel → surface brightness (flux/arcsec²)
@@ -622,6 +624,7 @@ def test_scipy_vs_render_image_consistency(galsim_image_pars):
         int_x0=int_x0,
         int_y0=int_y0,
         int_h_over_r=int_h_over_r,
+        pixel_response=None,  # point-sampled for method comparison
     )
 
     # render_image (JAX k-space FFT)
@@ -629,7 +632,10 @@ def test_scipy_vs_render_image_consistency(galsim_image_pars):
     theta = jnp.array(
         [cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0]
     )
-    render = np.array(model.render_image(theta, image_pars=galsim_image_pars))
+    # pixel_response=None: point-sampled to match scipy backend
+    render = np.array(
+        model.render_image(theta, image_pars=galsim_image_pars, pixel_response=None)
+    )
 
     peak = np.max(np.abs(render))
     max_frac = np.max(np.abs(scipy_image - render)) / peak
@@ -762,7 +768,10 @@ def test_render_image_vs_call_consistency(
 
     X, Y = build_map_grid_from_image_pars(rect_image_pars, unit='arcsec', centered=True)
     call_image = np.array(model(theta, 'obs', X, Y))
-    render = np.array(model.render_image(theta, image_pars=rect_image_pars))
+    # pixel_response=None: point-sampled to match __call__ (real-space, no pixel)
+    render = np.array(
+        model.render_image(theta, image_pars=rect_image_pars, pixel_response=None)
+    )
 
     peak = np.max(np.abs(call_image))
     residual = np.abs(render - call_image)

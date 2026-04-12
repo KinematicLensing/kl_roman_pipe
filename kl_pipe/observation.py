@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel
 
 from kl_pipe.parameters import ImagePars
+from kl_pipe.pixel import BoxPixel, PixelResponse, _PIXEL_RESPONSE_UNSET
 from kl_pipe.psf import PSFData
 from kl_pipe.utils import build_map_grid_from_image_pars
 
@@ -58,6 +59,10 @@ class ImageObs:
         Boolean mask (True=valid). Same shape as data.
     kspace_psf_fft : jnp.ndarray, optional
         Fused k-space PSF kernel for InclinedExponentialModel.
+    pixel_response : PixelResponse, optional
+        Pixel response function for k-space intensity rendering.
+        Default BoxPixel is created by build_image_obs. None disables
+        pixel integration (for testing or point-sampled comparisons).
     """
 
     image_pars: ImagePars
@@ -71,6 +76,7 @@ class ImageObs:
     variance: Optional[jnp.ndarray] = None
     mask: Optional[jnp.ndarray] = None
     kspace_psf_fft: Optional[jnp.ndarray] = None
+    pixel_response: Optional[PixelResponse] = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,7 @@ def _image_obs_flatten(obs):
         obs.variance,
         obs.mask,
         obs.kspace_psf_fft,
+        obs.pixel_response,
     )
     aux = (obs.image_pars, obs.oversample)
     return children, aux
@@ -158,6 +165,7 @@ def _image_obs_unflatten(aux, children):
         variance=children[6],
         mask=children[7],
         kspace_psf_fft=children[8],
+        pixel_response=children[9],
     )
 
 
@@ -243,6 +251,8 @@ def build_image_obs(
     variance=None,
     mask=None,
     int_model=None,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
+    render_config=None,
 ) -> ImageObs:
     """Build imaging observation. Replaces Model.configure_psf().
 
@@ -254,7 +264,12 @@ def build_image_obs(
         PSF profile. None = no PSF convolution.
     oversample : int
         Oversampling factor for source evaluation (positive odd int).
-        Only used when psf is not None. Default 5.
+        Used for velocity models (spatial oversampling) and as legacy
+        anti-aliasing for k-space models. For k-space intensity models,
+        pixel integration is handled by ``pixel_response`` in k-space;
+        most users should rely on adaptive grid sizing via
+        ``folding_threshold`` rather than manual ``oversample``.
+        Default 5.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -266,8 +281,25 @@ def build_image_obs(
     int_model : InclinedExponentialModel, optional
         When provided and has _kspace_pad_factor, also pre-compute
         fused k-space PSF kernel for the InclinedExponentialModel path.
+    pixel_response : PixelResponse or None, optional
+        Pixel response function for k-space rendering. Default (sentinel):
+        auto-construct ``BoxPixel(image_pars.pixel_scale)``. Pass
+        ``pixel_response=None`` explicitly to disable pixel integration
+        (for testing or point-sampled comparisons).
+    render_config : RenderConfig, optional
+        When provided, ``render_config.oversample`` takes precedence over
+        the bare ``oversample`` parameter for PSF FFT sizing and fine-grid
+        construction.
     """
+    # render_config.oversample takes precedence when provided
+    if render_config is not None:
+        oversample = render_config.oversample
+
     X, Y = build_map_grid_from_image_pars(image_pars)
+
+    # pixel response: default to BoxPixel from pixel_scale
+    if pixel_response is _PIXEL_RESPONSE_UNSET:
+        pixel_response = BoxPixel(image_pars.pixel_scale)
 
     psf_data = None
     fine_X = None
@@ -284,26 +316,28 @@ def build_image_obs(
             gsparams=gsparams,
         )
 
-        if oversample > 1:
-            fine_image_pars = image_pars.make_fine_scale(oversample)
-            fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
-
-        # fused k-space PSF kernel for InclinedExponentialModel
+        # fused k-space PSF kernel for k-space intensity models
         if int_model is not None and hasattr(int_model, '_kspace_pad_factor'):
             from kl_pipe.psf import precompute_psf_kspace_fft
 
             N = max(oversample, 1)
-            fine_Nrow = image_pars.Nrow * N
-            fine_Ncol = image_pars.Ncol * N
             fine_ps = image_pars.pixel_scale / N
-            pad_sq = next_fast_len(
-                int_model._kspace_pad_factor * max(fine_Nrow, fine_Ncol)
+            # for wrap-compatible grids: compute base pad first, then
+            # multiply by oversample so the fused PSF grid is an exact
+            # multiple of the base grid (required by _wrap_kspace)
+            base_pad_sq = next_fast_len(
+                int_model._kspace_pad_factor * max(image_pars.Nrow, image_pars.Ncol)
             )
+            pad_sq = base_pad_sq * N
             kspace_psf_fft = precompute_psf_kspace_fft(
                 psf, (pad_sq, pad_sq), fine_ps, gsparams=gsparams
             )
-    else:
-        oversample = 1
+
+    # fine grids: create when oversample > 1, regardless of PSF.
+    # needed for velocity models (spatial oversampling) even without PSF.
+    if oversample > 1:
+        fine_image_pars = image_pars.make_fine_scale(oversample)
+        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
 
     if data is not None:
         data = jnp.asarray(data)
@@ -324,6 +358,7 @@ def build_image_obs(
         variance=variance,
         mask=mask,
         kspace_psf_fft=kspace_psf_fft,
+        pixel_response=pixel_response,
     )
 
 
@@ -385,10 +420,6 @@ def build_velocity_obs(
             gsparams=gsparams,
         )
 
-        if oversample > 1:
-            fine_image_pars = image_pars.make_fine_scale(oversample)
-            fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
-
         if flux_model is None and flux_image is None:
             raise ValueError(
                 "Velocity PSF requires flux weighting. Provide flux_model + "
@@ -435,8 +466,11 @@ def build_velocity_obs(
                 )
 
             processed_flux_image = jnp.asarray(flux_image)
-    else:
-        oversample = 1
+
+    # fine grids: create when oversample > 1, regardless of PSF
+    if oversample > 1:
+        fine_image_pars = image_pars.make_fine_scale(oversample)
+        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
 
     if data is not None:
         data = jnp.asarray(data)
@@ -480,11 +514,18 @@ def build_joint_obs(
     data_int=None,
     variance_int=None,
     mask_int=None,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> tuple:
     """Build paired velocity+intensity obs for joint inference.
 
     Velocity gets flux_model=intensity_model (joint mode: flux_theta
     provided at render time via flux_theta_override).
+
+    Parameters
+    ----------
+    pixel_response : PixelResponse or None, optional
+        Passed through to build_image_obs for the intensity obs.
+        Default (sentinel): auto-construct BoxPixel. Pass None to disable.
 
     Returns
     -------
@@ -512,6 +553,7 @@ def build_joint_obs(
         variance=variance_int,
         mask=mask_int,
         int_model=intensity_model,
+        pixel_response=pixel_response,
     )
 
     return obs_vel, obs_int
@@ -545,11 +587,10 @@ def _build_velocity_obs_joint(
             gsparams=gsparams,
         )
 
-        if oversample > 1:
-            fine_image_pars = image_pars.make_fine_scale(oversample)
-            fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
-    else:
-        oversample = 1
+    # fine grids: create when oversample > 1, regardless of PSF
+    if oversample > 1:
+        fine_image_pars = image_pars.make_fine_scale(oversample)
+        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
 
     if data is not None:
         data = jnp.asarray(data)
@@ -623,10 +664,9 @@ def build_grism_obs(
             gsparams=gsparams,
         )
 
-        if oversample > 1:
-            fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
-    else:
-        oversample = 1
+    # fine grid: create when oversample > 1, regardless of PSF
+    if oversample > 1:
+        fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
 
     if data is not None:
         data = jnp.asarray(data)

@@ -29,6 +29,8 @@ kl_pipe/
 ├── psf.py             # PSF convolution: FFT pipeline, PSFData, oversampled rendering
 ├── spectral.py        # Datacube assembly (x,y,λ): CubePars, SpectralModel, emission lines
 ├── dispersion.py      # Grism dispersion: GrismPars, 3D→2D spectral projection
+├── pixel.py           # Pixel response: PixelResponse ABC, BoxPixel (sinc FT)
+├── render.py          # RenderConfig: k-space grid sizing (oversample, pad_factor, maxk/stepk)
 ├── synthetic.py       # Independent synthetic data generators (NOT using model.py)
 ├── noise.py           # SNR-based noise: add_intensity_noise, add_velocity_noise
 ├── utils.py           # Grid builders, path getters
@@ -84,6 +86,25 @@ Model (ABC)
 
 All models are **stateless pure functions**: parameters passed as `theta` array, never stored as instance attributes. `PARAMETER_NAMES` class tuple defines canonical ordering; enforced at subclass creation via `__init_subclass__`. Models carry no PSF or instrument state — that lives in observation objects (`ImageObs`, `VelocityObs`, `GrismObs`) from `observation.py`.
 
+Intensity models provide `maxk(params)` and `stepk(params)` for adaptive grid sizing: `maxk` returns the wavenumber where the bare profile FT drops below threshold; `stepk` returns the minimum k-spacing to avoid flux folding. These are used by `InferenceTask` to validate grid adequacy at construction time.
+
+### Pixel Response
+
+Pixel integration is handled in k-space by multiplying the profile FT by a `PixelResponse` object's FT. `BoxPixel(pixel_scale)` implements the standard square top-hat pixel (FT = 2D sinc). Lives on `ImageObs`; `build_image_obs` constructs `BoxPixel` by default. Pass `pixel_response=None` to disable (for testing or point-sampled comparisons). Defined in `kl_pipe/pixel.py`.
+
+For k-space intensity models: the rendering chain is `profile_FT × pixel_FT × PSF_FT` in one FFT pass. For velocity models: pixel integration uses spatial oversampling (sinc can't apply to flux-weighted ratio). The real-space PSF fallback path does NOT apply pixel_response (PSF kernel already includes pixel via `drawImage`).
+
+### RenderConfig
+
+`RenderConfig` in `kl_pipe/render.py` controls k-space FFT grid sizing: `oversample`, `pad_factor`, `folding_threshold`, `maxk_threshold`. Two regimes:
+
+- **Standalone**: `render_image(theta, image_pars=ip)` auto-computes `RenderConfig` from theta via `model.maxk(params)` / `model.stepk(params)`. Grid adapts per call.
+- **Inference**: `RenderConfig.for_priors(model, priors, pixel_scale, ...)` computes worst-case from prior bounds. Frozen into `InferenceTask`'s likelihood closure. JIT-compatible.
+
+`maxk` depends on both `int_rscale` (or `int_hlr`) and `cosi` — inclination compresses the FT along ky, extending it by 1/cosi. When `pixel_response` is present, the effective maxk is computed from the combined product `profile_FT × sinc`, not individual maxks — sinc attenuation significantly reduces the needed grid size.
+
+**Trade-off**: narrower cosi prior → smaller worst-case maxk → smaller grid → faster inference. The `maxk_threshold` parameter controls the aliasing budget (default 1e-3).
+
 ### Factory Pattern
 
 Three registries with case-insensitive `build_*()` functions:
@@ -125,6 +146,8 @@ All raise `ValueError` on unknown names.
 | Inclination | `cosi = cos(i)` | 0=edge-on, 1=face-on |
 | Shear | dimensionless | `g1`, `g2`; \|g\| < 1 |
 | Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)` |
+| Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
+| `folding_threshold` | dimensionless | fraction of flux allowed to alias (default 5e-3) |
 
 **Always perform dimensional sanity checks** on numerical quantities before finalizing code.
 

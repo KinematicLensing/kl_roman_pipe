@@ -16,12 +16,17 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Callable, Union, Tuple, Any, TYPE_CHECKING
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 
 
 class NoPSFWarning(UserWarning):
     """Inference task created without PSF — model will be unconvolved."""
+
+
+class GridAdequacyWarning(UserWarning):
+    """FFT grid may be too small for the model + prior combination."""
 
 
 if TYPE_CHECKING:
@@ -325,6 +330,49 @@ class InferenceTask:
         return self.priors.sample(rng_key, n_samples)
 
     # =========================================================================
+    # Grid adequacy validation
+    # =========================================================================
+
+    @staticmethod
+    def _validate_grid_adequacy(model, priors, obs, psf=None):
+        """Warn if the obs FFT grid is likely inadequate for the model + priors.
+
+        Computes worst-case maxk from priors and compares to the obs grid's
+        effective Nyquist. Issues a GridAdequacyWarning if the grid is too
+        small. Does not raise — the rendering will still work, just with
+        potential aliasing.
+        """
+        try:
+            from kl_pipe.render import RenderConfig
+
+            pixel_scale = obs.image_pars.pixel_scale
+            pixel_response = getattr(obs, 'pixel_response', None)
+
+            rc = RenderConfig.for_priors(
+                model,
+                priors,
+                pixel_scale,
+                pixel_response=pixel_response,
+                psf=psf,
+            )
+
+            # current effective Nyquist including oversample
+            k_nyquist = np.pi / pixel_scale
+            current_nyq = obs.oversample * k_nyquist
+            if rc.effective_maxk > current_nyq * 1.1:  # 10% margin
+                warnings.warn(
+                    f"\nFFT grid may be inadequate for worst-case priors: "
+                    f"effective_maxk={rc.effective_maxk:.1f} rad/arcsec > "
+                    f"grid Nyquist={current_nyq:.1f} rad/arcsec "
+                    f"(oversample={obs.oversample}). "
+                    f"Recommended oversample={rc.oversample}.\n",
+                    GridAdequacyWarning,
+                    stacklevel=3,
+                )
+        except (NotImplementedError, KeyError, TypeError):
+            pass  # model doesn't support maxk/stepk; skip validation
+
+    # =========================================================================
     # Factory Methods
     # =========================================================================
 
@@ -406,11 +454,26 @@ class InferenceTask:
                 stacklevel=2,
             )
 
+        # compute render_config from priors for optimal grid sizing
+        from kl_pipe.render import RenderConfig
+
+        try:
+            rc_int = RenderConfig.for_priors(
+                model,
+                priors,
+                obs.image_pars.pixel_scale,
+                pixel_response=obs.pixel_response,
+            )
+        except (KeyError, NotImplementedError):
+            rc_int = RenderConfig()  # fallback to defaults
+
         from kl_pipe.likelihood import create_jitted_likelihood_intensity
 
-        likelihood_fn = create_jitted_likelihood_intensity(model, obs)
+        likelihood_fn = create_jitted_likelihood_intensity(
+            model, obs, render_config=rc_int
+        )
 
-        return cls(
+        task = cls(
             model=model,
             likelihood_fn=likelihood_fn,
             priors=priors,
@@ -419,6 +482,8 @@ class InferenceTask:
             mask={'intensity': obs.mask},
             meta_pars=meta_pars or {},
         )
+        task._render_configs = {'intensity': rc_int}
+        return task
 
     @classmethod
     def from_joint_obs(
@@ -463,11 +528,35 @@ class InferenceTask:
                 stacklevel=2,
             )
 
+        # compute render_configs from priors
+        from kl_pipe.render import RenderConfig
+
+        int_model = model.intensity_model if hasattr(model, 'intensity_model') else None
+        rc_int = None
+        if int_model is not None:
+            try:
+                rc_int = RenderConfig.for_priors(
+                    int_model,
+                    priors,
+                    obs_int.image_pars.pixel_scale,
+                    pixel_response=obs_int.pixel_response,
+                )
+            except (KeyError, NotImplementedError):
+                rc_int = RenderConfig()
+
+        rc_vel = RenderConfig(oversample=obs_vel.oversample)
+
         from kl_pipe.likelihood import create_jitted_likelihood_joint
 
-        likelihood_fn = create_jitted_likelihood_joint(model, obs_vel, obs_int)
+        likelihood_fn = create_jitted_likelihood_joint(
+            model,
+            obs_vel,
+            obs_int,
+            render_config_int=rc_int,
+            render_config_vel=rc_vel,
+        )
 
-        return cls(
+        task = cls(
             model=model,
             likelihood_fn=likelihood_fn,
             priors=priors,
@@ -476,6 +565,8 @@ class InferenceTask:
             mask={'velocity': obs_vel.mask, 'intensity': obs_int.mask},
             meta_pars=meta_pars or {},
         )
+        task._render_configs = {'velocity': rc_vel, 'intensity': rc_int}
+        return task
 
     # =========================================================================
     # Legacy Factory Methods (delegate to new ones)
