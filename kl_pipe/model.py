@@ -1033,13 +1033,15 @@ class KLModel(object):
         if self.spectral_model is None:
             raise ValueError("No spectral model configured")
 
-        if cube_pars is None:
-            # convenience path: auto-build from z (not JIT-compatible)
-            theta_spec = self.get_spectral_pars(theta)
-            z = float(self.spectral_model.get_param('z', theta_spec))
-            cube_pars = fiber_pars.to_cube_pars(z)
+        # if cube_pars is None: #I don't think I have actually tried this out
+        ## convenience path: auto-build from z (not JIT-compatible)
+        # theta_spec = self.get_spectral_pars(theta)
+        # z = float(self.spectral_model.get_param('z', theta_spec))
+        # cube_pars = fiber_pars.to_cube_pars(z) #yeah this is not a thing yet
 
         cube = self.render_cube(theta, cube_pars, plane=plane)  # theoretical cube
+        # intensity model
+        intensity_model = self.intensity_model
 
         return self.fiber_observe_cube(cube, fiber_pars, force_noise_free, run_mode)
 
@@ -1053,14 +1055,21 @@ class KLModel(object):
             self.ATMPSF_conv_fiber_mask = None
             self.resolution_mat = None
             psfdata = self._fiber_psf_data
+            # galsim_psf = self._build_PSF_model_fiber(fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff)
+            # self.intensity_model.configure_psf(galsim_psf, image_pars = fiber_pars.cube_pars.image_pars, image_shape= (fiber_pars.obs_conf.NAXIS1,fiber_pars.obs_conf.NAXIS2), pixel_scale=fiber_pars.obs_conf['PIXSCALE'], oversample=1)
             if run_mode == 'ETC':
+                # psf_convolved_int = self.intensity_model.render_image(theta=theta_int, image_pars = fiberpars_instance.cube_pars.image_pars, plane='obs', oversample =1)
                 cube_bp = cube * jnp.array(fiber_pars._bp_array)
-                raw_img = jnp.sum(cube_bp, axis=2)
-                highres_img = jnp.repeat(
-                    jnp.repeat(raw_img, self._fiber_psf_data.oversample, axis=0),
-                    self._fiber_psf_data.oversample,
-                    axis=1,
-                )
+                raw_img = jnp.sum(cube_bp, axis=2) * fiber_pars.dlambda
+                print(fiber_pars.dlambda)
+                # if self._fiber_psf_data.oversample == 1:
+                # highres_img = raw_img
+                # elif self._fiber_psf_data.oversample > 1: #might not be correct
+                # highres_img = jnp.repeat(
+                # jnp.repeat(raw_img, self._fiber_psf_data.oversample, axis=0),
+                # self._fiber_psf_data.oversample,
+                # axis=1,
+                # )
                 factor = (
                     jnp.pi
                     * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
@@ -1068,10 +1077,38 @@ class KLModel(object):
                     / fiber_pars.obs_conf['GAIN']
                 )
 
-                photometric_image = factor * convolve_fft(
-                    highres_img, psfdata
+                img = factor * convolve_fft(
+                    raw_img, psfdata
                 )  # downsampling baked into convolve_fft
-                return photometric_image
+
+            # add SNR mode too
+
+            if force_noise_free:
+                return img, None
+
+            else:
+                print('photometry noise implementation WIP')
+                # noise_type = fiber_pars.obs_conf['NOISETYP']
+                # if noise_type == 'ccd':
+                # read_noise = fiber_pars.obs_conf['RDNOISE'] #electrons/pixel probably
+                # gain = fiber_pars.obs_conf['GAIN'] #electrons/ADU
+                # exp_time = fiber_pars.obs_conf['EXPTIME']
+                # sky_level = fiber_pars.obs_conf['SKYLEVEL']*exp_time/gain #what are the units of this? ADU/pixel? ADU/pixel/second? if /second then I should multiply by exposure time. #divide sky level by gain to get electrons/pixel
+                # noise_std = ((sky_level+img)+read_noise**2)**0.5
+                # key = jax.random.key(0)
+                # noise = (jax.random.normal(key, shape=(img.shape[0],img.shape[1])) * noise_std)
+                # print('noise', noise)
+                # print('shape', jnp.shape(noise))
+                # img_withNoise = img.copy()
+                # img_withNoise += noise
+                # noise_img = img_withNoise - img
+                # assert (img_withNoise.array is not None), "Null data"
+                # assert (img.array is not None), "Null data"
+                # if fiber_pars.obs_conf['ADDNOISE']:
+                # return img_withNoise.array, noise_img.array
+                # else:
+                # return img.array, noise_img.array
+                return img, None
 
         # if fiber 1D spectrum
         else:
@@ -1138,7 +1175,7 @@ class KLModel(object):
                         * fiber_pars.obs_conf['NOISESIG']
                     )
                 if fiber_pars.obs_conf['ADDNOISE']:
-                    print('spec_1D, noise', spec_1D, noise)
+                    # print('spec_1D, noise', spec_1D, noise)
                     return spec_1D + noise, noise
                 else:
                     return spec_1D, noise
@@ -1177,7 +1214,7 @@ class KLModel(object):
         self,
         gsobj,
         cube_pars,
-        oversample: int = 5,
+        oversample: int = 1,  # oversampling not really necessary unless you don't have an analytical PSF
         gsparams=None,
     ):
         """Pre-compute PSF FFT at the cube's spatial grid.

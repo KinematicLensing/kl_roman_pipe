@@ -146,7 +146,8 @@ class CubePars:
 ####WIP
 @dataclass(frozen=True)
 class FiberPars:
-    cube_pars: CubePars
+    cube_pars: CubePars  # instead of taking cube_pars, I should have this take image_pars and then I build cube_pars myself
+    # image_pars: ImagePars
     obs_conf: dict  # meta_pars: MetaPars <-- could do this instead and get obs_conf from there
 
     @classmethod
@@ -162,6 +163,7 @@ class FiberPars:
         if cls.is_dispersed:  # fiber spectrum
             cls.lambda_grid = cube_pars.lambda_grid
             cls.n_lambda = len(cls.lambda_grid)
+            cls.dlambda = jnp.diff(cls.lambda_grid)[0]
 
             # _bid = obs_conf['SEDBLKID'] #what is block ID?? it seems like it can alter the lambda range and resolution?
             ##_lrange = _pars['model_dimension']['lambda_range'][_bid]. #I need to make sure, is the model dimension what I'd expect in cube_pars?
@@ -181,6 +183,7 @@ class FiberPars:
         else:  # photometry
             cls.lambda_grid = cube_pars.lambda_grid
             cls.n_lambda = len(cls.lambda_grid)
+            cls.dlambda = jnp.diff(cls.lambda_grid)[0]
 
             _from_file_ = os.path.isfile(obs_conf['BANDPASS'])
             if _from_file_:
@@ -200,6 +203,53 @@ class FiberPars:
             # cls.lambda_grid, cls.n_lambda, cls._bp_array = None, 1, None
 
         return cls(cube_pars=cube_pars, obs_conf=obs_conf)
+
+    def to_cube_pars(  # work in progress
+        self,
+        z: float,
+        velocity_window_kms: float = 3000.0,
+        n_lambda: int = None,
+        line_lambdas_rest: tuple = None,
+    ) -> 'CubePars':
+        """Build CubePars centered on the emission line complex at redshift z.
+
+        Parameters
+        ----------
+        z : float
+            Galaxy redshift.
+        velocity_window_kms : float
+            Half-width of velocity window in km/s. Default 3000.
+        n_lambda : int, optional
+            Number of wavelength pixels. If None, computed from velocity window
+            and dispersion.
+        line_lambdas_rest : tuple of float, optional
+            Rest-frame wavelengths (nm) of lines to cover. If None, uses
+            H-alpha (656.28 nm).
+        """
+        from kl_pipe.spectral import CubePars
+
+        if line_lambdas_rest is None:
+            line_lambdas_rest = (656.28,)
+
+        # observed wavelength range covering all lines + velocity window
+        lam_obs = [(lam * (1.0 + z)) for lam in line_lambdas_rest]
+        lam_min_line = min(lam_obs)
+        lam_max_line = max(lam_obs)
+
+        # velocity window in wavelength units
+        c_kms = 299792.458
+        lam_center = 0.5 * (lam_min_line + lam_max_line)
+        dlam_vel = lam_center * velocity_window_kms / c_kms
+
+        lam_min = lam_min_line - dlam_vel
+        lam_max = lam_max_line + dlam_vel
+
+        if n_lambda is None:
+            n_lambda = int(np.ceil((lam_max - lam_min) / self.dispersion)) + 1
+            n_lambda = max(n_lambda, 3)
+
+        lambda_grid = jnp.linspace(lam_min, lam_max, n_lambda)
+        return CubePars(image_pars=self.image_pars, lambda_grid=lambda_grid)
 
 
 # =============================================================================
