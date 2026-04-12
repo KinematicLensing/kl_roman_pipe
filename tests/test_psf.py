@@ -806,7 +806,7 @@ def test_fused_kspace_psf_implementation(output_dir):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     model = InclinedExponentialModel()
-    obs = build_image_obs(ip, psf=psf_obj, int_model=model)
+    obs = build_image_obs(ip, psf=psf_obj, int_model=model, pixel_response=None)
     N = obs.oversample
     kernel = obs.kspace_psf_fft
 
@@ -873,7 +873,7 @@ def test_kspace_vs_realspace_psf_agreement(output_dir):
     model = InclinedExponentialModel()
 
     # k-space fused path (drawKImage PSF)
-    obs = build_image_obs(ip, psf=psf_obj, int_model=model)
+    obs = build_image_obs(ip, psf=psf_obj, int_model=model, pixel_response=None)
     img_kspace = np.array(model.render_image(theta, obs=obs))
 
     # real-space path on padded extent (drawImage PSF)
@@ -961,7 +961,7 @@ def test_no_psf_regression(image_pars):
     model = InclinedExponentialModel()
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
-    rendered = model.render_image(theta, image_pars, oversample=1)
+    rendered = model.render_image(theta, image_pars, oversample=1, pixel_response=None)
     raw = model._render_kspace(
         theta, image_pars.Nrow, image_pars.Ncol, image_pars.pixel_scale
     )
@@ -986,7 +986,7 @@ def test_psf_render_image_consistency(gaussian_psf):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     # fused k-space path (drawKImage PSF, default oversample)
-    obs = build_image_obs(ip, psf=gaussian_psf, int_model=model)
+    obs = build_image_obs(ip, psf=gaussian_psf, int_model=model, pixel_response=None)
     rendered = model.render_image(theta, obs=obs)
 
     # real-space path on padded extent (drawImage PSF)

@@ -521,7 +521,9 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
 
     # Create likelihood
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 
@@ -1358,7 +1360,9 @@ def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
     )
 
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 

@@ -102,6 +102,7 @@ def _log_likelihood_intensity(
     theta: jnp.ndarray,
     obs: 'ImageObs',
     int_model: 'IntensityModel',
+    render_config=None,
 ) -> float:
     """
     Log-likelihood for intensity observations.
@@ -117,6 +118,9 @@ def _log_likelihood_intensity(
         Image observation with data, variance, mask, and PSF.
     int_model : IntensityModel
         Intensity model instance.
+    render_config : RenderConfig, optional
+        K-space grid parameters. When provided (inference path), frozen
+        into the JIT closure for deterministic grid sizing.
 
     Returns
     -------
@@ -133,7 +137,7 @@ def _log_likelihood_intensity(
     JIT compile time (obs is frozen via ``partial()``), not a traced
     conditional.
     """
-    model_int = int_model.render_image(theta, obs=obs)
+    model_int = int_model.render_image(theta, obs=obs, render_config=render_config)
 
     residuals = obs.data - model_int
     variance = jnp.broadcast_to(jnp.asarray(obs.variance), obs.data.shape)
@@ -156,6 +160,8 @@ def _log_likelihood_joint(
     obs_vel: 'VelocityObs',
     obs_int: 'ImageObs',
     kl_model: 'KLModel',
+    render_config_int=None,
+    render_config_vel=None,
 ) -> float:
     """
     Log-likelihood for combined velocity + intensity observations.
@@ -203,6 +209,7 @@ def _log_likelihood_joint(
         theta_int,
         obs_int,
         kl_model.intensity_model,
+        render_config=render_config_int,
     )
 
     return log_prob_vel + log_prob_int
@@ -276,6 +283,7 @@ def create_jitted_likelihood_velocity(
 def create_jitted_likelihood_intensity(
     int_model: 'IntensityModel',
     obs_int: 'ImageObs',
+    render_config=None,
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled intensity-only likelihood function.
@@ -290,23 +298,14 @@ def create_jitted_likelihood_intensity(
         Intensity model instance.
     obs_int : ImageObs
         Image observation with data, variance, PSF, etc.
+    render_config : RenderConfig, optional
+        K-space grid parameters. When provided, frozen into the JIT closure
+        for deterministic grid sizing across MCMC samples.
 
     Returns
     -------
     Callable[[jnp.ndarray], float]
         JIT-compiled function that takes theta and returns log-likelihood.
-
-    Examples
-    --------
-    >>> from kl_pipe.intensity import InclinedExponentialModel
-    >>> from kl_pipe.observation import build_image_obs
-    >>> from kl_pipe.parameters import ImagePars
-    >>>
-    >>> model = InclinedExponentialModel()
-    >>> image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1)
-    >>> obs_int = build_image_obs(image_pars, data=data, variance=0.01)
-    >>> log_like = create_jitted_likelihood_intensity(model, obs_int)
-    >>> log_prob = log_like(theta)
 
     Notes
     -----
@@ -318,6 +317,7 @@ def create_jitted_likelihood_intensity(
             _log_likelihood_intensity,
             obs=obs_int,
             int_model=int_model,
+            render_config=render_config,
         )
     )
 
@@ -326,6 +326,8 @@ def create_jitted_likelihood_joint(
     kl_model: 'KLModel',
     obs_vel: 'VelocityObs',
     obs_int: 'ImageObs',
+    render_config_int=None,
+    render_config_vel=None,
 ) -> Callable[[jnp.ndarray], float]:
     """
     Create a JIT-compiled joint velocity + intensity likelihood function.
@@ -390,5 +392,7 @@ def create_jitted_likelihood_joint(
             obs_vel=obs_vel,
             obs_int=obs_int,
             kl_model=kl_model,
+            render_config_int=render_config_int,
+            render_config_vel=render_config_vel,
         )
     )

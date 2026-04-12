@@ -56,6 +56,7 @@ from typing import Tuple, Dict, Optional
 from scipy.special import gamma
 
 from kl_pipe.parameters import ImagePars
+from kl_pipe.pixel import BoxPixel, _PIXEL_RESPONSE_UNSET
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # Required parameters for each model type
@@ -230,6 +231,7 @@ def _generate_inclined_kspace_scipy(
     int_h_over_r,
     psf=None,
     oversample=1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ):
     """Shared numpy k-space rendering with pluggable radial FT.
 
@@ -245,6 +247,10 @@ def _generate_inclined_kspace_scipy(
         Spergel: ``lambda k_sq: 1/(1+k_sq)**(1+nu)``
     """
     from scipy.fft import next_fast_len as _next_fast_len
+
+    # default pixel response: BoxPixel from pixel_scale
+    if pixel_response is _PIXEL_RESPONSE_UNSET:
+        pixel_response = BoxPixel(image_pars.pixel_scale)
 
     sini = np.sqrt(1.0 - cosi**2)
     Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
@@ -294,6 +300,15 @@ def _generate_inclined_kspace_scipy(
 
     I_hat = flux * ft_radial * ft_vertical * phase
 
+    # pixel response: multiply by pixel FT (e.g., sinc for box pixel)
+    if pixel_response is not None:
+        pixel_ft = np.sinc(KX * ps / (2 * np.pi)) * np.sinc(KY * ps / (2 * np.pi))
+        if hasattr(pixel_response, 'pixel_scale'):
+            # use the pixel_response's actual scale (may differ from ps)
+            w = pixel_response.pixel_scale
+            pixel_ft = np.sinc(KX * w / (2 * np.pi)) * np.sinc(KY * w / (2 * np.pi))
+        I_hat = I_hat * pixel_ft
+
     if psf is not None:
         # fuse PSF on the profile's k-grid before IFFT
         # real-space kernel (independent from model's drawKImage path)
@@ -340,6 +355,7 @@ def generate_sersic_intensity_2d(
     backend: str = 'scipy',
     psf=None,
     oversample: int = 1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> np.ndarray:
     """
     Generate Sersic intensity profile.
@@ -405,6 +421,7 @@ def generate_sersic_intensity_2d(
             int_h_over_r=int_h_over_r,
             psf=psf,
             oversample=oversample,
+            pixel_response=pixel_response,
         )
 
 
@@ -480,6 +497,7 @@ def _generate_sersic_scipy(
     int_h_over_r: float = 0.0,
     psf=None,
     oversample: int = 1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy.
 
@@ -530,6 +548,7 @@ def _generate_sersic_scipy(
             int_h_over_r,
             psf=psf,
             oversample=oversample,
+            pixel_response=pixel_response,
         )
 
     # thin-disk path (original)
@@ -680,6 +699,7 @@ def generate_spergel_intensity_2d(
     backend: str = 'scipy',
     psf=None,
     oversample: int = 1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> np.ndarray:
     """Generate Spergel intensity profile.
 
@@ -744,6 +764,7 @@ def generate_spergel_intensity_2d(
             int_h_over_r,
             psf=psf,
             oversample=oversample,
+            pixel_response=pixel_response,
         )
 
 
@@ -761,6 +782,7 @@ def _generate_spergel_scipy(
     int_h_over_r=0.1,
     psf=None,
     oversample=1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ):
     """Generate Spergel profile via shared numpy k-space core.
 
@@ -780,6 +802,7 @@ def _generate_spergel_scipy(
         int_h_over_r,
         psf=psf,
         oversample=oversample,
+        pixel_response=pixel_response,
     )
 
 

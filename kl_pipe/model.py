@@ -150,12 +150,22 @@ class Model(ABC):
         jnp.ndarray
             2D image array (coarse-scale).
         """
-        if obs is not None:
-            if obs.psf_data is not None and obs.oversample > 1:
-                model_map = self(theta, plane, obs.fine_X, obs.fine_Y, **kwargs)
-                from kl_pipe.psf import convolve_fft
+        rc = kwargs.pop('render_config', None)
 
-                return convolve_fft(model_map, obs.psf_data)
+        if obs is not None:
+            oversample = rc.oversample if rc is not None else obs.oversample
+            if oversample > 1 and obs.fine_X is not None:
+                # oversampled: evaluate on fine grid
+                model_map = self(theta, plane, obs.fine_X, obs.fine_Y, **kwargs)
+                if obs.psf_data is not None:
+                    from kl_pipe.psf import convolve_fft
+
+                    return convolve_fft(model_map, obs.psf_data)
+                # no PSF but oversampled → bin for pixel integration
+                N = oversample
+                Nrow = obs.image_pars.Nrow
+                Ncol = obs.image_pars.Ncol
+                return model_map.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
 
             model_map = self(theta, plane, obs.X, obs.Y, **kwargs)
 
@@ -352,19 +362,29 @@ class VelocityModel(Model):
         jnp.ndarray
             2D velocity or speed map (coarse-scale).
         """
+        rc = kwargs.pop('render_config', None)
+
         if obs is not None:
-            if obs.psf_data is not None and obs.oversample > 1:
+            oversample = rc.oversample if rc is not None else obs.oversample
+            if oversample > 1 and obs.fine_X is not None:
                 fine_X, fine_Y = obs.fine_X, obs.fine_Y
                 model_vel = self(
                     theta, plane, fine_X, fine_Y, return_speed=return_speed
                 )
 
-                from kl_pipe.psf import convolve_flux_weighted
+                if obs.psf_data is not None:
+                    from kl_pipe.psf import convolve_flux_weighted
 
-                flux_map = _get_flux_map(
-                    obs, plane, fine_X, fine_Y, flux_theta_override
-                )
-                return convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
+                    flux_map = _get_flux_map(
+                        obs, plane, fine_X, fine_Y, flux_theta_override
+                    )
+                    return convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
+
+                # no PSF but oversampled → bin for pixel integration
+                N = oversample
+                Nrow = obs.image_pars.Nrow
+                Ncol = obs.image_pars.Ncol
+                return model_vel.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
 
             model_vel = self(theta, plane, obs.X, obs.Y, return_speed=return_speed)
 
@@ -449,6 +469,53 @@ class IntensityModel(Model):
         """
         raise NotImplementedError(
             "Subclasses must implement render_unconvolved method."
+        )
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where the bare profile FT drops below threshold.
+
+        Used for adaptive grid sizing. The effective maxk of a rendering
+        chain is computed from the full product: profile × pixel × PSF.
+
+        Parameters
+        ----------
+        params : dict
+            Profile parameters (e.g., int_rscale, int_hlr, n_sersic).
+        threshold : float
+            Maximum acceptable FT amplitude. Default 1e-3.
+
+        Returns
+        -------
+        float
+            Wavenumber in rad/arcsec.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement maxk(). "
+            f"Required for adaptive grid sizing."
+        )
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing to contain (1 - folding_threshold) of flux.
+
+        Determines the real-space image extent needed to avoid periodic
+        boundary folding in the DFT. Following GalSim convention:
+        stepk = π / (stepk_min_hlr × hlr), where stepk_min_hlr ≈ 5.
+
+        Parameters
+        ----------
+        params : dict
+            Profile parameters.
+        folding_threshold : float
+            Maximum fraction of flux allowed to fold. Default 5e-3.
+
+        Returns
+        -------
+        float
+            k-spacing in rad/arcsec.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement stepk(). "
+            f"Required for adaptive grid sizing."
         )
 
     @abstractmethod

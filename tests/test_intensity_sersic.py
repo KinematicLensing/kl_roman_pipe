@@ -488,11 +488,22 @@ def test_sersic_psf_path_consistency():
     ip = ImagePars(shape=(64, 64), pixel_scale=0.3125, indexing='ij')
 
     # fused k-space path (int_model triggers kspace_psf_fft)
-    obs_kspace = build_image_obs(ip, psf=psf_obj, oversample=5, int_model=model)
+    obs_kspace = build_image_obs(
+        ip,
+        psf=psf_obj,
+        oversample=5,
+        int_model=model,
+        pixel_response=None,
+    )
     img_kspace = np.array(model.render_image(theta, obs=obs_kspace))
 
     # fallback real-space path (no int_model -> no kspace_psf_fft)
-    obs_realspace = build_image_obs(ip, psf=psf_obj, oversample=5)
+    obs_realspace = build_image_obs(
+        ip,
+        psf=psf_obj,
+        oversample=5,
+        pixel_response=None,
+    )
     img_realspace = np.array(model.render_image(theta, obs=obs_realspace))
 
     peak = np.max(np.abs(img_kspace))
