@@ -277,7 +277,9 @@ class ImagePars(object):
     including size, pixel_scale, WCS, etc.
 
     NOTE: By default the class assumes that you are passing shape
-    information in the numpy convention of (Nrow, Ncol) = (Ny, Nx)
+    information in the numpy convention of (Nrow, Ncol) where:
+    - Nrow = shape[0] = number of rows = Ny (vertical pixel count)
+    - Ncol = shape[1] = number of cols = Nx (horizontal pixel count)
     and that the pixel_scale is in arcsec/pixel. You can override
     this by setting indexing='xy' instead of 'ij' in the constructor.
 

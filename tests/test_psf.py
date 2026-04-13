@@ -27,6 +27,7 @@ from kl_pipe.psf import (
     PSFData,
     gsobj_to_kernel,
     precompute_psf_fft,
+    precompute_psf_kspace_fft,
     convolve_fft,
     convolve_flux_weighted,
     convolve_fft_numpy,
@@ -47,6 +48,50 @@ def _gaussian_2d(X, Y, sigma):
     """2D Gaussian on grid, normalized to sum=1."""
     g = np.exp(-0.5 * (X**2 + Y**2) / sigma**2)
     return g / g.sum()
+
+
+def _render_manual_padded(model, psf_obj, theta, ip):
+    """Real-space manual path on padded extent matching fused path.
+
+    Renders source on the same padded grid the fused k-space path uses,
+    convolves with drawImage PSF, then crops center and bins to coarse.
+    Eliminates boundary flux difference; residual is purely the sinc gap
+    between drawKImage (fused) and drawImage (this path).
+
+    Model must have PSF configured (to read oversample). Clears PSF
+    internally for the raw source render, then clears again on exit.
+    """
+    N = model._psf_oversample
+    pad_factor = model._kspace_pad_factor
+    model.clear_psf()
+
+    fine_Nrow = ip.Nrow * N
+    fine_Ncol = ip.Ncol * N
+    fine_ps = ip.pixel_scale / N
+
+    pad_sq = next_fast_len(pad_factor * max(fine_Nrow, fine_Ncol))
+    # match fine grid parity so half-pixel correction is consistent
+    fine_parity = max(fine_Nrow, fine_Ncol) % 2
+    while pad_sq % 2 != fine_parity:
+        pad_sq = next_fast_len(pad_sq + 1)
+
+    # render source at padded extent (PSF cleared → no-PSF path)
+    ip_pad = ImagePars(shape=(pad_sq, pad_sq), pixel_scale=fine_ps, indexing='ij')
+    raw_padded = model.render_image(theta, ip_pad, oversample=1)
+
+    # convolve with drawImage PSF on padded grid
+    pdata = precompute_psf_fft(psf_obj, ip_pad, oversample=1)
+    conv_padded = np.array(convolve_fft(jnp.array(raw_padded), pdata))
+
+    # crop center to fine extent
+    r0 = pad_sq // 2 - fine_Nrow // 2
+    c0 = pad_sq // 2 - fine_Ncol // 2
+    conv_fine = conv_padded[r0 : r0 + fine_Nrow, c0 : c0 + fine_Ncol]
+
+    # bin to coarse
+    if N > 1:
+        return conv_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
+    return conv_fine
 
 
 def _azimuthal_average(image, X, Y, radial_bins):
@@ -696,6 +741,216 @@ def test_wrap_around_artifact(image_pars):
 
 
 # ==============================================================================
+# D2. drawKImage k-space PSF Tests
+# ==============================================================================
+
+
+@pytest.mark.parametrize(
+    "psf_obj,psf_name",
+    [
+        (gs.Gaussian(fwhm=0.625), 'Gaussian'),
+        (gs.Moffat(beta=3.5, fwhm=0.625), 'Moffat'),
+        (gs.OpticalPSF(lam_over_diam=0.5, defocus=0.5, coma1=0.3), 'OpticalPSF'),
+    ],
+)
+def test_drawKImage_normalization(psf_obj, psf_name):
+    """DC component of k-space PSF FFT == 1.0 (unit-flux convention)."""
+    pad_sq = next_fast_len(256)
+    pixel_scale = 0.3
+    fft = precompute_psf_kspace_fft(psf_obj, (pad_sq, pad_sq), pixel_scale)
+    np.testing.assert_allclose(
+        float(fft[0, 0].real), 1.0, atol=1e-12, err_msg=f"{psf_name}: DC != 1.0"
+    )
+    np.testing.assert_allclose(
+        float(fft[0, 0].imag),
+        0.0,
+        atol=1e-12,
+        err_msg=f"{psf_name}: DC has imaginary component",
+    )
+
+
+def test_drawKImage_vs_kValue():
+    """ifftshift(drawKImage.array) matches gsobj.kValue at sample k-points."""
+    psf = gs.Gaussian(fwhm=0.625)
+    pad_sq = 64
+    pixel_scale = 0.3
+    dk = 2.0 * np.pi / (pad_sq * pixel_scale)
+
+    kim = psf.drawKImage(nx=pad_sq, ny=pad_sq, scale=dk)
+    arr = kim.array  # centered layout
+
+    # check a few off-center k-points via kValue
+    # drawKImage centered layout: pixel (ix, iy) maps to
+    #   kx = (ix - pad_sq//2) * dk, ky = (iy - pad_sq//2) * dk
+    # but GalSim's kValue uses (kx, ky) with the convention that
+    # kx is along image x (cols) and ky is along image y (rows)
+    test_offsets = [(1, 0), (0, 1), (3, 5), (-2, 4)]
+    for dx, dy in test_offsets:
+        ix = pad_sq // 2 + dx
+        iy = pad_sq // 2 + dy
+        kx = dx * dk
+        ky = dy * dk
+        expected = psf.kValue(kx, ky)
+        got = arr[iy, ix]  # GalSim Image: arr[y, x]
+        np.testing.assert_allclose(
+            got, expected, rtol=1e-10, err_msg=f"kValue mismatch at offset ({dx},{dy})"
+        )
+
+
+def test_fused_kspace_psf_implementation(output_dir):
+    """
+    Wiring test: fused render_image == manual _render_kspace + same PSF kernel.
+
+    Both paths use the identical drawKImage PSF kernel FFT, so the only
+    difference is floating-point noise. Tolerance 1e-12.
+    """
+    ip = ImagePars(shape=(80, 80), pixel_scale=0.3, indexing='xy')
+    psf_obj = gs.Gaussian(fwhm=0.625)
+    theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
+
+    model = InclinedExponentialModel()
+    model.configure_psf(psf_obj, ip)
+    N = model._psf_oversample
+    kernel = model._psf_kspace_fft
+
+    # fused path
+    img_fused = np.array(model.render_image(theta, ip))
+
+    # manual path with same kernel
+    img_manual_fine = np.array(
+        model._render_kspace(
+            theta,
+            ip.Nrow * N,
+            ip.Ncol * N,
+            ip.pixel_scale / N,
+            psf_kernel_fft=kernel,
+        )
+    )
+    img_manual = img_manual_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
+    model.clear_psf()
+
+    peak = np.max(np.abs(img_fused))
+    max_rel_resid = np.max(np.abs(img_fused - img_manual)) / peak
+
+    # diagnostic plot
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    im0 = axes[0].imshow(img_fused, origin='lower')
+    axes[0].set_title('fused render_image')
+    plt.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(img_manual, origin='lower')
+    axes[1].set_title('manual _render_kspace')
+    plt.colorbar(im1, ax=axes[1])
+
+    resid = (img_fused - img_manual) / peak
+    vmax = max(np.max(np.abs(resid)), 1e-15)
+    im2 = axes[2].imshow(resid, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[2].set_title(f'rel resid (max={max_rel_resid:.2e})')
+    plt.colorbar(im2, ax=axes[2])
+
+    status = 'PASS' if max_rel_resid < 1e-12 else 'FAIL'
+    fig.suptitle(
+        f'fused vs manual k-space PSF — {status}',
+        color='green' if status == 'PASS' else 'red',
+    )
+    plt.tight_layout()
+    plt.savefig(output_dir / 'fused_kspace_psf_implementation.png', dpi=150)
+    plt.close()
+
+    assert (
+        max_rel_resid < 1e-12
+    ), f"fused vs manual k-space PSF disagree: max_rel_resid={max_rel_resid:.2e}"
+
+
+def test_kspace_vs_realspace_psf_agreement(output_dir):
+    """
+    drawKImage (fused k-space) vs drawImage (real-space) PSF agreement.
+
+    Both paths render on the same padded extent (via _render_manual_padded),
+    eliminating boundary flux difference. Residual is purely the sinc gap
+    between GalSim's drawKImage and drawImage PSF representations.
+    """
+    ip = ImagePars(shape=(80, 80), pixel_scale=0.3, indexing='xy')
+    psf_obj = gs.Gaussian(fwhm=0.625)
+    theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
+
+    model = InclinedExponentialModel()
+
+    # k-space fused path (drawKImage PSF)
+    model.configure_psf(psf_obj, ip)
+    img_kspace = np.array(model.render_image(theta, ip))
+    model.clear_psf()
+
+    # real-space path on padded extent (drawImage PSF)
+    model.configure_psf(psf_obj, ip)
+    img_realspace = _render_manual_padded(model, psf_obj, theta, ip)
+
+    peak = np.max(np.abs(img_realspace))
+    max_rel_resid = np.max(np.abs(img_kspace - img_realspace)) / peak
+
+    # diagnostic plot
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    im0 = axes[0].imshow(img_kspace, origin='lower')
+    axes[0].set_title('drawKImage fused')
+    plt.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(img_realspace, origin='lower')
+    axes[1].set_title('drawImage padded')
+    plt.colorbar(im1, ax=axes[1])
+
+    resid = (img_kspace - img_realspace) / peak
+    vmax = np.max(np.abs(resid))
+    im2 = axes[2].imshow(resid, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[2].set_title(f'rel resid (max={max_rel_resid:.2e})')
+    plt.colorbar(im2, ax=axes[2])
+
+    status = 'PASS' if max_rel_resid < 1e-3 else 'FAIL'
+    fig.suptitle(
+        f'drawKImage vs drawImage PSF (padded) — {status}',
+        color='green' if status == 'PASS' else 'red',
+    )
+    plt.tight_layout()
+    plt.savefig(output_dir / 'kspace_vs_realspace_psf.png', dpi=150)
+    plt.close()
+
+    assert (
+        max_rel_resid < 1e-3
+    ), f"drawKImage vs drawImage PSF disagree: max_rel_resid={max_rel_resid:.2e}"
+
+
+@pytest.mark.parametrize("shape", [(60, 100), (100, 60)], ids=['tall', 'wide'])
+def test_nonsquare_psf_regression(shape, output_dir):
+    """Non-square images with PSF produce correct results via square padding."""
+    ip = ImagePars(shape=shape, pixel_scale=0.3, indexing='xy')
+    psf_obj = gs.Gaussian(fwhm=0.625)
+    theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
+
+    model = InclinedExponentialModel()
+    model.configure_psf(psf_obj, ip, oversample=1)
+    img = np.array(model.render_image(theta, ip))
+    model.clear_psf()
+
+    # with indexing='xy', shape=(Ncol, Nrow) but render_image returns (Nrow, Ncol)
+    assert img.shape == (ip.Nrow, ip.Ncol)
+    assert np.all(np.isfinite(img))
+    # flux should be positive and reasonable (not zeroed or exploded)
+    assert np.sum(img) > 0
+    # peak should be near center
+    peak_idx = np.unravel_index(np.argmax(img), img.shape)
+    assert abs(peak_idx[0] - ip.Nrow // 2) < ip.Nrow // 4
+    assert abs(peak_idx[1] - ip.Ncol // 2) < ip.Ncol // 4
+
+    # diagnostic plot
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(img, origin='lower')
+    ax.set_title(f'Non-square {shape} PSF render')
+    plt.colorbar(im, ax=ax)
+    plt.tight_layout()
+    plt.savefig(output_dir / f'nonsquare_psf_{shape[0]}x{shape[1]}.png', dpi=150)
+    plt.close()
+
+
+# ==============================================================================
 # E. Render Layer Integration Tests
 # ==============================================================================
 
@@ -719,27 +974,33 @@ def test_no_psf_regression(image_pars):
     np.testing.assert_allclose(np.array(rendered), np.array(raw), atol=1e-12)
 
 
-def test_psf_render_image_consistency(image_pars, gaussian_psf):
+def test_psf_render_image_consistency(gaussian_psf):
     """
-    Configure PSF -> render_image == manual convolve_fft(source, psf_data).
+    Cross-path validation: drawKImage fused vs drawImage real-space PSF.
 
-    Both sides use k-space source (render_image without PSF) so this purely
-    validates the PSF convolution path, not quadrature vs k-space differences.
+    Both paths render on the same padded extent (via _render_manual_padded),
+    eliminating boundary flux. Residual is purely the sinc gap between
+    GalSim drawKImage (analytic k-space FT) and drawImage (real-space).
+
+    Uses a large stamp (~5 effective scale lengths) where boundary flux
+    is negligible even without padding, giving additional margin.
     """
+    # large stamp: ±22.5" x ±25.5" at 0.3"/pix → ~5x rscale_eff in short dim
+    ip = ImagePars(shape=(150, 170), pixel_scale=0.3, indexing='xy')
     model = InclinedExponentialModel()
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
-    # manual convolution using k-space source (same as render_image uses internally)
-    raw = model.render_image(theta, image_pars, oversample=1)  # k-space, no PSF
-    pdata = precompute_psf_fft(gaussian_psf, image_pars)
-    manual = convolve_fft(raw, pdata)
-
-    # render_image with PSF (oversample=1 for exact equality with manual path)
-    model.configure_psf(gaussian_psf, image_pars, oversample=1)
-    rendered = model.render_image(theta, image_pars)
+    # fused k-space path (drawKImage PSF, default oversample)
+    model.configure_psf(gaussian_psf, ip)
+    rendered = model.render_image(theta, ip)
     model.clear_psf()
 
-    np.testing.assert_allclose(np.array(rendered), np.array(manual), atol=1e-12)
+    # real-space path on padded extent (drawImage PSF)
+    model.configure_psf(gaussian_psf, ip)
+    manual = _render_manual_padded(model, gaussian_psf, theta, ip)
+
+    peak = np.max(np.abs(manual))
+    np.testing.assert_allclose(np.array(rendered), np.array(manual), atol=5e-4 * peak)
 
 
 def test_velocity_render_image_flux_weighted(image_pars, gaussian_psf):

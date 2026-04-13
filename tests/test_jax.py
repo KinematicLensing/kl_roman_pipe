@@ -51,7 +51,7 @@ def test_grid():
     """Test coordinate grids."""
     x = jnp.linspace(-10, 10, 20)
     y = jnp.linspace(-10, 10, 20)
-    return jnp.meshgrid(x, y, indexing='ij')
+    return jnp.meshgrid(x, y, indexing='xy')
 
 
 @pytest.fixture

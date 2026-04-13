@@ -335,36 +335,36 @@ def _generate_sersic_scipy(
         Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
         ps = image_pars.pixel_scale
 
-        # padded k-grid (2x for anti-aliasing)
+        # padded k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
         pad = 2
         pr = int(np.ceil(pad * Nrow / 2) * 2)  # even padded sizes
         pc = int(np.ceil(pad * Ncol / 2) * 2)
-        krow = 2 * np.pi * np.fft.fftfreq(pr, d=ps)
-        kcol = 2 * np.pi * np.fft.fftfreq(pc, d=ps)
-        KROW, KCOL = np.meshgrid(krow, kcol, indexing='ij')
+        ky = 2 * np.pi * np.fft.fftfreq(pr, d=ps)
+        kx = 2 * np.pi * np.fft.fftfreq(pc, d=ps)
+        KY, KX = np.meshgrid(ky, kx, indexing='ij')
 
-        # centroid phase + half-pixel alignment
-        hrow = 0.5 * ps * (1 - Nrow % 2)
-        hcol = 0.5 * ps * (1 - Ncol % 2)
-        phase = np.exp(-1j * (KROW * (int_x0 - hrow) + KCOL * (int_y0 - hcol)))
+        # centroid phase: pair kx with x0 (horizontal), ky with y0 (vertical)
+        hx = 0.5 * ps * (1 - Ncol % 2)
+        hy = 0.5 * ps * (1 - Nrow % 2)
+        phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
 
-        # shear (area-preserving, flux-preserving)
+        # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
         norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
-        kr_s = norm_s * ((1 + g1) * KROW + g2 * KCOL)
-        kc_s = norm_s * (g2 * KROW + (1 - g1) * KCOL)
+        kx_s = norm_s * ((1 + g1) * KX + g2 * KY)
+        ky_s = norm_s * (g2 * KX + (1 - g1) * KY)
 
         # rotation by -theta_int
         c, s = np.cos(-theta_int), np.sin(-theta_int)
-        kr_gal = c * kr_s - s * kc_s
-        kc_gal = s * kr_s + c * kc_s
+        kx_gal = c * kx_s - s * ky_s
+        ky_gal = s * kx_s + c * ky_s
 
         # analytic FT
-        kr_sc = kr_gal * int_rscale
-        kc_sc = kc_gal * int_rscale
-        k_sq = kr_sc**2 + (kc_sc * cosi) ** 2
+        kx_sc = kx_gal * int_rscale
+        ky_sc = ky_gal * int_rscale
+        k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
         ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
 
-        u = (np.pi / 2) * int_h_over_r * kc_sc * sini
+        u = (np.pi / 2) * int_h_over_r * ky_sc * sini
         # safe-where: substitute finite dummy to avoid 0/sinh(0) = 0/0 warning
         u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
         ft_vertical = np.where(
@@ -499,15 +499,15 @@ def _generate_sersic_galsim(
     if psf is not None:
         profile = gs.Convolve(profile, psf)
 
-    # GalSim stores x (horizontal) in cols; we store X (horizontal) in rows.
-    # Physical params (shift, rotate, shear) are Cartesian — correct as-is.
-    nx, ny = image_pars.Nrow, image_pars.Ncol
+    # standard convention: X=horizontal=cols, Y=vertical=rows
+    # GalSim drawImage(nx, ny) expects nx=Ncol, ny=Nrow
+    nx, ny = image_pars.Nx, image_pars.Ny
     pixel_scale = image_pars.pixel_scale
 
     image = profile.drawImage(nx=nx, ny=ny, scale=pixel_scale, method=method)
 
-    # transpose: GalSim (row=y, col=x) -> ours (row=X, col=Y)
-    intensity = image.array.T
+    # GalSim array shape = (ny, nx) = (Nrow, Ncol) — matches our grid directly
+    intensity = image.array
 
     return intensity
 

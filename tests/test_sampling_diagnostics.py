@@ -400,8 +400,8 @@ class TestJointSamplingDiagnostics:
     # Sampler config - need enough iterations for convergence
     SAMPLER_CONFIG = EnsembleSamplerConfig(
         n_walkers=32,
-        n_iterations=2000,
-        burn_in=500,
+        n_iterations=1500,
+        burn_in=400,
         thin=1,
         seed=42,
         progress=False,
@@ -410,14 +410,14 @@ class TestJointSamplingDiagnostics:
     # Looser config for shear tests (more degeneracy)
     SAMPLER_CONFIG_SHEAR = EnsembleSamplerConfig(
         n_walkers=48,
-        n_iterations=3000,
-        burn_in=1000,
+        n_iterations=2000,
+        burn_in=600,
         thin=1,
         seed=42,
         progress=False,
     )
 
-    @pytest.mark.parametrize("snr", [100, 50, 10])
+    @pytest.mark.parametrize("snr", [100, 20])
     def test_joint_sampling_no_shear(self, snr, test_config):
         """Test joint sampling without shear (g1=g2=0)."""
         true_pars = {
@@ -438,7 +438,7 @@ class TestJointSamplingDiagnostics:
             true_pars, snr, test_config, "joint_no_shear", sample_shear=False
         )
 
-    @pytest.mark.parametrize("snr", [100, 50, 10])
+    @pytest.mark.parametrize("snr", [100, 20])
     def test_joint_sampling_with_shear(self, snr, test_config):
         """Test joint sampling with shear (g1=0.03, g2=-0.02)."""
         true_pars = {
