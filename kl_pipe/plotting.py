@@ -320,9 +320,9 @@ def plot_rotation_curve(
     x0 = float(model.get_param('x0', theta)) if 'x0' in model._param_indices else 0.0
     y0 = float(model.get_param('y0', theta)) if 'y0' in model._param_indices else 0.0
 
-    # Convert center from arcsec to pixels
-    x0_pix = x0 / image_pars.pixel_scale + image_pars.Nrow / 2
-    y0_pix = y0 / image_pars.pixel_scale + image_pars.Ncol / 2
+    # Convert center from arcsec to pixels (x=horizontal=cols, y=vertical=rows)
+    x0_pix = x0 / image_pars.pixel_scale + image_pars.Ncol / 2
+    y0_pix = y0 / image_pars.pixel_scale + image_pars.Nrow / 2
 
     # Distance along major axis (in pixels)
     dx = np.cos(theta_int)
@@ -371,12 +371,12 @@ def plot_rotation_curve(
     # Velocity map (show in pixel coordinates for clarity)
     vmin, vmax = np.percentile(vmap[mask], [1, 99])
     im = ax1.imshow(
-        vmap.T,
+        vmap,
         origin='lower',
         cmap='RdBu_r',
         vmin=vmin,
         vmax=vmax,
-        extent=[0, image_pars.Nrow, 0, image_pars.Ncol],
+        extent=[0, image_pars.Ncol, 0, image_pars.Nrow],
     )
     plt.colorbar(im, ax=ax1, label='km/s')
 
@@ -404,8 +404,8 @@ def plot_rotation_curve(
             lw=1,
         )
 
-    ax1.set_xlim(0, image_pars.Nrow)
-    ax1.set_ylim(0, image_pars.Ncol)
+    ax1.set_xlim(0, image_pars.Ncol)
+    ax1.set_ylim(0, image_pars.Nrow)
     ax1.set_title(f'Velocity Map ({plane} plane)')
     ax1.set_xlabel('x (pixels)')
     ax1.set_ylabel('y (pixels)')

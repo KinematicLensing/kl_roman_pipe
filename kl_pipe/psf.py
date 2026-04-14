@@ -39,10 +39,10 @@ class PSFData:
     """Pre-computed PSF arrays for JAX FFT convolution."""
 
     kernel_fft: jnp.ndarray  # pre-FFT'd kernel (padded)
-    padded_shape: tuple  # (Ny_pad, Nx_pad) — fine-scale when oversampled
-    original_shape: tuple  # (Ny, Nx) — fine-scale when oversampled
+    padded_shape: tuple  # (Nrow_pad, Ncol_pad) — fine-scale when oversampled
+    original_shape: tuple  # (Nrow, Ncol) — fine-scale when oversampled
     oversample: int  # oversampling factor (1 = no oversampling)
-    coarse_shape: tuple  # output shape (Ny, Nx) — same as original_shape when N=1
+    coarse_shape: tuple  # output shape (Nrow, Ncol) — same as original_shape when N=1
 
 
 def _psf_flatten(p):
@@ -85,7 +85,7 @@ def gsobj_to_kernel(
 
     Two calling conventions (image_pars is preferred):
     - gsobj_to_kernel(gsobj, image_pars=image_pars)
-    - gsobj_to_kernel(gsobj, image_shape=(Ny, Nx), pixel_scale=scale)
+    - gsobj_to_kernel(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale)
 
     Parameters
     ----------
@@ -94,7 +94,7 @@ def gsobj_to_kernel(
     image_pars : ImagePars, optional
         Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
     image_shape : tuple, optional
-        (Ny, Nx) of the data images this kernel will convolve.
+        (Nrow, Ncol) of the data images this kernel will convolve.
     pixel_scale : float, optional
         arcsec/pixel.
     gsparams : galsim.GSParams, optional
@@ -107,7 +107,7 @@ def gsobj_to_kernel(
     kernel_shifted : np.ndarray
         ifftshift'd, zero-padded kernel ready for FFT.
     padded_shape : tuple
-        (Ny_pad, Nx_pad) after padding for linear (non-circular) convolution.
+        (Nrow_pad, Ncol_pad) after padding for linear (non-circular) convolution.
     """
     import galsim as gs
 
@@ -141,20 +141,76 @@ def gsobj_to_kernel(
     kernel /= kernel.sum()
 
     # compute padded shape for linear convolution (avoid wrap-around)
-    ny_pad = next_fast_len(image_shape[0] + kernel.shape[0] - 1)
-    nx_pad = next_fast_len(image_shape[1] + kernel.shape[1] - 1)
-    padded_shape = (ny_pad, nx_pad)
+    nrow_pad = next_fast_len(image_shape[0] + kernel.shape[0] - 1)
+    ncol_pad = next_fast_len(image_shape[1] + kernel.shape[1] - 1)
+    padded_shape = (nrow_pad, ncol_pad)
 
     # zero-pad kernel then roll center to (0,0) for FFT convention.
     # np.roll correctly wraps negative-offset values to the end of
     # the padded array, unlike ifftshift+place which mispositions them.
     padded_kernel = np.zeros(padded_shape, dtype=np.float64)
     padded_kernel[: kernel.shape[0], : kernel.shape[1]] = kernel
-    ky_half = kernel.shape[0] // 2
-    kx_half = kernel.shape[1] // 2
-    padded_kernel = np.roll(padded_kernel, (-ky_half, -kx_half), axis=(0, 1))
+    row_half = kernel.shape[0] // 2
+    col_half = kernel.shape[1] // 2
+    padded_kernel = np.roll(padded_kernel, (-row_half, -col_half), axis=(0, 1))
 
     return padded_kernel, padded_shape
+
+
+def precompute_psf_kspace_fft(
+    gsobj: 'galsim.GSObject',
+    padded_shape: Tuple[int, int],
+    pixel_scale: float,
+    gsparams: 'galsim.GSParams' = None,
+) -> jnp.ndarray:
+    """
+    Evaluate PSF's continuous Fourier transform on the padded DFT grid.
+
+    Uses GalSim's ``drawKImage`` to sample the PSF's analytic k-space
+    representation directly, avoiding the sinc smoothing and aliasing
+    introduced by pixel-rendering then FFT-ing.
+
+    For combined k-space rendering + PSF convolution: the result lives on
+    the same padded grid that ``_render_kspace`` uses, so element-wise
+    multiplication in k-space correctly convolves before the IFFT crop.
+
+    Parameters
+    ----------
+    gsobj : galsim.GSObject
+        PSF profile.
+    padded_shape : tuple
+        (N_pad, N_pad) of the padded FFT grid (must be square and must
+        match _render_kspace).
+    pixel_scale : float
+        arcsec/pixel at the fine scale (pixel_scale / oversample if oversampled).
+    gsparams : galsim.GSParams, optional
+        Override GSParams (affects kvalue_accuracy).
+
+    Returns
+    -------
+    jnp.ndarray
+        Complex kernel FFT in standard FFT order (DC at [0,0]),
+        shape == padded_shape.
+    """
+    pad_sq = padded_shape[0]
+    if padded_shape[0] != padded_shape[1]:
+        raise ValueError(f"drawKImage requires square grid, got {padded_shape}")
+
+    if gsparams is not None:
+        gsobj = gsobj.withGSParams(gsparams)
+
+    # dk matching the DFT grid: dk = 2*pi / (N * pixel_scale)
+    dk = 2.0 * np.pi / (pad_sq * pixel_scale)
+    kim = gsobj.drawKImage(nx=pad_sq, ny=pad_sq, scale=dk)
+
+    # drawKImage returns centered layout; convert to FFT order (DC at [0,0])
+    fft_ordered = np.fft.ifftshift(kim.array)
+
+    # normalize so DC = 1 (unit-flux PSF convention), matching the
+    # sum(kernel)=1 → DFT[0,0]=1 convention used by the real-space path
+    fft_ordered = fft_ordered / fft_ordered[0, 0]
+
+    return jnp.array(fft_ordered)
 
 
 def precompute_psf_fft(
@@ -173,7 +229,7 @@ def precompute_psf_fft(
 
     Two calling conventions (image_pars is preferred):
     - precompute_psf_fft(gsobj, image_pars=image_pars)
-    - precompute_psf_fft(gsobj, image_shape=(Ny, Nx), pixel_scale=scale)
+    - precompute_psf_fft(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale)
 
     Parameters
     ----------
@@ -182,13 +238,13 @@ def precompute_psf_fft(
     image_pars : ImagePars, optional
         Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
     image_shape : tuple, optional
-        (Ny, Nx) of the data images.
+        (Nrow, Ncol) of the data images.
     pixel_scale : float, optional
         arcsec/pixel.
     oversample : int, optional
         Oversampling factor for source evaluation. When > 1, the PSF kernel
         is rendered at finer pixel scale (pixel_scale / oversample) on a
-        larger grid (Ny*oversample, Nx*oversample). Must be a positive odd
+        larger grid (Nrow*oversample, Ncol*oversample). Must be a positive odd
         integer to avoid centroid-shift artifacts. Default is 1 (no oversampling).
     gsparams : galsim.GSParams, optional
         Override GSParams for kernel rendering. Controls truncation radius
@@ -263,18 +319,18 @@ def _convolve_fft_raw(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
     jnp.ndarray
         Convolved image at fine-scale, shape == psf_data.original_shape.
     """
-    ny, nx = psf_data.original_shape
-    py, px = psf_data.padded_shape
+    nrow, ncol = psf_data.original_shape
+    prow, pcol = psf_data.padded_shape
 
     # zero-pad image
-    padded = jnp.zeros((py, px), dtype=image.dtype)
-    padded = padded.at[:ny, :nx].set(image)
+    padded = jnp.zeros((prow, pcol), dtype=image.dtype)
+    padded = padded.at[:nrow, :ncol].set(image)
 
     # FFT multiply IFFT
     result = jnp.fft.ifft2(jnp.fft.fft2(padded) * psf_data.kernel_fft)
 
     # crop to original shape and take real part
-    return result[:ny, :nx].real
+    return result[:nrow, :ncol].real
 
 
 def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
@@ -309,8 +365,8 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
 
     if psf_data.oversample > 1:
         N = psf_data.oversample
-        Ny_c, Nx_c = psf_data.coarse_shape
-        result = result.reshape(Ny_c, N, Nx_c, N).mean(axis=(1, 3))
+        Nrow_c, Ncol_c = psf_data.coarse_shape
+        result = result.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
 
     return result
 
@@ -346,14 +402,19 @@ def convolve_flux_weighted(
     jnp.ndarray
         Flux-weighted, PSF-convolved velocity map, shape == psf_data.coarse_shape.
     """
+    # normalize intensity to prevent FFT overflow with large flux values
+    # (e.g. TNG luminosities); cancels exactly in the ratio Conv(I*v)/Conv(I)
+    i_max = jnp.max(jnp.abs(intensity))
+    intensity = intensity / jnp.maximum(i_max, 1.0)
+
     conv_iv = _convolve_fft_raw(intensity * velocity, psf_data)
     conv_i = _convolve_fft_raw(intensity, psf_data)
 
     if psf_data.oversample > 1:
         N = psf_data.oversample
-        Ny_c, Nx_c = psf_data.coarse_shape
-        num = conv_iv.reshape(Ny_c, N, Nx_c, N).sum(axis=(1, 3))
-        den = conv_i.reshape(Ny_c, N, Nx_c, N).sum(axis=(1, 3))
+        Nrow_c, Ncol_c = psf_data.coarse_shape
+        num = conv_iv.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+        den = conv_i.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
         return num / jnp.maximum(den, epsilon)
     else:
         return conv_iv / jnp.maximum(conv_i, epsilon)
@@ -379,24 +440,24 @@ def convolve_fft_numpy(
     kernel : np.ndarray
         ifftshift'd, zero-padded kernel from gsobj_to_kernel.
     padded_shape : tuple
-        (Ny_pad, Nx_pad).
+        (Nrow_pad, Ncol_pad).
 
     Returns
     -------
     np.ndarray
         Convolved image, same shape as input.
     """
-    ny, nx = image.shape
-    py, px = padded_shape
+    nrow, ncol = image.shape
+    prow, pcol = padded_shape
 
     # zero-pad image
-    padded = np.zeros((py, px), dtype=np.float64)
-    padded[:ny, :nx] = image
+    padded = np.zeros((prow, pcol), dtype=np.float64)
+    padded[:nrow, :ncol] = image
 
     # FFT multiply IFFT
     result = np.fft.ifft2(np.fft.fft2(padded) * np.fft.fft2(kernel))
 
-    return result[:ny, :nx].real
+    return result[:nrow, :ncol].real
 
 
 def convolve_flux_weighted_numpy(
@@ -418,7 +479,7 @@ def convolve_flux_weighted_numpy(
     kernel : np.ndarray
         ifftshift'd, zero-padded kernel from gsobj_to_kernel.
     padded_shape : tuple
-        (Ny_pad, Nx_pad).
+        (Nrow_pad, Ncol_pad).
     epsilon : float
         Floor to prevent division by zero.
 
@@ -427,6 +488,10 @@ def convolve_flux_weighted_numpy(
     np.ndarray
         Flux-weighted, PSF-convolved velocity map.
     """
+    # normalize intensity to prevent FFT overflow with large flux values
+    i_max = np.max(np.abs(intensity))
+    intensity = intensity / max(i_max, 1.0)
+
     conv_iv = convolve_fft_numpy(intensity * velocity, kernel, padded_shape)
     conv_i = convolve_fft_numpy(intensity, kernel, padded_shape)
 
@@ -453,7 +518,7 @@ def _resample_to_grid(
 
     Two calling conventions (target_image_pars is preferred):
     - _resample_to_grid(image, source_pars, target_image_pars=target_pars)
-    - _resample_to_grid(image, source_pars, target_shape=(Ny, Nx), target_pixel_scale=scale)
+    - _resample_to_grid(image, source_pars, target_shape=(Nrow, Ncol), target_pixel_scale=scale)
 
     Parameters
     ----------
@@ -464,7 +529,7 @@ def _resample_to_grid(
     target_image_pars : ImagePars, optional
         Image parameters for target grid. Extracts (Nrow, Ncol) and pixel_scale.
     target_shape : tuple, optional
-        (Ny, Nx) of target grid.
+        (Nrow, Ncol) of target grid.
     target_pixel_scale : float, optional
         arcsec/pixel of target grid.
 

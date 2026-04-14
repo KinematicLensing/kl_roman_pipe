@@ -153,7 +153,7 @@ def compute_empirical_scales(
     # Run short MCMC
     kernel = NUTS(preconditioning_model, dense_mass=False)  # Diagonal for speed
     mcmc = MCMC(
-        kernel, num_warmup=50, num_samples=n_samples, num_chains=1, progress_bar=False
+        kernel, num_warmup=100, num_samples=n_samples, num_chains=1, progress_bar=False
     )
     mcmc.run(rng_key)
 
@@ -557,11 +557,9 @@ class NumpyroSampler(Sampler):
 
         samples = np.column_stack(samples_list)
 
-        # Compute log probabilities for samples
-        log_posterior_fn = self.task.get_log_posterior_fn()
-        log_probs = np.array(
-            [float(log_posterior_fn(jnp.array(theta))) for theta in samples]
-        )
+        # Compute log probabilities for samples (batched via vmap)
+        _batched_log_posterior = jax.jit(jax.vmap(self.task._log_posterior_jittable))
+        log_probs = np.asarray(_batched_log_posterior(jnp.array(samples)))
 
         # Collect diagnostics
         diagnostics = self._collect_diagnostics(mcmc, self._reparam_scales)

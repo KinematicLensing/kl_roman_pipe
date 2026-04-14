@@ -1252,7 +1252,7 @@ class TNGDataVectorGenerator:
         # ===================================================================
         if g1 != 0 or g2 != 0:
             # source→cen = A^{-1} = norm * [[1+g1, g2], [g2, 1-g1]]
-            norm = 1.0 / (1.0 - (g1**2 + g2**2))
+            norm = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
             x_cen = norm * ((1.0 + g1) * x_source + g2 * y_source)
             y_cen = norm * (g2 * x_source + (1.0 - g1) * y_source)
         else:
