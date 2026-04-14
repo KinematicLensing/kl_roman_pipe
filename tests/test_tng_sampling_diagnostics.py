@@ -90,16 +90,16 @@ MAX_SAMPLING_TIME = 300  # 5 minutes per galaxy
 # ==============================================================================
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def tng_data():
     """Load TNG50 data once per module."""
     return TNG50MockData()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def output_dir():
     """Output directory for TNG sampling diagnostics."""
-    out_dir = get_test_dir() / "out" / "tng_diagnostics" / "sampling"
+    out_dir = get_test_dir() / 'out' / 'tng_diagnostics' / 'sampling'
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 
@@ -107,7 +107,7 @@ def output_dir():
 @pytest.fixture
 def image_pars():
     """Standard test image parameters."""
-    return ImagePars(shape=IMAGE_SHAPE, pixel_scale=PIXEL_SCALE, indexing="ij")
+    return ImagePars(shape=IMAGE_SHAPE, pixel_scale=PIXEL_SCALE, indexing='ij')
 
 
 # ==============================================================================
@@ -139,7 +139,7 @@ def estimate_velocity_params(
 
     if valid_mask.sum() < 10:
         # Not enough valid pixels, return defaults
-        return {"v0": 0.0, "vcirc": 150.0, "vel_rscale": 0.5}
+        return {'v0': 0.0, 'vcirc': 150.0, 'vel_rscale': 0.5}
 
     valid_vel = velocity_map[valid_mask]
 
@@ -162,11 +162,11 @@ def estimate_velocity_params(
     vel_rscale = fov_arcsec / 6.0  # Rough estimate
 
     return {
-        "v0": v0,
-        "vcirc": vcirc_estimate,
-        "vel_rscale": vel_rscale,
-        "vel_x0": 0.0,  # Assume centered initially
-        "vel_y0": 0.0,
+        'v0': v0,
+        'vcirc': vcirc_estimate,
+        'vel_rscale': vel_rscale,
+        'vel_x0': 0.0,  # Assume centered initially
+        'vel_y0': 0.0,
     }
 
 
@@ -225,11 +225,11 @@ def estimate_intensity_params(
     total = intensity_map.sum()
     if total <= 0:
         return {
-            "flux": flux,
-            "int_rscale": 0.5,
-            "int_h_over_r": 0.1,
-            "int_x0": 0.0,
-            "int_y0": 0.0,
+            'flux': flux,
+            'int_rscale': 0.5,
+            'int_h_over_r': 0.1,
+            'int_x0': 0.0,
+            'int_y0': 0.0,
         }
 
     cumsum = np.cumsum(np.sort(intensity_map.ravel())[::-1])
@@ -246,11 +246,11 @@ def estimate_intensity_params(
     int_rscale = max(0.1, min(3.0, int_rscale))
 
     return {
-        "flux": flux,
-        "int_rscale": int_rscale,
-        "int_h_over_r": 0.1,
-        "int_x0": 0.0,
-        "int_y0": 0.0,
+        'flux': flux,
+        'int_rscale': int_rscale,
+        'int_h_over_r': 0.1,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
     }
 
 
@@ -291,7 +291,7 @@ def create_tng_joint_inference_task(
     joint_model = KLModel(
         velocity_model=vel_model,
         intensity_model=int_model,
-        shared_pars={"cosi", "theta_int", "g1", "g2"},
+        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
     )
 
     # FOV for offset prior bounds
@@ -302,39 +302,39 @@ def create_tng_joint_inference_task(
     # This allows exploration since TNG doesn't match analytic models exactly
     prior_spec = {
         # Velocity params - wide priors
-        "v0": Gaussian(true_pars.get("v0", 0.0), 30.0),  # Wide Gaussian
-        "vcirc": TruncatedNormal(
-            true_pars.get("vcirc", 150.0), 100.0, 30, 500
+        'v0': Gaussian(true_pars.get('v0', 0.0), 30.0),  # Wide Gaussian
+        'vcirc': TruncatedNormal(
+            true_pars.get('vcirc', 150.0), 100.0, 30, 500
         ),  # Very wide
-        "vel_rscale": TruncatedNormal(true_pars.get("vel_rscale", 0.5), 0.5, 0.05, 3.0),
-        "vel_x0": TruncatedNormal(
-            true_pars.get("vel_x0", 0.0), 0.5, -offset_bound, offset_bound
+        'vel_rscale': TruncatedNormal(true_pars.get('vel_rscale', 0.5), 0.5, 0.05, 3.0),
+        'vel_x0': TruncatedNormal(
+            true_pars.get('vel_x0', 0.0), 0.5, -offset_bound, offset_bound
         ),
-        "vel_y0": TruncatedNormal(
-            true_pars.get("vel_y0", 0.0), 0.5, -offset_bound, offset_bound
+        'vel_y0': TruncatedNormal(
+            true_pars.get('vel_y0', 0.0), 0.5, -offset_bound, offset_bound
         ),
         # Intensity params - wide priors
         # After normalization, flux ~0.01 gives unit integrated flux in model
-        "flux": TruncatedNormal(true_pars.get("flux", 0.01), 0.02, 0.001, 0.1),
-        "int_rscale": TruncatedNormal(true_pars.get("int_rscale", 0.5), 0.5, 0.05, 3.0),
-        "int_h_over_r": 0.1,  # Fixed
-        "int_x0": TruncatedNormal(
-            true_pars.get("int_x0", 0.0), 0.5, -offset_bound, offset_bound
+        'flux': TruncatedNormal(true_pars.get('flux', 0.01), 0.02, 0.001, 0.1),
+        'int_rscale': TruncatedNormal(true_pars.get('int_rscale', 0.5), 0.5, 0.05, 3.0),
+        'int_h_over_r': 0.1,  # Fixed
+        'int_x0': TruncatedNormal(
+            true_pars.get('int_x0', 0.0), 0.5, -offset_bound, offset_bound
         ),
-        "int_y0": TruncatedNormal(
-            true_pars.get("int_y0", 0.0), 0.5, -offset_bound, offset_bound
+        'int_y0': TruncatedNormal(
+            true_pars.get('int_y0', 0.0), 0.5, -offset_bound, offset_bound
         ),
         # Shared geometric params - centered on known TNG values
-        "cosi": TruncatedNormal(true_pars["cosi"], 0.2, 0.01, 0.99),
-        "theta_int": TruncatedNormal(
-            true_pars["theta_int"],
+        'cosi': TruncatedNormal(true_pars['cosi'], 0.2, 0.01, 0.99),
+        'theta_int': TruncatedNormal(
+            true_pars['theta_int'],
             0.5,
             0.0,
             2 * np.pi,  # Full 0-2pi range
         ),
         # No shear for TNG (unlensed)
-        "g1": 0.0,
-        "g2": 0.0,
+        'g1': 0.0,
+        'g2': 0.0,
     }
 
     priors = PriorDict(prior_spec)
@@ -383,13 +383,13 @@ def evaluate_model_at_map(
     vel_model = task.model.velocity_model
     vel_pars = {k: full_pars[k] for k in vel_model.PARAMETER_NAMES}
     theta_vel = jnp.array([vel_pars[k] for k in vel_model.PARAMETER_NAMES])
-    model_vel = vel_model.render(theta_vel, "image", image_pars_vel)
+    model_vel = vel_model.render(theta_vel, 'image', image_pars_vel)
 
     # Evaluate intensity model
     int_model = task.model.intensity_model
     int_pars = {k: full_pars[k] for k in int_model.PARAMETER_NAMES}
     theta_int = jnp.array([int_pars[k] for k in int_model.PARAMETER_NAMES])
-    model_int = int_model.render(theta_int, "image", image_pars_int)
+    model_int = int_model.render(theta_int, 'image', image_pars_int)
 
     return model_vel, model_int
 
@@ -466,20 +466,20 @@ def run_tng_sampling_test(
     # Combine with geometric true_pars
     full_true_pars = {**true_pars, **vel_params, **int_params}
 
-    print(f"\n{'=' * 60}")
-    print(f"TNG Sampling: SubhaloID {subhalo_id} - {test_name}")
-    print(f"{'=' * 60}")
+    print(f'\n{"=" * 60}')
+    print(f'TNG Sampling: SubhaloID {subhalo_id} - {test_name}')
+    print(f'{"=" * 60}')
     print(
-        f"Geometric params: cosi={true_pars['cosi']:.3f}, theta_int={true_pars['theta_int']:.3f}"
+        f'Geometric params: cosi={true_pars["cosi"]:.3f}, theta_int={true_pars["theta_int"]:.3f}'
     )
     print(
-        f"Estimated velocity: v0={vel_params['v0']:.1f}, vcirc={vel_params['vcirc']:.1f}, "
-        f"vel_rscale={vel_params['vel_rscale']:.2f}"
+        f'Estimated velocity: v0={vel_params["v0"]:.1f}, vcirc={vel_params["vcirc"]:.1f}, '
+        f'vel_rscale={vel_params["vel_rscale"]:.2f}'
     )
     print(
-        f"Estimated intensity: flux={int_params['flux']:.2f}, int_rscale={int_params['int_rscale']:.2f}"
+        f'Estimated intensity: flux={int_params["flux"]:.2f}, int_rscale={int_params["int_rscale"]:.2f}'
     )
-    print(f"Variance (mean): vel={var_vel_mean:.2e}, int={var_int_mean:.2e}")
+    print(f'Variance (mean): vel={var_vel_mean:.2e}, int={var_int_mean:.2e}')
 
     # Create inference task
     data_vel = jnp.array(velocity_raw)
@@ -495,8 +495,8 @@ def run_tng_sampling_test(
         image_pars,
     )
 
-    print(f"Sampled parameters: {task.sampled_names}")
-    print(f"Fixed parameters: {list(task.fixed_params.keys())}")
+    print(f'Sampled parameters: {task.sampled_names}')
+    print(f'Fixed parameters: {list(task.fixed_params.keys())}')
 
     # Configure numpyro sampler with settings balanced for speed and quality
     # Given model mismatch, we prioritize getting reasonable diagnostics over perfect convergence
@@ -504,24 +504,24 @@ def run_tng_sampling_test(
         n_samples=N_SAMPLES,
         n_warmup=N_WARMUP,
         n_chains=N_CHAINS,
-        chain_method="vectorized",
+        chain_method='vectorized',
         seed=seed,
         progress=True,  # Show progress so we can see what's happening
-        reparam_strategy="prior",
+        reparam_strategy='prior',
         dense_mass=False,  # Diagonal mass matrix is faster and often sufficient
         max_tree_depth=8,  # Limit tree depth to prevent very long iterations
         target_accept_prob=0.8,  # Standard acceptance target
     )
 
     # Run sampler
-    sampler = build_sampler("numpyro", task, numpyro_config)
+    sampler = build_sampler('numpyro', task, numpyro_config)
     start_time = time.time()
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter('ignore')
         result = sampler.run()
     runtime = time.time() - start_time
 
-    print(f"Sampling complete: {result.n_samples} samples in {runtime:.1f}s")
+    print(f'Sampling complete: {result.n_samples} samples in {runtime:.1f}s')
 
     # Get MAP estimate
     map_pars = get_map_from_samples(result)
@@ -531,14 +531,14 @@ def run_tng_sampling_test(
 
     # Save corner plot
     sampler_info = {
-        "name": "numpyro",
-        "runtime": runtime,
-        "settings": {
-            "n_samples": N_SAMPLES,
-            "n_warmup": N_WARMUP,
-            "n_chains": N_CHAINS,
-            "SNR": snr,
-            "SubhaloID": subhalo_id,
+        'name': 'numpyro',
+        'runtime': runtime,
+        'settings': {
+            'n_samples': N_SAMPLES,
+            'n_warmup': N_WARMUP,
+            'n_chains': N_CHAINS,
+            'SNR': snr,
+            'SubhaloID': subhalo_id,
         },
     }
 
@@ -553,10 +553,10 @@ def run_tng_sampling_test(
         map_values=map_pars,
         sampler_info=sampler_info,
     )
-    corner_path = output_dir / f"{test_name}_subhalo{subhalo_id}_corner.png"
-    fig.savefig(corner_path, dpi=150, bbox_inches="tight")
+    corner_path = output_dir / f'{test_name}_subhalo{subhalo_id}_corner.png'
+    fig.savefig(corner_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
-    print(f"Saved corner plot: {corner_path}")
+    print(f'Saved corner plot: {corner_path}')
 
     # Save data comparison panels
     # Use the noisy data as both "noisy" and "true" since TNG is the "truth"
@@ -567,25 +567,25 @@ def run_tng_sampling_test(
         data_int_noisy=np.asarray(data_int),
         data_int_true=np.asarray(data_int),  # TNG is truth
         model_int=np.asarray(model_int),
-        test_name=f"{test_name}_subhalo{subhalo_id}",
+        test_name=f'{test_name}_subhalo{subhalo_id}',
         output_dir=output_dir,
         variance_vel=var_vel_mean,
         variance_int=var_int_mean,
         n_params=task.n_params,
-        model_label="MAP Model",
+        model_label='MAP Model',
     )
-    print(f"Saved data comparison: {test_name}_subhalo{subhalo_id}_data_comparison.png")
+    print(f'Saved data comparison: {test_name}_subhalo{subhalo_id}_data_comparison.png')
 
     # Print summary
     print_summary(result, true_values=corner_true_values)
 
     return {
-        "runtime": runtime,
-        "result": result,
-        "map_pars": map_pars,
-        "true_pars": full_true_pars,
-        "model_vel": model_vel,
-        "model_int": model_int,
+        'runtime': runtime,
+        'result': result,
+        'map_pars': map_pars,
+        'true_pars': full_true_pars,
+        'model_vel': model_vel,
+        'model_int': model_int,
     }
 
 
@@ -601,7 +601,7 @@ class TestTNGNativeSampling:
     Uses TNG catalog inclination and position angle as "true" geometric params.
     """
 
-    @pytest.mark.parametrize("subhalo_id", TEST_SUBHALO_IDS)
+    @pytest.mark.parametrize('subhalo_id', TEST_SUBHALO_IDS)
     def test_native_orientation_sampling(
         self, tng_data, output_dir, image_pars, subhalo_id
     ):
@@ -617,22 +617,22 @@ class TestTNGNativeSampling:
 
         # Extract native orientation as "true" geometric parameters
         true_pars = {
-            "cosi": gen.native_cosi,
-            "theta_int": gen.native_pa_rad,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': gen.native_cosi,
+            'theta_int': gen.native_pa_rad,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         print(
-            f"\nNative orientation: inc={gen.native_inclination_deg:.1f}°, "
-            f"PA={gen.native_pa_deg:.1f}°"
+            f'\nNative orientation: inc={gen.native_inclination_deg:.1f}°, '
+            f'PA={gen.native_pa_deg:.1f}°'
         )
-        print(f"  -> cosi={gen.native_cosi:.3f}, theta_int={gen.native_pa_rad:.3f} rad")
+        print(f'  -> cosi={gen.native_cosi:.3f}, theta_int={gen.native_pa_rad:.3f} rad')
 
         # Create render config for native orientation
         config = TNGRenderConfig(
             image_pars=image_pars,
-            band="r",
+            band='r',
             use_native_orientation=True,
             target_redshift=TARGET_REDSHIFT,
             use_cic_gridding=True,
@@ -644,7 +644,7 @@ class TestTNGNativeSampling:
             subhalo_id=subhalo_id,
             config=config,
             true_pars=true_pars,
-            test_name="native",
+            test_name='native',
             output_dir=output_dir,
             image_pars=image_pars,
             snr=DEFAULT_SNR,
@@ -652,9 +652,9 @@ class TestTNGNativeSampling:
         )
 
         # Basic assertions
-        assert results["result"].n_samples > 0
-        assert results["runtime"] > 0
-        assert all(np.isfinite(results["result"].log_prob))
+        assert results['result'].n_samples > 0
+        assert results['runtime'] > 0
+        assert all(np.isfinite(results['result'].log_prob))
 
 
 class TestTNGCustomSampling:
@@ -669,7 +669,7 @@ class TestTNGCustomSampling:
     CUSTOM_PA_DEG = 30.0
     CUSTOM_COSI = 0.5
 
-    @pytest.mark.parametrize("subhalo_id", TEST_SUBHALO_IDS)
+    @pytest.mark.parametrize('subhalo_id', TEST_SUBHALO_IDS)
     def test_custom_orientation_sampling(
         self, tng_data, output_dir, image_pars, subhalo_id
     ):
@@ -685,26 +685,26 @@ class TestTNGCustomSampling:
         # Custom geometric parameters
         theta_int = np.radians(self.CUSTOM_PA_DEG)
         true_pars = {
-            "cosi": self.CUSTOM_COSI,
-            "theta_int": theta_int,
-            "g1": 0.0,
-            "g2": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
+            'cosi': self.CUSTOM_COSI,
+            'theta_int': theta_int,
+            'g1': 0.0,
+            'g2': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
         }
 
         print(
-            f"\nCustom orientation: inc={np.degrees(np.arccos(self.CUSTOM_COSI)):.1f}°, "
-            f"PA={self.CUSTOM_PA_DEG:.1f}°"
+            f'\nCustom orientation: inc={np.degrees(np.arccos(self.CUSTOM_COSI)):.1f}°, '
+            f'PA={self.CUSTOM_PA_DEG:.1f}°'
         )
-        print(f"  -> cosi={self.CUSTOM_COSI:.3f}, theta_int={theta_int:.3f} rad")
-        print(f"  -> preserve_gas_stellar_offset=False (aligned geometry)")
+        print(f'  -> cosi={self.CUSTOM_COSI:.3f}, theta_int={theta_int:.3f} rad')
+        print(f'  -> preserve_gas_stellar_offset=False (aligned geometry)')
 
         # Create render config with custom orientation and aligned gas/stellar
-        pars = {k: true_pars[k] for k in ["cosi", "theta_int", "x0", "y0", "g1", "g2"]}
+        pars = {k: true_pars[k] for k in ['cosi', 'theta_int', 'x0', 'y0', 'g1', 'g2']}
         config = TNGRenderConfig(
             image_pars=image_pars,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars,
             target_redshift=TARGET_REDSHIFT,
@@ -718,7 +718,7 @@ class TestTNGCustomSampling:
             subhalo_id=subhalo_id,
             config=config,
             true_pars=true_pars,
-            test_name="custom_aligned",
+            test_name='custom_aligned',
             output_dir=output_dir,
             image_pars=image_pars,
             snr=DEFAULT_SNR,
@@ -726,21 +726,21 @@ class TestTNGCustomSampling:
         )
 
         # Basic assertions
-        assert results["result"].n_samples > 0
-        assert results["runtime"] > 0
-        assert all(np.isfinite(results["result"].log_prob))
+        assert results['result'].n_samples > 0
+        assert results['runtime'] > 0
+        assert all(np.isfinite(results['result'].log_prob))
 
         # Additional check: cosi should be recovered near true value
         # (with aligned geometry, model should fit better)
-        map_cosi = results["map_pars"].get("cosi", 0)
+        map_cosi = results['map_pars'].get('cosi', 0)
         cosi_error = abs(map_cosi - self.CUSTOM_COSI)
         print(
-            f"cosi recovery: true={self.CUSTOM_COSI:.3f}, MAP={map_cosi:.3f}, "
-            f"error={cosi_error:.3f}"
+            f'cosi recovery: true={self.CUSTOM_COSI:.3f}, MAP={map_cosi:.3f}, '
+            f'error={cosi_error:.3f}'
         )
 
         # Warn if recovery is poor (not fail - TNG doesn't match model exactly)
         if cosi_error > 0.3:
             warnings.warn(
-                f"Poor cosi recovery for SubhaloID {subhalo_id}: error={cosi_error:.3f}"
+                f'Poor cosi recovery for SubhaloID {subhalo_id}: error={cosi_error:.3f}'
             )

@@ -118,7 +118,7 @@ TNG50_SNAPSHOT_99_REDSHIFT = 0.0
 # Default data directory. This is needed to load the auxillary data files for the BC03 models, which are used for converting between
 # luminosity and magnitude, and for distance conversions. The BC03 models are stored in a preprocessed HDF5 file that contains the
 # SED and absolute magnitude grids for different bands, as well as the age and metallicity grids.
-DEFAULT_DATA_DIR = Path(__file__).parent.parent.parent / "data" / "tng50"
+DEFAULT_DATA_DIR = Path(__file__).parent.parent.parent / 'data' / 'tng50'
 
 
 def convert_tng_to_arcsec(
@@ -177,7 +177,7 @@ def convert_tng_to_arcsec(
 
     else:
         raise ValueError(
-            "Target redshift must be provided and different from native redshift for angular size scaling if using the TNG50 sample at snapshot 99."
+            'Target redshift must be provided and different from native redshift for angular size scaling if using the TNG50 sample at snapshot 99.'
         )
 
     return coords_arcsec
@@ -431,10 +431,10 @@ def sph_project_2d(
         y_min = yi - 2 * hi
         y_max = yi + 2 * hi
 
-        ix_min = np.searchsorted(x_centers, x_min, side="left")
-        ix_max = np.searchsorted(x_centers, x_max, side="right")
-        iy_min = np.searchsorted(y_centers, y_min, side="left")
-        iy_max = np.searchsorted(y_centers, y_max, side="right")
+        ix_min = np.searchsorted(x_centers, x_min, side='left')
+        ix_max = np.searchsorted(x_centers, x_max, side='right')
+        iy_min = np.searchsorted(y_centers, y_min, side='left')
+        iy_max = np.searchsorted(y_centers, y_max, side='right')
 
         ix_min = max(ix_min, 0)
         ix_max = min(ix_max, nx)
@@ -509,7 +509,7 @@ class TNGRenderConfig:
     """
 
     image_pars: ImagePars
-    band: str = "r"
+    band: str = 'r'
     use_dusted: bool = True
     center_on_peak: bool = True
     use_native_orientation: bool = True
@@ -524,14 +524,14 @@ class TNGRenderConfig:
         """Validate configuration parameters."""
         # Validate shear parameters if custom orientation is used
         if not self.use_native_orientation and self.pars is not None:
-            g1 = self.pars.get("g1", 0.0)
-            g2 = self.pars.get("g2", 0.0)
+            g1 = self.pars.get('g1', 0.0)
+            g2 = self.pars.get('g2', 0.0)
             gamma = np.sqrt(g1**2 + g2**2)
             weak_lensing_limit = 1.0
             if gamma >= weak_lensing_limit:
                 raise ValueError(
-                    f"Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. "
-                    f"Weak lensing requires |g| < {weak_lensing_limit}."
+                    f'Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. '
+                    f'Weak lensing requires |g| < {weak_lensing_limit}.'
                 )
 
 
@@ -557,11 +557,13 @@ class TNGDataVectorGenerator:
         galaxy_data : dict
             Dictionary with keys 'gas', 'stellar', 'subhalo' containing
             the TNG data for one galaxy (from TNG50MockData.get_galaxy())
+        data_dir : Path, optional
+            Directory containing auxiliary data files (e.g., BC03 models).
         """
         self.galaxy_data = galaxy_data
-        self.stellar = galaxy_data.get("stellar")
-        self.gas = galaxy_data.get("gas")
-        self.subhalo = galaxy_data.get("subhalo")
+        self.stellar = galaxy_data.get('stellar')
+        self.gas = galaxy_data.get('gas')
+        self.subhalo = galaxy_data.get('subhalo')
 
         # Setting some constant parameters for the BC03 models. These are used for converting between luminosity and magnitude, and for distance conversions.
         self.L_sun = 3.826e33  # erg/s. The default value in galaxev
@@ -574,36 +576,36 @@ class TNGDataVectorGenerator:
 
         # AB absolute manitudes in different SDSS bands
         self.M_abs_sun = {
-            "u": 6.39,
-            "g": 5.11,
-            "r": 4.65,
-            "i": 4.53,
-            "z": 4.50,
+            'u': 6.39,
+            'g': 5.11,
+            'r': 4.65,
+            'i': 4.53,
+            'z': 4.50,
         }
 
         if self.stellar is None:
-            raise ValueError("Stellar data required for data vector generation")
+            raise ValueError('Stellar data required for data vector generation')
 
         if self.subhalo is None:
             raise ValueError(
-                "Subhalo data required for coordinate conversion and orientation"
+                'Subhalo data required for coordinate conversion and orientation'
             )
 
         if data_dir is None:
             data_dir = DEFAULT_DATA_DIR
-        output_path = data_dir / "SDSS_hr_stelib_stellar_photometrics.hdf5"
+        output_path = data_dir / 'SDSS_hr_stelib_stellar_photometrics.hdf5'
         filtdir = data_dir
         self.load_BC03_models(output_path, filtdir)
 
         # Store key properties
-        self.distance_mpc = float(self.subhalo["DistanceMpc"])
+        self.distance_mpc = float(self.subhalo['DistanceMpc'])
         self.native_redshift = TNG50_SNAPSHOT_99_REDSHIFT  # Snapshot 99
-        self.native_inclination_deg = float(self.subhalo["Inclination_star"])
-        self.native_pa_deg = float(self.subhalo["Position_Angle_star"])
+        self.native_inclination_deg = float(self.subhalo['Inclination_star'])
+        self.native_pa_deg = float(self.subhalo['Position_Angle_star'])
 
         # Store gas orientation for offset preservation
-        self.native_gas_inclination_deg = float(self.subhalo["Inclination_gas"])
-        self.native_gas_pa_deg = float(self.subhalo["Position_Angle_gas"])
+        self.native_gas_inclination_deg = float(self.subhalo['Inclination_gas'])
+        self.native_gas_pa_deg = float(self.subhalo['Position_Angle_gas'])
 
         # Compute 3D rotation matrices to transform from TNG simulation frame
         # to face-on disk frame. We compute SEPARATE matrices for stellar and gas
@@ -627,7 +629,7 @@ class TNGDataVectorGenerator:
         self.native_pa_rad = np.radians(self.native_pa_deg)
 
     def load_BC03_models(
-        self, output_path: Path, filtdir: Path, bands: set = {"g", "r", "i", "u", "z"}
+        self, output_path: Path, filtdir: Path, bands: set = {'g', 'r', 'i', 'u', 'z'}
     ):
         """Load BC03 SED and absolute magnitude grids from preprocessed HDF5 file. They are both interpolated in the same way (bilinear
         in log(age) and metallicity) to get the SED and absolute magnitude for each particle based on its age and metallicity. The SED grid
@@ -646,19 +648,19 @@ class TNGDataVectorGenerator:
         """
 
         self.absolute_mag_grid = {}
-        with h5py.File(output_path, "r") as f:
-            self.BC03_age_grid_logGr = f["LogAgeInGyr_bins"][:]  # log(age in Gyr) grid
-            self.BC03_metallicity_grid = f["Metallicity_bins"][:]
-            BC03_wave_ang = f["Wavelengths"][:]
-            BC03_SED_grid = f["SEDs"][:].astype(
+        with h5py.File(output_path, 'r') as f:
+            self.BC03_age_grid_logGr = f['LogAgeInGyr_bins'][:]  # log(age in Gyr) grid
+            self.BC03_metallicity_grid = f['Metallicity_bins'][:]
+            BC03_wave_ang = f['Wavelengths'][:]
+            BC03_SED_grid = f['SEDs'][:].astype(
                 np.float64
             )  # shape (N_metallicity, N_age, N_wave)
-            self.BC03_N_age = f["N_LogAgeInGyr"][()]
-            self.BC03_N_metallicity = f["N_Metallicity"][()]
+            self.BC03_N_age = f['N_LogAgeInGyr'][()]
+            self.BC03_N_metallicity = f['N_Metallicity'][()]
 
             for band in bands:
                 # Absolute magnitude grid for this band has shape (N_metallicity, N_age)
-                self.absolute_mag_grid[band] = f["Magnitude_" + band][:]
+                self.absolute_mag_grid[band] = f['Magnitude_' + band][:]
 
         self.wavelength_SED_within_filter = {}
         self.SED_within_filter_grid = {}
@@ -666,13 +668,13 @@ class TNGDataVectorGenerator:
         self.denominator_scalar = {}
         for band in bands:
             # Currently limited to the SDSS filters, but could be extended in the future.
-            filtname = filtdir / f"{band}_SDSS.res"
-            f = open(filtname, "r")
+            filtname = filtdir / f'{band}_SDSS.res'
+            f = open(filtname, 'r')
             filt_wave, filt_t = np.loadtxt(f, unpack=True)
             f.close()
 
             filt_spline = interp1d(
-                filt_wave, filt_t, kind="linear", bounds_error=False, fill_value=0.0
+                filt_wave, filt_t, kind='linear', bounds_error=False, fill_value=0.0
             )
 
             wmin_filt, wmax_filt = filt_wave[0], filt_wave[-1]
@@ -741,9 +743,9 @@ class TNGDataVectorGenerator:
         # Get stellar particles for this galaxy
         stellar_particles = self.stellar
 
-        initial_masses = stellar_particles["GFM_InitialMass"]
-        stellar_ages = stellar_particles["Stellar_age"]
-        metallicities_org = stellar_particles["GFM_Metallicity"]
+        initial_masses = stellar_particles['GFM_InitialMass']
+        stellar_ages = stellar_particles['Stellar_age']
+        metallicities_org = stellar_particles['GFM_Metallicity']
         ages = np.log10(
             stellar_ages
         )  # log10(Gyr). The time when the stars formed. This is consistent with the age grid from galaxev.
@@ -769,7 +771,7 @@ class TNGDataVectorGenerator:
 
         if len(n_out_of_bounds) > 0:
             print(
-                f"Warning: {len(n_out_of_bounds)} stellar particles out of {len(metallicities_org)} have metallicities out of the galaxev model bounds. They will be set to the nearest bound."
+                f'Warning: {len(n_out_of_bounds)} stellar particles out of {len(metallicities_org)} have metallicities out of the galaxev model bounds. They will be set to the nearest bound.'
             )
             metallicities = np.clip(
                 metallicities_org,
@@ -825,7 +827,7 @@ class TNGDataVectorGenerator:
                 if metallicity_SPH is None:
                     # Using the mass averaged metallcity if the pixel metallicity is not specified.
                     gas_metallicity = self.subhalo[
-                        "SubhaloGasMetallicity"
+                        'SubhaloGasMetallicity'
                     ] * np.ones_like(
                         N_H_cm2
                     )  # This is the mass-averaged metallicity of the gas in the galaxy, which is a single value for the whole galaxy. We will use this as a fallback if the
@@ -844,7 +846,7 @@ class TNGDataVectorGenerator:
                     wavelength_microns,
                     N_H_cm2,
                     gas_metallicity,
-                    self.subhalo["Redshift"],
+                    self.subhalo['Redshift'],
                 )
                 tau_lambda = self.CSK1994_scatter(wavelength_microns, tau_lambda_a)
             else:
@@ -861,10 +863,10 @@ class TNGDataVectorGenerator:
 
         # Pre-allocate the master 1D output arrays (These use negligible memory)
 
-        self.stellar["Absolute_Magnitude_rotate_" + band] = np.zeros(N_particles)
-        self.stellar["Raw_Luminosity_rotate_" + band] = np.zeros(N_particles)
-        self.stellar["Dusted_Luminosity_rotate_" + band] = np.zeros(N_particles)
-        self.stellar["Dusted_Absolute_Magnitude_rotate_" + band] = np.zeros(N_particles)
+        self.stellar['Absolute_Magnitude_rotate_' + band] = np.zeros(N_particles)
+        self.stellar['Raw_Luminosity_rotate_' + band] = np.zeros(N_particles)
+        self.stellar['Dusted_Luminosity_rotate_' + band] = np.zeros(N_particles)
+        self.stellar['Dusted_Absolute_Magnitude_rotate_' + band] = np.zeros(N_particles)
 
         tau_lambda_all[band] = dust_scatter(
             self.wavelength_SED_within_filter[band]
@@ -906,7 +908,7 @@ class TNGDataVectorGenerator:
             mass_chunk = initial_masses[start_idx:end_idx]
 
             print(
-                f"Processing particles {start_idx} to {end_idx} for galaxy ID {self.subhalo['SubhaloID']}"
+                f'Processing particles {start_idx} to {end_idx} for galaxy ID {self.subhalo["SubhaloID"]}'
             )
 
             lum_chunk = (
@@ -947,7 +949,7 @@ class TNGDataVectorGenerator:
                     # np.einsum instantly multiplies and sums along the wavelength axis (axis 1)
                     # This operates in C and allocates ZERO intermediate arrays!
                     dusted_integrals = np.einsum(
-                        "ij,ij->i", lum_chunk[valid_idx], dust_weights
+                        'ij,ij->i', lum_chunk[valid_idx], dust_weights
                     )
 
                     dusted_lum_nu[valid_idx] = (
@@ -956,7 +958,7 @@ class TNGDataVectorGenerator:
 
             # Convert L_nu (erg/s/Hz) to Absolute Magnitude using the AB magnitude system definition
             # Wrap the log10 calculations to silence the zero-flux warnings
-            with np.errstate(divide="ignore"):
+            with np.errstate(divide='ignore'):
                 raw_lum_AB_mag = (
                     -2.5
                     * np.log10(
@@ -983,14 +985,14 @@ class TNGDataVectorGenerator:
             # self.stellar_data[galaxy_id]["AB_apparent_magnitude_" + band][
             #     start_idx:end_idx
             # ] = app_mag
-            self.stellar["Absolute_Magnitude_rotate_" + band][
+            self.stellar['Absolute_Magnitude_rotate_' + band][
                 start_idx:end_idx
             ] = raw_lum_AB_mag
-            self.stellar["Raw_Luminosity_rotate_" + band][start_idx:end_idx] = raw_lum
-            self.stellar["Dusted_Luminosity_rotate_" + band][
+            self.stellar['Raw_Luminosity_rotate_' + band][start_idx:end_idx] = raw_lum
+            self.stellar['Dusted_Luminosity_rotate_' + band][
                 start_idx:end_idx
             ] = dusted_lum
-            self.stellar["Dusted_Absolute_Magnitude_rotate_" + band][
+            self.stellar['Dusted_Absolute_Magnitude_rotate_' + band][
                 start_idx:end_idx
             ] = dusted_lum_AB_mag
 
@@ -998,32 +1000,32 @@ class TNGDataVectorGenerator:
         # 4. GALAXY TOTALS
         # -----------------------------------------------------------------------------
 
-        total_raw = np.nansum(self.stellar["Raw_Luminosity_rotate_" + band])
-        total_dusted = np.nansum(self.stellar["Dusted_Luminosity_rotate_" + band])
+        total_raw = np.nansum(self.stellar['Raw_Luminosity_rotate_' + band])
+        total_dusted = np.nansum(self.stellar['Dusted_Luminosity_rotate_' + band])
 
-        self.subhalo["Raw_Luminosity_rotate_" + band] = total_raw
-        self.subhalo["Dusted_Luminosity_rotate_" + band] = total_dusted
+        self.subhalo['Raw_Luminosity_rotate_' + band] = total_raw
+        self.subhalo['Dusted_Luminosity_rotate_' + band] = total_dusted
 
-        self.subhalo["Absolute_Magnitude_rotate_" + band] = -2.5 * np.log10(
+        self.subhalo['Absolute_Magnitude_rotate_' + band] = -2.5 * np.log10(
             np.nansum(
-                10.0 ** (-0.4 * self.stellar["Absolute_Magnitude_rotate_" + band])
+                10.0 ** (-0.4 * self.stellar['Absolute_Magnitude_rotate_' + band])
             )
         )
 
-        self.subhalo["Dusted_Absolute_Magnitude_rotate_" + band] = -2.5 * np.log10(
+        self.subhalo['Dusted_Absolute_Magnitude_rotate_' + band] = -2.5 * np.log10(
             np.nansum(
                 10.0
-                ** (-0.4 * self.stellar["Dusted_Absolute_Magnitude_rotate_" + band])
+                ** (-0.4 * self.stellar['Dusted_Absolute_Magnitude_rotate_' + band])
             )
         )
 
-        print(f"Total raw luminosity in band {band}: {total_raw} erg/s")
-        print(f"Total dusted luminosity in band {band}: {total_dusted} erg/s")
+        print(f'Total raw luminosity in band {band}: {total_raw} erg/s')
+        print(f'Total dusted luminosity in band {band}: {total_dusted} erg/s')
         print(
-            f"Dusted absolute magnitude in band {band}: {self.subhalo['Dusted_Absolute_Magnitude_rotate_' + band]} mag"
+            f'Dusted absolute magnitude in band {band}: {self.subhalo["Dusted_Absolute_Magnitude_rotate_" + band]} mag'
         )
         print(
-            f"Raw absolute magnitude in band {band}: {self.subhalo['Absolute_Magnitude_rotate_' + band]} mag"
+            f'Raw absolute magnitude in band {band}: {self.subhalo["Absolute_Magnitude_rotate_" + band]} mag'
         )
 
     def hydrogen_column_density(
@@ -1066,7 +1068,7 @@ class TNGDataVectorGenerator:
 
         galaxy_data_single = self.subhalo
 
-        R_eff = galaxy_data_single["SubhaloHalfmassRadStars"]  # kpc
+        R_eff = galaxy_data_single['SubhaloHalfmassRadStars']  # kpc
         galaxy_pos = coords_rotate_2d_gas_center  # kpc
 
         # --- define grid boundaries ---
@@ -1079,21 +1081,21 @@ class TNGDataVectorGenerator:
             galaxy_pos[1] - grid_size, galaxy_pos[1] + grid_size, Ngrid + 1
         )
 
-        if gas_particles["Coordinates"] is None:
-            print(f"This galaxy has no gas particles.")
+        if gas_particles['Coordinates'] is None:
+            print(f'This galaxy has no gas particles.')
             N_H_cm2 = np.zeros((Ngrid, Ngrid))
             metallicity_sph = np.zeros((Ngrid, Ngrid))
         else:
             gas_coords = coords_rotate_2d_gas  # kpc
-            gas_masses = gas_particles["Masses"]  # Msun
-            GFM_Metals = gas_particles["GFM_Metals"][
+            gas_masses = gas_particles['Masses']  # Msun
+            GFM_Metals = gas_particles['GFM_Metals'][
                 :, 0
             ]  # total hydrogen mass fraction, hydrogen is the first element
             NeutroHydrogenAbundance = gas_particles[
-                "NeutralHydrogenAbundance"
+                'NeutralHydrogenAbundance'
             ]  # fraction of neutral hydrogen
             GFM_Metallicity = gas_particles[
-                "GFM_Metallicity"
+                'GFM_Metallicity'
             ]  # total metallicity, which is the mass fraction of all elements heavier than helium
             # --- project coordinates based on line-of-sight axis ---
 
@@ -1103,7 +1105,7 @@ class TNGDataVectorGenerator:
             gas_mass_sph = sph_project_2d(
                 gas_coords[:, 0],
                 gas_coords[:, 1],
-                gas_particles["SubfindHsml"],
+                gas_particles['SubfindHsml'],
                 weights,
                 x_edges,
                 y_edges,
@@ -1112,7 +1114,7 @@ class TNGDataVectorGenerator:
             metallicity_sph = sph_project_2d(
                 gas_coords[:, 0],
                 gas_coords[:, 1],
-                gas_particles["SubfindHsml"],
+                gas_particles['SubfindHsml'],
                 GFM_Metallicity * weights,
                 x_edges,
                 y_edges,
@@ -1144,7 +1146,7 @@ class TNGDataVectorGenerator:
             # We can check this and print a warning if it's not the case, which may indicate an issue with the SPH projection or the choice of grid parameters.
             if not np.isclose(total_input, total_projected, rtol=5e-2):
                 print(
-                    f"Warning: Mass conserved roughly. Input: {total_input}, Output: {total_projected}"
+                    f'Warning: Mass conserved roughly. Input: {total_input}, Output: {total_projected}'
                 )
 
             # --- compute per-pixel hydrogen mass in grams ---
@@ -1182,7 +1184,7 @@ class TNGDataVectorGenerator:
 
         if np.any((x < 0.3) | (x > 10)):
             print(
-                "Warning: Wavelength out of range for CCM89 extinction law (0.1 - 3.3 microns^-1)."
+                'Warning: Wavelength out of range for CCM89 extinction law (0.1 - 3.3 microns^-1).'
             )
 
         # --- Infrared (0.3 ≤ x < 1.1 μm⁻¹) ---
@@ -1351,7 +1353,7 @@ class TNGDataVectorGenerator:
 
         if np.any((wavelength_angstroms > 7000) & (wavelength_angstroms <= 44800)):
             print(
-                "Warning: Wavelength out of range for CSK1994 scattering model (0.1 - 0.7 microns). Using Natta & Panagia 1984 table values for longer wavelengths."
+                'Warning: Wavelength out of range for CSK1994 scattering model (0.1 - 0.7 microns). Using Natta & Panagia 1984 table values for longer wavelengths.'
             )
             omega_table_wavelengths = np.array(
                 [0.7, 0.9, 1.25, 1.65, 2.2, 3.6, 4.48]
@@ -1362,7 +1364,7 @@ class TNGDataVectorGenerator:
             omega_interp = interp1d(
                 omega_table_wavelengths,
                 omega_table_values,
-                kind="cubic",
+                kind='cubic',
                 bounds_error=True,
                 fill_value=None,
             )
@@ -1373,7 +1375,7 @@ class TNGDataVectorGenerator:
             )  # Convert back to microns for interpolation
         elif np.any((wavelength_angstroms > 44800) | (wavelength_angstroms < 1000)):
             print(
-                "Warning: No valid model for wavelength > 4.48 microns or < 0.1 microns in CSK1994 scattering model. Setting albedo to zero."
+                'Warning: No valid model for wavelength > 4.48 microns or < 0.1 microns in CSK1994 scattering model. Setting albedo to zero.'
             )
 
         # Calculating the weighting factor h(λ) that accounts for the anistropy in scattering
@@ -1383,7 +1385,7 @@ class TNGDataVectorGenerator:
 
         if np.any((wavelength_angstroms > 7000) & (wavelength_angstroms <= 18000)):
             print(
-                "Warning: Applying extrapolation for h(λ) beyond 0.7 microns. Bruzual et al 1988 has a table for g(λ) up to 1.8 microns, the functional form seems to hold approximately."
+                'Warning: Applying extrapolation for h(λ) beyond 0.7 microns. Bruzual et al 1988 has a table for g(λ) up to 1.8 microns, the functional form seems to hold approximately.'
             )
 
             mask5 = (wavelength_angstroms > 7000) & (wavelength_angstroms <= 18000)
@@ -1391,13 +1393,13 @@ class TNGDataVectorGenerator:
             h_Lambda[mask5] = 1.0 - 0.561 * np.exp(-(np.abs(y - 3.3112) ** 2.2) / 0.17)
         elif np.any(wavelength_angstroms > 18000):
             print(
-                "Warning: No valid model for h(λ) beyond 1.8 microns in CSK1994 scattering model. Setting h(λ) to one."
+                'Warning: No valid model for h(λ) beyond 1.8 microns in CSK1994 scattering model. Setting h(λ) to one.'
             )
             mask6 = wavelength_angstroms > 18000
             h_Lambda[mask6] = 1.0
         elif np.any(wavelength_angstroms < 1200):
             print(
-                "Warning: No valid model for h(λ) below 0.12 microns in CSK1994 scattering model. Setting h(λ) to zero."
+                'Warning: No valid model for h(λ) below 0.12 microns in CSK1994 scattering model. Setting h(λ) to zero.'
             )
 
         # Correcting the optical depth for scattering effects
@@ -1426,14 +1428,14 @@ class TNGDataVectorGenerator:
         # === Stellar rotation matrix from stellar particles ===
         # Use luminosity-weighted angular momentum for stellar particles
         # This is more physical than SubhaloSpin (which includes all particle types)
-        coords_stellar = self.stellar["Coordinates"]
-        vel_stellar = self.stellar["Velocities"]
+        coords_stellar = self.stellar['Coordinates']
+        vel_stellar = self.stellar['Velocities']
 
         # Use r-band luminosity as weights (or masses if not available)
-        if "Dusted_Luminosity_r" in self.stellar:
-            weights_stellar = self.stellar["Dusted_Luminosity_r"]
-        elif "Masses" in self.stellar:
-            weights_stellar = self.stellar["Masses"]
+        if 'Dusted_Luminosity_r' in self.stellar:
+            weights_stellar = self.stellar['Dusted_Luminosity_r']
+        elif 'Masses' in self.stellar:
+            weights_stellar = self.stellar['Masses']
         else:
             weights_stellar = np.ones(len(coords_stellar))
 
@@ -1461,10 +1463,10 @@ class TNGDataVectorGenerator:
         self._kinematic_inc_stellar_deg = np.rad2deg(np.arccos(np.abs(L_stellar[2])))
 
         # === Gas rotation matrix from particle angular momentum ===
-        if self.gas is not None and len(self.gas.get("Coordinates", [])) > 0:
-            coords_gas = self.gas["Coordinates"]
-            vel_gas = self.gas["Velocities"]
-            masses_gas = self.gas["Masses"]
+        if self.gas is not None and len(self.gas.get('Coordinates', [])) > 0:
+            coords_gas = self.gas['Coordinates']
+            vel_gas = self.gas['Velocities']
+            masses_gas = self.gas['Masses']
 
             # Center on mass-weighted centroid
             center_gas = np.average(coords_gas, axis=0, weights=masses_gas)
@@ -1552,25 +1554,25 @@ class TNGDataVectorGenerator:
         self, band: str, use_dusted: bool, rotate: bool = False
     ) -> str:
         """Get the appropriate luminosity key for the specified band."""
-        prefix = "Dusted_Luminosity" if use_dusted else "Raw_Luminosity"
+        prefix = 'Dusted_Luminosity' if use_dusted else 'Raw_Luminosity'
         if rotate and use_dusted:
-            prefix += "_rotate"
-        key = f"{prefix}_{band}"
+            prefix += '_rotate'
+        key = f'{prefix}_{band}'
         # Use the dusted luminosity after the rotation since the dust attenuation depends on the line-of-sight, so the luminosity values will change after the rotation.
         # The raw luminosity is unaffected by the rotation since it is intrinsic to the stellar population, so we can use the same raw luminosity values before and
         # after the rotation.
         # Validate key exists
         if key not in self.stellar:
-            available = [k for k in self.stellar.keys() if "Luminosity" in k]
+            available = [k for k in self.stellar.keys() if 'Luminosity' in k]
             raise KeyError(
                 f"Luminosity key '{key}' not found in stellar data. "
-                f"Available bands: {available}"
+                f'Available bands: {available}'
             )
 
         return key
 
     def _get_reference_center(
-        self, center_on_peak: bool, band: str = "r", use_dusted: bool = True
+        self, center_on_peak: bool, band: str = 'r', use_dusted: bool = True
     ) -> np.ndarray:
         """
         Get reference center for coordinate system (shared by intensity and velocity).
@@ -1596,15 +1598,15 @@ class TNGDataVectorGenerator:
             # Use stellar luminosity-weighted centroid as reference
             lum_key = self._get_luminosity_key(band, use_dusted)
             luminosities = self.stellar[lum_key]
-            stellar_coords = self.stellar["Coordinates"]
+            stellar_coords = self.stellar['Coordinates']
             center = np.average(stellar_coords, axis=0, weights=luminosities)
         else:
             # Use subhalo position
             center = np.array(
                 [
-                    self.subhalo["SubhaloPosX"],
-                    self.subhalo["SubhaloPosY"],
-                    self.subhalo["SubhaloPosZ"],
+                    self.subhalo['SubhaloPosX'],
+                    self.subhalo['SubhaloPosY'],
+                    self.subhalo['SubhaloPosZ'],
                 ]
             )
         return center
@@ -1628,7 +1630,7 @@ class TNGDataVectorGenerator:
         return coords - center
 
     def _undo_native_orientation(
-        self, coords: np.ndarray, velocities: np.ndarray, particle_type: str = "stellar"
+        self, coords: np.ndarray, velocities: np.ndarray, particle_type: str = 'stellar'
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Transform from TNG's native obs frame to face-on disk plane.
@@ -1660,7 +1662,7 @@ class TNGDataVectorGenerator:
             Velocities in face-on disk plane, shape (n_particles, 3)
         """
         # Select the appropriate rotation matrix
-        if particle_type == "gas":
+        if particle_type == 'gas':
             R = self._R_to_disk_gas
         else:
             R = self._R_to_disk_stellar
@@ -1706,20 +1708,20 @@ class TNGDataVectorGenerator:
             3D coordinates in new obs frame (for diagnostics), shape (n_particles, 3)
         """
         # Extract parameters with defaults
-        cosi = pars.get("cosi", 1.0)
-        theta_int = pars.get("theta_int", 0.0)
-        x0 = pars.get("x0", 0.0)
-        y0 = pars.get("y0", 0.0)
-        g1 = pars.get("g1", 0.0)
-        g2 = pars.get("g2", 0.0)
+        cosi = pars.get('cosi', 1.0)
+        theta_int = pars.get('theta_int', 0.0)
+        x0 = pars.get('x0', 0.0)
+        y0 = pars.get('y0', 0.0)
+        g1 = pars.get('g1', 0.0)
+        g2 = pars.get('g2', 0.0)
 
         # Validate shear parameters
         gamma = np.sqrt(g1**2 + g2**2)
         weak_lensing_limit = 1.0
         if gamma >= weak_lensing_limit:
             raise ValueError(
-                f"Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. "
-                f"Weak lensing requires |g| < {weak_lensing_limit}."
+                f'Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. '
+                f'Weak lensing requires |g| < {weak_lensing_limit}.'
             )
 
         # ===================================================================
@@ -1810,7 +1812,7 @@ class TNGDataVectorGenerator:
         values: np.ndarray,
         weights: np.ndarray,
         image_pars: ImagePars,
-        mode: str = "weighted_average",
+        mode: str = 'weighted_average',
     ) -> np.ndarray:
         """
         Grid particles using Cloud-in-Cell (CIC) interpolation.
@@ -1838,11 +1840,11 @@ class TNGDataVectorGenerator:
             Gridded 2D map, shape determined by image_pars
         """
         # Get grid properties
-        X, Y = build_map_grid_from_image_pars(image_pars, unit="arcsec", centered=True)
+        X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
         pixel_size = image_pars.pixel_scale
         Ny, Nx = (
             image_pars.shape
-            if image_pars.indexing == "ij"
+            if image_pars.indexing == 'ij'
             else (image_pars.shape[1], image_pars.shape[0])
         )
 
@@ -1853,7 +1855,7 @@ class TNGDataVectorGenerator:
 
         # Initialize arrays
         weighted_sum = np.zeros((Ny, Nx))
-        weight_sum = np.zeros((Ny, Nx)) if mode == "weighted_average" else None
+        weight_sum = np.zeros((Ny, Nx)) if mode == 'weighted_average' else None
 
         # Cloud-in-Cell: distribute to 4 nearest pixels
         x_floor = np.floor(x_pix).astype(int)
@@ -1897,18 +1899,18 @@ class TNGDataVectorGenerator:
                     values_valid * weights_valid * w_valid,
                 )
 
-                if mode == "weighted_average":
+                if mode == 'weighted_average':
                     np.add.at(weight_sum, (yi_valid, xi_valid), weights_valid * w_valid)
 
         # Compute result based on mode
-        if mode == "sum":
+        if mode == 'sum':
             result = weighted_sum
-        elif mode == "weighted_average":
+        elif mode == 'weighted_average':
             mask = weight_sum > 0
             result = np.zeros((Ny, Nx))
             result[mask] = weighted_sum[mask] / weight_sum[mask]
         else:
-            raise ValueError(f"Unknown mode: {mode}")
+            raise ValueError(f'Unknown mode: {mode}')
 
         return result
 
@@ -1918,7 +1920,7 @@ class TNGDataVectorGenerator:
         values: np.ndarray,
         weights: np.ndarray,
         image_pars: ImagePars,
-        mode: str = "weighted_average",
+        mode: str = 'weighted_average',
     ) -> np.ndarray:
         """
         Grid particles using nearest-grid-point (NGP) assignment.
@@ -1944,11 +1946,11 @@ class TNGDataVectorGenerator:
         np.ndarray
             Gridded 2D map, shape determined by image_pars
         """
-        X, Y = build_map_grid_from_image_pars(image_pars, unit="arcsec", centered=True)
+        X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
         pixel_size = image_pars.pixel_scale
         Ny, Nx = (
             image_pars.shape
-            if image_pars.indexing == "ij"
+            if image_pars.indexing == 'ij'
             else (image_pars.shape[1], image_pars.shape[0])
         )
 
@@ -1965,9 +1967,9 @@ class TNGDataVectorGenerator:
             weights=values * weights,
         )
 
-        if mode == "sum":
+        if mode == 'sum':
             result = H_weighted
-        elif mode == "weighted_average":
+        elif mode == 'weighted_average':
             H_weights, _, _ = np.histogram2d(
                 y_pix, x_pix, bins=[Ny, Nx], range=[[0, Ny], [0, Nx]], weights=weights
             )
@@ -1976,7 +1978,7 @@ class TNGDataVectorGenerator:
             result = np.zeros((Ny, Nx))
             result[mask] = H_weighted[mask] / H_weights[mask]
         else:
-            raise ValueError(f"Unknown mode: {mode}")
+            raise ValueError(f'Unknown mode: {mode}')
 
         return result
 
@@ -2007,7 +2009,7 @@ class TNGDataVectorGenerator:
         """
 
         # Get coordinates
-        coords = self.stellar["Coordinates"].copy()
+        coords = self.stellar['Coordinates'].copy()
 
         # Get reference center (shared with velocity map for consistent FOV)
         center = self._get_reference_center(
@@ -2023,12 +2025,12 @@ class TNGDataVectorGenerator:
             # Transform stellar to specified orientation
             if config.pars is None:
                 raise ValueError(
-                    "pars must be provided when use_native_orientation=False"
+                    'pars must be provided when use_native_orientation=False'
                 )
 
             # Undo native orientation to get face-on stellar disk
             coords_disk, _ = self._undo_native_orientation(
-                coords_centered, np.zeros_like(coords_centered), particle_type="stellar"
+                coords_centered, np.zeros_like(coords_centered), particle_type='stellar'
             )
 
             # Apply new stellar orientation from pars
@@ -2040,7 +2042,7 @@ class TNGDataVectorGenerator:
                 # If using the dusted luminosity, we also need to apply the same rotation for the gas particles.
                 # This is because the dust attenuation depends on the line-of-sight, so the luminosity values will change after the rotation.
                 # We apply the same rotation to the gas particles to ensure that the dust attenuation is consistent with the new orientation of the stellar particles.
-                coords_gas = self.gas["Coordinates"].copy()
+                coords_gas = self.gas['Coordinates'].copy()
                 center_gas = self._get_reference_center(
                     config.center_on_peak, config.band, config.use_dusted
                 )
@@ -2048,7 +2050,7 @@ class TNGDataVectorGenerator:
                 coords_gas_disk, _ = self._undo_native_orientation(
                     coords_gas_centered,
                     np.zeros_like(coords_gas_centered),
-                    particle_type="gas",
+                    particle_type='gas',
                 )
                 coords_gas_2d, _, _ = self._apply_new_orientation(
                     coords_gas_disk, np.zeros_like(coords_gas_disk), config.pars
@@ -2081,7 +2083,7 @@ class TNGDataVectorGenerator:
                 luminosities_norm,
                 np.ones_like(luminosities_norm),
                 config.image_pars,
-                mode="sum",
+                mode='sum',
             )
         else:
             intensity = self._grid_particles_ngp(
@@ -2089,7 +2091,7 @@ class TNGDataVectorGenerator:
                 luminosities_norm,
                 np.ones_like(luminosities_norm),
                 config.image_pars,
-                mode="sum",
+                mode='sum',
             )
 
         # Rescale back to original units
@@ -2155,11 +2157,11 @@ class TNGDataVectorGenerator:
         """
         # Get gas particle data (truth for kinematics)
         if self.gas is None:
-            raise ValueError("Gas data required for velocity map generation")
+            raise ValueError('Gas data required for velocity map generation')
 
-        coords = self.gas["Coordinates"].copy()
-        velocities = self.gas["Velocities"].copy()
-        masses = self.gas["Masses"].copy()
+        coords = self.gas['Coordinates'].copy()
+        velocities = self.gas['Velocities'].copy()
+        masses = self.gas['Masses'].copy()
 
         # Subtract systemic velocity using mass-weighted mean of inner region
         # Use only inner particles to avoid bias from distant satellites/CGM
@@ -2196,7 +2198,7 @@ class TNGDataVectorGenerator:
             # Transform gas to the requested orientation
             if config.pars is None:
                 raise ValueError(
-                    "pars must be provided when use_native_orientation=False"
+                    'pars must be provided when use_native_orientation=False'
                 )
 
             # Choose which rotation matrix to use for gas particles:
@@ -2208,10 +2210,10 @@ class TNGDataVectorGenerator:
             #   User's (cosi, theta_int) refers to each component independently.
             if config.preserve_gas_stellar_offset:
                 # Use stellar rotation for gas -> preserves intrinsic misalignment
-                particle_type = "stellar"
+                particle_type = 'stellar'
             else:
                 # Use gas's own rotation -> aligns gas with user's requested orientation
-                particle_type = "gas"
+                particle_type = 'gas'
 
             # Undo native orientation to get face-on disk
             coords_disk, velocities_disk = self._undo_native_orientation(
@@ -2235,7 +2237,7 @@ class TNGDataVectorGenerator:
                 vel_los,
                 masses_norm,
                 config.image_pars,
-                mode="weighted_average",
+                mode='weighted_average',
             )
         else:
             velocity = self._grid_particles_ngp(
@@ -2243,7 +2245,7 @@ class TNGDataVectorGenerator:
                 vel_los,
                 masses_norm,
                 config.image_pars,
-                mode="weighted_average",
+                mode='weighted_average',
             )
 
         # Apply flux-weighted PSF convolution if requested
@@ -2254,8 +2256,8 @@ class TNGDataVectorGenerator:
                 import warnings
 
                 warnings.warn(
-                    "PSF set but no intensity_map provided to generate_velocity_map. "
-                    "Generating intensity internally (less efficient).",
+                    'PSF set but no intensity_map provided to generate_velocity_map. '
+                    'Generating intensity internally (less efficient).',
                     stacklevel=2,
                 )
                 intensity_map, _ = self.generate_intensity_map(config, snr=None)
@@ -2306,10 +2308,10 @@ class TNGDataVectorGenerator:
         from ..noise import add_noise
 
         # Get star formation rates (Msun/yr per particle)
-        sfr = self.gas["StarFormationRate"].copy()
+        sfr = self.gas['StarFormationRate'].copy()
 
         # Get coordinates
-        coords = self.gas["Coordinates"].copy()
+        coords = self.gas['Coordinates'].copy()
 
         # Get reference center (use stellar peak for consistency with intensity)
         center = self._get_reference_center(
@@ -2325,13 +2327,13 @@ class TNGDataVectorGenerator:
             # Transform gas to specified orientation
             if config.pars is None:
                 raise ValueError(
-                    "pars must be provided when use_native_orientation=False"
+                    'pars must be provided when use_native_orientation=False'
                 )
 
             # Undo native GAS orientation to get face-on gas disk
             # Uses the gas-specific angular momentum rotation matrix
             coords_disk, _ = self._undo_native_orientation(
-                coords_centered, np.zeros_like(coords_centered), particle_type="gas"
+                coords_centered, np.zeros_like(coords_centered), particle_type='gas'
             )
 
             # Apply requested orientation (same as velocity - uses gas angular momentum)
@@ -2347,11 +2349,11 @@ class TNGDataVectorGenerator:
         # Grid SFR (sum to get total SFR per pixel)
         if config.use_cic_gridding:
             sfr_map = self._grid_particles_cic(
-                coords_arcsec, sfr, np.ones_like(sfr), config.image_pars, mode="sum"
+                coords_arcsec, sfr, np.ones_like(sfr), config.image_pars, mode='sum'
             )
         else:
             sfr_map = self._grid_particles_ngp(
-                coords_arcsec, sfr, np.ones_like(sfr), config.image_pars, mode="sum"
+                coords_arcsec, sfr, np.ones_like(sfr), config.image_pars, mode='sum'
             )
 
         # Apply cosmological surface brightness dimming if requested

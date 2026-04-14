@@ -17,13 +17,13 @@ from kl_pipe.plotting import MidpointNormalize
 pytestmark = pytest.mark.tng50
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def tng_data():
     """Load TNG50 data once."""
     return TNG50MockData()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def test_galaxy(tng_data):
     """Get first galaxy."""
     return tng_data[0]
@@ -32,7 +32,7 @@ def test_galaxy(tng_data):
 @pytest.fixture
 def image_pars_test():
     """Standard test image parameters."""
-    return ImagePars(shape=(64, 64), pixel_scale=0.1, indexing="ij")
+    return ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ class TestBasicRendering:
         config = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=True,
             use_cic_gridding=True,
         )
@@ -69,7 +69,7 @@ class TestBasicRendering:
         config = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=True,
             use_cic_gridding=True,
         )
@@ -90,17 +90,17 @@ class TestOrientation:
         """Test rendering at face-on orientation."""
         gen = TNGDataVectorGenerator(test_galaxy)
         pars = {
-            "theta_int": 0.0,
-            "cosi": 1.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 1.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars,
             use_cic_gridding=True,
@@ -117,17 +117,17 @@ class TestOrientation:
         """Test rendering at edge-on orientation."""
         gen = TNGDataVectorGenerator(test_galaxy)
         pars = {
-            "theta_int": 0.0,
-            "cosi": 0.1,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars,
             use_cic_gridding=True,
@@ -145,17 +145,17 @@ class TestOrientation:
 
         # Face-on
         pars_face = {
-            "theta_int": 0.0,
-            "cosi": 1.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 1.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_face = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars_face,
         )
@@ -164,17 +164,17 @@ class TestOrientation:
 
         # Edge-on
         pars_edge = {
-            "theta_int": 0.0,
-            "cosi": 0.1,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_edge = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars_edge,
         )
@@ -185,8 +185,8 @@ class TestOrientation:
         intensity_diff = np.abs(intensity_face - intensity_edge).sum()
         velocity_diff = np.abs(velocity_face - velocity_edge).sum()
 
-        assert intensity_diff > 0, "Intensity should change with orientation"
-        assert velocity_diff > 0, "Velocity should change with orientation"
+        assert intensity_diff > 0, 'Intensity should change with orientation'
+        assert velocity_diff > 0, 'Velocity should change with orientation'
 
     def test_rotation_affects_maps(self, test_galaxy, image_pars_test):
         """Verify rotation (PA) produces different maps."""
@@ -194,17 +194,17 @@ class TestOrientation:
 
         # PA = 0
         pars_0 = {
-            "theta_int": 0.0,
-            "cosi": 0.7,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 0.7,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_0 = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars_0,
         )
@@ -212,24 +212,24 @@ class TestOrientation:
 
         # PA = 90 degrees
         pars_90 = {
-            "theta_int": np.pi / 2,
-            "cosi": 0.7,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': np.pi / 2,
+            'cosi': 0.7,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_90 = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_native_orientation=False,
             pars=pars_90,
         )
         velocity_90, _ = gen.generate_velocity_map(config_90)
 
         velocity_diff = np.abs(velocity_0 - velocity_90).sum()
-        assert velocity_diff > 0, "Velocity should change with PA rotation"
+        assert velocity_diff > 0, 'Velocity should change with PA rotation'
 
 
 class TestGridding:
@@ -241,7 +241,7 @@ class TestGridding:
         config = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_cic_gridding=True,
         )
 
@@ -257,7 +257,7 @@ class TestGridding:
         config = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_cic_gridding=False,
         )
 
@@ -274,7 +274,7 @@ class TestGridding:
         config_cic = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_cic_gridding=True,
         )
         intensity_cic, _ = gen.generate_intensity_map(config_cic)
@@ -282,7 +282,7 @@ class TestGridding:
         config_ngp = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_cic_gridding=False,
         )
         intensity_ngp, _ = gen.generate_intensity_map(config_ngp)
@@ -292,7 +292,7 @@ class TestGridding:
         flux_diff_pct = 100 * abs(flux_cic - flux_ngp) / flux_cic
 
         # Allow 20% difference (CIC spreads to more pixels)
-        assert flux_diff_pct < 20, f"Flux conservation issue: {flux_diff_pct:.1f}%"
+        assert flux_diff_pct < 20, f'Flux conservation issue: {flux_diff_pct:.1f}%'
 
     def test_cic_smoother_than_ngp(self, test_galaxy, image_pars_test):
         """CIC should spread flux to more pixels than NGP."""
@@ -301,7 +301,7 @@ class TestGridding:
         config_cic = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_cic_gridding=True,
         )
         intensity_cic, _ = gen.generate_intensity_map(config_cic)
@@ -309,7 +309,7 @@ class TestGridding:
         config_ngp = TNGRenderConfig(
             target_redshift=0.6,
             image_pars=image_pars_test,
-            band="r",
+            band='r',
             use_cic_gridding=False,
         )
         intensity_ngp, _ = gen.generate_intensity_map(config_ngp)
@@ -320,7 +320,7 @@ class TestGridding:
 
         assert (
             nonzero_cic >= nonzero_ngp
-        ), "CIC should spread to at least as many pixels as NGP"
+        ), 'CIC should spread to at least as many pixels as NGP'
 
 
 class TestNoise:
@@ -330,7 +330,7 @@ class TestNoise:
         """Adding noise should increase variance."""
         gen = TNGDataVectorGenerator(test_galaxy)
         config = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r"
+            target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
 
         intensity_clean, var_clean = gen.generate_intensity_map(config, snr=None)
@@ -344,7 +344,7 @@ class TestNoise:
         """Same seed should produce same noise."""
         gen = TNGDataVectorGenerator(test_galaxy)
         config = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r"
+            target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
 
         intensity_1, var_1 = gen.generate_intensity_map(config, snr=50, seed=42)
@@ -359,7 +359,7 @@ class TestNoise:
         """Different seeds should produce different noise."""
         gen = TNGDataVectorGenerator(test_galaxy)
         config = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r"
+            target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
 
         intensity_1, _ = gen.generate_intensity_map(config, snr=50, seed=42)
@@ -375,7 +375,7 @@ class TestParticleTypes:
         """Intensity should use stellar particles."""
         gen = TNGDataVectorGenerator(test_galaxy)
         config = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r"
+            target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
 
         # Should work even without gas data
@@ -388,10 +388,10 @@ class TestParticleTypes:
 
         # Check that gas data is required
         if gen.gas is None:
-            pytest.skip("Galaxy missing gas data")
+            pytest.skip('Galaxy missing gas data')
 
         config = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r"
+            target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
         velocity, _ = gen.generate_velocity_map(config)
 
@@ -402,7 +402,7 @@ class TestParticleTypes:
 class TestPhotometricBands:
     """Test different photometric bands."""
 
-    @pytest.mark.parametrize("band", ["g", "r", "i", "u", "z"])
+    @pytest.mark.parametrize('band', ['g', 'r', 'i', 'u', 'z'])
     def test_all_bands_work(self, test_galaxy, image_pars_test, band):
         """All SDSS bands should render successfully."""
         gen = TNGDataVectorGenerator(test_galaxy)
@@ -418,12 +418,12 @@ class TestPhotometricBands:
         gen = TNGDataVectorGenerator(test_galaxy)
 
         config_dusted = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r", use_dusted=True
+            target_redshift=0.6, image_pars=image_pars_test, band='r', use_dusted=True
         )
         intensity_dusted, _ = gen.generate_intensity_map(config_dusted)
 
         config_raw = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r", use_dusted=False
+            target_redshift=0.6, image_pars=image_pars_test, band='r', use_dusted=False
         )
         intensity_raw, _ = gen.generate_intensity_map(config_raw)
 
@@ -442,7 +442,7 @@ class TestEdgeCases:
 
         config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_test)
 
-        with pytest.raises(ValueError, match="Gas data required"):
+        with pytest.raises(ValueError, match='Gas data required'):
             gen.generate_velocity_map(config)
 
     def test_pars_required_for_custom_orientation(self, test_galaxy, image_pars_test):
@@ -455,23 +455,23 @@ class TestEdgeCases:
             pars=None,  # Missing!
         )
 
-        with pytest.raises(ValueError, match="pars must be provided"):
+        with pytest.raises(ValueError, match='pars must be provided'):
             gen.generate_intensity_map(config)
 
     def test_invalid_shear_raises_error(self, test_galaxy, image_pars_test):
         """Should raise error if shear magnitude >= 1."""
-        with pytest.raises(ValueError, match="Shear too large"):
+        with pytest.raises(ValueError, match='Shear too large'):
             TNGRenderConfig(
                 target_redshift=0.6,
                 image_pars=image_pars_test,
                 use_native_orientation=False,
                 pars={
-                    "cosi": 0.7,
-                    "theta_int": 0.0,
-                    "x0": 0.0,
-                    "y0": 0.0,
-                    "g1": 0.8,
-                    "g2": 0.8,
+                    'cosi': 0.7,
+                    'theta_int': 0.0,
+                    'x0': 0.0,
+                    'y0': 0.0,
+                    'g1': 0.8,
+                    'g2': 0.8,
                 },
             )
 
@@ -492,19 +492,19 @@ class TestSFRMap:
 
         assert sfr_map.shape == image_pars_test.shape
         assert np.all(np.isfinite(sfr_map))
-        assert sfr_map.sum() > 0, "SFR map should have positive total"
-        assert np.any(sfr_map > 0), "SFR map should have some non-zero pixels"
+        assert sfr_map.sum() > 0, 'SFR map should have positive total'
+        assert np.any(sfr_map > 0), 'SFR map should have some non-zero pixels'
 
     def test_sfr_map_custom_orientation(self, test_galaxy, image_pars_test):
         """Test SFR map generation with custom orientation (uses gas offset)."""
         gen = TNGDataVectorGenerator(test_galaxy)
         pars = {
-            "theta_int": np.pi / 4,
-            "cosi": 0.7,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': np.pi / 4,
+            'cosi': 0.7,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config = TNGRenderConfig(
             target_redshift=0.6,
@@ -525,12 +525,12 @@ class TestSFRMap:
 
         # Face-on
         pars_face = {
-            "theta_int": 0.0,
-            "cosi": 1.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 1.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_face = TNGRenderConfig(
             target_redshift=0.6,
@@ -542,12 +542,12 @@ class TestSFRMap:
 
         # Edge-on
         pars_edge = {
-            "theta_int": 0.0,
-            "cosi": 0.1,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'theta_int': 0.0,
+            'cosi': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_edge = TNGRenderConfig(
             target_redshift=0.6,
@@ -559,7 +559,7 @@ class TestSFRMap:
 
         # Maps should differ
         sfr_diff = np.abs(sfr_face - sfr_edge).sum()
-        assert sfr_diff > 0, "SFR map should change with orientation"
+        assert sfr_diff > 0, 'SFR map should change with orientation'
 
     def test_sfr_with_noise(self, test_galaxy, image_pars_test):
         """Test SFR map generation with noise."""
@@ -573,7 +573,7 @@ class TestSFRMap:
         sfr_clean = gen.generate_sfr_map(config, snr=None)
         sfr_noisy = gen.generate_sfr_map(config, snr=50, seed=42)
 
-        assert not np.allclose(sfr_clean, sfr_noisy), "Noise should change the map"
+        assert not np.allclose(sfr_clean, sfr_noisy), 'Noise should change the map'
         assert np.all(np.isfinite(sfr_noisy))
 
 
@@ -611,12 +611,12 @@ class TestTransformRoundTrip:
         native_theta_int = np.radians(gen.native_pa_deg)
 
         pars_native = {
-            "cosi": native_cosi,
-            "theta_int": native_theta_int,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': native_cosi,
+            'theta_int': native_theta_int,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         config_custom = TNGRenderConfig(
@@ -630,20 +630,20 @@ class TestTransformRoundTrip:
         vel_custom, _ = gen.generate_velocity_map(config_custom, snr=None)
 
         # Both should produce valid, non-trivial maps
-        assert int_native.sum() > 0, "Native intensity should be positive"
-        assert int_custom.sum() > 0, "Custom intensity should be positive"
-        assert np.any(vel_native != 0), "Native velocity should have non-zero values"
-        assert np.any(vel_custom != 0), "Custom velocity should have non-zero values"
+        assert int_native.sum() > 0, 'Native intensity should be positive'
+        assert int_custom.sum() > 0, 'Custom intensity should be positive'
+        assert np.any(vel_native != 0), 'Native velocity should have non-zero values'
+        assert np.any(vel_custom != 0), 'Custom velocity should have non-zero values'
 
         # They may differ due to different transform paths - this is expected
         # The key is that both are internally consistent
-        print(f"✓ Native intensity sum: {int_native.sum():.2e}")
-        print(f"✓ Custom intensity sum: {int_custom.sum():.2e}")
+        print(f'✓ Native intensity sum: {int_native.sum():.2e}')
+        print(f'✓ Custom intensity sum: {int_custom.sum():.2e}')
         print(
-            f"✓ Native velocity range: [{vel_native.min():.1f}, {vel_native.max():.1f}] km/s"
+            f'✓ Native velocity range: [{vel_native.min():.1f}, {vel_native.max():.1f}] km/s'
         )
         print(
-            f"✓ Custom velocity range: [{vel_custom.min():.1f}, {vel_custom.max():.1f}] km/s"
+            f'✓ Custom velocity range: [{vel_custom.min():.1f}, {vel_custom.max():.1f}] km/s'
         )
 
     def test_orientation_sweep_consistency(self, test_galaxy, image_pars_test):
@@ -662,12 +662,12 @@ class TestTransformRoundTrip:
 
         for inc_deg in inclinations:
             pars = {
-                "cosi": np.cos(np.radians(inc_deg)),
-                "theta_int": 0.0,
-                "x0": 0.0,
-                "y0": 0.0,
-                "g1": 0.0,
-                "g2": 0.0,
+                'cosi': np.cos(np.radians(inc_deg)),
+                'theta_int': 0.0,
+                'x0': 0.0,
+                'y0': 0.0,
+                'g1': 0.0,
+                'g2': 0.0,
             }
 
             config = TNGRenderConfig(
@@ -687,28 +687,28 @@ class TestTransformRoundTrip:
         # Check that values are finite and positive
         assert all(
             np.isfinite(s) and s > 0 for s in intensity_sums
-        ), "All intensity sums should be finite and positive"
+        ), 'All intensity sums should be finite and positive'
         assert all(
             np.isfinite(r) and r > 0 for r in velocity_ranges
-        ), "All velocity ranges should be finite and positive"
+        ), 'All velocity ranges should be finite and positive'
 
         # Check for smoothness: adjacent values shouldn't differ by more than 2x
         for i in range(len(inclinations) - 1):
             int_ratio = intensity_sums[i + 1] / intensity_sums[i]
             assert (
                 0.5 < int_ratio < 2.0
-            ), f"Intensity change from inc={inclinations[i]}° to {inclinations[i + 1]}° too abrupt"
+            ), f'Intensity change from inc={inclinations[i]}° to {inclinations[i + 1]}° too abrupt'
 
             vel_ratio = velocity_ranges[i + 1] / velocity_ranges[i]
             assert (
                 0.5 < vel_ratio < 2.0
-            ), f"Velocity change from inc={inclinations[i]}° to {inclinations[i + 1]}° too abrupt"
+            ), f'Velocity change from inc={inclinations[i]}° to {inclinations[i + 1]}° too abrupt'
 
         print(
-            f"✓ Inclination sweep passed: intensity sums = {[f'{s:.2e}' for s in intensity_sums]}"
+            f'✓ Inclination sweep passed: intensity sums = {[f"{s:.2e}" for s in intensity_sums]}'
         )
         print(
-            f"✓ Inclination sweep passed: velocity ranges = {[f'{r:.1f}' for r in velocity_ranges]}"
+            f'✓ Inclination sweep passed: velocity ranges = {[f"{r:.1f}" for r in velocity_ranges]}'
         )
 
 
@@ -730,21 +730,21 @@ class TestInclinationSymmetry:
         inc_2 = 135.0  # = 180° - 45°
 
         pars_1 = {
-            "cosi": np.cos(np.radians(inc_1)),
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': np.cos(np.radians(inc_1)),
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         pars_2 = {
-            "cosi": np.cos(np.radians(inc_2)),  # Negative cos(i)!
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': np.cos(np.radians(inc_2)),  # Negative cos(i)!
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         config_1 = TNGRenderConfig(
@@ -773,11 +773,11 @@ class TestInclinationSymmetry:
 
         # Expect significant differences (>10 km/s somewhere in the map)
         assert max_diff > 10.0, (
-            f"TNG velocity maps at inc={inc_1}° and inc={inc_2}° "
-            f"should differ significantly, but max_diff={max_diff:.2f} km/s"
+            f'TNG velocity maps at inc={inc_1}° and inc={inc_2}° '
+            f'should differ significantly, but max_diff={max_diff:.2f} km/s'
         )
 
-        print(f"✓ TNG asymmetric: max velocity difference = {max_diff:.1f} km/s")
+        print(f'✓ TNG asymmetric: max velocity difference = {max_diff:.1f} km/s')
 
     def test_negative_cosi_handled_correctly(self, test_galaxy, image_pars_test):
         """
@@ -791,15 +791,15 @@ class TestInclinationSymmetry:
         # Test inclination >90° (cos(i) < 0)
         inc = 120.0
         cosi = np.cos(np.radians(inc))
-        assert cosi < 0, "Test requires inc > 90° so cos(i) < 0"
+        assert cosi < 0, 'Test requires inc > 90° so cos(i) < 0'
 
         pars = {
-            "cosi": cosi,
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': cosi,
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         config = TNGRenderConfig(
@@ -815,12 +815,12 @@ class TestInclinationSymmetry:
         intensity, int_var = gen.generate_intensity_map(config, snr=50)
 
         # Maps should be valid (finite, non-zero in places)
-        assert np.all(np.isfinite(vel)), "Velocity map has non-finite values"
-        assert np.all(np.isfinite(intensity)), "Intensity map has non-finite values"
-        assert np.any(vel != 0), "Velocity map is all zeros"
-        assert np.any(intensity > 0), "Intensity map is all zeros/negative"
+        assert np.all(np.isfinite(vel)), 'Velocity map has non-finite values'
+        assert np.all(np.isfinite(intensity)), 'Intensity map has non-finite values'
+        assert np.any(vel != 0), 'Velocity map is all zeros'
+        assert np.any(intensity > 0), 'Intensity map is all zeros/negative'
 
-        print(f"✓ inc={inc}° (cos(i)={cosi:.3f}) handled correctly")
+        print(f'✓ inc={inc}° (cos(i)={cosi:.3f}) handled correctly')
 
     def test_face_on_vs_face_on_from_below(self, test_galaxy, image_pars_test):
         """
@@ -833,22 +833,22 @@ class TestInclinationSymmetry:
 
         # Face-on from above (inc=0°, cos(i)=+1)
         pars_above = {
-            "cosi": 1.0,
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': 1.0,
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         # Face-on from below (inc=180°, cos(i)=-1)
         pars_below = {
-            "cosi": -1.0,
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': -1.0,
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
 
         config_above = TNGRenderConfig(
@@ -877,8 +877,8 @@ class TestInclinationSymmetry:
         vel_diff = np.abs(vel_above - vel_below)
         vel_max_diff = np.nanmax(vel_diff)
         assert vel_max_diff > 5.0, (
-            f"Face-on velocities from above/below should differ, "
-            f"but max_diff={vel_max_diff:.2f} km/s"
+            f'Face-on velocities from above/below should differ, '
+            f'but max_diff={vel_max_diff:.2f} km/s'
         )
 
         # Intensity: should be similar (same particles, same projection)
@@ -886,12 +886,12 @@ class TestInclinationSymmetry:
         int_rel_diff = np.abs(int_above - int_below) / (int_above + int_below + 1e-10)
         int_median_rel_diff = np.nanmedian(int_rel_diff[int_rel_diff > 0])
         assert int_median_rel_diff < 0.5, (
-            f"Face-on intensity from above/below should be similar, "
-            f"but median_rel_diff={int_median_rel_diff:.2f}"
+            f'Face-on intensity from above/below should be similar, '
+            f'but median_rel_diff={int_median_rel_diff:.2f}'
         )
 
-        print(f"✓ Face-on velocity diff = {vel_max_diff:.1f} km/s")
-        print(f"✓ Face-on intensity median_rel_diff = {int_median_rel_diff:.3f}")
+        print(f'✓ Face-on velocity diff = {vel_max_diff:.1f} km/s')
+        print(f'✓ Face-on intensity median_rel_diff = {int_median_rel_diff:.3f}')
 
 
 class TestDustAttenuation:
@@ -902,18 +902,18 @@ class TestDustAttenuation:
         gen = TNGDataVectorGenerator(test_galaxy)
 
         config_dusted = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r", use_dusted=True
+            target_redshift=0.6, image_pars=image_pars_test, band='r', use_dusted=True
         )
         intensity_dusted, _ = gen.generate_intensity_map(config_dusted)
 
         config_raw = TNGRenderConfig(
-            target_redshift=0.6, image_pars=image_pars_test, band="r", use_dusted=False
+            target_redshift=0.6, image_pars=image_pars_test, band='r', use_dusted=False
         )
         intensity_raw, _ = gen.generate_intensity_map(config_raw)
 
         assert (
             intensity_raw.sum() > intensity_dusted.sum()
-        ), "Dust should attenuate flux"
+        ), 'Dust should attenuate flux'
 
     def test_dust_attenuation_model(self, test_galaxy):
         gen = TNGDataVectorGenerator(test_galaxy)
@@ -922,23 +922,23 @@ class TestDustAttenuation:
         # The two should give consistent results since they have the same dust attenuation model.
 
         # Assuming using catalogues that fixed the line-of-sight to be along the z-axis.
-        coords_stellar_2d = gen.stellar["Coordinates"][:, :2]  # x,y positions
-        coords_gas_2d = gen.gas["Coordinates"][:, :2]
-        coords_galaxy_center_2d = gen.subhalo["SubhaloPos"][:2]  # x,y of galaxy center
+        coords_stellar_2d = gen.stellar['Coordinates'][:, :2]  # x,y positions
+        coords_gas_2d = gen.gas['Coordinates'][:, :2]
+        coords_galaxy_center_2d = gen.subhalo['SubhaloPos'][:2]  # x,y of galaxy center
 
         # Using the native orientation to compute the dust attenuation and compare to the TNG data.
         gen._estimate_magnitude_luminosity(
-            coords_stellar_2d, coords_gas_2d, coords_galaxy_center_2d, band="r"
+            coords_stellar_2d, coords_gas_2d, coords_galaxy_center_2d, band='r'
         )
 
         assert np.allclose(
-            gen.stellar["Dusted_Luminosity_rotate_r"],
-            gen.stellar["Dusted_Luminosity_r"],
-        ), "Stellar luminosity after dust attenuation correction should match TNG data"
+            gen.stellar['Dusted_Luminosity_rotate_r'],
+            gen.stellar['Dusted_Luminosity_r'],
+        ), 'Stellar luminosity after dust attenuation correction should match TNG data'
         assert np.allclose(
-            gen.stellar["Dusted_Absolute_Magnitude_rotate_r"],
-            gen.stellar["Dusted_Absolute_Magnitude_r"],
-        ), "Stellar absolute magnitude after dust attenuation correction should match TNG data"
+            gen.stellar['Dusted_Absolute_Magnitude_rotate_r'],
+            gen.stellar['Dusted_Absolute_Magnitude_r'],
+        ), 'Stellar absolute magnitude after dust attenuation correction should match TNG data'
 
 
 @pytest.mark.tng_diagnostics
@@ -949,10 +949,10 @@ class TestDiagnosticPlots:
     from unit tests as they are slower and generate large plot files.
     """
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope='class')
     def output_dir(self):
         """Create output directory for diagnostic plots."""
-        out_dir = Path(__file__).parent / "out" / "tng_diagnostics"
+        out_dir = Path(__file__).parent / 'out' / 'tng_diagnostics'
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
@@ -1027,12 +1027,12 @@ class TestDiagnosticPlots:
         from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
         return plt.colorbar(im, cax=cax, **kwargs)
 
     @staticmethod
     def add_scale_markers(
-        ax, image_pars, scale_bar_arcsec=1.0, color="black", crosshair_arcsec=0.3
+        ax, image_pars, scale_bar_arcsec=1.0, color='black', crosshair_arcsec=0.3
     ):
         """
         Add physical scale bar and center marker to a plot.
@@ -1074,20 +1074,20 @@ class TestDiagnosticPlots:
                 [y_start, y_start],
                 color=color,
                 linewidth=3,
-                solid_capstyle="butt",
+                solid_capstyle='butt',
             )
             ax.text(
                 x_start + scale_bar_pixels / 2,
                 y_start + 0.04 * image_pars.shape[0],
                 f'{scale_bar_arcsec}"',
                 color=color,
-                ha="center",
-                va="bottom",
+                ha='center',
+                va='bottom',
                 fontsize=8,
-                weight="bold",
+                weight='bold',
                 bbox=dict(
-                    boxstyle="round,pad=0.3",
-                    facecolor="white" if color == "black" else "black",
+                    boxstyle='round,pad=0.3',
+                    facecolor='white' if color == 'black' else 'black',
                     alpha=0.7,
                     edgecolor=color,
                 ),
@@ -1099,18 +1099,18 @@ class TestDiagnosticPlots:
             ax.plot(
                 [cx - marker_size_pix, cx + marker_size_pix],
                 [cy, cy],
-                "k-",
+                'k-',
                 linewidth=0.8,
                 alpha=0.6,
             )
             ax.plot(
                 [cx, cx],
                 [cy - marker_size_pix, cy + marker_size_pix],
-                "k-",
+                'k-',
                 linewidth=0.8,
                 alpha=0.6,
             )
-            ax.plot(cx, cy, "k+", markersize=6, markeredgewidth=1, alpha=0.6)
+            ax.plot(cx, cy, 'k+', markersize=6, markeredgewidth=1, alpha=0.6)
         else:
             # Data coordinate system (arcsec)
             fov_x = image_pars.shape[1] * image_pars.pixel_scale
@@ -1123,20 +1123,20 @@ class TestDiagnosticPlots:
                 [y_start, y_start],
                 color=color,
                 linewidth=3,
-                solid_capstyle="butt",
+                solid_capstyle='butt',
             )
             ax.text(
                 x_start + scale_bar_arcsec / 2,
                 y_start + 0.04 * fov_y,
                 f'{scale_bar_arcsec}"',
                 color=color,
-                ha="center",
-                va="bottom",
+                ha='center',
+                va='bottom',
                 fontsize=8,
-                weight="bold",
+                weight='bold',
                 bbox=dict(
-                    boxstyle="round,pad=0.3",
-                    facecolor="white" if color == "black" else "black",
+                    boxstyle='round,pad=0.3',
+                    facecolor='white' if color == 'black' else 'black',
                     alpha=0.7,
                     edgecolor=color,
                 ),
@@ -1146,18 +1146,18 @@ class TestDiagnosticPlots:
             ax.plot(
                 [-crosshair_arcsec, crosshair_arcsec],
                 [0, 0],
-                "k-",
+                'k-',
                 linewidth=0.8,
                 alpha=0.6,
             )
             ax.plot(
                 [0, 0],
                 [-crosshair_arcsec, crosshair_arcsec],
-                "k-",
+                'k-',
                 linewidth=0.8,
                 alpha=0.6,
             )
-            ax.plot(0, 0, "k+", markersize=6, markeredgewidth=1, alpha=0.6)
+            ax.plot(0, 0, 'k+', markersize=6, markeredgewidth=1, alpha=0.6)
 
     def test_all_galaxies_high_res_native(self, tng_data, output_dir):
         """
@@ -1175,7 +1175,7 @@ class TestDiagnosticPlots:
 
         n_galaxies = len(tng_data)
         image_pars = ImagePars(
-            shape=(128, 128), pixel_scale=0.05, indexing="ij"
+            shape=(128, 128), pixel_scale=0.05, indexing='ij'
         )  # High res
         target_z = 0.7
         native_z = 0.011
@@ -1189,7 +1189,7 @@ class TestDiagnosticPlots:
             gen = TNGDataVectorGenerator(galaxy)
 
             # Get metadata
-            subhalo_id = int(galaxy["subhalo"]["SubhaloID"])
+            subhalo_id = int(galaxy['subhalo']['SubhaloID'])
             inc_deg = gen.native_inclination_deg
             pa_deg = gen.native_pa_deg
             flipped = gen.flipped_from_below
@@ -1215,36 +1215,36 @@ class TestDiagnosticPlots:
             vmin, vmax = self.compute_robust_intensity_bounds(int_log, log=True)
             im_int = ax_int.imshow(
                 int_log,
-                origin="lower",
-                cmap="viridis",
-                aspect="equal",
+                origin='lower',
+                cmap='viridis',
+                aspect='equal',
                 vmin=vmin,
                 vmax=vmax,
             )
-            ax_int.set_title(f"Intensity - Galaxy {idx} (ID={subhalo_id})", fontsize=10)
+            ax_int.set_title(f'Intensity - Galaxy {idx} (ID={subhalo_id})', fontsize=10)
             # Remove axis ticks and labels for cleaner appearance
             ax_int.set_xticks([])
             ax_int.set_yticks([])
             plt.colorbar(
-                im_int, ax=ax_int, label="log$_{10}$(Flux)", fraction=0.046, pad=0.02
+                im_int, ax=ax_int, label='log$_{10}$(Flux)', fraction=0.046, pad=0.02
             )
 
             # Add metadata text
-            flipped_str = " (flipped)" if flipped else ""
+            flipped_str = ' (flipped)' if flipped else ''
             ax_int.text(
                 0.02,
                 0.98,
-                f"inc={inc_deg:.1f}°{flipped_str}\nPA={pa_deg:.1f}°",
+                f'inc={inc_deg:.1f}°{flipped_str}\nPA={pa_deg:.1f}°',
                 transform=ax_int.transAxes,
-                va="top",
-                ha="left",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                va='top',
+                ha='left',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
                 fontsize=8,
             )
 
             # Add scale bar and center marker (white for intensity)
             self.add_scale_markers(
-                ax_int, image_pars, scale_bar_arcsec=1.0, color="white"
+                ax_int, image_pars, scale_bar_arcsec=1.0, color='white'
             )
 
             # Plot velocity with diverging colormap (white=0)
@@ -1252,19 +1252,19 @@ class TestDiagnosticPlots:
             vmax = np.nanmax(np.abs(velocity))
             im_vel = ax_vel.imshow(
                 velocity,
-                origin="lower",
-                cmap="RdBu_r",
-                aspect="equal",
+                origin='lower',
+                cmap='RdBu_r',
+                aspect='equal',
                 norm=MidpointNormalize(vmin=-vmax, vmax=vmax, midpoint=0),
             )
-            ax_vel.set_title(f"Velocity - Galaxy {idx} (ID={subhalo_id})", fontsize=10)
+            ax_vel.set_title(f'Velocity - Galaxy {idx} (ID={subhalo_id})', fontsize=10)
             # Remove axis ticks and labels for cleaner appearance
             ax_vel.set_xticks([])
             ax_vel.set_yticks([])
             plt.colorbar(
                 im_vel,
                 ax=ax_vel,
-                label=r"$v_\mathrm{LOS}$ [km/s]",
+                label=r'$v_\mathrm{LOS}$ [km/s]',
                 fraction=0.046,
                 pad=0.02,
             )
@@ -1273,24 +1273,24 @@ class TestDiagnosticPlots:
             self.add_scale_markers(ax_vel, image_pars, scale_bar_arcsec=1.0)
 
             print(
-                f"✓ Galaxy {idx} (SubhaloID={subhalo_id}): "
-                f"inc={inc_deg:.1f}°, PA={pa_deg:.1f}°, flipped={flipped}"
+                f'✓ Galaxy {idx} (SubhaloID={subhalo_id}): '
+                f'inc={inc_deg:.1f}°, PA={pa_deg:.1f}°, flipped={flipped}'
             )
 
         # Leave room at top for suptitle (top=0.96 leaves ~4% for title)
         gs.update(top=0.96, bottom=0.01)
         fig.suptitle(
-            f"TNG50 Galaxies - Native Orientation (z={native_z:.3f}→{target_z:.1f})",
+            f'TNG50 Galaxies - Native Orientation (z={native_z:.3f}→{target_z:.1f})',
             fontsize=14,
             y=0.99,
         )
         plt.savefig(
-            output_dir / "all_galaxies_native_highres.png", dpi=150, bbox_inches="tight"
+            output_dir / 'all_galaxies_native_highres.png', dpi=150, bbox_inches='tight'
         )
         plt.close()
 
         print(
-            f"✓ Saved diagnostic plot: {output_dir / 'all_galaxies_native_highres.png'}"
+            f'✓ Saved diagnostic plot: {output_dir / "all_galaxies_native_highres.png"}'
         )
 
     def test_cic_vs_ngp_comparison(self, test_galaxy, output_dir):
@@ -1311,7 +1311,7 @@ class TestDiagnosticPlots:
         from kl_pipe.tng.data_vectors import convert_tng_to_arcsec
 
         gen = TNGDataVectorGenerator(test_galaxy)
-        image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing="ij")
+        image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
         target_z = 0.7
         fov_arcsec = image_pars.shape[0] * image_pars.pixel_scale  # Same for both dims
 
@@ -1337,7 +1337,7 @@ class TestDiagnosticPlots:
 
         # Get particle positions for scatter plots
         # Stellar particles (for intensity)
-        stellar_coords = gen.stellar["Coordinates"].copy()
+        stellar_coords = gen.stellar['Coordinates'].copy()
         stellar_center = gen._get_reference_center(
             config_cic.center_on_peak, config_cic.band, config_cic.use_dusted
         )
@@ -1357,7 +1357,7 @@ class TestDiagnosticPlots:
         stellar_lum_log = np.log10(stellar_lum + 1e-10)
 
         # Gas particles (for velocity)
-        gas_coords = gen.gas["Coordinates"].copy()
+        gas_coords = gen.gas['Coordinates'].copy()
         gas_center = stellar_center  # Use same center for consistency
         gas_coords_centered = gen._center_coordinates(gas_coords, gas_center)
         gas_coords_2d = gas_coords_centered[:, :2]  # Just drop z for native orientation
@@ -1367,7 +1367,7 @@ class TestDiagnosticPlots:
 
         # Gas velocities - must subtract systemic velocity like the gridded maps do
         # The generate_velocity_map method subtracts median velocity to center at v=0
-        gas_vel_3d = gen.gas["Velocities"].copy()
+        gas_vel_3d = gen.gas['Velocities'].copy()
         v_systemic = np.median(gas_vel_3d, axis=0)
         gas_vel_3d -= v_systemic  # Now in galaxy rest frame
         # For native orientation, LOS is along z-axis, so v_LOS = v_z
@@ -1398,15 +1398,15 @@ class TestDiagnosticPlots:
             c=lum_p,
             s=1,
             alpha=0.5,
-            cmap="viridis",
+            cmap='viridis',
             vmin=vmin_lum,
             vmax=vmax_lum,
         )
         ax.set_xlim(-fov_arcsec / 2, fov_arcsec / 2)
         ax.set_ylim(-fov_arcsec / 2, fov_arcsec / 2)
-        ax.set_aspect("equal")
-        ax.set_title("Particles (Stellar)", fontsize=11)
-        self.add_colorbar_matching_height(sc_int, ax, label="log$_{10}$(Lum)")
+        ax.set_aspect('equal')
+        ax.set_title('Particles (Stellar)', fontsize=11)
+        self.add_colorbar_matching_height(sc_int, ax, label='log$_{10}$(Lum)')
 
         # Column 1: CIC
         ax = axes[0, 1]
@@ -1414,34 +1414,34 @@ class TestDiagnosticPlots:
         vmin, vmax = self.compute_robust_intensity_bounds(int_log_cic, log=True)
         im = ax.imshow(
             int_log_cic,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin,
             vmax=vmax,
         )
-        ax.set_title("CIC Gridded\n(Cloud-in-Cell)", fontsize=10)
+        ax.set_title('CIC Gridded\n(Cloud-in-Cell)', fontsize=10)
         ax.set_xticks([])
         ax.set_yticks([])
-        self.add_colorbar_matching_height(im, ax, label="log$_{10}$(Flux)")
-        self.add_scale_markers(ax, image_pars, scale_bar_arcsec=1.0, color="white")
+        self.add_colorbar_matching_height(im, ax, label='log$_{10}$(Flux)')
+        self.add_scale_markers(ax, image_pars, scale_bar_arcsec=1.0, color='white')
 
         # Column 2: NGP
         ax = axes[0, 2]
         int_log_ngp = np.log10(int_ngp + 1e-10)
         im = ax.imshow(
             int_log_ngp,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin,
             vmax=vmax,
         )
-        ax.set_title("NGP Gridded\n(Nearest-Grid-Point)", fontsize=10)
+        ax.set_title('NGP Gridded\n(Nearest-Grid-Point)', fontsize=10)
         ax.set_xticks([])
         ax.set_yticks([])
-        self.add_colorbar_matching_height(im, ax, label="log$_{10}$(Flux)")
-        self.add_scale_markers(ax, image_pars, scale_bar_arcsec=1.0, color="white")
+        self.add_colorbar_matching_height(im, ax, label='log$_{10}$(Flux)')
+        self.add_scale_markers(ax, image_pars, scale_bar_arcsec=1.0, color='white')
 
         # Column 3: Residuals (CIC - NGP)
         ax = axes[0, 3]
@@ -1449,16 +1449,16 @@ class TestDiagnosticPlots:
         resid_max = np.percentile(np.abs(int_resid), 99)
         im = ax.imshow(
             int_resid,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             vmin=-resid_max,
             vmax=resid_max,
         )
-        ax.set_title("Residual (CIC - NGP)", fontsize=11)
+        ax.set_title('Residual (CIC - NGP)', fontsize=11)
         ax.set_xticks([])
         ax.set_yticks([])
-        self.add_colorbar_matching_height(im, ax, label="ΔFlux")
+        self.add_colorbar_matching_height(im, ax, label='ΔFlux')
 
         # === Row 1: Velocity ===
         # Column 0: Particle scatter
@@ -1481,45 +1481,45 @@ class TestDiagnosticPlots:
             c=vel_g,
             s=1,
             alpha=0.5,
-            cmap="RdBu_r",
+            cmap='RdBu_r',
             vmin=-vel_max_gridded,
             vmax=vel_max_gridded,
         )
         ax.set_xlim(-fov_arcsec / 2, fov_arcsec / 2)
         ax.set_ylim(-fov_arcsec / 2, fov_arcsec / 2)
-        ax.set_aspect("equal")
-        ax.set_title("Particles (Gas)", fontsize=11)
-        self.add_colorbar_matching_height(sc_vel, ax, label="v$_z$ [km/s]")
+        ax.set_aspect('equal')
+        ax.set_title('Particles (Gas)', fontsize=11)
+        self.add_colorbar_matching_height(sc_vel, ax, label='v$_z$ [km/s]')
 
         # Column 1: Velocity CIC
         ax = axes[1, 1]
         vel_max = max(np.nanmax(np.abs(vel_cic)), np.nanmax(np.abs(vel_ngp)))
         im = ax.imshow(
             vel_cic,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             norm=MidpointNormalize(vmin=-vel_max, vmax=vel_max, midpoint=0),
         )
-        ax.set_title("CIC Gridded\n(Cloud-in-Cell)", fontsize=10)
+        ax.set_title('CIC Gridded\n(Cloud-in-Cell)', fontsize=10)
         ax.set_xticks([])
         ax.set_yticks([])
-        self.add_colorbar_matching_height(im, ax, label="v$_{\\rm LOS}$ [km/s]")
+        self.add_colorbar_matching_height(im, ax, label='v$_{\\rm LOS}$ [km/s]')
         self.add_scale_markers(ax, image_pars, scale_bar_arcsec=1.0)
 
         # Column 2: Velocity NGP
         ax = axes[1, 2]
         im = ax.imshow(
             vel_ngp,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             norm=MidpointNormalize(vmin=-vel_max, vmax=vel_max, midpoint=0),
         )
-        ax.set_title("NGP Gridded\n(Nearest-Grid-Point)", fontsize=10)
+        ax.set_title('NGP Gridded\n(Nearest-Grid-Point)', fontsize=10)
         ax.set_xticks([])
         ax.set_yticks([])
-        self.add_colorbar_matching_height(im, ax, label="v$_{\\rm LOS}$ [km/s]")
+        self.add_colorbar_matching_height(im, ax, label='v$_{\\rm LOS}$ [km/s]')
         self.add_scale_markers(ax, image_pars, scale_bar_arcsec=1.0)
 
         # Column 3: Velocity Residuals
@@ -1533,29 +1533,29 @@ class TestDiagnosticPlots:
             vel_resid_max = 1.0
         im = ax.imshow(
             vel_resid,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             vmin=-vel_resid_max,
             vmax=vel_resid_max,
         )
-        ax.set_title("Residual (CIC - NGP)", fontsize=11)
+        ax.set_title('Residual (CIC - NGP)', fontsize=11)
         ax.set_xticks([])
         ax.set_yticks([])
-        self.add_colorbar_matching_height(im, ax, label="Δv [km/s]")
+        self.add_colorbar_matching_height(im, ax, label='Δv [km/s]')
 
         fig.suptitle(
-            f"Gridding Comparison: Particles → CIC → NGP → Residuals (z=0.011→{target_z})",
+            f'Gridding Comparison: Particles → CIC → NGP → Residuals (z=0.011→{target_z})',
             fontsize=13,
         )
         plt.tight_layout()
         plt.savefig(
-            output_dir / "cic_vs_ngp_comparison.png", dpi=150, bbox_inches="tight"
+            output_dir / 'cic_vs_ngp_comparison.png', dpi=150, bbox_inches='tight'
         )
         plt.close()
 
         print(
-            f"✓ Saved CIC vs NGP comparison: {output_dir / 'cic_vs_ngp_comparison.png'}"
+            f'✓ Saved CIC vs NGP comparison: {output_dir / "cic_vs_ngp_comparison.png"}'
         )
 
     def test_symmetry_breaking_inclinations(self, test_galaxy, output_dir):
@@ -1569,7 +1569,7 @@ class TestDiagnosticPlots:
         import matplotlib.pyplot as plt
 
         gen = TNGDataVectorGenerator(test_galaxy)
-        image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing="ij")
+        image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
         target_z = 0.7
 
         inc_1 = 45.0  # Viewing from above at 45° tilt
@@ -1577,12 +1577,12 @@ class TestDiagnosticPlots:
 
         # First inclination
         pars_1 = {
-            "cosi": np.cos(np.radians(inc_1)),
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': np.cos(np.radians(inc_1)),
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_1 = TNGRenderConfig(
             target_redshift=target_z,
@@ -1596,12 +1596,12 @@ class TestDiagnosticPlots:
 
         # Second inclination
         pars_2 = {
-            "cosi": np.cos(np.radians(inc_2)),
-            "theta_int": 0.0,
-            "x0": 0.0,
-            "y0": 0.0,
-            "g1": 0.0,
-            "g2": 0.0,
+            'cosi': np.cos(np.radians(inc_2)),
+            'theta_int': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
         }
         config_2 = TNGRenderConfig(
             target_redshift=target_z,
@@ -1637,55 +1637,55 @@ class TestDiagnosticPlots:
         # Row 1: inc=45°
         im00 = axes[0, 0].imshow(
             int_log_1,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin,
             vmax=vmax,
         )
-        axes[0, 0].set_title(f"Intensity - inc={inc_1}° (from above)", fontsize=11)
-        plt.colorbar(im00, ax=axes[0, 0], label="log$_{10}$(Flux)")
+        axes[0, 0].set_title(f'Intensity - inc={inc_1}° (from above)', fontsize=11)
+        plt.colorbar(im00, ax=axes[0, 0], label='log$_{10}$(Flux)')
         self.add_scale_markers(
-            axes[0, 0], image_pars, scale_bar_arcsec=1.0, color="white"
+            axes[0, 0], image_pars, scale_bar_arcsec=1.0, color='white'
         )
 
         vmax_1 = np.nanmax(np.abs(vel_1))
         im01 = axes[0, 1].imshow(
             vel_1,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             norm=MidpointNormalize(vmin=-vmax_1, vmax=vmax_1, midpoint=0),
         )
-        axes[0, 1].set_title(f"Velocity - inc={inc_1}° (from above)", fontsize=11)
-        plt.colorbar(im01, ax=axes[0, 1], label="v_LOS [km/s]")
+        axes[0, 1].set_title(f'Velocity - inc={inc_1}° (from above)', fontsize=11)
+        plt.colorbar(im01, ax=axes[0, 1], label='v_LOS [km/s]')
         self.add_scale_markers(axes[0, 1], image_pars, scale_bar_arcsec=1.0)
 
         # Row 2: inc=135°
         im10 = axes[1, 0].imshow(
             int_log_2,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin,
             vmax=vmax,
         )
-        axes[1, 0].set_title(f"Intensity - inc={inc_2}° (from below)", fontsize=11)
-        plt.colorbar(im10, ax=axes[1, 0], label="log$_{10}$(Flux)")
+        axes[1, 0].set_title(f'Intensity - inc={inc_2}° (from below)', fontsize=11)
+        plt.colorbar(im10, ax=axes[1, 0], label='log$_{10}$(Flux)')
         self.add_scale_markers(
-            axes[1, 0], image_pars, scale_bar_arcsec=1.0, color="white"
+            axes[1, 0], image_pars, scale_bar_arcsec=1.0, color='white'
         )
 
         vmax_2 = np.nanmax(np.abs(vel_2))
         im11 = axes[1, 1].imshow(
             vel_2,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             norm=MidpointNormalize(vmin=-vmax_2, vmax=vmax_2, midpoint=0),
         )
-        axes[1, 1].set_title(f"Velocity - inc={inc_2}°")
-        plt.colorbar(im11, ax=axes[1, 1], label="v_LOS [km/s]")
+        axes[1, 1].set_title(f'Velocity - inc={inc_2}°')
+        plt.colorbar(im11, ax=axes[1, 1], label='v_LOS [km/s]')
 
         # Row 3: Differences
         # Use arcsinh scaling for intensity difference to see small features
@@ -1693,43 +1693,43 @@ class TestDiagnosticPlots:
         diff_max = np.nanmax(np.abs(int_diff_scaled))
         im20 = axes[2, 0].imshow(
             int_diff_scaled,
-            origin="lower",
-            cmap="RdBu_r",
+            origin='lower',
+            cmap='RdBu_r',
             vmin=-diff_max,
             vmax=diff_max,
         )
-        axes[2, 0].set_title("Intensity Difference (arcsinh scaled)", fontsize=11)
-        plt.colorbar(im20, ax=axes[2, 0], label="arcsinh(ΔFlux)")
+        axes[2, 0].set_title('Intensity Difference (arcsinh scaled)', fontsize=11)
+        plt.colorbar(im20, ax=axes[2, 0], label='arcsinh(ΔFlux)')
 
         vel_diff_max = np.nanmax(np.abs(vel_diff))
         im21 = axes[2, 1].imshow(
             vel_diff,
-            origin="lower",
-            cmap="RdBu_r",
+            origin='lower',
+            cmap='RdBu_r',
             vmin=-vel_diff_max,
             vmax=vel_diff_max,
         )
-        axes[2, 1].set_title(f"Velocity Difference")
-        plt.colorbar(im21, ax=axes[2, 1], label="Δv_LOS [km/s]")
+        axes[2, 1].set_title(f'Velocity Difference')
+        plt.colorbar(im21, ax=axes[2, 1], label='Δv_LOS [km/s]')
 
         fig.suptitle(
-            f"TNG Asymmetry: inc={inc_1}° vs inc={inc_2}°\n"
-            f"(Symmetric models would show zero difference)",
+            f'TNG Asymmetry: inc={inc_1}° vs inc={inc_2}°\n'
+            f'(Symmetric models would show zero difference)',
             fontsize=14,
         )
         plt.tight_layout()
         plt.savefig(
-            output_dir / "symmetry_breaking_inclinations.png",
+            output_dir / 'symmetry_breaking_inclinations.png',
             dpi=150,
-            bbox_inches="tight",
+            bbox_inches='tight',
         )
         plt.close()
 
         max_vel_diff = np.nanmax(np.abs(vel_diff))
         print(
-            f"✓ Max velocity difference: {max_vel_diff:.1f} km/s (confirms asymmetry)"
+            f'✓ Max velocity difference: {max_vel_diff:.1f} km/s (confirms asymmetry)'
         )
-        print(f"✓ Saved: {output_dir / 'symmetry_breaking_inclinations.png'}")
+        print(f'✓ Saved: {output_dir / "symmetry_breaking_inclinations.png"}')
 
     def test_resolution_and_snr_grid(self, test_galaxy, output_dir):
         """
@@ -1760,7 +1760,7 @@ class TestDiagnosticPlots:
         for i, pix_scale in enumerate(pixel_scales):
             npix = int(np.round(fov_arcsec / pix_scale))
             shape = (npix, npix)
-            image_pars = ImagePars(shape=shape, pixel_scale=pix_scale, indexing="ij")
+            image_pars = ImagePars(shape=shape, pixel_scale=pix_scale, indexing='ij')
 
             for j, snr in enumerate(snr_levels):
                 config = TNGRenderConfig(
@@ -1794,45 +1794,45 @@ class TestDiagnosticPlots:
                 int_log = np.log10(np.clip(intensity, 1e-10, None))
                 im_int = ax_int.imshow(
                     int_log,
-                    origin="lower",
-                    cmap="viridis",
-                    aspect="equal",
+                    origin='lower',
+                    cmap='viridis',
+                    aspect='equal',
                     vmin=vmin_int_global,
                     vmax=vmax_int_global,
                 )
 
-                snr_str = f"SNR={snr}" if snr is not None else "No noise"
+                snr_str = f'SNR={snr}' if snr is not None else 'No noise'
                 if i == 0:  # Top row
-                    ax_int.set_title(f"{snr_str}", fontsize=10)
+                    ax_int.set_title(f'{snr_str}', fontsize=10)
                 ax_int.set_xticks([])
                 ax_int.set_yticks([])
                 if j == 0:  # Left column
-                    ax_int.set_ylabel(f'{pix_scale}"/pix', fontsize=9, weight="bold")
+                    ax_int.set_ylabel(f'{pix_scale}"/pix', fontsize=9, weight='bold')
 
                 # Add colorbar
                 plt.colorbar(im_int, ax=ax_int, fraction=0.046, pad=0.04)
 
                 # Add scale markers (white for intensity)
                 self.add_scale_markers(
-                    ax_int, image_pars, scale_bar_arcsec=1.0, color="white"
+                    ax_int, image_pars, scale_bar_arcsec=1.0, color='white'
                 )
 
                 # VELOCITY (bottom 3 rows) - RdBu_r with white=0, global bounds
                 ax_vel = axes[i + 3, j]
                 im_vel = ax_vel.imshow(
                     velocity,
-                    origin="lower",
-                    cmap="RdBu_r",
+                    origin='lower',
+                    cmap='RdBu_r',
                     norm=MidpointNormalize(
                         vmin=-vmax_vel_global, vmax=vmax_vel_global, midpoint=0
                     ),
-                    aspect="equal",
+                    aspect='equal',
                 )
 
                 ax_vel.set_xticks([])
                 ax_vel.set_yticks([])
                 if j == 0:  # Left column
-                    ax_vel.set_ylabel(f'{pix_scale}"/pix', fontsize=9, weight="bold")
+                    ax_vel.set_ylabel(f'{pix_scale}"/pix', fontsize=9, weight='bold')
 
                 # Add colorbar
                 plt.colorbar(im_vel, ax=ax_vel, fraction=0.046, pad=0.04)
@@ -1844,14 +1844,14 @@ class TestDiagnosticPlots:
         fig.text(
             0.02,
             0.75,
-            "INTENSITY",
+            'INTENSITY',
             rotation=90,
-            va="center",
+            va='center',
             fontsize=12,
-            weight="bold",
+            weight='bold',
         )
         fig.text(
-            0.02, 0.25, "VELOCITY", rotation=90, va="center", fontsize=12, weight="bold"
+            0.02, 0.25, 'VELOCITY', rotation=90, va='center', fontsize=12, weight='bold'
         )
 
         fig.suptitle(
@@ -1861,12 +1861,12 @@ class TestDiagnosticPlots:
         )
         plt.tight_layout(rect=[0.03, 0, 1, 0.99])
         plt.savefig(
-            output_dir / "resolution_snr_grid.png", dpi=150, bbox_inches="tight"
+            output_dir / 'resolution_snr_grid.png', dpi=150, bbox_inches='tight'
         )
         plt.close()
 
         print(
-            f"✓ Saved resolution/SNR grid with intensity+velocity: {output_dir / 'resolution_snr_grid.png'}"
+            f'✓ Saved resolution/SNR grid with intensity+velocity: {output_dir / "resolution_snr_grid.png"}'
         )
 
     def test_glamour_shot(self, output_dir):
@@ -1886,16 +1886,16 @@ class TestDiagnosticPlots:
 
         # High resolution for truth (top row) - zoom to ±2" at 0.025"/pix
         image_pars_highres = ImagePars(
-            shape=(160, 160), pixel_scale=0.025, indexing="ij"
+            shape=(160, 160), pixel_scale=0.025, indexing='ij'
         )
         # Half resolution for data vectors (bottom row)
-        image_pars_datavec = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing="ij")
+        image_pars_datavec = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
         target_z = 0.6
 
         # Config for high-res truth
         config_highres = TNGRenderConfig(
             image_pars=image_pars_highres,
-            band="r",
+            band='r',
             use_native_orientation=True,
             use_cic_gridding=True,
             target_redshift=target_z,
@@ -1904,7 +1904,7 @@ class TestDiagnosticPlots:
         # Config for lower-res data vectors
         config_datavec = TNGRenderConfig(
             image_pars=image_pars_datavec,
-            band="r",
+            band='r',
             use_native_orientation=True,
             use_cic_gridding=True,
             target_redshift=target_z,
@@ -1937,19 +1937,19 @@ class TestDiagnosticPlots:
         vmin_int, vmax_int = self.compute_robust_intensity_bounds(int_log, log=True)
         im00 = ax00.imshow(
             int_log,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin_int,
             vmax=vmax_int,
             extent=extent_highres,
         )
-        ax00.set_title("r-band Flux (Truth)", fontsize=12, weight="bold")
-        ax00.set_xlabel("X [arcsec]", fontsize=10)
-        ax00.set_ylabel("Y [arcsec]", fontsize=10)
-        self.add_colorbar_matching_height(im00, ax00, label="log$_{10}$(Flux)")
+        ax00.set_title('r-band Flux (Truth)', fontsize=12, weight='bold')
+        ax00.set_xlabel('X [arcsec]', fontsize=10)
+        ax00.set_ylabel('Y [arcsec]', fontsize=10)
+        self.add_colorbar_matching_height(im00, ax00, label='log$_{10}$(Flux)')
         self.add_scale_markers(
-            ax00, image_pars_highres, scale_bar_arcsec=0.5, color="white"
+            ax00, image_pars_highres, scale_bar_arcsec=0.5, color='white'
         )
         ax00.text(
             0.95,
@@ -1957,9 +1957,9 @@ class TestDiagnosticPlots:
             'pix=0.025"',
             transform=ax00.transAxes,
             fontsize=9,
-            va="top",
-            ha="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            va='top',
+            ha='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
         # Top middle: Hα flux (from SFR)
@@ -1968,19 +1968,19 @@ class TestDiagnosticPlots:
         vmin_ha, vmax_ha = self.compute_robust_intensity_bounds(halpha_log, log=True)
         im01 = ax01.imshow(
             halpha_log,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin_ha,
             vmax=vmax_ha,
             extent=extent_highres,
         )
-        ax01.set_title("Hα Flux (SFR proxy, Truth)", fontsize=12, weight="bold")
-        ax01.set_xlabel("X [arcsec]", fontsize=10)
-        ax01.set_ylabel("Y [arcsec]", fontsize=10)
-        self.add_colorbar_matching_height(im01, ax01, label="log$_{10}$(SFR)")
+        ax01.set_title('Hα Flux (SFR proxy, Truth)', fontsize=12, weight='bold')
+        ax01.set_xlabel('X [arcsec]', fontsize=10)
+        ax01.set_ylabel('Y [arcsec]', fontsize=10)
+        self.add_colorbar_matching_height(im01, ax01, label='log$_{10}$(SFR)')
         self.add_scale_markers(
-            ax01, image_pars_highres, scale_bar_arcsec=0.5, color="white"
+            ax01, image_pars_highres, scale_bar_arcsec=0.5, color='white'
         )
         ax01.text(
             0.95,
@@ -1988,9 +1988,9 @@ class TestDiagnosticPlots:
             'pix=0.025"',
             transform=ax01.transAxes,
             fontsize=9,
-            va="top",
-            ha="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            va='top',
+            ha='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
         # Top right: LoS velocity
@@ -1998,16 +1998,16 @@ class TestDiagnosticPlots:
         vmax_vel = np.nanmax(np.abs(vel_clean))
         im02 = ax02.imshow(
             vel_clean,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             norm=MidpointNormalize(vmin=-vmax_vel, vmax=vmax_vel, midpoint=0),
             extent=extent_highres,
         )
-        ax02.set_title("LoS Velocity (Truth)", fontsize=12, weight="bold")
-        ax02.set_xlabel("X [arcsec]", fontsize=10)
-        ax02.set_ylabel("Y [arcsec]", fontsize=10)
-        self.add_colorbar_matching_height(im02, ax02, label=r"$v_\mathrm{LOS}$ [km/s]")
+        ax02.set_title('LoS Velocity (Truth)', fontsize=12, weight='bold')
+        ax02.set_xlabel('X [arcsec]', fontsize=10)
+        ax02.set_ylabel('Y [arcsec]', fontsize=10)
+        self.add_colorbar_matching_height(im02, ax02, label=r'$v_\mathrm{LOS}$ [km/s]')
         self.add_scale_markers(ax02, image_pars_highres, scale_bar_arcsec=0.5)
         ax02.text(
             0.95,
@@ -2015,9 +2015,9 @@ class TestDiagnosticPlots:
             'pix=0.025"',
             transform=ax02.transAxes,
             fontsize=9,
-            va="top",
-            ha="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            va='top',
+            ha='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
         # Bottom row: Lower-res with noise (Data Vectors)
@@ -2031,19 +2031,19 @@ class TestDiagnosticPlots:
         )
         im10 = ax10.imshow(
             int_noisy_log,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin_int_noisy,
             vmax=vmax_int_noisy,
             extent=extent_datavec,
         )
-        ax10.set_title("r-band DataVector (SNR=250)", fontsize=12, weight="bold")
-        ax10.set_xlabel("X [arcsec]", fontsize=10)
-        ax10.set_ylabel("Y [arcsec]", fontsize=10)
-        self.add_colorbar_matching_height(im10, ax10, label="log$_{10}$(Flux)")
+        ax10.set_title('r-band DataVector (SNR=250)', fontsize=12, weight='bold')
+        ax10.set_xlabel('X [arcsec]', fontsize=10)
+        ax10.set_ylabel('Y [arcsec]', fontsize=10)
+        self.add_colorbar_matching_height(im10, ax10, label='log$_{10}$(Flux)')
         self.add_scale_markers(
-            ax10, image_pars_datavec, scale_bar_arcsec=1.0, color="white"
+            ax10, image_pars_datavec, scale_bar_arcsec=1.0, color='white'
         )
         ax10.text(
             0.95,
@@ -2051,9 +2051,9 @@ class TestDiagnosticPlots:
             'pix=0.1"',
             transform=ax10.transAxes,
             fontsize=9,
-            va="top",
-            ha="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            va='top',
+            ha='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
         # Bottom middle: Hα DataVector - compute separate bounds for noisy data
@@ -2066,19 +2066,19 @@ class TestDiagnosticPlots:
         )
         im11 = ax11.imshow(
             halpha_noisy_log,
-            origin="lower",
-            cmap="viridis",
-            aspect="equal",
+            origin='lower',
+            cmap='viridis',
+            aspect='equal',
             vmin=vmin_ha_noisy,
             vmax=vmax_ha_noisy,
             extent=extent_datavec,
         )
-        ax11.set_title("Hα DataVector (SNR=250)", fontsize=12, weight="bold")
-        ax11.set_xlabel("X [arcsec]", fontsize=10)
-        ax11.set_ylabel("Y [arcsec]", fontsize=10)
-        self.add_colorbar_matching_height(im11, ax11, label="log$_{10}$(SFR)")
+        ax11.set_title('Hα DataVector (SNR=250)', fontsize=12, weight='bold')
+        ax11.set_xlabel('X [arcsec]', fontsize=10)
+        ax11.set_ylabel('Y [arcsec]', fontsize=10)
+        self.add_colorbar_matching_height(im11, ax11, label='log$_{10}$(SFR)')
         self.add_scale_markers(
-            ax11, image_pars_datavec, scale_bar_arcsec=1.0, color="white"
+            ax11, image_pars_datavec, scale_bar_arcsec=1.0, color='white'
         )
         ax11.text(
             0.95,
@@ -2086,25 +2086,25 @@ class TestDiagnosticPlots:
             'pix=0.1"',
             transform=ax11.transAxes,
             fontsize=9,
-            va="top",
-            ha="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            va='top',
+            ha='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
         # Bottom right: Velocity DataVector
         ax12 = fig.add_subplot(gs[1, 2])
         im12 = ax12.imshow(
             vel_noisy,
-            origin="lower",
-            cmap="RdBu_r",
-            aspect="equal",
+            origin='lower',
+            cmap='RdBu_r',
+            aspect='equal',
             norm=MidpointNormalize(vmin=-vmax_vel, vmax=vmax_vel, midpoint=0),
             extent=extent_datavec,
         )
-        ax12.set_title("Velocity DataVector (SNR=50)", fontsize=12, weight="bold")
-        ax12.set_xlabel("X [arcsec]", fontsize=10)
-        ax12.set_ylabel("Y [arcsec]", fontsize=10)
-        self.add_colorbar_matching_height(im12, ax12, label=r"$v_\mathrm{LOS}$ [km/s]")
+        ax12.set_title('Velocity DataVector (SNR=50)', fontsize=12, weight='bold')
+        ax12.set_xlabel('X [arcsec]', fontsize=10)
+        ax12.set_ylabel('Y [arcsec]', fontsize=10)
+        self.add_colorbar_matching_height(im12, ax12, label=r'$v_\mathrm{LOS}$ [km/s]')
         self.add_scale_markers(ax12, image_pars_datavec, scale_bar_arcsec=1.0)
         ax12.text(
             0.95,
@@ -2112,18 +2112,18 @@ class TestDiagnosticPlots:
             'pix=0.1"',
             transform=ax12.transAxes,
             fontsize=9,
-            va="top",
-            ha="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            va='top',
+            ha='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
-        fig.suptitle(f"TNG50 Galaxy (SubhaloID=8, z={target_z})", fontsize=14, y=0.98)
+        fig.suptitle(f'TNG50 Galaxy (SubhaloID=8, z={target_z})', fontsize=14, y=0.98)
         plt.savefig(
-            output_dir / "glamour_shot_subhalo8.png", dpi=150, bbox_inches="tight"
+            output_dir / 'glamour_shot_subhalo8.png', dpi=150, bbox_inches='tight'
         )
         plt.close()
 
-        print(f"✓ Saved glamour shot: {output_dir / 'glamour_shot_subhalo8.png'}")
+        print(f'✓ Saved glamour shot: {output_dir / "glamour_shot_subhalo8.png"}')
 
     def test_orientation_sweep_inclination(self, output_dir):
         """
@@ -2152,7 +2152,7 @@ class TestDiagnosticPlots:
 
         # Zoomed out view: larger FOV
         image_pars = ImagePars(
-            shape=(80, 80), pixel_scale=0.05, indexing="ij"
+            shape=(80, 80), pixel_scale=0.05, indexing='ij'
         )  # 4 arcsec FOV
         target_z = 0.5  # Slightly closer for larger apparent size
         snr = None
@@ -2165,9 +2165,9 @@ class TestDiagnosticPlots:
 
         # Generate both modes: with and without gas-stellar offset preservation
         for preserve_offset in [True, False]:
-            mode_label = "offset_preserved" if preserve_offset else "aligned"
+            mode_label = 'offset_preserved' if preserve_offset else 'aligned'
             mode_title = (
-                "Gas offset preserved" if preserve_offset else "Gas-stellar aligned"
+                'Gas offset preserved' if preserve_offset else 'Gas-stellar aligned'
             )
 
             # First pass: generate all maps to get consistent colorbar ranges
@@ -2179,7 +2179,7 @@ class TestDiagnosticPlots:
             # Native orientation
             config_native = TNGRenderConfig(
                 image_pars=image_pars,
-                band="r",
+                band='r',
                 use_native_orientation=True,
                 use_cic_gridding=True,
                 target_redshift=target_z,
@@ -2190,23 +2190,23 @@ class TestDiagnosticPlots:
             all_velocities.append(vel_native)
             native_cosi = np.cos(np.deg2rad(gen.native_inclination_deg))
             titles_int.append(
-                f"Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}"
+                f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}'
             )
-            titles_vel.append("")
+            titles_vel.append('')
 
             # Custom orientations
             for cosi, inc_deg in zip(cosi_vals, inc_deg_vals):
                 pars = {
-                    "cosi": cosi,
-                    "theta_int": np.deg2rad(gen.native_pa_deg),
-                    "g1": 0.0,
-                    "g2": 0.0,
-                    "x0": 0.0,
-                    "y0": 0.0,
+                    'cosi': cosi,
+                    'theta_int': np.deg2rad(gen.native_pa_deg),
+                    'g1': 0.0,
+                    'g2': 0.0,
+                    'x0': 0.0,
+                    'y0': 0.0,
                 }
                 config = TNGRenderConfig(
                     image_pars=image_pars,
-                    band="r",
+                    band='r',
                     use_native_orientation=False,
                     use_cic_gridding=True,
                     target_redshift=target_z,
@@ -2217,8 +2217,8 @@ class TestDiagnosticPlots:
                 velocity, _ = gen.generate_velocity_map(config, snr=snr, seed=42)
                 all_intensities.append(intensity)
                 all_velocities.append(velocity)
-                titles_int.append(f"inc={inc_deg:.0f}°\ncos(i)={cosi:.1f}")
-                titles_vel.append("")
+                titles_int.append(f'inc={inc_deg:.0f}°\ncos(i)={cosi:.1f}')
+                titles_vel.append('')
 
             # Compute global colorbar ranges
             # Use np.clip to avoid log10 of negative/zero values
@@ -2244,9 +2244,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2254,9 +2254,9 @@ class TestDiagnosticPlots:
                 int_log = np.log10(np.clip(intensity, 1e-10, None))
                 im = grid_int[idx].imshow(
                     int_log,
-                    origin="lower",
-                    cmap="viridis",
-                    aspect="equal",
+                    origin='lower',
+                    cmap='viridis',
+                    aspect='equal',
                     vmin=vmin_int,
                     vmax=vmax_int,
                     extent=extent,
@@ -2266,12 +2266,12 @@ class TestDiagnosticPlots:
                 grid_int[idx].set_yticks([])
                 if idx == 0:  # Scale bar on native column
                     self.add_scale_markers(
-                        grid_int[idx], image_pars, scale_bar_arcsec=1.0, color="white"
+                        grid_int[idx], image_pars, scale_bar_arcsec=1.0, color='white'
                     )
 
-            grid_int[0].set_ylabel("Intensity", fontsize=10, weight="bold")
+            grid_int[0].set_ylabel('Intensity', fontsize=10, weight='bold')
             grid_int.cbar_axes[0].colorbar(im)
-            grid_int.cbar_axes[0].set_ylabel("log(Flux)", fontsize=9)
+            grid_int.cbar_axes[0].set_ylabel('log(Flux)', fontsize=9)
 
             # Velocity row (bottom)
             grid_vel = ImageGrid(
@@ -2280,18 +2280,18 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
             for idx, velocity in enumerate(all_velocities):
                 im = grid_vel[idx].imshow(
                     velocity,
-                    origin="lower",
-                    cmap="RdBu_r",
-                    aspect="equal",
+                    origin='lower',
+                    cmap='RdBu_r',
+                    aspect='equal',
                     norm=MidpointNormalize(vmin=-vmax_vel, vmax=vmax_vel, midpoint=0),
                     extent=extent,
                 )
@@ -2302,24 +2302,24 @@ class TestDiagnosticPlots:
                         grid_vel[idx], image_pars, scale_bar_arcsec=1.0
                     )
 
-            grid_vel[0].set_ylabel("Velocity", fontsize=10, weight="bold")
+            grid_vel[0].set_ylabel('Velocity', fontsize=10, weight='bold')
             grid_vel.cbar_axes[0].colorbar(im)
-            grid_vel.cbar_axes[0].set_ylabel("v [km/s]", fontsize=9)
+            grid_vel.cbar_axes[0].set_ylabel('v [km/s]', fontsize=9)
 
             # Add info about gas-stellar offset
             offset_angle = gen._gas_stellar_L_angle_deg
             fig.suptitle(
-                f"TNG50 SubhaloID=8: Inclination Sweep ({mode_title})\n"
-                f"Gas-stellar L offset: {offset_angle:.1f}°, z={target_z}",
+                f'TNG50 SubhaloID=8: Inclination Sweep ({mode_title})\n'
+                f'Gas-stellar L offset: {offset_angle:.1f}°, z={target_z}',
                 fontsize=11,
                 y=1.02,
             )
 
-            out_path = output_dir / f"orientation_sweep_inclination_{mode_label}.png"
-            plt.savefig(out_path, dpi=150, bbox_inches="tight")
+            out_path = output_dir / f'orientation_sweep_inclination_{mode_label}.png'
+            plt.savefig(out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
-            print(f"✓ Saved inclination sweep ({mode_label}): {out_path}")
+            print(f'✓ Saved inclination sweep ({mode_label}): {out_path}')
 
     def test_orientation_sweep_inclination_multi_galaxy(self, output_dir):
         """
@@ -2340,7 +2340,7 @@ class TestDiagnosticPlots:
         galaxy_indices = range(min(5, len(tng_data)))
 
         # Common parameters
-        image_pars = ImagePars(shape=(80, 80), pixel_scale=0.05, indexing="ij")
+        image_pars = ImagePars(shape=(80, 80), pixel_scale=0.05, indexing='ij')
         target_z = 0.5
         snr = None
         preserve_offset = True  # Use gas offset preserved mode
@@ -2357,28 +2357,28 @@ class TestDiagnosticPlots:
         for gal_idx in galaxy_indices:
             galaxy = tng_data[gal_idx]
             gen = TNGDataVectorGenerator(galaxy)
-            subhalo_id = galaxy["subhalo"]["SubhaloID"]
+            subhalo_id = galaxy['subhalo']['SubhaloID']
 
             print(
-                f"Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})..."
+                f'Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})...'
             )
 
             # Collect orientation diagnostics for summary
             orientation_summary.append(
                 {
-                    "SubhaloID": subhalo_id,
-                    "Catalog_Inc_deg": gen.native_inclination_deg,
-                    "Kinematic_Inc_deg": getattr(
-                        gen, "_kinematic_inc_stellar_deg", 0.0
+                    'SubhaloID': subhalo_id,
+                    'Catalog_Inc_deg': gen.native_inclination_deg,
+                    'Kinematic_Inc_deg': getattr(
+                        gen, '_kinematic_inc_stellar_deg', 0.0
                     ),
-                    "Catalog_vs_Kinematic_Offset_deg": getattr(
-                        gen, "_catalog_vs_kinematic_offset_deg", 0.0
+                    'Catalog_vs_Kinematic_Offset_deg': getattr(
+                        gen, '_catalog_vs_kinematic_offset_deg', 0.0
                     ),
-                    "Gas_Stellar_L_Offset_deg": getattr(
-                        gen, "_gas_stellar_L_angle_deg", 0.0
+                    'Gas_Stellar_L_Offset_deg': getattr(
+                        gen, '_gas_stellar_L_angle_deg', 0.0
                     ),
-                    "Kinematic_Inc_Gas_deg": getattr(
-                        gen, "_kinematic_inc_gas_deg", 0.0
+                    'Kinematic_Inc_Gas_deg': getattr(
+                        gen, '_kinematic_inc_gas_deg', 0.0
                     ),
                 }
             )
@@ -2392,7 +2392,7 @@ class TestDiagnosticPlots:
             # Native orientation
             config_native = TNGRenderConfig(
                 image_pars=image_pars,
-                band="r",
+                band='r',
                 use_native_orientation=True,
                 use_cic_gridding=True,
                 target_redshift=target_z,
@@ -2403,23 +2403,23 @@ class TestDiagnosticPlots:
             all_velocities.append(vel_native)
             native_cosi = np.cos(np.deg2rad(gen.native_inclination_deg))
             titles_int.append(
-                f"Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}"
+                f'Native\ninc={gen.native_inclination_deg:.1f}°\ncos(i)={native_cosi:.2f}'
             )
-            titles_vel.append("")
+            titles_vel.append('')
 
             # Custom orientations
             for cosi, inc_deg in zip(cosi_vals, inc_deg_vals):
                 pars = {
-                    "cosi": cosi,
-                    "theta_int": np.deg2rad(gen.native_pa_deg),
-                    "g1": 0.0,
-                    "g2": 0.0,
-                    "x0": 0.0,
-                    "y0": 0.0,
+                    'cosi': cosi,
+                    'theta_int': np.deg2rad(gen.native_pa_deg),
+                    'g1': 0.0,
+                    'g2': 0.0,
+                    'x0': 0.0,
+                    'y0': 0.0,
                 }
                 config = TNGRenderConfig(
                     image_pars=image_pars,
-                    band="r",
+                    band='r',
                     use_native_orientation=False,
                     use_cic_gridding=True,
                     target_redshift=target_z,
@@ -2430,8 +2430,8 @@ class TestDiagnosticPlots:
                 velocity, _ = gen.generate_velocity_map(config, snr=snr, seed=42)
                 all_intensities.append(intensity)
                 all_velocities.append(velocity)
-                titles_int.append(f"inc={inc_deg:.0f}°\ncos(i)={cosi:.1f}")
-                titles_vel.append("")
+                titles_int.append(f'inc={inc_deg:.0f}°\ncos(i)={cosi:.1f}')
+                titles_vel.append('')
 
             # Compute colorbar ranges
             # Use np.clip to avoid log10 of negative/zero values
@@ -2457,9 +2457,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2468,19 +2468,19 @@ class TestDiagnosticPlots:
                 im = grid_int[idx].imshow(
                     int_log,
                     extent=extent,
-                    origin="lower",
-                    cmap="viridis",
+                    origin='lower',
+                    cmap='viridis',
                     vmin=vmin_int,
                     vmax=vmax_int,
-                    interpolation="nearest",
+                    interpolation='nearest',
                 )
                 grid_int[idx].set_title(title, fontsize=8)
                 if idx == 0:
-                    grid_int[idx].set_ylabel("Intensity", fontsize=10)
+                    grid_int[idx].set_ylabel('Intensity', fontsize=10)
                 grid_int[idx].tick_params(labelsize=6)
 
             grid_int.cbar_axes[0].colorbar(im)
-            grid_int.cbar_axes[0].set_ylabel("log(Flux)", fontsize=8)
+            grid_int.cbar_axes[0].set_ylabel('log(Flux)', fontsize=8)
 
             # Velocity row
             grid_vel = ImageGrid(
@@ -2489,9 +2489,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2499,26 +2499,26 @@ class TestDiagnosticPlots:
                 im = grid_vel[idx].imshow(
                     velocity,
                     extent=extent,
-                    origin="lower",
-                    cmap="RdBu_r",
+                    origin='lower',
+                    cmap='RdBu_r',
                     vmin=-vmax_vel,
                     vmax=vmax_vel,
-                    interpolation="nearest",
+                    interpolation='nearest',
                 )
                 grid_vel[idx].set_title(title, fontsize=8)
                 if idx == 0:
-                    grid_vel[idx].set_ylabel("Velocity", fontsize=10)
+                    grid_vel[idx].set_ylabel('Velocity', fontsize=10)
                 grid_vel[idx].tick_params(labelsize=6)
 
             grid_vel.cbar_axes[0].colorbar(im)
-            grid_vel.cbar_axes[0].set_ylabel("v [km/s]", fontsize=8)
+            grid_vel.cbar_axes[0].set_ylabel('v [km/s]', fontsize=8)
 
             # Quantitative diagnostic: compute vertical extent at each inclination
-            print(f"\n  SubhaloID={subhalo_id} Vertical Extent Analysis:")
+            print(f'\n  SubhaloID={subhalo_id} Vertical Extent Analysis:')
             print(
-                f"  {'Inclination':<12} {'cos(i)':<8} {'RMS Height':<12} {'90th Pct':<12}"
+                f'  {"Inclination":<12} {"cos(i)":<8} {"RMS Height":<12} {"90th Pct":<12}'
             )
-            print(f"  {'-' * 50}")
+            print(f'  {"-" * 50}')
 
             vertical_extents_rms = []
             vertical_extents_90 = []
@@ -2540,9 +2540,9 @@ class TestDiagnosticPlots:
             vertical_extents_rms.append(rms_height_native)
             vertical_extents_90.append(p90_height_native)
             native_cosi_val = np.cos(np.deg2rad(gen.native_inclination_deg))
-            inc_labels.append(f"Native ({gen.native_inclination_deg:.1f}°)")
+            inc_labels.append(f'Native ({gen.native_inclination_deg:.1f}°)')
             print(
-                f"  {'Native':<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}"
+                f'  {"Native":<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}'
             )
 
             # Analyze custom orientations
@@ -2556,33 +2556,33 @@ class TestDiagnosticPlots:
                 )
                 vertical_extents_rms.append(rms_height)
                 vertical_extents_90.append(p90_height)
-                inc_labels.append(f"{inc_deg:.0f}°")
+                inc_labels.append(f'{inc_deg:.0f}°')
                 print(
-                    f"  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}"
+                    f'  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}'
                 )
 
             # Find minimum
             min_idx_rms = np.argmin(vertical_extents_rms)
             min_idx_90 = np.argmin(vertical_extents_90)
-            print(f"\n  Minimum RMS height at: {inc_labels[min_idx_rms]}")
-            print(f"  Minimum 90th pct height at: {inc_labels[min_idx_90]}\n")
+            print(f'\n  Minimum RMS height at: {inc_labels[min_idx_rms]}')
+            print(f'  Minimum 90th pct height at: {inc_labels[min_idx_90]}\n')
 
             # Save diagnostic data to CSV
             csv_path = (
-                output_dir / f"vertical_extent_diagnostic_subhalo{subhalo_id}.csv"
+                output_dir / f'vertical_extent_diagnostic_subhalo{subhalo_id}.csv'
             )
             import csv
 
-            with open(csv_path, "w", newline="") as csvfile:
+            with open(csv_path, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(
                     [
-                        "SubhaloID",
-                        "Inclination_deg",
-                        "cos_i",
-                        "RMS_Height_arcsec",
-                        "P90_Height_arcsec",
-                        "is_native",
+                        'SubhaloID',
+                        'Inclination_deg',
+                        'cos_i',
+                        'RMS_Height_arcsec',
+                        'P90_Height_arcsec',
+                        'is_native',
                     ]
                 )
 
@@ -2611,72 +2611,72 @@ class TestDiagnosticPlots:
                         ]
                     )
 
-            print(f"  ✓ Saved diagnostic CSV: {csv_path}")
+            print(f'  ✓ Saved diagnostic CSV: {csv_path}')
 
             # Title with enhanced diagnostics
-            gas_stellar_angle = getattr(gen, "_gas_stellar_L_angle_deg", 0.0)
-            kinematic_inc = getattr(gen, "_kinematic_inc_stellar_deg", 0.0)
+            gas_stellar_angle = getattr(gen, '_gas_stellar_L_angle_deg', 0.0)
+            kinematic_inc = getattr(gen, '_kinematic_inc_stellar_deg', 0.0)
             catalog_kinematic_offset = getattr(
-                gen, "_catalog_vs_kinematic_offset_deg", 0.0
+                gen, '_catalog_vs_kinematic_offset_deg', 0.0
             )
 
             fig.suptitle(
-                f"TNG50 SubhaloID={subhalo_id}: Inclination Sweep (Gas offset preserved)\n"
-                f"Gas-stellar L offset: {gas_stellar_angle:.1f}°, "
-                f"Catalog inc: {gen.native_inclination_deg:.1f}° vs Kinematic inc: {kinematic_inc:.1f}° "
-                f"(Δ={catalog_kinematic_offset:.1f}°), z={target_z}",
+                f'TNG50 SubhaloID={subhalo_id}: Inclination Sweep (Gas offset preserved)\n'
+                f'Gas-stellar L offset: {gas_stellar_angle:.1f}°, '
+                f'Catalog inc: {gen.native_inclination_deg:.1f}° vs Kinematic inc: {kinematic_inc:.1f}° '
+                f'(Δ={catalog_kinematic_offset:.1f}°), z={target_z}',
                 fontsize=10,
                 y=0.98,
             )
 
             out_path = (
-                output_dir / f"orientation_sweep_inclination_subhalo{subhalo_id}.png"
+                output_dir / f'orientation_sweep_inclination_subhalo{subhalo_id}.png'
             )
-            plt.savefig(out_path, dpi=150, bbox_inches="tight")
+            plt.savefig(out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
             # Print diagnostic summary
-            print(f"\n  Orientation Diagnostics:")
-            print(f"    Catalog (morphological) inc: {gen.native_inclination_deg:.1f}°")
-            print(f"    Kinematic (from L) inc: {kinematic_inc:.1f}°")
-            print(f"    Catalog vs Kinematic offset: {catalog_kinematic_offset:.1f}°")
-            print(f"    Gas-stellar L angle: {gas_stellar_angle:.1f}°")
+            print(f'\n  Orientation Diagnostics:')
+            print(f'    Catalog (morphological) inc: {gen.native_inclination_deg:.1f}°')
+            print(f'    Kinematic (from L) inc: {kinematic_inc:.1f}°')
+            print(f'    Catalog vs Kinematic offset: {catalog_kinematic_offset:.1f}°')
+            print(f'    Gas-stellar L angle: {gas_stellar_angle:.1f}°')
 
-            print(f"\n  ✓ Saved: {out_path}")
+            print(f'\n  ✓ Saved: {out_path}')
 
         # Write summary CSV with orientation diagnostics for all galaxies
-        summary_csv_path = output_dir / "orientation_diagnostics_summary.csv"
-        with open(summary_csv_path, "w", newline="") as csvfile:
+        summary_csv_path = output_dir / 'orientation_diagnostics_summary.csv'
+        with open(summary_csv_path, 'w', newline='') as csvfile:
             fieldnames = [
-                "SubhaloID",
-                "Catalog_Inc_deg",
-                "Kinematic_Inc_deg",
-                "Catalog_vs_Kinematic_Offset_deg",
-                "Gas_Stellar_L_Offset_deg",
-                "Kinematic_Inc_Gas_deg",
+                'SubhaloID',
+                'Catalog_Inc_deg',
+                'Kinematic_Inc_deg',
+                'Catalog_vs_Kinematic_Offset_deg',
+                'Gas_Stellar_L_Offset_deg',
+                'Kinematic_Inc_Gas_deg',
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             for row in orientation_summary:
                 writer.writerow(row)
 
-        print(f"\n✓ Saved orientation diagnostics summary: {summary_csv_path}")
+        print(f'\n✓ Saved orientation diagnostics summary: {summary_csv_path}')
 
         # Print summary table
-        print("\n" + "=" * 80)
-        print("ORIENTATION DIAGNOSTICS SUMMARY")
-        print("=" * 80)
+        print('\n' + '=' * 80)
+        print('ORIENTATION DIAGNOSTICS SUMMARY')
+        print('=' * 80)
         print(
-            f"{'SubhaloID':<12} {'Cat. Inc':<10} {'Kin. Inc':<10} {'Cat-Kin Δ':<12} {'Gas-Star Δ':<12}"
+            f'{"SubhaloID":<12} {"Cat. Inc":<10} {"Kin. Inc":<10} {"Cat-Kin Δ":<12} {"Gas-Star Δ":<12}'
         )
-        print("-" * 80)
+        print('-' * 80)
         for row in orientation_summary:
             print(
-                f"{row['SubhaloID']:<12} {row['Catalog_Inc_deg']:<10.1f} "
-                f"{row['Kinematic_Inc_deg']:<10.1f} {row['Catalog_vs_Kinematic_Offset_deg']:<12.1f} "
-                f"{row['Gas_Stellar_L_Offset_deg']:<12.1f}"
+                f'{row["SubhaloID"]:<12} {row["Catalog_Inc_deg"]:<10.1f} '
+                f'{row["Kinematic_Inc_deg"]:<10.1f} {row["Catalog_vs_Kinematic_Offset_deg"]:<12.1f} '
+                f'{row["Gas_Stellar_L_Offset_deg"]:<12.1f}'
             )
-        print("=" * 80)
+        print('=' * 80)
 
     def test_orientation_sweep_pa(self, output_dir):
         """
@@ -2705,7 +2705,7 @@ class TestDiagnosticPlots:
 
         # Zoomed out view
         image_pars = ImagePars(
-            shape=(80, 80), pixel_scale=0.05, indexing="ij"
+            shape=(80, 80), pixel_scale=0.05, indexing='ij'
         )  # 4 arcsec FOV
         target_z = 0.5
         snr = None
@@ -2719,9 +2719,9 @@ class TestDiagnosticPlots:
 
         # Generate both modes: with and without gas-stellar offset preservation
         for preserve_offset in [True, False]:
-            mode_label = "offset_preserved" if preserve_offset else "aligned"
+            mode_label = 'offset_preserved' if preserve_offset else 'aligned'
             mode_title = (
-                "Gas offset preserved" if preserve_offset else "Gas-stellar aligned"
+                'Gas offset preserved' if preserve_offset else 'Gas-stellar aligned'
             )
 
             # Generate all maps
@@ -2729,16 +2729,16 @@ class TestDiagnosticPlots:
             all_velocities = []
             for pa_deg in pa_deg_vals:
                 pars = {
-                    "cosi": native_cosi,
-                    "theta_int": np.deg2rad(pa_deg),
-                    "g1": 0.0,
-                    "g2": 0.0,
-                    "x0": 0.0,
-                    "y0": 0.0,
+                    'cosi': native_cosi,
+                    'theta_int': np.deg2rad(pa_deg),
+                    'g1': 0.0,
+                    'g2': 0.0,
+                    'x0': 0.0,
+                    'y0': 0.0,
                 }
                 config = TNGRenderConfig(
                     image_pars=image_pars,
-                    band="r",
+                    band='r',
                     use_native_orientation=False,
                     use_cic_gridding=True,
                     target_redshift=target_z,
@@ -2773,9 +2773,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_pa),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2785,24 +2785,24 @@ class TestDiagnosticPlots:
                 int_log = np.log10(intensity + 1e-10)
                 im = grid_int[idx].imshow(
                     int_log,
-                    origin="lower",
-                    cmap="viridis",
-                    aspect="equal",
+                    origin='lower',
+                    cmap='viridis',
+                    aspect='equal',
                     vmin=vmin_int,
                     vmax=vmax_int,
                     extent=extent,
                 )
-                grid_int[idx].set_title(f"PA={pa_deg:.0f}°", fontsize=9)
+                grid_int[idx].set_title(f'PA={pa_deg:.0f}°', fontsize=9)
                 grid_int[idx].set_xticks([])
                 grid_int[idx].set_yticks([])
                 if idx == 0:  # Scale bar on first column
                     self.add_scale_markers(
-                        grid_int[idx], image_pars, scale_bar_arcsec=1.0, color="white"
+                        grid_int[idx], image_pars, scale_bar_arcsec=1.0, color='white'
                     )
 
-            grid_int[0].set_ylabel("Intensity", fontsize=10, weight="bold")
+            grid_int[0].set_ylabel('Intensity', fontsize=10, weight='bold')
             grid_int.cbar_axes[0].colorbar(im)
-            grid_int.cbar_axes[0].set_ylabel("log(Flux)", fontsize=9)
+            grid_int.cbar_axes[0].set_ylabel('log(Flux)', fontsize=9)
 
             # Velocity row (bottom)
             grid_vel = ImageGrid(
@@ -2811,18 +2811,18 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_pa),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
             for idx, velocity in enumerate(all_velocities):
                 im = grid_vel[idx].imshow(
                     velocity,
-                    origin="lower",
-                    cmap="RdBu_r",
-                    aspect="equal",
+                    origin='lower',
+                    cmap='RdBu_r',
+                    aspect='equal',
                     norm=MidpointNormalize(vmin=-vmax_vel, vmax=vmax_vel, midpoint=0),
                     extent=extent,
                 )
@@ -2833,21 +2833,21 @@ class TestDiagnosticPlots:
                         grid_vel[idx], image_pars, scale_bar_arcsec=1.0
                     )
 
-            grid_vel[0].set_ylabel("Velocity", fontsize=10, weight="bold")
+            grid_vel[0].set_ylabel('Velocity', fontsize=10, weight='bold')
             grid_vel.cbar_axes[0].colorbar(im)
-            grid_vel.cbar_axes[0].set_ylabel("v [km/s]", fontsize=9)
+            grid_vel.cbar_axes[0].set_ylabel('v [km/s]', fontsize=9)
 
             # Add info about gas-stellar offset
             offset_angle = gen._gas_stellar_L_angle_deg
             fig.suptitle(
-                f"TNG50 SubhaloID=8: PA Sweep ({mode_title})\n"
-                f"inc={gen.native_inclination_deg:.1f}°, Gas-stellar L offset: {offset_angle:.1f}°",
+                f'TNG50 SubhaloID=8: PA Sweep ({mode_title})\n'
+                f'inc={gen.native_inclination_deg:.1f}°, Gas-stellar L offset: {offset_angle:.1f}°',
                 fontsize=11,
                 y=1.02,
             )
 
-            out_path = output_dir / f"orientation_sweep_pa_{mode_label}.png"
-            plt.savefig(out_path, dpi=150, bbox_inches="tight")
+            out_path = output_dir / f'orientation_sweep_pa_{mode_label}.png'
+            plt.savefig(out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
-            print(f"✓ Saved PA sweep ({mode_label}): {out_path}")
+            print(f'✓ Saved PA sweep ({mode_label}): {out_path}')
