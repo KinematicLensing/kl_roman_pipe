@@ -20,26 +20,27 @@ import galsim as gs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir
 
-OUTPUT_DIR = get_test_dir() / "out" / "psf_tng"
+OUTPUT_DIR = get_test_dir() / 'out' / 'psf_tng'
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def output_dir():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return OUTPUT_DIR
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def tng_generator():
     """Load TNG generator for SubhaloID 8."""
     from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator
 
     tng_data = TNG50MockData()
-    galaxy = tng_data.get_galaxy(subhalo_id=8)
+    # galaxy = tng_data.get_galaxy(subhalo_id=8)
+    galaxy = tng_data.get_galaxy(index=0)
     return TNGDataVectorGenerator(galaxy)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def tng_config():
     """Render config for TNG tests."""
     from kl_pipe.tng.data_vectors import TNGRenderConfig
@@ -52,7 +53,7 @@ def tng_config():
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def tng_psf():
     return gs.Gaussian(fwhm=0.625)
 
@@ -82,12 +83,12 @@ def test_tng_intensity_with_psf(tng_generator, tng_config, tng_psf, output_dir):
     flux_no_psf = np.sum(intensity_no_psf)
     flux_psf = np.sum(intensity_psf)
     rel_flux_diff = abs(flux_psf - flux_no_psf) / abs(flux_no_psf)
-    assert rel_flux_diff < 0.01, f"Flux not conserved: {rel_flux_diff:.2%} difference"
+    assert rel_flux_diff < 0.01, f'Flux not conserved: {rel_flux_diff:.2%} difference'
 
     # PSF version should have lower peak (smoother)
     assert np.max(intensity_psf) < np.max(
         intensity_no_psf
-    ), "PSF-convolved intensity should have lower peak"
+    ), 'PSF-convolved intensity should have lower peak'
 
     # diagnostic plot
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -134,7 +135,7 @@ def test_tng_velocity_with_psf(tng_generator, tng_config, tng_psf, output_dir):
     range_psf = np.ptp(velocity_psf)
     assert (
         range_psf < range_no_psf
-    ), f"PSF should reduce velocity range: {range_no_psf:.1f} -> {range_psf:.1f}"
+    ), f'PSF should reduce velocity range: {range_no_psf:.1f} -> {range_psf:.1f}'
 
     # diagnostic plot
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -165,5 +166,5 @@ def test_tng_velocity_with_psf(tng_generator, tng_config, tng_psf, output_dir):
     plt.close()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s", "-m", "tng50"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v', '-s', '-m', 'tng50'])

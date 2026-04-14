@@ -17,13 +17,13 @@ from kl_pipe.plotting import MidpointNormalize
 pytestmark = pytest.mark.tng50
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def tng_data():
     """Load TNG50 data once."""
     return TNG50MockData()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def test_galaxy(tng_data):
     """Get first galaxy."""
     return tng_data[0]
@@ -185,8 +185,8 @@ class TestOrientation:
         intensity_diff = np.abs(intensity_face - intensity_edge).sum()
         velocity_diff = np.abs(velocity_face - velocity_edge).sum()
 
-        assert intensity_diff > 0, "Intensity should change with orientation"
-        assert velocity_diff > 0, "Velocity should change with orientation"
+        assert intensity_diff > 0, 'Intensity should change with orientation'
+        assert velocity_diff > 0, 'Velocity should change with orientation'
 
     def test_rotation_affects_maps(self, test_galaxy, image_pars_test):
         """Verify rotation (PA) produces different maps."""
@@ -229,7 +229,7 @@ class TestOrientation:
         velocity_90, _ = gen.generate_velocity_map(config_90)
 
         velocity_diff = np.abs(velocity_0 - velocity_90).sum()
-        assert velocity_diff > 0, "Velocity should change with PA rotation"
+        assert velocity_diff > 0, 'Velocity should change with PA rotation'
 
 
 class TestGridding:
@@ -292,7 +292,7 @@ class TestGridding:
         flux_diff_pct = 100 * abs(flux_cic - flux_ngp) / flux_cic
 
         # Allow 20% difference (CIC spreads to more pixels)
-        assert flux_diff_pct < 20, f"Flux conservation issue: {flux_diff_pct:.1f}%"
+        assert flux_diff_pct < 20, f'Flux conservation issue: {flux_diff_pct:.1f}%'
 
     def test_cic_smoother_than_ngp(self, test_galaxy, image_pars_test):
         """CIC should spread flux to more pixels than NGP."""
@@ -320,7 +320,7 @@ class TestGridding:
 
         assert (
             nonzero_cic >= nonzero_ngp
-        ), "CIC should spread to at least as many pixels as NGP"
+        ), 'CIC should spread to at least as many pixels as NGP'
 
 
 class TestNoise:
@@ -388,7 +388,7 @@ class TestParticleTypes:
 
         # Check that gas data is required
         if gen.gas is None:
-            pytest.skip("Galaxy missing gas data")
+            pytest.skip('Galaxy missing gas data')
 
         config = TNGRenderConfig(
             target_redshift=0.6, image_pars=image_pars_test, band='r'
@@ -402,7 +402,7 @@ class TestParticleTypes:
 class TestPhotometricBands:
     """Test different photometric bands."""
 
-    @pytest.mark.parametrize("band", ['g', 'r', 'i', 'u', 'z'])
+    @pytest.mark.parametrize('band', ['g', 'r', 'i', 'u', 'z'])
     def test_all_bands_work(self, test_galaxy, image_pars_test, band):
         """All SDSS bands should render successfully."""
         gen = TNGDataVectorGenerator(test_galaxy)
@@ -442,7 +442,7 @@ class TestEdgeCases:
 
         config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_test)
 
-        with pytest.raises(ValueError, match="Gas data required"):
+        with pytest.raises(ValueError, match='Gas data required'):
             gen.generate_velocity_map(config)
 
     def test_pars_required_for_custom_orientation(self, test_galaxy, image_pars_test):
@@ -455,12 +455,12 @@ class TestEdgeCases:
             pars=None,  # Missing!
         )
 
-        with pytest.raises(ValueError, match="pars must be provided"):
+        with pytest.raises(ValueError, match='pars must be provided'):
             gen.generate_intensity_map(config)
 
     def test_invalid_shear_raises_error(self, test_galaxy, image_pars_test):
         """Should raise error if shear magnitude >= 1."""
-        with pytest.raises(ValueError, match="Shear too large"):
+        with pytest.raises(ValueError, match='Shear too large'):
             TNGRenderConfig(
                 target_redshift=0.6,
                 image_pars=image_pars_test,
@@ -492,8 +492,8 @@ class TestSFRMap:
 
         assert sfr_map.shape == image_pars_test.shape
         assert np.all(np.isfinite(sfr_map))
-        assert sfr_map.sum() > 0, "SFR map should have positive total"
-        assert np.any(sfr_map > 0), "SFR map should have some non-zero pixels"
+        assert sfr_map.sum() > 0, 'SFR map should have positive total'
+        assert np.any(sfr_map > 0), 'SFR map should have some non-zero pixels'
 
     def test_sfr_map_custom_orientation(self, test_galaxy, image_pars_test):
         """Test SFR map generation with custom orientation (uses gas offset)."""
@@ -559,7 +559,7 @@ class TestSFRMap:
 
         # Maps should differ
         sfr_diff = np.abs(sfr_face - sfr_edge).sum()
-        assert sfr_diff > 0, "SFR map should change with orientation"
+        assert sfr_diff > 0, 'SFR map should change with orientation'
 
     def test_sfr_with_noise(self, test_galaxy, image_pars_test):
         """Test SFR map generation with noise."""
@@ -573,7 +573,7 @@ class TestSFRMap:
         sfr_clean = gen.generate_sfr_map(config, snr=None)
         sfr_noisy = gen.generate_sfr_map(config, snr=50, seed=42)
 
-        assert not np.allclose(sfr_clean, sfr_noisy), "Noise should change the map"
+        assert not np.allclose(sfr_clean, sfr_noisy), 'Noise should change the map'
         assert np.all(np.isfinite(sfr_noisy))
 
 
@@ -630,20 +630,20 @@ class TestTransformRoundTrip:
         vel_custom, _ = gen.generate_velocity_map(config_custom, snr=None)
 
         # Both should produce valid, non-trivial maps
-        assert int_native.sum() > 0, "Native intensity should be positive"
-        assert int_custom.sum() > 0, "Custom intensity should be positive"
-        assert np.any(vel_native != 0), "Native velocity should have non-zero values"
-        assert np.any(vel_custom != 0), "Custom velocity should have non-zero values"
+        assert int_native.sum() > 0, 'Native intensity should be positive'
+        assert int_custom.sum() > 0, 'Custom intensity should be positive'
+        assert np.any(vel_native != 0), 'Native velocity should have non-zero values'
+        assert np.any(vel_custom != 0), 'Custom velocity should have non-zero values'
 
         # They may differ due to different transform paths - this is expected
         # The key is that both are internally consistent
-        print(f"✓ Native intensity sum: {int_native.sum():.2e}")
-        print(f"✓ Custom intensity sum: {int_custom.sum():.2e}")
+        print(f'✓ Native intensity sum: {int_native.sum():.2e}')
+        print(f'✓ Custom intensity sum: {int_custom.sum():.2e}')
         print(
-            f"✓ Native velocity range: [{vel_native.min():.1f}, {vel_native.max():.1f}] km/s"
+            f'✓ Native velocity range: [{vel_native.min():.1f}, {vel_native.max():.1f}] km/s'
         )
         print(
-            f"✓ Custom velocity range: [{vel_custom.min():.1f}, {vel_custom.max():.1f}] km/s"
+            f'✓ Custom velocity range: [{vel_custom.min():.1f}, {vel_custom.max():.1f}] km/s'
         )
 
     def test_orientation_sweep_consistency(self, test_galaxy, image_pars_test):
@@ -687,28 +687,28 @@ class TestTransformRoundTrip:
         # Check that values are finite and positive
         assert all(
             np.isfinite(s) and s > 0 for s in intensity_sums
-        ), "All intensity sums should be finite and positive"
+        ), 'All intensity sums should be finite and positive'
         assert all(
             np.isfinite(r) and r > 0 for r in velocity_ranges
-        ), "All velocity ranges should be finite and positive"
+        ), 'All velocity ranges should be finite and positive'
 
         # Check for smoothness: adjacent values shouldn't differ by more than 2x
         for i in range(len(inclinations) - 1):
             int_ratio = intensity_sums[i + 1] / intensity_sums[i]
             assert (
                 0.5 < int_ratio < 2.0
-            ), f"Intensity change from inc={inclinations[i]}° to {inclinations[i+1]}° too abrupt"
+            ), f'Intensity change from inc={inclinations[i]}° to {inclinations[i + 1]}° too abrupt'
 
             vel_ratio = velocity_ranges[i + 1] / velocity_ranges[i]
             assert (
                 0.5 < vel_ratio < 2.0
-            ), f"Velocity change from inc={inclinations[i]}° to {inclinations[i+1]}° too abrupt"
+            ), f'Velocity change from inc={inclinations[i]}° to {inclinations[i + 1]}° too abrupt'
 
         print(
-            f"✓ Inclination sweep passed: intensity sums = {[f'{s:.2e}' for s in intensity_sums]}"
+            f'✓ Inclination sweep passed: intensity sums = {[f"{s:.2e}" for s in intensity_sums]}'
         )
         print(
-            f"✓ Inclination sweep passed: velocity ranges = {[f'{r:.1f}' for r in velocity_ranges]}"
+            f'✓ Inclination sweep passed: velocity ranges = {[f"{r:.1f}" for r in velocity_ranges]}'
         )
 
 
@@ -773,11 +773,11 @@ class TestInclinationSymmetry:
 
         # Expect significant differences (>10 km/s somewhere in the map)
         assert max_diff > 10.0, (
-            f"TNG velocity maps at inc={inc_1}° and inc={inc_2}° "
-            f"should differ significantly, but max_diff={max_diff:.2f} km/s"
+            f'TNG velocity maps at inc={inc_1}° and inc={inc_2}° '
+            f'should differ significantly, but max_diff={max_diff:.2f} km/s'
         )
 
-        print(f"✓ TNG asymmetric: max velocity difference = {max_diff:.1f} km/s")
+        print(f'✓ TNG asymmetric: max velocity difference = {max_diff:.1f} km/s')
 
     def test_negative_cosi_handled_correctly(self, test_galaxy, image_pars_test):
         """
@@ -791,7 +791,7 @@ class TestInclinationSymmetry:
         # Test inclination >90° (cos(i) < 0)
         inc = 120.0
         cosi = np.cos(np.radians(inc))
-        assert cosi < 0, "Test requires inc > 90° so cos(i) < 0"
+        assert cosi < 0, 'Test requires inc > 90° so cos(i) < 0'
 
         pars = {
             'cosi': cosi,
@@ -815,12 +815,12 @@ class TestInclinationSymmetry:
         intensity, int_var = gen.generate_intensity_map(config, snr=50)
 
         # Maps should be valid (finite, non-zero in places)
-        assert np.all(np.isfinite(vel)), "Velocity map has non-finite values"
-        assert np.all(np.isfinite(intensity)), "Intensity map has non-finite values"
-        assert np.any(vel != 0), "Velocity map is all zeros"
-        assert np.any(intensity > 0), "Intensity map is all zeros/negative"
+        assert np.all(np.isfinite(vel)), 'Velocity map has non-finite values'
+        assert np.all(np.isfinite(intensity)), 'Intensity map has non-finite values'
+        assert np.any(vel != 0), 'Velocity map is all zeros'
+        assert np.any(intensity > 0), 'Intensity map is all zeros/negative'
 
-        print(f"✓ inc={inc}° (cos(i)={cosi:.3f}) handled correctly")
+        print(f'✓ inc={inc}° (cos(i)={cosi:.3f}) handled correctly')
 
     def test_face_on_vs_face_on_from_below(self, test_galaxy, image_pars_test):
         """
@@ -877,8 +877,8 @@ class TestInclinationSymmetry:
         vel_diff = np.abs(vel_above - vel_below)
         vel_max_diff = np.nanmax(vel_diff)
         assert vel_max_diff > 5.0, (
-            f"Face-on velocities from above/below should differ, "
-            f"but max_diff={vel_max_diff:.2f} km/s"
+            f'Face-on velocities from above/below should differ, '
+            f'but max_diff={vel_max_diff:.2f} km/s'
         )
 
         # Intensity: should be similar (same particles, same projection)
@@ -886,12 +886,59 @@ class TestInclinationSymmetry:
         int_rel_diff = np.abs(int_above - int_below) / (int_above + int_below + 1e-10)
         int_median_rel_diff = np.nanmedian(int_rel_diff[int_rel_diff > 0])
         assert int_median_rel_diff < 0.5, (
-            f"Face-on intensity from above/below should be similar, "
-            f"but median_rel_diff={int_median_rel_diff:.2f}"
+            f'Face-on intensity from above/below should be similar, '
+            f'but median_rel_diff={int_median_rel_diff:.2f}'
         )
 
-        print(f"✓ Face-on velocity diff = {vel_max_diff:.1f} km/s")
-        print(f"✓ Face-on intensity median_rel_diff = {int_median_rel_diff:.3f}")
+        print(f'✓ Face-on velocity diff = {vel_max_diff:.1f} km/s')
+        print(f'✓ Face-on intensity median_rel_diff = {int_median_rel_diff:.3f}')
+
+
+class TestDustAttenuation:
+    """Test dust attenuation effects."""
+
+    def test_dust_attenuation_reduces_flux(self, test_galaxy, image_pars_test):
+        """Dust attenuation should reduce total flux."""
+        gen = TNGDataVectorGenerator(test_galaxy)
+
+        config_dusted = TNGRenderConfig(
+            target_redshift=0.6, image_pars=image_pars_test, band='r', use_dusted=True
+        )
+        intensity_dusted, _ = gen.generate_intensity_map(config_dusted)
+
+        config_raw = TNGRenderConfig(
+            target_redshift=0.6, image_pars=image_pars_test, band='r', use_dusted=False
+        )
+        intensity_raw, _ = gen.generate_intensity_map(config_raw)
+
+        assert (
+            intensity_raw.sum() > intensity_dusted.sum()
+        ), 'Dust should attenuate flux'
+
+    def test_dust_attenuation_model(self, test_galaxy):
+        gen = TNGDataVectorGenerator(test_galaxy)
+
+        # Compute the dust attenuation in the native coordinates for this galaxy and compared to the result stored in the TNG data.
+        # The two should give consistent results since they have the same dust attenuation model.
+
+        # Assuming using catalogues that fixed the line-of-sight to be along the z-axis.
+        coords_stellar_2d = gen.stellar['Coordinates'][:, :2]  # x,y positions
+        coords_gas_2d = gen.gas['Coordinates'][:, :2]
+        coords_galaxy_center_2d = gen.subhalo['SubhaloPos'][:2]  # x,y of galaxy center
+
+        # Using the native orientation to compute the dust attenuation and compare to the TNG data.
+        gen._estimate_magnitude_luminosity(
+            coords_stellar_2d, coords_gas_2d, coords_galaxy_center_2d, band='r'
+        )
+
+        assert np.allclose(
+            gen.stellar['Dusted_Luminosity_rotate_r'],
+            gen.stellar['Dusted_Luminosity_r'],
+        ), 'Stellar luminosity after dust attenuation correction should match TNG data'
+        assert np.allclose(
+            gen.stellar['Dusted_Absolute_Magnitude_rotate_r'],
+            gen.stellar['Dusted_Absolute_Magnitude_r'],
+        ), 'Stellar absolute magnitude after dust attenuation correction should match TNG data'
 
 
 @pytest.mark.tng_diagnostics
@@ -902,10 +949,10 @@ class TestDiagnosticPlots:
     from unit tests as they are slower and generate large plot files.
     """
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope='class')
     def output_dir(self):
         """Create output directory for diagnostic plots."""
-        out_dir = Path(__file__).parent / "out" / "tng_diagnostics"
+        out_dir = Path(__file__).parent / 'out' / 'tng_diagnostics'
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
@@ -980,7 +1027,7 @@ class TestDiagnosticPlots:
         from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
         return plt.colorbar(im, cax=cax, **kwargs)
 
     @staticmethod
@@ -1183,7 +1230,7 @@ class TestDiagnosticPlots:
             )
 
             # Add metadata text
-            flipped_str = " (flipped)" if flipped else ""
+            flipped_str = ' (flipped)' if flipped else ''
             ax_int.text(
                 0.02,
                 0.98,
@@ -1226,8 +1273,8 @@ class TestDiagnosticPlots:
             self.add_scale_markers(ax_vel, image_pars, scale_bar_arcsec=1.0)
 
             print(
-                f"✓ Galaxy {idx} (SubhaloID={subhalo_id}): "
-                f"inc={inc_deg:.1f}°, PA={pa_deg:.1f}°, flipped={flipped}"
+                f'✓ Galaxy {idx} (SubhaloID={subhalo_id}): '
+                f'inc={inc_deg:.1f}°, PA={pa_deg:.1f}°, flipped={flipped}'
             )
 
         # Leave room at top for suptitle (top=0.96 leaves ~4% for title)
@@ -1243,7 +1290,7 @@ class TestDiagnosticPlots:
         plt.close()
 
         print(
-            f"✓ Saved diagnostic plot: {output_dir / 'all_galaxies_native_highres.png'}"
+            f'✓ Saved diagnostic plot: {output_dir / "all_galaxies_native_highres.png"}'
         )
 
     def test_cic_vs_ngp_comparison(self, test_galaxy, output_dir):
@@ -1301,7 +1348,7 @@ class TestDiagnosticPlots:
             :, :2
         ]  # Just drop z for native orientation
         stellar_coords_arcsec = convert_tng_to_arcsec(
-            stellar_coords_2d, gen.distance_mpc, target_redshift=target_z
+            stellar_coords_2d, target_redshift=target_z
         )
 
         # Stellar luminosities for color/size
@@ -1315,7 +1362,7 @@ class TestDiagnosticPlots:
         gas_coords_centered = gen._center_coordinates(gas_coords, gas_center)
         gas_coords_2d = gas_coords_centered[:, :2]  # Just drop z for native orientation
         gas_coords_arcsec = convert_tng_to_arcsec(
-            gas_coords_2d, gen.distance_mpc, target_redshift=target_z
+            gas_coords_2d, target_redshift=target_z
         )
 
         # Gas velocities - must subtract systemic velocity like the gridded maps do
@@ -1508,7 +1555,7 @@ class TestDiagnosticPlots:
         plt.close()
 
         print(
-            f"✓ Saved CIC vs NGP comparison: {output_dir / 'cic_vs_ngp_comparison.png'}"
+            f'✓ Saved CIC vs NGP comparison: {output_dir / "cic_vs_ngp_comparison.png"}'
         )
 
     def test_symmetry_breaking_inclinations(self, test_galaxy, output_dir):
@@ -1680,9 +1727,9 @@ class TestDiagnosticPlots:
 
         max_vel_diff = np.nanmax(np.abs(vel_diff))
         print(
-            f"✓ Max velocity difference: {max_vel_diff:.1f} km/s (confirms asymmetry)"
+            f'✓ Max velocity difference: {max_vel_diff:.1f} km/s (confirms asymmetry)'
         )
-        print(f"✓ Saved: {output_dir / 'symmetry_breaking_inclinations.png'}")
+        print(f'✓ Saved: {output_dir / "symmetry_breaking_inclinations.png"}')
 
     def test_resolution_and_snr_grid(self, test_galaxy, output_dir):
         """
@@ -1819,7 +1866,7 @@ class TestDiagnosticPlots:
         plt.close()
 
         print(
-            f"✓ Saved resolution/SNR grid with intensity+velocity: {output_dir / 'resolution_snr_grid.png'}"
+            f'✓ Saved resolution/SNR grid with intensity+velocity: {output_dir / "resolution_snr_grid.png"}'
         )
 
     def test_glamour_shot(self, output_dir):
@@ -1833,7 +1880,8 @@ class TestDiagnosticPlots:
 
         # Load SubhaloID=8
         tng_data = TNG50MockData()
-        galaxy = tng_data.get_galaxy(subhalo_id=8)
+        # galaxy = tng_data.get_galaxy(subhalo_id=8)
+        galaxy = tng_data.get_galaxy(index=0)
         gen = TNGDataVectorGenerator(galaxy)
 
         # High resolution for truth (top row) - zoom to ±2" at 0.025"/pix
@@ -2075,7 +2123,7 @@ class TestDiagnosticPlots:
         )
         plt.close()
 
-        print(f"✓ Saved glamour shot: {output_dir / 'glamour_shot_subhalo8.png'}")
+        print(f'✓ Saved glamour shot: {output_dir / "glamour_shot_subhalo8.png"}')
 
     def test_orientation_sweep_inclination(self, output_dir):
         """
@@ -2098,7 +2146,8 @@ class TestDiagnosticPlots:
 
         # Load SubhaloID=8
         tng_data = TNG50MockData()
-        galaxy = tng_data.get_galaxy(subhalo_id=8)
+        # galaxy = tng_data.get_galaxy(subhalo_id=8)
+        galaxy = tng_data.get_galaxy(index=0)
         gen = TNGDataVectorGenerator(galaxy)
 
         # Zoomed out view: larger FOV
@@ -2116,9 +2165,9 @@ class TestDiagnosticPlots:
 
         # Generate both modes: with and without gas-stellar offset preservation
         for preserve_offset in [True, False]:
-            mode_label = "offset_preserved" if preserve_offset else "aligned"
+            mode_label = 'offset_preserved' if preserve_offset else 'aligned'
             mode_title = (
-                "Gas offset preserved" if preserve_offset else "Gas-stellar aligned"
+                'Gas offset preserved' if preserve_offset else 'Gas-stellar aligned'
             )
 
             # First pass: generate all maps to get consistent colorbar ranges
@@ -2195,9 +2244,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2231,9 +2280,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2270,7 +2319,7 @@ class TestDiagnosticPlots:
             plt.savefig(out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
-            print(f"✓ Saved inclination sweep ({mode_label}): {out_path}")
+            print(f'✓ Saved inclination sweep ({mode_label}): {out_path}')
 
     def test_orientation_sweep_inclination_multi_galaxy(self, output_dir):
         """
@@ -2311,7 +2360,7 @@ class TestDiagnosticPlots:
             subhalo_id = galaxy['subhalo']['SubhaloID']
 
             print(
-                f"Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})..."
+                f'Generating inclination sweep for galaxy {gal_idx} (SubhaloID={subhalo_id})...'
             )
 
             # Collect orientation diagnostics for summary
@@ -2408,9 +2457,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2440,9 +2489,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_cols),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2465,11 +2514,11 @@ class TestDiagnosticPlots:
             grid_vel.cbar_axes[0].set_ylabel('v [km/s]', fontsize=8)
 
             # Quantitative diagnostic: compute vertical extent at each inclination
-            print(f"\n  SubhaloID={subhalo_id} Vertical Extent Analysis:")
+            print(f'\n  SubhaloID={subhalo_id} Vertical Extent Analysis:')
             print(
-                f"  {'Inclination':<12} {'cos(i)':<8} {'RMS Height':<12} {'90th Pct':<12}"
+                f'  {"Inclination":<12} {"cos(i)":<8} {"RMS Height":<12} {"90th Pct":<12}'
             )
-            print(f"  {'-'*50}")
+            print(f'  {"-" * 50}')
 
             vertical_extents_rms = []
             vertical_extents_90 = []
@@ -2491,9 +2540,9 @@ class TestDiagnosticPlots:
             vertical_extents_rms.append(rms_height_native)
             vertical_extents_90.append(p90_height_native)
             native_cosi_val = np.cos(np.deg2rad(gen.native_inclination_deg))
-            inc_labels.append(f"Native ({gen.native_inclination_deg:.1f}°)")
+            inc_labels.append(f'Native ({gen.native_inclination_deg:.1f}°)')
             print(
-                f"  {'Native':<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}"
+                f'  {"Native":<12} {native_cosi_val:<8.2f} {rms_height_native:<12.3f} {p90_height_native:<12.3f}'
             )
 
             # Analyze custom orientations
@@ -2507,16 +2556,16 @@ class TestDiagnosticPlots:
                 )
                 vertical_extents_rms.append(rms_height)
                 vertical_extents_90.append(p90_height)
-                inc_labels.append(f"{inc_deg:.0f}°")
+                inc_labels.append(f'{inc_deg:.0f}°')
                 print(
-                    f"  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}"
+                    f'  {inc_deg:<12.0f} {cosi:<8.2f} {rms_height:<12.3f} {p90_height:<12.3f}'
                 )
 
             # Find minimum
             min_idx_rms = np.argmin(vertical_extents_rms)
             min_idx_90 = np.argmin(vertical_extents_90)
-            print(f"\n  Minimum RMS height at: {inc_labels[min_idx_rms]}")
-            print(f"  Minimum 90th pct height at: {inc_labels[min_idx_90]}\n")
+            print(f'\n  Minimum RMS height at: {inc_labels[min_idx_rms]}')
+            print(f'  Minimum 90th pct height at: {inc_labels[min_idx_90]}\n')
 
             # Save diagnostic data to CSV
             csv_path = (
@@ -2562,7 +2611,7 @@ class TestDiagnosticPlots:
                         ]
                     )
 
-            print(f"  ✓ Saved diagnostic CSV: {csv_path}")
+            print(f'  ✓ Saved diagnostic CSV: {csv_path}')
 
             # Title with enhanced diagnostics
             gas_stellar_angle = getattr(gen, '_gas_stellar_L_angle_deg', 0.0)
@@ -2587,13 +2636,13 @@ class TestDiagnosticPlots:
             plt.close()
 
             # Print diagnostic summary
-            print(f"\n  Orientation Diagnostics:")
-            print(f"    Catalog (morphological) inc: {gen.native_inclination_deg:.1f}°")
-            print(f"    Kinematic (from L) inc: {kinematic_inc:.1f}°")
-            print(f"    Catalog vs Kinematic offset: {catalog_kinematic_offset:.1f}°")
-            print(f"    Gas-stellar L angle: {gas_stellar_angle:.1f}°")
+            print(f'\n  Orientation Diagnostics:')
+            print(f'    Catalog (morphological) inc: {gen.native_inclination_deg:.1f}°')
+            print(f'    Kinematic (from L) inc: {kinematic_inc:.1f}°')
+            print(f'    Catalog vs Kinematic offset: {catalog_kinematic_offset:.1f}°')
+            print(f'    Gas-stellar L angle: {gas_stellar_angle:.1f}°')
 
-            print(f"\n  ✓ Saved: {out_path}")
+            print(f'\n  ✓ Saved: {out_path}')
 
         # Write summary CSV with orientation diagnostics for all galaxies
         summary_csv_path = output_dir / 'orientation_diagnostics_summary.csv'
@@ -2611,23 +2660,23 @@ class TestDiagnosticPlots:
             for row in orientation_summary:
                 writer.writerow(row)
 
-        print(f"\n✓ Saved orientation diagnostics summary: {summary_csv_path}")
+        print(f'\n✓ Saved orientation diagnostics summary: {summary_csv_path}')
 
         # Print summary table
-        print("\n" + "=" * 80)
-        print("ORIENTATION DIAGNOSTICS SUMMARY")
-        print("=" * 80)
+        print('\n' + '=' * 80)
+        print('ORIENTATION DIAGNOSTICS SUMMARY')
+        print('=' * 80)
         print(
-            f"{'SubhaloID':<12} {'Cat. Inc':<10} {'Kin. Inc':<10} {'Cat-Kin Δ':<12} {'Gas-Star Δ':<12}"
+            f'{"SubhaloID":<12} {"Cat. Inc":<10} {"Kin. Inc":<10} {"Cat-Kin Δ":<12} {"Gas-Star Δ":<12}'
         )
-        print("-" * 80)
+        print('-' * 80)
         for row in orientation_summary:
             print(
-                f"{row['SubhaloID']:<12} {row['Catalog_Inc_deg']:<10.1f} "
-                f"{row['Kinematic_Inc_deg']:<10.1f} {row['Catalog_vs_Kinematic_Offset_deg']:<12.1f} "
-                f"{row['Gas_Stellar_L_Offset_deg']:<12.1f}"
+                f'{row["SubhaloID"]:<12} {row["Catalog_Inc_deg"]:<10.1f} '
+                f'{row["Kinematic_Inc_deg"]:<10.1f} {row["Catalog_vs_Kinematic_Offset_deg"]:<12.1f} '
+                f'{row["Gas_Stellar_L_Offset_deg"]:<12.1f}'
             )
-        print("=" * 80)
+        print('=' * 80)
 
     def test_orientation_sweep_pa(self, output_dir):
         """
@@ -2650,7 +2699,8 @@ class TestDiagnosticPlots:
 
         # Load SubhaloID=8
         tng_data = TNG50MockData()
-        galaxy = tng_data.get_galaxy(subhalo_id=8)
+        # galaxy = tng_data.get_galaxy(subhalo_id=8)
+        galaxy = tng_data.get_galaxy(index=0)
         gen = TNGDataVectorGenerator(galaxy)
 
         # Zoomed out view
@@ -2669,9 +2719,9 @@ class TestDiagnosticPlots:
 
         # Generate both modes: with and without gas-stellar offset preservation
         for preserve_offset in [True, False]:
-            mode_label = "offset_preserved" if preserve_offset else "aligned"
+            mode_label = 'offset_preserved' if preserve_offset else 'aligned'
             mode_title = (
-                "Gas offset preserved" if preserve_offset else "Gas-stellar aligned"
+                'Gas offset preserved' if preserve_offset else 'Gas-stellar aligned'
             )
 
             # Generate all maps
@@ -2723,9 +2773,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_pa),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2761,9 +2811,9 @@ class TestDiagnosticPlots:
                 nrows_ncols=(1, n_pa),
                 axes_pad=0.05,
                 share_all=True,
-                cbar_location="right",
-                cbar_mode="single",
-                cbar_size="3%",
+                cbar_location='right',
+                cbar_mode='single',
+                cbar_size='3%',
                 cbar_pad=0.1,
             )
 
@@ -2800,4 +2850,4 @@ class TestDiagnosticPlots:
             plt.savefig(out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
-            print(f"✓ Saved PA sweep ({mode_label}): {out_path}")
+            print(f'✓ Saved PA sweep ({mode_label}): {out_path}')
