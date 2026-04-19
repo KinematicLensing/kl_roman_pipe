@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Tuple, FrozenSet, Optional, Callable
 import jax
 import jax.numpy as jnp
 import numpy as np
+import galsim as gs
+import os
 
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel, VelocityModel
@@ -483,6 +485,122 @@ class SpectralModel:
         # vmap over (Nrow, Ncol) -> apply convolve_1d to each pixel's spectrum
         return jax.vmap(jax.vmap(convolve_1d))(cube)
 
+####WIP
+@dataclass#(frozen=True)
+class FiberPars:
+    #cube_pars: CubePars  # instead of taking cube_pars, I should have this take image_pars and then I build cube_pars myself
+    #image_pars: ImagePars
+    #obs_conf: dict 
+
+    def __init__(self, cube_pars, obs_conf):
+
+    #@classmethod #actually, I don't want classmethod aaagh
+    #def from_cube_pars(self, cube_pars, obs_conf):
+
+        self.cube_pars = cube_pars
+        self.obs_conf = obs_conf
+
+        self.is_dispersed = obs_conf['OBSTYPE'] == 1
+        self.obs_index = obs_conf['OBSINDEX']
+        self.pix_scale = cube_pars.image_pars.pixel_scale
+        self.spatial_shape = cube_pars.spatial_shape
+        self.X, self.Y = build_map_grid_from_image_pars(
+            cube_pars.image_pars
+        )  # need to figure out the units for this, whether it can be off-center
+
+        if self.is_dispersed:  # fiber spectrum
+            self.lambda_grid = cube_pars.lambda_grid
+            self.n_lambda = len(self.lambda_grid)
+            self.dlambda = jnp.diff(self.lambda_grid)[0]
+
+            # _bid = obs_conf['SEDBLKID'] #what is block ID?? it seems like it can alter the lambda range and resolution?
+            ##_lrange = _pars['model_dimension']['lambda_range'][_bid]. #I need to make sure, is the model dimension what I'd expect in cube_pars?
+            ##_dlam = _pars['model_dimension']['lambda_res']
+            ##if isinstance(_dlam, list):
+            ##_dlam = _dlam[_bid]
+
+            self.throughput = gs.Bandpass(
+                obs_conf['BANDPASS'],
+                'nm',
+                blue_limit=self.lambda_grid[0],
+                red_limit=self.lambda_grid[-1],
+            )
+            self._bp_array = jnp.array(self.throughput(self.lambda_grid))
+            self.lambda_eff = self.throughput.effective_wavelength
+
+        else:  # photometry
+            self.lambda_grid = cube_pars.lambda_grid
+            self.n_lambda = len(self.lambda_grid)
+            self.dlambda = jnp.diff(self.lambda_grid)[0]
+
+            _from_file_ = os.path.isfile(obs_conf['BANDPASS'])
+            if _from_file_:
+                self.throughput = gs.Bandpass(obs_conf['BANDPASS'], 'nm')
+            else:
+                _lrange = [np.min(self.lambda_grid), np.max(self.lambda_grid)]
+                self.throughput = gs.Bandpass(
+                    obs_conf['BANDPASS'],
+                    'nm',
+                    blue_limit=_lrange[0],
+                    red_limit=_lrange[1],
+                )
+            self._bp_array = jnp.array(self.throughput(self.lambda_grid))
+            self.lambda_eff = self.throughput.effective_wavelength
+
+            # this is how it's written in kl-tools but I think I need these even for photometry
+            # cls.lambda_grid, cls.n_lambda, cls._bp_array = None, 1, None
+
+        #return (cube_pars=cube_pars, obs_conf=obs_conf)
+        return
+    
+    #not using yet
+    def to_cube_pars(  # work in progress, taken from dispersion.py
+        self,
+        z: float,
+        velocity_window_kms: float = 3000.0,
+        n_lambda: int = None,
+        line_lambdas_rest: tuple = None,
+    ) -> 'CubePars':
+        """Build CubePars centered on the emission line complex at redshift z.
+
+        Parameters
+        ----------
+        z : float
+            Galaxy redshift.
+        velocity_window_kms : float
+            Half-width of velocity window in km/s. Default 3000.
+        n_lambda : int, optional
+            Number of wavelength pixels. If None, computed from velocity window
+            and dispersion.
+        line_lambdas_rest : tuple of float, optional
+            Rest-frame wavelengths (nm) of lines to cover. If None, uses
+            H-alpha (656.28 nm).
+        """
+        from kl_pipe.spectral import CubePars
+
+        if line_lambdas_rest is None:
+            line_lambdas_rest = (656.28,)
+
+        # observed wavelength range covering all lines + velocity window
+        lam_obs = [(lam * (1.0 + z)) for lam in line_lambdas_rest]
+        lam_min_line = min(lam_obs)
+        lam_max_line = max(lam_obs)
+
+        # velocity window in wavelength units
+        c_kms = 299792.458
+        lam_center = 0.5 * (lam_min_line + lam_max_line)
+        dlam_vel = lam_center * velocity_window_kms / c_kms
+
+        lam_min = lam_min_line - dlam_vel
+        lam_max = lam_max_line + dlam_vel
+
+        if n_lambda is None:
+            n_lambda = int(np.ceil((lam_max - lam_min) / self.dispersion)) + 1
+            n_lambda = max(n_lambda, 3)
+
+        lambda_grid = jnp.linspace(lam_min, lam_max, n_lambda)
+        self.cube_pars = CubePars(image_pars=self.image_pars, lambda_grid=lambda_grid)
+        return CubePars(image_pars=self.image_pars, lambda_grid=lambda_grid)
 
 # =============================================================================
 # Factories

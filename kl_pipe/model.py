@@ -1,13 +1,16 @@
 import inspect
 import jax.numpy as jnp
 import jax
+import galsim
 
 from abc import abstractmethod, ABC
 from typing import Tuple, Set, Any
 
 from kl_pipe.transformation import transform_to_disk_plane
 from kl_pipe.parameters import ImagePars
+from kl_pipe.spectral import FiberPars
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.psf import convolve_fft
 
 # from kl_pipe.spectral import SpectralModel
 # from kl_pipe.spectral import FiberPars
@@ -1142,12 +1145,150 @@ class KLModel(object):
                     # poisson noise is included too
                     # dark current is ignored; readout noise not ignored
 
+<<<<<<< Updated upstream
+=======
+            cube = self.render_cube(theta, cube_pars, plane=plane)
+            return disperse_cube(cube, gp, cube_pars.lambda_grid)
+        
+    def render_fiber(
+        self,
+        theta: jnp.ndarray,
+        #fiber_pars,
+        obs,
+        plane: str = 'obs',
+        #cube_pars=None,
+        force_noise_free=True,
+        run_mode='ETC',
+    ) -> jnp.ndarray:
+
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured")
+
+        # if cube_pars is None: #I don't think I have actually tried this out
+        ## convenience path: auto-build from z (not JIT-compatible)
+        # theta_spec = self.get_spectral_pars(theta)
+        # z = float(self.spectral_model.get_param('z', theta_spec))
+        # cube_pars = fiber_pars.to_cube_pars(z) #yeah this is not a thing yet
+
+        fiber_pars=obs.fiber_pars
+        cube_pars=fiber_pars.cube_pars
+        cube = self.render_cube(theta, cube_pars, plane=plane)  # theoretical cube
+
+        return self.fiber_observe_cube(cube, fiber_pars, obs, force_noise_free, run_mode)
+
+    def fiber_observe_cube(
+        self, 
+        cube, 
+        fiber_pars, 
+        obs, 
+        force_noise_free=True, 
+        run_mode='ETC'
+    ):
+        # if photometry image...wip
+        if not fiber_pars.is_dispersed:
+
+            #self.ATMPSF_conv_fiber_mask = None
+            #self.resolution_mat = None #do not set to None because the model will be reused for photometry
+
+            psfdata = obs.psf_data #self._fiber_photo_psf_data
+            #psfdata = self._fiber_psf_data
+            # galsim_psf = self._build_PSF_model_fiber(fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff)
+            # self.intensity_model.configure_psf(galsim_psf, image_pars = fiber_pars.cube_pars.image_pars, image_shape= (fiber_pars.obs_conf.NAXIS1,fiber_pars.obs_conf.NAXIS2), pixel_scale=fiber_pars.obs_conf['PIXSCALE'], oversample=1)
+            if run_mode == 'ETC':
+                # psf_convolved_int = self.intensity_model.render_image(theta=theta_int, image_pars = fiberpars_instance.cube_pars.image_pars, plane='obs', oversample =1)
+                cube_bp = cube * jnp.array(fiber_pars._bp_array)
+                raw_img = jnp.sum(cube_bp, axis=2) * fiber_pars.dlambda
+                #print(fiber_pars.dlambda)
+                # if self._fiber_psf_data.oversample == 1:
+                # highres_img = raw_img
+                # elif self._fiber_psf_data.oversample > 1: #might not be correct
+                # highres_img = jnp.repeat(
+                # jnp.repeat(raw_img, self._fiber_psf_data.oversample, axis=0),
+                # self._fiber_psf_data.oversample,
+                # axis=1,
+                # )
+                factor = (
+                    jnp.pi
+                    * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
+                    * fiber_pars.obs_conf['EXPTIME']
+                    / fiber_pars.obs_conf['GAIN']
+                )
+
+                img = factor * convolve_fft(
+                    raw_img, psfdata
+                )  # downsampling baked into convolve_fft
+
+            # add SNR mode too
+
+            if force_noise_free:
+                return img, None
+
+            else:
+                print('photometry noise implementation WIP')
+                # noise_type = fiber_pars.obs_conf['NOISETYP']
+                # if noise_type == 'ccd':
+                # read_noise = fiber_pars.obs_conf['RDNOISE'] #electrons/pixel probably
+                # gain = fiber_pars.obs_conf['GAIN'] #electrons/ADU
+                # exp_time = fiber_pars.obs_conf['EXPTIME']
+                # sky_level = fiber_pars.obs_conf['SKYLEVEL']*exp_time/gain #what are the units of this? ADU/pixel? ADU/pixel/second? if /second then I should multiply by exposure time. #divide sky level by gain to get electrons/pixel
+                # noise_std = ((sky_level+img)+read_noise**2)**0.5
+                # key = jax.random.key(0)
+                # noise = (jax.random.normal(key, shape=(img.shape[0],img.shape[1])) * noise_std)
+                # print('noise', noise)
+                # print('shape', jnp.shape(noise))
+                # img_withNoise = img.copy()
+                # img_withNoise += noise
+                # noise_img = img_withNoise - img
+                # assert (img_withNoise.array is not None), "Null data"
+                # assert (img.array is not None), "Null data"
+                # if fiber_pars.obs_conf['ADDNOISE']:
+                # return img_withNoise.array, noise_img.array
+                # else:
+                # return img.array, noise_img.array
+                return img, None
+
+        # if fiber 1D spectrum
+        else:
+            # see notes in kl-tools for why it can be done this way
+            wave = fiber_pars.lambda_grid
+            spec_1D = jnp.sum(
+                (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
+                axis=(0, 1))
+            
+            if (run_mode == 'ETC'):  # "exposure time calculator" -- unit of spectrum = counts in detector.
+                spec_1D = spec_1D * fiber_pars._bp_array
+                factor = (
+                    jnp.pi
+                    * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
+                    * fiber_pars.obs_conf['EXPTIME']
+                    / fiber_pars.obs_conf['GAIN']
+                )  # units cm^2 * seconds * ADU/electron
+                spec_1D = spec_1D * factor
+
+            # fiber PSF can result in degrade in spectra resolution
+            if obs.resolution_matrix is not None: #self.resolution_mat
+                spec_1D = jnp.dot(obs.resolution_matrix, spec_1D)
+                print(spec_1D)
+            if force_noise_free:
+                return spec_1D, None
+            else: #work in progress
+                if (
+                    run_mode == 'ETC'
+                ):  # noise computed from sky level; realistic sky level from kitt peak for example
+                    # poisson noise is included too
+                    # dark current is ignored; readout noise not ignored
+
+>>>>>>> Stashed changes
                     # should precompute skysb, definitely don't repeat every likelihood eval
                     skysb = galsim.LookupTable.from_file(
                         fiber_pars.obs_conf["SKYMODEL"], f_log=True
                     )  # Ang v.s. 1e-17 erg s-1 cm-2 A-1 arcsec-2
                     fiber_area = jnp.pi * (fiber_pars.obs_conf["FIBERRAD"]) ** 2
+<<<<<<< Updated upstream
                     _wave = self.wave * 10  # Angstrom
+=======
+                    _wave = wave * 10  # Angstrom
+>>>>>>> Stashed changes
                     _dwave = _wave[1] - _wave[0]  # Angstrom
                     _hnu = 1986445857.148928 / _wave  # 1e-17 erg
                     skyct = skysb(_wave) * fiber_area * _dwave / _hnu  # s-1 cm-2
@@ -1180,6 +1321,7 @@ class KLModel(object):
                 else:
                     return spec_1D, noise
 
+<<<<<<< Updated upstream
     def get_fiber_mask(self, fiber_pars):
         from photutils.geometry import (
             circular_overlap_grid as cog,
@@ -1330,6 +1472,8 @@ class KLModel(object):
         self.resolution_mat = jnp.array(
             Rmat.toarray()
         )  # need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
+=======
+>>>>>>> Stashed changes
 
     def evaluate_velocity(
         self,
