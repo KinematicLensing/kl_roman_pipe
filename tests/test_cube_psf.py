@@ -419,8 +419,12 @@ class TestGalSimRegression:
         fine_ip = _IMAGE_PARS.make_fine_scale(N)
         pdata = precompute_psf_fft(gaussian_psf, image_pars=_IMAGE_PARS, oversample=N)
 
-        # upsample intrinsic slice to fine scale via nearest-neighbor repeat
-        fine_slice = np.repeat(np.repeat(intrinsic_slice, N, axis=0), N, axis=1)
+        # upsample intrinsic slice to fine scale via nearest-neighbor repeat;
+        # divide by N² to split each coarse pixel's flux equally across N² fine
+        # pixels (flux/pixel convention). convolve_fft sum-bins back to coarse.
+        fine_slice = np.repeat(np.repeat(intrinsic_slice, N, axis=0), N, axis=1) / (
+            N * N
+        )
         jax_result = np.array(convolve_fft(jnp.array(fine_slice), pdata))
 
         # GalSim ground truth: FFT convolve at native resolution

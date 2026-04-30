@@ -878,10 +878,7 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
     variance = synth.variance
     data_true = synth.data_true
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_noisy = data_noisy / ps2
-    variance = variance / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     # create model and observation with PSF
     model = InclinedExponentialModel()
@@ -1081,10 +1078,7 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
     )
     variance_int = synth_int.variance
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_int_noisy = data_int_noisy / ps2
-    variance_int = variance_int / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     # generate intensity on velocity grid for flux weighting
     vel_pars = {

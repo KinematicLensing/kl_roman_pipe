@@ -315,10 +315,10 @@ def _generate_inclined_kspace_scipy(
     roll_row = (Nrow // 2) * oversample
     roll_col = (Ncol // 2) * oversample
     full = np.roll(full, (roll_row, roll_col), axis=(0, 1))
-    intensity = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
+    intensity = full[:eff_Nrow, :eff_Ncol]
 
     if oversample > 1:
-        intensity = intensity.reshape(Nrow, oversample, Ncol, oversample).mean(
+        intensity = intensity.reshape(Nrow, oversample, Ncol, oversample).sum(
             axis=(1, 3)
         )
 
@@ -605,7 +605,7 @@ def _generate_sersic_galsim(
     Returns
     -------
     ndarray
-        Surface brightness map matching image_pars shape.
+        Flux per pixel image matching image_pars shape.
     """
 
     inclination = gs.Angle(np.arccos(cosi), gs.radians)

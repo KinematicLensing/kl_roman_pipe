@@ -197,8 +197,7 @@ class TestBuildCube:
 
         # spatial integral at each wavelength, then spectral integral
         dl = float(cube_pars.lambda_grid[1] - cube_pars.lambda_grid[0])
-        ps = _IMAGE_PARS.pixel_scale
-        total_flux = float(jnp.sum(cube) * ps**2 * dl)
+        total_flux = float(jnp.sum(cube) * dl)
 
         # measured 0.34%; 0.5% gives ~1.5x headroom
         assert total_flux == pytest.approx(

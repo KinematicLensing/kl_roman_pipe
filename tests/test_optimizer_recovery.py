@@ -643,10 +643,7 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     )
     variance = synth.variance
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_noisy = data_noisy / ps2
-    variance = variance / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     # build obs with PSF
     model = InclinedExponentialModel()
@@ -773,10 +770,7 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
     )
     variance_int = synth_int.variance
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_int_noisy = data_int_noisy / ps2
-    variance_int = variance_int / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     int_pars_for_vel = {
         k: v

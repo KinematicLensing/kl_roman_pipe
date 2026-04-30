@@ -125,6 +125,9 @@ All raise `ValueError` on unknown names.
 | Inclination | `cosi = cos(i)` | 0=edge-on, 1=face-on |
 | Shear | dimensionless | `g1`, `g2`; \|g\| < 1 |
 | Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)` |
+| Render output | flux/pixel | `render_image`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |
+| Analytic profile eval | surface brightness | `__call__`, `evaluate_in_disk_plane` — continuous-coord eval; multiply by `pixel_scale**2` for flux/pixel |
+| Noise gain | photons-per-(flux/pixel) | `noise.py:add_intensity_noise` Poisson scaling |
 
 **Always perform dimensional sanity checks** on numerical quantities before finalizing code.
 
@@ -340,7 +343,7 @@ make test-grism-validation      # compare kl_pipe vs geko outputs
 
 ### Rules for AI Agents
 
-1. **Do not run `make format` or `make test`** — the user will run these manually. Only suggest which tests to run for validation; do not execute them.
+1. **Do not run `make format`** — the user will run formatting manually.
 2. **Branch naming**: `se/` prefix for user branches, `cc/` prefix for AI-created branches.
 3. **Read before editing**: never propose changes to code you haven't read.
 4. **Minimal changes**: don't add docstrings, comments, or type annotations to code you didn't change.

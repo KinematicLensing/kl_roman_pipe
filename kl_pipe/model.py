@@ -451,6 +451,39 @@ class IntensityModel(Model):
             "Subclasses must implement render_unconvolved method."
         )
 
+    def _ft_image(
+        self,
+        theta: jnp.ndarray,
+        KX: jnp.ndarray,
+        KY: jnp.ndarray,
+        pixel_scale: float,
+        Nrow: int,
+        Ncol: int,
+    ) -> jnp.ndarray:
+        """Evaluate complex k-space FT at grid points (KX, KY).
+
+        Called by ``_render_kspace`` and by ``CompositeIntensityModel``
+        to sum component FTs before a single IFFT pass. Subclasses with
+        k-space rendering must override.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array for this model.
+        KX, KY : jnp.ndarray
+            k-space grids (rad/arcsec).
+        pixel_scale : float
+            Coarse pixel scale (arcsec/pixel) for half-pixel phase.
+        Nrow, Ncol : int
+            Coarse grid dimensions for half-pixel phase.
+
+        Returns
+        -------
+        jnp.ndarray
+            Complex FT array, same shape as KX/KY.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement _ft_image")
+
     @abstractmethod
     def evaluate_in_disk_plane(
         self, theta: jnp.ndarray, X: jnp.ndarray, Y: jnp.ndarray, Z: jnp.ndarray = None

@@ -72,7 +72,8 @@ def prerender_sersic_grid(n, cosi_values, hlr=2.0, npix=128, ps=0.11):
             gsparams=gsp,
         )
         im = se.drawImage(nx=npix, ny=npix, scale=ps, method='no_pixel')
-        images[cosi] = im.array / ps**2
+        # GalSim and InclinedSpergelModel both produce flux/pixel
+        images[cosi] = im.array
     return images
 
 

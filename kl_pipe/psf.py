@@ -339,7 +339,8 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
 
     When psf_data.oversample > 1, the input image must be at fine-scale
     (shape == original_shape == coarse_shape * oversample). The result
-    is binned down to coarse_shape by averaging N×N blocks.
+    is binned down to coarse_shape by summing N×N blocks (preserves total
+    flux under the flux/pixel render convention).
 
     Fully JAX JIT and autodiff compatible.
 
@@ -366,7 +367,7 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
     if psf_data.oversample > 1:
         N = psf_data.oversample
         Nrow_c, Ncol_c = psf_data.coarse_shape
-        result = result.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+        result = result.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
 
     return result
 

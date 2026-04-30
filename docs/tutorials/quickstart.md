@@ -79,7 +79,8 @@ print("Model parameters:", vel_model.PARAMETER_NAMES)
 ```{code-cell} python
 from kl_pipe.intensity import InclinedExponentialModel
 
-# Create an exponential disk surface brightness model
+# Create an exponential disk intensity model (analytic eval is in surface
+# brightness; render_image returns flux/pixel)
 int_model = InclinedExponentialModel()
 
 print("Model parameters:", int_model.PARAMETER_NAMES)
@@ -409,6 +410,111 @@ This technique is used extensively in the test suite (`tests/test_likelihood_sli
 - `tests/test_likelihood_slices.py` - Comprehensive parameter recovery tests
 - `tests/test_optimizer_recovery.py` - Gradient-based fitting examples
 
+---
+
+## Multi-Component Intensity Models
+
+Real galaxies have distinct morphological components (disk, bulge, bar). `CompositeIntensityModel` sums N components in k-space (one IFFT), and `BulgeDiskModel` is a convenience subclass for the common disk+bulge case.
+
+### BulgeDiskModel
+
+Exponential disk (n=1, exact FT) + Sersic bulge (n=4, fixed). The disk uses the analytic exponential FT; the bulge uses the Miller & Pasha (2025) symbolic regression emulator.
+
+```{code-cell} python
+from kl_pipe.intensity import BulgeDiskModel
+
+model = BulgeDiskModel()
+print("Parameters:", model.PARAMETER_NAMES)
+print(f"Count: {len(model.PARAMETER_NAMES)}")
+```
+
+Flux is parameterized as `total_flux` + `bulge_frac` (B/T ratio). Component fluxes are derived internally: `disk_flux = total_flux * (1 - bulge_frac)`.
+
+```{code-cell} python
+import jax.numpy as jnp
+from kl_pipe.parameters import ImagePars
+from kl_pipe.utils import build_map_grid_from_image_pars
+
+pars = {
+    'cosi': 0.5, 'theta_int': 0.3, 'g1': 0.02, 'g2': -0.01,
+    'total_flux': 1e4, 'bulge_frac': 0.25,
+    'disk_rscale': 1.5, 'disk_h_over_r': 0.1,
+    'disk_x0': 0.0, 'disk_y0': 0.0,
+    'bulge_hlr': 0.4, 'bulge_h_over_hlr': 0.3,
+    'bulge_x0': 0.0, 'bulge_y0': 0.0,
+}
+theta = model.pars2theta(pars)
+image = model._render_kspace(theta, 64, 64, 0.11)
+
+import matplotlib.pyplot as plt
+plt.imshow(image, origin='lower', cmap='viridis')
+plt.colorbar(label='Flux')
+plt.title('Bulge + Disk Composite')
+plt.show()
+```
+
+### Shared centroids
+
+By default, each component has its own centroid (`disk_x0`, `bulge_x0`, etc.). Pass `shared_centroids=True` to link them:
+
+```{code-cell} python
+model_shared = BulgeDiskModel(shared_centroids=True)
+print("Shared:", model_shared.PARAMETER_NAMES)
+print(f"Count: {len(model_shared.PARAMETER_NAMES)} (vs {len(model.PARAMETER_NAMES)} independent)")
+```
+
+### Turning off bulge shear
+
+`fixed_params` can override shared parameters for specific components. To zero out shear for the bulge while keeping it for the disk:
+
+```{code-cell} python
+from kl_pipe.intensity import CompositeIntensityModel, ComponentSpec
+from kl_pipe.intensity import InclinedExponentialModel, InclinedSersicModel
+
+model_no_bulge_shear = CompositeIntensityModel(
+    components=[
+        ComponentSpec(InclinedExponentialModel(), prefix='disk'),
+        ComponentSpec(InclinedSersicModel(), prefix='bulge',
+                      fixed_params={'n_sersic': 4.0, 'g1': 0.0, 'g2': 0.0}),
+    ],
+)
+# g1/g2 still in PARAMETER_NAMES (disk needs them), but bulge always sees zeros
+print("g1 in params:", 'g1' in model_no_bulge_shear.PARAMETER_NAMES)
+```
+
+### Generic two-component
+
+Any two `IntensityModel` subclasses can be composed:
+
+```{code-cell} python
+two_sersic = CompositeIntensityModel(
+    components=[
+        ComponentSpec(InclinedSersicModel(), prefix='thin_disk'),
+        ComponentSpec(InclinedSersicModel(), prefix='thick_disk'),
+    ],
+)
+print("Free n for both:", [p for p in two_sersic.PARAMETER_NAMES if 'n_sersic' in p])
+```
+
+### Three-component example
+
+```{code-cell} python
+three_comp = CompositeIntensityModel(
+    components=[
+        ComponentSpec(InclinedExponentialModel(), prefix='disk'),
+        ComponentSpec(InclinedSersicModel(), prefix='bulge',
+                      fixed_params={'n_sersic': 4.0}),
+        ComponentSpec(InclinedSersicModel(), prefix='bar',
+                      fixed_params={'n_sersic': 1.5}),
+    ],
+)
+frac_params = [p for p in three_comp.PARAMETER_NAMES if '_frac' in p]
+print("Fraction params:", frac_params)
+print("disk_frac = 1 - bulge_frac - bar_frac (derived)")
+```
+
+---
+
 ## TODOs:
 
-- Add eample for MCMC inference
+- Add example for MCMC inference

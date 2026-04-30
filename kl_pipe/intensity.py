@@ -1,8 +1,10 @@
 import numpy as np
 import jax.numpy as jnp
 import jax
+from dataclasses import dataclass, field
 from scipy.fft import next_fast_len
 from scipy.special import kve as scipy_kve
+from typing import Dict, List, Optional, Set
 
 from kl_pipe.model import IntensityModel
 from kl_pipe.transformation import obs2cen, cen2source, source2gal
@@ -291,10 +293,10 @@ def _kspace_render_core(
     roll_row = (Nrow // 2) * oversample
     roll_col = (Ncol // 2) * oversample
     full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
-    image = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
+    image = full[:eff_Nrow, :eff_Ncol]
 
     if oversample > 1:
-        image = image.reshape(Nrow, oversample, Ncol, oversample).mean(axis=(1, 3))
+        image = image.reshape(Nrow, oversample, Ncol, oversample).sum(axis=(1, 3))
 
     return image
 
@@ -466,7 +468,7 @@ def _kspace_render_image(
                 psf_kernel_fft=obs.kspace_psf_fft,
             )
             if N > 1:
-                image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                image = image.reshape(Nrow, N, Ncol, N).sum(axis=(1, 3))
             return image
 
         if obs.psf_data is not None:
@@ -1095,6 +1097,18 @@ class InclinedExponentialModel(IntensityModel):
         if pad_factor is None:
             pad_factor = self._kspace_pad_factor
 
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate exponential FT: radial ``(1 + k^2)^{-3/2}``."""
         x0 = self.get_param('int_x0', theta)
         y0 = self.get_param('int_y0', theta)
         g1 = self.get_param('g1', theta)
@@ -1105,34 +1119,22 @@ class InclinedExponentialModel(IntensityModel):
         rscale = self.get_param('int_rscale', theta)
         h_over_r = self.get_param('int_h_over_r', theta)
 
-        def ft_image(KX, KY):
-            # exponential radial FT: (1 + k²)^{-3/2}
-            return _inclined_sech2_ft(
-                KX,
-                KY,
-                lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5,
-                flux,
-                x0,
-                y0,
-                g1,
-                g2,
-                pa,
-                cosi,
-                rscale,
-                h_over_r,
-                pixel_scale,
-                Nrow,
-                Ncol,
-            )
-
-        return _kspace_render_core(
-            ft_image,
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5,
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            rscale,
+            h_over_r,
+            pixel_scale,
             Nrow,
             Ncol,
-            pixel_scale,
-            pad_factor,
-            oversample,
-            psf_kernel_fft,
         )
 
     def render_image(
@@ -1186,7 +1188,7 @@ class InclinedExponentialModel(IntensityModel):
                     psf_kernel_fft=obs.kspace_psf_fft,
                 )
                 if N > 1:
-                    image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                    image = image.reshape(Nrow, N, Ncol, N).sum(axis=(1, 3))
                 return image
 
             if obs.psf_data is not None:
@@ -1474,6 +1476,18 @@ class InclinedSpergelModel(IntensityModel):
         if pad_factor is None:
             pad_factor = self._kspace_pad_factor
 
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate Spergel FT: radial ``(1 + k^2)^{-(1+nu)}``."""
         x0 = self.get_param('int_x0', theta)
         y0 = self.get_param('int_y0', theta)
         g1 = self.get_param('g1', theta)
@@ -1485,34 +1499,22 @@ class InclinedSpergelModel(IntensityModel):
         h_over_r = self.get_param('int_h_over_r', theta)
         nu = self.get_param('nu', theta)
 
-        def ft_image(KX, KY):
-            # spergel radial FT: (1 + k²)^{-(1+nu)}, captures nu from closure
-            return _inclined_sech2_ft(
-                KX,
-                KY,
-                lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
-                flux,
-                x0,
-                y0,
-                g1,
-                g2,
-                pa,
-                cosi,
-                rscale,
-                h_over_r,
-                pixel_scale,
-                Nrow,
-                Ncol,
-            )
-
-        return _kspace_render_core(
-            ft_image,
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            rscale,
+            h_over_r,
+            pixel_scale,
             Nrow,
             Ncol,
-            pixel_scale,
-            pad_factor,
-            oversample,
-            psf_kernel_fft,
         )
 
     def render_image(
@@ -1744,6 +1746,18 @@ class InclinedDeVaucouleursModel(IntensityModel):
         if pad_factor is None:
             pad_factor = self._kspace_pad_factor
 
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate de Vaucouleurs FT: Spergel with fixed nu=-0.6."""
         x0 = self.get_param('int_x0', theta)
         y0 = self.get_param('int_y0', theta)
         g1 = self.get_param('g1', theta)
@@ -1755,34 +1769,22 @@ class InclinedDeVaucouleursModel(IntensityModel):
         h_over_r = self.get_param('int_h_over_r', theta)
         nu = self._fixed_nu
 
-        def ft_image(KX, KY):
-            # de vaucouleurs radial FT: (1 + k²)^{-(1+nu)} with fixed nu=-0.6
-            return _inclined_sech2_ft(
-                KX,
-                KY,
-                lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
-                flux,
-                x0,
-                y0,
-                g1,
-                g2,
-                pa,
-                cosi,
-                rscale,
-                h_over_r,
-                pixel_scale,
-                Nrow,
-                Ncol,
-            )
-
-        return _kspace_render_core(
-            ft_image,
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            rscale,
+            h_over_r,
+            pixel_scale,
             Nrow,
             Ncol,
-            pixel_scale,
-            pad_factor,
-            oversample,
-            psf_kernel_fft,
         )
 
     def render_image(
@@ -2037,6 +2039,18 @@ class InclinedSersicModel(IntensityModel):
         if pad_factor is None:
             pad_factor = self._kspace_pad_factor
 
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate Sersic FT via Miller & Pasha emulator."""
         x0 = self.get_param('int_x0', theta)
         y0 = self.get_param('int_y0', theta)
         g1 = self.get_param('g1', theta)
@@ -2048,41 +2062,29 @@ class InclinedSersicModel(IntensityModel):
         h_over_hlr = self.get_param('int_h_over_hlr', theta)
         n = self.get_param('n_sersic', theta)
 
-        def ft_image(KX, KY):
-            # sersic radial FT via emulator; k_sq is dimensionless (k*R_e)²
-            # safe-where: sqrt(0) has gradient inf — substitute dummy=1
-            # in the DC branch so autodiff never sees sqrt(0)
-            def _safe_sersic_ft(k_sq):
-                is_dc = k_sq < 1e-20
-                k = jnp.sqrt(jnp.where(is_dc, jnp.ones_like(k_sq), k_sq))
-                return jnp.where(is_dc, 1.0, _sersic_ft_emulator(k, n))
+        # safe-where: sqrt(0) has gradient inf — substitute dummy=1
+        # in the DC branch so autodiff never sees sqrt(0)
+        def _safe_sersic_ft(k_sq):
+            is_dc = k_sq < 1e-20
+            k = jnp.sqrt(jnp.where(is_dc, jnp.ones_like(k_sq), k_sq))
+            return jnp.where(is_dc, 1.0, _sersic_ft_emulator(k, n))
 
-            return _inclined_sech2_ft(
-                KX,
-                KY,
-                _safe_sersic_ft,
-                flux,
-                x0,
-                y0,
-                g1,
-                g2,
-                pa,
-                cosi,
-                hlr,
-                h_over_hlr,
-                pixel_scale,
-                Nrow,
-                Ncol,
-            )
-
-        return _kspace_render_core(
-            ft_image,
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            _safe_sersic_ft,
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            hlr,
+            h_over_hlr,
+            pixel_scale,
             Nrow,
             Ncol,
-            pixel_scale,
-            pad_factor,
-            oversample,
-            psf_kernel_fft,
         )
 
     def render_image(
@@ -2110,52 +2112,376 @@ class InclinedSersicModel(IntensityModel):
 
 
 # ==============================================================================
-# CompositeIntensityModel (stub)
+# Composite intensity models
 # ==============================================================================
 
 
-class CompositeIntensityModel(IntensityModel):
-    """Composite intensity model summing two inclined components (e.g. disk + bulge).
+@dataclass
+class ComponentSpec:
+    """Specification for one component in a CompositeIntensityModel.
 
-    Each component has its own radial profile, scale, and shape parameter.
-    Shared geometric params (cosi, theta_int, g1, g2, centroid) apply to both.
-    Component-specific params use prefixes ('disk_', 'bulge_') to avoid collision.
-
-    K-space composition: each component computes its own ``ft_image_fn``
-    closure via ``_inclined_sech2_ft`` (with its own rscale, h_over_r, and
-    radial_ft_fn). The composite sums these in k-space and passes the total
-    to ``_kspace_render_core`` for a single IFFT pass. This is exact
-    (linearity of FT) and efficient (one FFT, not two).
-
-    Real-space composition: sum component __call__ results at each pixel.
-
-    NOT YET IMPLEMENTED — stub establishing interface and design for future work.
-
-    Design notes for implementation:
-    - ``_render_kspace``: build ``ft_a(KX,KY) + ft_b(KX,KY)``, pass sum to
-      ``_kspace_render_core`` (one IFFT)
-    - ``__call__``: sum ``component_a(theta_a, ...) + component_b(theta_b, ...)``
-    - Parameter slicing: same pattern as ``KLModel.get_intensity_pars``
-    - Each component can be any IntensityModel (Exponential, Spergel, etc.)
+    Parameters
+    ----------
+    model : IntensityModel
+        The component model instance (e.g. InclinedExponentialModel()).
+    prefix : str
+        Prefix for this component's non-shared parameters (e.g. 'disk').
+    fixed_params : dict
+        Parameters to fix (not exposed in composite PARAMETER_NAMES).
+        Keys must match the component model's PARAMETER_NAMES.
+        If a fixed param is also in shared_pars, fixed takes precedence
+        for this component while other components still get the shared value.
     """
 
-    # placeholder; dynamically built in __init__ from component PARAMETER_NAMES
+    model: IntensityModel
+    prefix: str
+    fixed_params: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class _ComponentMapping:
+    """Pre-computed index mapping for extracting one component's theta."""
+
+    template: jnp.ndarray
+    gather_idx: jnp.ndarray
+    scatter_pos: jnp.ndarray
+    flux_pos: int
+
+
+def _rename_param(name: str, prefix: str) -> str:
+    """Rename a component param: strip int_ prefix, prepend component prefix."""
+    base = name[4:] if name.startswith('int_') else name
+    return f'{prefix}_{base}'
+
+
+class CompositeIntensityModel(IntensityModel):
+    """Composite intensity model summing N inclined components in k-space.
+
+    Each component is an existing IntensityModel instance. The composite
+    sums their k-space FTs before a single IFFT pass (exact via linearity
+    of FT). Component-specific parameters are prefixed to avoid collision;
+    geometric parameters are shared by default.
+
+    Flux is parameterized as ``total_flux`` + ``{prefix}_frac`` for
+    components 1..N-1. Component 0's flux fraction is derived as
+    ``1 - sum(other fracs)``.
+
+    When used as the intensity model in KLModel, the composite's total
+    flux weights the velocity PSF convolution. Since the bulge has
+    different kinematics than the disk (dispersion-dominated, not
+    rotation-dominated), the flux-weighted velocity field will show
+    reduced V_circ at the center. This is the physically correct
+    observable but may bias Tully-Fisher estimates.
+
+    Parameters
+    ----------
+    components : list of ComponentSpec
+        Component specifications. Component 0 is the flux reference.
+    shared_pars : set of str, optional
+        Original model param names to share across components.
+        Default: ``{'cosi', 'theta_int', 'g1', 'g2'}``.
+        Centroids NOT shared by default; add ``'int_x0', 'int_y0'``
+        to share them.
+    meta_pars : dict, optional
+        Model metadata.
+    """
+
+    # placeholder; set dynamically in __init__
     PARAMETER_NAMES = ()
 
-    def __init__(self, component_a, component_b, shared_pars=None, meta_pars=None):
-        raise NotImplementedError(
-            "CompositeIntensityModel is a stub for future implementation"
+    _DEFAULT_SHARED = frozenset({'cosi', 'theta_int', 'g1', 'g2'})
+
+    def __init__(
+        self,
+        components: List[ComponentSpec],
+        shared_pars: Set[str] = None,
+        meta_pars: dict = None,
+    ):
+        if len(components) < 2:
+            raise ValueError('CompositeIntensityModel requires >= 2 components')
+
+        self._components = components
+        self._shared_pars = (
+            set(shared_pars) if shared_pars is not None else set(self._DEFAULT_SHARED)
+        )
+
+        # validate fixed_params keys exist in component PARAMETER_NAMES
+        for spec in self._components:
+            for p in spec.fixed_params:
+                if p not in spec.model.PARAMETER_NAMES:
+                    raise ValueError(
+                        f"fixed_params key '{p}' not in "
+                        f"{type(spec.model).__name__}.PARAMETER_NAMES"
+                    )
+
+        # validate shared_pars exist in at least one component
+        all_component_pars = set()
+        for spec in self._components:
+            all_component_pars |= set(spec.model.PARAMETER_NAMES)
+        invalid_shared = self._shared_pars - all_component_pars
+        if invalid_shared:
+            raise ValueError(f"shared_pars {invalid_shared} not found in any component")
+
+        self.PARAMETER_NAMES, self._component_mappings = (
+            self._build_parameter_structure()
+        )
+        self._kspace_pad_factor = max(
+            getattr(s.model, '_kspace_pad_factor', 2) for s in self._components
+        )
+
+        super().__init__(meta_pars)
+
+    def _build_parameter_structure(self):
+        """Build composite PARAMETER_NAMES and per-component index mappings.
+
+        Returns
+        -------
+        param_names : tuple of str
+        mappings : list of _ComponentMapping
+        """
+        param_list = []
+        # track which shared params we've already added
+        shared_added = set()
+
+        # pass 1: collect shared params (first occurrence order)
+        for spec in self._components:
+            for p in spec.model.PARAMETER_NAMES:
+                if p == 'flux':
+                    continue
+                if p in self._shared_pars and p not in shared_added:
+                    # only add to composite if at least one component
+                    # doesn't fix it (otherwise it's fully fixed)
+                    has_non_fixed = any(
+                        p not in s.fixed_params for s in self._components
+                    )
+                    if has_non_fixed:
+                        param_list.append(p)
+                        shared_added.add(p)
+
+        # pass 2: add total_flux and fraction params
+        param_list.append('total_flux')
+        for spec in self._components[1:]:
+            param_list.append(f'{spec.prefix}_frac')
+
+        # pass 3: add component-specific (non-shared, non-fixed, non-flux) params
+        for spec in self._components:
+            for p in spec.model.PARAMETER_NAMES:
+                if p == 'flux':
+                    continue
+                if p in self._shared_pars:
+                    continue
+                if p in spec.fixed_params:
+                    continue
+                param_list.append(_rename_param(p, spec.prefix))
+
+        param_names = tuple(param_list)
+
+        # build index for composite param lookup
+        composite_idx = {name: i for i, name in enumerate(param_names)}
+
+        # build per-component mappings
+        mappings = []
+        for spec in self._components:
+            comp_pars = spec.model.PARAMETER_NAMES
+            n_comp = len(comp_pars)
+            template = jnp.zeros(n_comp)
+            gather_list = []
+            scatter_list = []
+            flux_pos = -1
+
+            for j, p in enumerate(comp_pars):
+                if p == 'flux':
+                    flux_pos = j
+                    # flux injected separately via _get_component_theta
+                    continue
+
+                if p in spec.fixed_params:
+                    # fixed value goes into template (even if shared)
+                    template = template.at[j].set(spec.fixed_params[p])
+                    continue
+
+                if p in self._shared_pars:
+                    if p in composite_idx:
+                        gather_list.append(composite_idx[p])
+                        scatter_list.append(j)
+                    continue
+
+                # non-shared, non-fixed: use renamed param
+                renamed = _rename_param(p, spec.prefix)
+                gather_list.append(composite_idx[renamed])
+                scatter_list.append(j)
+
+            if flux_pos < 0:
+                raise ValueError(
+                    f"Component model {type(spec.model).__name__} has no "
+                    f"'flux' parameter — cannot use in composite"
+                )
+
+            mappings.append(
+                _ComponentMapping(
+                    template=template,
+                    gather_idx=jnp.array(gather_list, dtype=jnp.int32),
+                    scatter_pos=jnp.array(scatter_list, dtype=jnp.int32),
+                    flux_pos=flux_pos,
+                )
+            )
+
+        return param_names, mappings
+
+    def _get_component_theta(self, theta: jnp.ndarray, i: int) -> jnp.ndarray:
+        """Extract component i's parameter array from composite theta.
+
+        JIT-compatible: uses precomputed template + index scatter.
+        Injects derived flux from total_flux and fraction params.
+        """
+        m = self._component_mappings[i]
+        comp_theta = m.template.at[m.scatter_pos].set(theta[m.gather_idx])
+
+        total_flux = self.get_param('total_flux', theta)
+        if i == 0:
+            # reference component: flux = total * (1 - sum of other fracs)
+            frac_sum = 0.0
+            for j in range(1, len(self._components)):
+                frac_name = f'{self._components[j].prefix}_frac'
+                frac_sum = frac_sum + self.get_param(frac_name, theta)
+            comp_theta = comp_theta.at[m.flux_pos].set(total_flux * (1.0 - frac_sum))
+        else:
+            frac_name = f'{self._components[i].prefix}_frac'
+            frac = self.get_param(frac_name, theta)
+            comp_theta = comp_theta.at[m.flux_pos].set(total_flux * frac)
+
+        return comp_theta
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Sum k-space FTs of all components (exact via linearity of FT)."""
+        ft_total = jnp.zeros_like(KX, dtype=complex)
+        for i, spec in enumerate(self._components):
+            comp_theta = self._get_component_theta(theta, i)
+            ft_total = ft_total + spec.model._ft_image(
+                comp_theta, KX, KY, pixel_scale, Nrow, Ncol
+            )
+        return ft_total
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """Render composite image via summed k-space FTs + single IFFT."""
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+        )
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        *,
+        obs=None,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """Render composite image with optional PSF convolution."""
+        return _kspace_render_image(
+            self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
+        )
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render without PSF, for datacube building."""
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
+    def __call__(self, theta, plane, x, y, z=None):
+        """Sum real-space component evaluations."""
+        total = jnp.zeros_like(x)
+        for i, spec in enumerate(self._components):
+            comp_theta = self._get_component_theta(theta, i)
+            total = total + spec.model(comp_theta, plane, x, y, z)
+        return total
+
+    def evaluate_in_disk_plane(self, theta, X, Y, Z=None):
+        """Sum component face-on profiles in disk plane."""
+        total = jnp.zeros_like(X)
+        for i, spec in enumerate(self._components):
+            comp_theta = self._get_component_theta(theta, i)
+            total = total + spec.model.evaluate_in_disk_plane(comp_theta, X, Y, Z)
+        return total
+
+    @property
+    def name(self) -> str:
+        parts = '+'.join(f'{s.prefix}:{s.model.name}' for s in self._components)
+        return f'composite({parts})'
+
+    def theta2pars(self, theta: jnp.ndarray) -> dict:
+        """Convert theta array to parameter dict (instance method)."""
+        return {name: float(theta[i]) for i, name in enumerate(self.PARAMETER_NAMES)}
+
+    def pars2theta(self, pars: dict) -> jnp.ndarray:
+        """Convert parameter dict to theta array (instance method)."""
+        return jnp.array([pars[name] for name in self.PARAMETER_NAMES])
+
+
+class BulgeDiskModel(CompositeIntensityModel):
+    """Exponential disk (n=1) + Sersic bulge (n=4, fixed) composite.
+
+    The disk component uses ``InclinedExponentialModel`` with the exact
+    analytic Fourier transform ``(1 + k^2)^{-3/2}`` -- no approximation.
+
+    The bulge component uses ``InclinedSersicModel`` with the Miller &
+    Pasha (2025) symbolic regression emulator for the radial FT
+    (L2 < 2e-6 vs numerical truth, valid 0.5 <= n <= 6). The Sersic
+    index is fixed at n=4 (de Vaucouleurs).
+
+    Parameters
+    ----------
+    shared_centroids : bool
+        If True, share centroid (int_x0, int_y0) between components.
+        Default False: disk and bulge have independent centroids.
+    meta_pars : dict, optional
+        Model metadata.
+    """
+
+    def __init__(self, shared_centroids: bool = False, meta_pars: dict = None):
+        shared = {'cosi', 'theta_int', 'g1', 'g2'}
+        if shared_centroids:
+            shared |= {'int_x0', 'int_y0'}
+        super().__init__(
+            components=[
+                ComponentSpec(InclinedExponentialModel(), prefix='disk'),
+                ComponentSpec(
+                    InclinedSersicModel(),
+                    prefix='bulge',
+                    fixed_params={'n_sersic': 4.0},
+                ),
+            ],
+            shared_pars=shared,
+            meta_pars=meta_pars,
         )
 
     @property
     def name(self) -> str:
-        return 'composite'
-
-    def evaluate_in_disk_plane(self, theta, x, y, z=None):
-        raise NotImplementedError
-
-    def __call__(self, theta, plane, x, y, z=None):
-        raise NotImplementedError
+        return 'bulge_disk'
 
 
 # ==============================================================================
@@ -2171,6 +2497,7 @@ INTENSITY_MODEL_TYPES = {
     'de_vaucouleurs': InclinedDeVaucouleursModel,
     'inclined_sersic': InclinedSersicModel,
     'sersic': InclinedSersicModel,
+    'bulge_disk': BulgeDiskModel,
 }
 
 
