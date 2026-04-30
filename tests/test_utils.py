@@ -265,6 +265,8 @@ class TestConfig:
             'int_x0': 0.1,
             'int_y0': 0.1,
             'int_h_over_r': 0.01,  # low sensitivity at h/r=0.1
+            'disk_h_over_r': 0.01,  # composite disk: same physical param as int_h_over_r
+            'bulge_h_over_hlr': 0.01,  # composite bulge: same physical param as int_h_over_r
             'nu': 0.05,  # Spergel index absolute floor
         }
 
