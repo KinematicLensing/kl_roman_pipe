@@ -224,6 +224,28 @@ class TestConfig:
         }
 
         # =========================================================================
+        # COMPOSITE INTENSITY MODEL TOLERANCES
+        # Initialized identically to single-component exponential. Per-parameter
+        # scaling entries (see composite_param_scaling) added only with explicit
+        # sign-off when the experimental observation justifies it (e.g. emulator
+        # core bias on bulge_h_over_hlr at high SNR).
+        # =========================================================================
+        self.likelihood_slice_tolerance_intensity_composite = {
+            1000: 0.001,
+            500: 0.0025,
+            100: 0.005,
+            50: 0.01,
+            10: 0.05,
+        }
+        self.optimizer_tolerance_intensity_composite = {
+            1000: 0.02,
+            500: 0.025,
+            100: 0.03,
+            50: 0.05,
+            10: 0.20,
+        }
+
+        # =========================================================================
         # PARAMETER-SPECIFIC SCALING (applies to both test types)
         # Accounts for inherently weaker constraints on certain parameters
         # =========================================================================
@@ -254,6 +276,12 @@ class TestConfig:
             # nu-rscale degeneracy in optimization
             'nu': {1000: 1.5, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
         }
+
+        # Composite-specific param scaling. Starts EMPTY: per the project
+        # tolerance policy, scaling entries are added only with explicit
+        # sign-off accompanied by a documented physical/numerical reason
+        # (e.g. emulator-induced bias on n=4 bulge profile parameters).
+        self.composite_param_scaling = {}
 
         # absolute tolerance floor (for parameters near zero)
         # if true value is very small, relative error is misleading
@@ -327,6 +355,7 @@ class TestConfig:
         data_type: str,
         test_type: str,
         has_psf: bool = False,
+        model_kind: Optional[str] = None,
     ) -> Dict[str, float]:
         """
         Get tolerance for parameter at given SNR.
@@ -349,6 +378,10 @@ class TestConfig:
             Optimizer tests use looser tolerances due to local optima & degeneracies.
         has_psf : bool
             If True, apply psf_tolerance_multiplier to loosen tolerances.
+        model_kind : str, optional
+            'composite' selects the composite tolerance dicts (initialized
+            identically to single-component intensity, but extensible per-param
+            via composite_param_scaling). None falls back to default dicts.
 
         Returns
         -------
@@ -356,19 +389,36 @@ class TestConfig:
             Contains 'relative' and 'absolute' tolerance values.
         """
 
-        # Get base tolerance for this SNR and test type
+        # Get base tolerance for this SNR and test type. Composite intensity
+        # models route to the dedicated dicts so per-param scaling and
+        # tolerances can evolve independently from the exponential baseline.
+        is_composite = model_kind == 'composite' and data_type == 'intensity'
         if test_type == 'optimizer':
             if data_type == 'velocity':
                 base_tol = self.optimizer_tolerance_velocity.get(snr, 0.075)
+            elif is_composite:
+                base_tol = self.optimizer_tolerance_intensity_composite.get(snr, 0.075)
             else:
                 base_tol = self.optimizer_tolerance_intensity.get(snr, 0.075)
-            param_scaling = self.optimizer_param_scaling
+            param_scaling = (
+                self.composite_param_scaling
+                if is_composite
+                else self.optimizer_param_scaling
+            )
         else:  # likelihood_slice (default)
             if data_type == 'velocity':
                 base_tol = self.likelihood_slice_tolerance_velocity.get(snr, 0.05)
+            elif is_composite:
+                base_tol = self.likelihood_slice_tolerance_intensity_composite.get(
+                    snr, 0.05
+                )
             else:
                 base_tol = self.likelihood_slice_tolerance_intensity.get(snr, 0.05)
-            param_scaling = self.likelihood_slice_param_scaling
+            param_scaling = (
+                self.composite_param_scaling
+                if is_composite
+                else self.likelihood_slice_param_scaling
+            )
 
         # Apply parameter-specific scaling
         if param_name in param_scaling:
@@ -1623,6 +1673,7 @@ def plot_likelihood_slices(
     snr: float,
     data_type: str,
     has_psf: bool = False,
+    model_kind: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
     """
     Plot likelihood slices for all parameters.
@@ -1664,6 +1715,7 @@ def plot_likelihood_slices(
             data_type,
             test_type='likelihood_slice',
             has_psf=has_psf,
+            model_kind=model_kind,
         )
 
         # Check recovery
