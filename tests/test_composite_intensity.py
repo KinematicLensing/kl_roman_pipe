@@ -669,11 +669,17 @@ def _generate_galsim_composite(pars, image_pars, psf=None):
     )
 
     # bulge: n=4 sersic
+    # NOTE: GalSim reinterprets scale_h_over_r as h_z/scale_radius (NOT
+    # h_z/half_light_radius) when half_light_radius is supplied — see
+    # galsim.InclinedSersic docstring. Pass scale_height (physical h_z in
+    # arcsec) directly to bypass that reinterpretation. kl_pipe's
+    # bulge_h_over_hlr is h_z/half_light_radius, so physical h_z =
+    # bulge_h_over_hlr * bulge_hlr.
     bulge = gs.InclinedSersic(
         n=4.0,
         inclination=inclination,
         half_light_radius=pars['bulge_hlr'],
-        scale_h_over_r=pars['bulge_h_over_hlr'],
+        scale_height=pars['bulge_h_over_hlr'] * pars['bulge_hlr'],
         flux=total_flux * bf,
     )
 
@@ -790,23 +796,6 @@ def _generate_composite_synthetic(pars, image_pars, snr, seed=42, psf=None):
     return data_true, data_noisy, variance
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known-failing as of 2026-05-05. The Miller-Pasha n=4 Sersic emulator "
-        "produces a bulge profile that is broader than GalSim's actual InclinedSersic "
-        "(same total flux, lower peak by 20-40% at the central pixel for "
-        "inclined geometries). The existing tests/test_intensity_sersic.py "
-        "radial-profile diagnostic averages over elliptical rings (max ~3-5% at "
-        "n=4 inclined), masking these per-pixel residuals; the per-pixel "
-        "likelihood here exposes them directly. Result: slice peaks shifted "
-        "+25% on cosi, -17.8% on theta_int, -16.7% on bulge_hlr at SNR=1000 "
-        "with PSF FWHM=0.15 + oversample=5. "
-        "PR #41 (sinc-wrap k-space pixel integration) closes only ~6% of the "
-        "gap — the residual ~25% bias is intrinsic to the emulator at n=4 "
-        "inclined and needs emulator-side improvement before this test can pass."
-    ),
-)
 @pytest.mark.parametrize('snr', [1000])
 def test_likelihood_slice_bulge_disk(snr, composite_test_config, composite_grids):
     """Likelihood slices for BulgeDiskModel: verify peaks at true params.
@@ -905,24 +894,6 @@ def test_likelihood_slice_bulge_disk(snr, composite_test_config, composite_grids
 # ==============================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known-failing as of 2026-05-05. Two coupled failure modes: "
-        "(1) Mode I — the n=4 emulator's 20-40% per-pixel bias at the bulge "
-        "core (see test_likelihood_slice_bulge_disk xfail reason) shifts the "
-        "ML estimate even for a single-mode optimizer; (2) Mode II — the "
-        "well-known bulge_frac=0 boundary attractor in B+D fits "
-        "(Erwin 2015 IMFIT et al.). Multi-start L-BFGS-B "
-        "(kl_pipe.optimization.multi_start_minimize) helps with Mode II "
-        "but the forward-model bias of Mode I makes the truth basin no "
-        "longer the global ML, so multi-start still locks onto the biased "
-        "ML at SNR=1000 (theta_int recovers to 0.165 vs true 0.785) and "
-        "catastrophically at SNR=50 (bulge_frac → 0.01 bound, total_flux "
-        "→ 3.76, bulge eliminated). Both modes resolve when the emulator "
-        "improves; PR #41 alone is insufficient (~6% of the gap)."
-    ),
-)
 @pytest.mark.parametrize('snr', [1000, 50])
 def test_optimizer_recovery_bulge_disk(snr, composite_test_config, composite_grids):
     """Gradient-based optimizer recovery for BulgeDiskModel.
