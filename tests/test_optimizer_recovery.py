@@ -23,7 +23,12 @@ from scipy.optimize import minimize
 from typing import Dict, Tuple
 
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
-from kl_pipe.intensity import InclinedExponentialModel, InclinedSpergelModel
+from kl_pipe.intensity import (
+    InclinedExponentialModel,
+    InclinedSpergelModel,
+    BulgeDiskModel,
+)
+from kl_pipe.optimization import multi_start_minimize
 from kl_pipe.model import KLModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
@@ -1536,6 +1541,121 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
         recovery_stats,
         snr,
         'Optimizer: Inclined Spergel (PSF)',
+        exclude_params=exclude_params,
+    )
+
+
+# ==============================================================================
+# Test: BulgeDisk Composite Optimizer Recovery
+# ==============================================================================
+
+
+@pytest.mark.parametrize('snr', [1000, 50])
+def test_optimize_bulge_disk(snr, test_config):
+    """Multi-start L-BFGS-B optimizer recovery for BulgeDiskModel.
+
+    Multi-start (literature standard for B+D fits: Sheth+ 2010 / Erwin 2015 /
+    Robotham+ 2017) rather than single-start because the bulge+disk likelihood
+    has a documented ``bulge_frac=0`` boundary attractor — single-start
+    L-BFGS-B from a 5% perturbation reliably converges to the wrong basin
+    (catastrophically at low SNR).
+
+    Synthetic data is rendered with PSF + pixel response on; noise via
+    ``add_noise(include_poisson=False)`` matching every other intensity test.
+    """
+    from test_composite_intensity import (
+        _TRUE_PARS_SHARED,
+        _IMAGE_PARS,
+        _TEST_PSF,
+        _generate_composite_synthetic,
+    )
+
+    true_pars = dict(_TRUE_PARS_SHARED)
+
+    model = BulgeDiskModel(shared_centroids=True)
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = _generate_composite_synthetic(
+        true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
+    )
+
+    obs_int = build_image_obs(
+        _IMAGE_PARS,
+        psf=_TEST_PSF,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    neg_ll_and_grad = jax.jit(jax.value_and_grad(lambda t: -log_like(t)))
+
+    def objective(x):
+        val, grad = neg_ll_and_grad(jnp.array(x))
+        return float(val), np.array(grad, dtype=np.float64)
+
+    bounds = [
+        (0.1, 0.99),  # cosi
+        (0.0, np.pi),  # theta_int
+        (-0.1, 0.1),  # g1
+        (-0.1, 0.1),  # g2
+        (0.0, 0.0),  # int_x0 (fixed)
+        (0.0, 0.0),  # int_y0 (fixed)
+        (0.1, 10.0),  # total_flux
+        (0.01, 0.99),  # bulge_frac
+        (0.5, 10.0),  # disk_rscale
+        (0.1, 0.1),  # disk_h_over_r (fixed)
+        (0.1, 3.0),  # bulge_hlr
+        (0.3, 0.3),  # bulge_h_over_hlr (fixed)
+    ]
+    fixed_indices = [i for i, (lo, hi) in enumerate(bounds) if lo == hi]
+
+    result = multi_start_minimize(
+        objective,
+        np.array(theta_true),
+        bounds=bounds,
+        n_starts=10,
+        perturbation=0.2,
+        method='L-BFGS-B',
+        seed=42,
+        fixed_indices=fixed_indices,
+        jac=True,
+        options={'maxiter': 2000, 'ftol': 1e-8},
+    )
+    assert result.success, f'Optimization failed: {result.message}'
+
+    theta_opt = jnp.array(result.x)
+    pars_opt = model.theta2pars(theta_opt)
+
+    recovery_stats = {}
+    for param_name, true_val in true_pars.items():
+        recovered_val = pars_opt[param_name]
+        tolerance = test_config.get_tolerance(
+            snr,
+            param_name,
+            true_val,
+            'intensity',
+            test_type='optimizer',
+            has_psf=True,
+            model_kind='composite',
+        )
+        passed, stats = check_parameter_recovery(
+            recovered_val, true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    exclude_params = [
+        'g1',
+        'g2',
+        'int_x0',
+        'int_y0',
+        'disk_h_over_r',
+        'bulge_h_over_hlr',
+    ]
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'BulgeDisk optimizer',
         exclude_params=exclude_params,
     )
 

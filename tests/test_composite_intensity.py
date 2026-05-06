@@ -26,19 +26,8 @@ from kl_pipe.intensity import (
     build_intensity_model,
 )
 from kl_pipe.parameters import ImagePars
-from kl_pipe.observation import build_image_obs
-from kl_pipe.likelihood import create_jitted_likelihood_intensity
-from kl_pipe.noise import add_intensity_noise
-from kl_pipe.optimization import multi_start_minimize
-from kl_pipe.utils import get_test_dir, build_map_grid_from_image_pars
-from test_utils import (
-    TestConfig,
-    slice_all_parameters,
-    plot_likelihood_slices,
-    assert_parameter_recovery,
-    check_parameter_recovery,
-)
-from kl_pipe.diagnostics.imaging import plot_data_comparison_panels
+from kl_pipe.noise import add_noise
+from kl_pipe.utils import get_test_dir
 
 
 # ==============================================================================
@@ -762,22 +751,13 @@ class TestGalSimComparison:
 
 
 # ==============================================================================
-# Likelihood slice tests
+# Synthetic data helper for slice / optimizer recovery tests
+#
+# The recovery tests themselves live in test_likelihood_slices.py and
+# test_optimizer_recovery.py — they import this helper plus the constants
+# (_TRUE_PARS_SHARED, _IMAGE_PARS, _TEST_PSF) and renderer
+# (_generate_galsim_composite) defined above.
 # ==============================================================================
-
-
-@pytest.fixture(scope='module')
-def composite_test_config():
-    out_dir = get_test_dir() / 'out' / 'composite_likelihood'
-    config = TestConfig(out_dir, include_poisson_noise=False)
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    return config
-
-
-@pytest.fixture(scope='module')
-def composite_grids():
-    X, Y = build_map_grid_from_image_pars(_IMAGE_PARS, unit='arcsec', centered=True)
-    return X, Y
 
 
 def _generate_composite_synthetic(pars, image_pars, snr, seed=42, psf=None):
@@ -788,217 +768,19 @@ def _generate_composite_synthetic(pars, image_pars, snr, seed=42, psf=None):
     top-hat (default ``drawImage`` method) — the recommended setup for
     composite recovery tests, since a bare-cusp render exposes the n=4
     emulator's core-pixel approximation directly to the per-pixel data.
+
+    Noise convention: range-based (SNR = (max-min)/noise_std), matching the
+    other intensity slice tests via ``add_noise(include_poisson=False)``.
     """
     data_true = _generate_galsim_composite(pars, image_pars, psf=psf)
-    data_noisy, variance = add_intensity_noise(
+    data_noisy, variance = add_noise(
         data_true, target_snr=snr, include_poisson=False, seed=seed
     )
     return data_true, data_noisy, variance
 
 
-@pytest.mark.parametrize('snr', [1000])
-def test_likelihood_slice_bulge_disk(snr, composite_test_config, composite_grids):
-    """Likelihood slices for BulgeDiskModel: verify peaks at true params.
-
-    SNR=1000 only: at lower SNR, multi-component degeneracies (flux-B/T,
-    scale-inclination) cause 1D slice peaks to shift beyond single-component
-    tolerances. Lower-SNR validation requires full MCMC with priors.
-
-    Synthetic data is rendered through GalSim with PSF + pixel response on
-    (``_TEST_PSF``). The bulge GalSim render passes ``scale_height`` (physical
-    h_z) rather than ``scale_h_over_r`` to avoid GalSim reinterpreting it as
-    h_z/scale_radius (b_n^n thickness mismatch — ~3463x for n=4).
-    """
-    X, Y = composite_grids
-    true_pars = dict(_TRUE_PARS_SHARED)
-
-    model = BulgeDiskModel(shared_centroids=True)
-    theta_true = model.pars2theta(true_pars)
-
-    data_true, data_noisy, variance = _generate_composite_synthetic(
-        true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
-    )
-
-    model_eval = np.array(model(theta_true, 'obs', X, Y))
-
-    test_name = f'bulge_disk_snr{snr}'
-    plot_data_comparison_panels(
-        data_noisy=np.asarray(data_noisy),
-        data_true=np.asarray(data_true),
-        model_eval=model_eval,
-        test_name=test_name,
-        output_dir=composite_test_config.output_dir / test_name,
-        data_type='intensity',
-        variance=variance,
-        n_params=len(model.PARAMETER_NAMES),
-        enable_plots=composite_test_config.enable_plots,
-    )
-
-    # Pass the same PSF + int_model to build_image_obs so the kl_pipe
-    # likelihood path applies a fused k-space PSF kernel matching the
-    # GalSim ground truth.
-    obs_int = build_image_obs(
-        _IMAGE_PARS,
-        psf=_TEST_PSF,
-        data=data_noisy,
-        variance=variance,
-        int_model=model,
-    )
-    log_like = create_jitted_likelihood_intensity(model, obs_int)
-
-    slices = slice_all_parameters(
-        log_like,
-        model,
-        theta_true,
-        composite_test_config,
-        image_pars=_IMAGE_PARS,
-    )
-
-    recovery_stats = plot_likelihood_slices(
-        slices,
-        true_pars,
-        test_name,
-        composite_test_config,
-        snr,
-        'intensity',
-        has_psf=True,
-        model_kind='composite',
-    )
-
-    # Exclude params that are at zero true value (need absolute floor) or
-    # otherwise weakly constrained at this stage. Geometric params (cosi,
-    # theta_int) and bulge profile params now run unexcluded; with PSF on
-    # the previously-observed 25% slice peak shifts should drop below the
-    # composite tolerance floor. Re-enable exclusion here only with
-    # documented justification per the composite tolerance policy.
-    exclude_params = [
-        'g1',
-        'g2',
-        'int_x0',
-        'int_y0',
-    ]
-    assert_parameter_recovery(
-        recovery_stats,
-        snr,
-        'BulgeDisk likelihood slice',
-        exclude_params=exclude_params,
-    )
-
-
-# ==============================================================================
-# Optimizer recovery tests
-# ==============================================================================
-
-
-@pytest.mark.parametrize('snr', [1000, 50])
-def test_optimizer_recovery_bulge_disk(snr, composite_test_config, composite_grids):
-    """Gradient-based optimizer recovery for BulgeDiskModel.
-
-    Uses *multi-start* L-BFGS-B (kl_pipe.optimization.multi_start_minimize)
-    rather than a single-start optimizer because the bulge+disk likelihood
-    has a documented ``bulge_frac=0`` boundary attractor — single-start
-    L-BFGS-B from a 5% perturbation reliably converges to the wrong basin
-    (catastrophically at low SNR). Multi-start is the standard remedy in
-    galaxy bulge+disk decomposition: see Sheth+ 2010 (S4G), Erwin 2015
-    (IMFIT), Robotham+ 2017 (ProFit).
-
-    Synthetic data is rendered with PSF + pixel response on (see
-    test_likelihood_slice_bulge_disk for rationale).
-    """
-    X, Y = composite_grids
-    true_pars = dict(_TRUE_PARS_SHARED)
-
-    model = BulgeDiskModel(shared_centroids=True)
-    theta_true = model.pars2theta(true_pars)
-
-    data_true, data_noisy, variance = _generate_composite_synthetic(
-        true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
-    )
-
-    obs_int = build_image_obs(
-        _IMAGE_PARS,
-        psf=_TEST_PSF,
-        data=data_noisy,
-        variance=variance,
-        int_model=model,
-    )
-    log_like = create_jitted_likelihood_intensity(model, obs_int)
-
-    # objective and gradient (negative log-likelihood for minimization)
-    neg_ll_and_grad = jax.jit(jax.value_and_grad(lambda t: -log_like(t)))
-
-    def objective(x):
-        val, grad = neg_ll_and_grad(jnp.array(x))
-        return float(val), np.array(grad, dtype=np.float64)
-
-    bounds = [
-        (0.1, 0.99),  # cosi
-        (0.0, np.pi),  # theta_int
-        (-0.1, 0.1),  # g1
-        (-0.1, 0.1),  # g2
-        (0.0, 0.0),  # int_x0 (fixed at boundary)
-        (0.0, 0.0),  # int_y0 (fixed at boundary)
-        (0.1, 10.0),  # total_flux
-        (0.01, 0.99),  # bulge_frac
-        (0.5, 10.0),  # disk_rscale
-        (0.1, 0.1),  # disk_h_over_r (fixed)
-        (0.1, 3.0),  # bulge_hlr
-        (0.3, 0.3),  # bulge_h_over_hlr (fixed)
-    ]
-    # indices of parameters that are pinned via collapsed bounds (lo == hi);
-    # multi_start_minimize will not perturb these.
-    fixed_indices = [i for i, (lo, hi) in enumerate(bounds) if lo == hi]
-
-    # n_starts=10 / perturbation=0.2 are literature defaults for B+D fits.
-    # The first start is the unperturbed theta_true (preserves the original
-    # single-start solution as a baseline within multi_start_minimize).
-    result = multi_start_minimize(
-        objective,
-        np.array(theta_true),
-        bounds=bounds,
-        n_starts=10,
-        perturbation=0.2,
-        method='L-BFGS-B',
-        seed=42,
-        fixed_indices=fixed_indices,
-        jac=True,
-        options={'maxiter': 2000, 'ftol': 1e-8},
-    )
-    assert result.success, f'Optimization failed: {result.message}'
-
-    theta_opt = jnp.array(result.x)
-    pars_opt = model.theta2pars(theta_opt)
-
-    # check recovery — exclude degenerate / pinned params
-    recovery_stats = {}
-    for param_name, true_val in true_pars.items():
-        recovered_val = pars_opt[param_name]
-        tolerance = composite_test_config.get_tolerance(
-            snr,
-            param_name,
-            true_val,
-            'intensity',
-            test_type='optimizer',
-            has_psf=True,
-            model_kind='composite',
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, param_name
-        )
-        recovery_stats[param_name] = stats
-
-    # exclude params that are fixed or have zero true value (absolute floor)
-    exclude_params = [
-        'g1',
-        'g2',
-        'int_x0',
-        'int_y0',
-        'disk_h_over_r',
-        'bulge_h_over_hlr',
-    ]
-    assert_parameter_recovery(
-        recovery_stats,
-        snr,
-        'BulgeDisk optimizer',
-        exclude_params=exclude_params,
-    )
+# BulgeDisk recovery tests live in:
+#   tests/test_likelihood_slices.py::test_recover_bulge_disk
+#   tests/test_optimizer_recovery.py::test_optimize_bulge_disk
+# They import _TRUE_PARS_SHARED, _IMAGE_PARS, _TEST_PSF, and
+# _generate_composite_synthetic from this file.

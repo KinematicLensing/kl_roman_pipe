@@ -22,7 +22,11 @@ from typing import Dict, Tuple
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
-from kl_pipe.intensity import InclinedExponentialModel, InclinedSpergelModel
+from kl_pipe.intensity import (
+    InclinedExponentialModel,
+    InclinedSpergelModel,
+    BulgeDiskModel,
+)
 from kl_pipe.model import KLModel
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
 from kl_pipe.likelihood import (
@@ -1838,6 +1842,100 @@ def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
     )
 
     assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (w/ shear)')
+
+
+# ==============================================================================
+# Test: BulgeDisk Composite Likelihood Slice
+# ==============================================================================
+
+
+@pytest.mark.parametrize('snr', [1000])
+def test_recover_bulge_disk(snr, test_config):
+    """Likelihood slices for BulgeDiskModel composite recovery.
+
+    SNR=1000 only: at lower SNR, multi-component degeneracies (flux-B/T,
+    scale-inclination) cause 1D slice peaks to shift beyond single-component
+    tolerances. Lower-SNR validation requires full MCMC with priors.
+
+    Synthetic data is rendered through GalSim with PSF + pixel response on
+    (``_TEST_PSF`` from test_composite_intensity). Noise convention matches
+    other intensity slice tests via ``add_noise(include_poisson=False)``.
+    """
+    # Composite-specific helpers and constants live in test_composite_intensity.
+    from test_composite_intensity import (
+        _TRUE_PARS_SHARED,
+        _IMAGE_PARS,
+        _TEST_PSF,
+        _generate_composite_synthetic,
+    )
+
+    X, Y = build_map_grid_from_image_pars(_IMAGE_PARS, unit='arcsec', centered=True)
+    true_pars = dict(_TRUE_PARS_SHARED)
+
+    model = BulgeDiskModel(shared_centroids=True)
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = _generate_composite_synthetic(
+        true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
+    )
+
+    model_eval = np.array(model(theta_true, 'obs', X, Y))
+
+    test_name = f'bulge_disk_snr{snr}'
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=model_eval,
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        _IMAGE_PARS,
+        psf=_TEST_PSF,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=_IMAGE_PARS,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices,
+        true_pars,
+        test_name,
+        test_config,
+        snr,
+        'intensity',
+        has_psf=True,
+        model_kind='composite',
+    )
+
+    # Excluded:
+    # - g1, g2, int_x0, int_y0: zero true value (need absolute floor)
+    # - disk_h_over_r: projected thickness sini*h_z ~ 0.14 arcsec is
+    #   comparable to the PSF FWHM (0.15 arcsec), so the disk thickness
+    #   signal is essentially absorbed into the PSF — fundamentally
+    #   unobservable at this geometry. The optimizer test also excludes
+    #   this parameter for the same reason.
+    exclude_params = ['g1', 'g2', 'int_x0', 'int_y0', 'disk_h_over_r']
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'BulgeDisk likelihood slice',
+        exclude_params=exclude_params,
+    )
 
 
 if __name__ == "__main__":
