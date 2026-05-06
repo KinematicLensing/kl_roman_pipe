@@ -958,12 +958,15 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
     )
     psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
 
-    # GalSim InclinedSersic(n=4) matched at half_light_radius
+    # GalSim InclinedSersic(n=4) matched at half_light_radius.
+    # NOTE: when half_light_radius is supplied, GalSim reinterprets
+    # scale_h_over_r as h_z/scale_radius (NOT h_z/half_light_radius).
+    # Pass scale_height (physical h_z, arcsec) to avoid the b_n^n mismatch.
     gs_sersic = gs.InclinedSersic(
         n=4.0,
         inclination=inc,
         half_light_radius=hlr,
-        scale_h_over_r=h_over_r,
+        scale_height=h_over_r * hlr,
         flux=flux,
         gsparams=gsp,
     )
@@ -1075,7 +1078,7 @@ def _render_spergel_vs_sersic_panel(
             n=n,
             inclination=0 * gs.radians,
             half_light_radius=hlr,
-            scale_h_over_r=h_over_r,
+            scale_height=h_over_r * hlr,
             flux=flux,
             gsparams=gsp,
         ).scale_radius
@@ -1086,12 +1089,14 @@ def _render_spergel_vs_sersic_panel(
 
             inc = gs.Angle(np.arccos(cosi), gs.radians)
 
-            # GalSim InclinedSersic (3D), k-space FFT
+            # GalSim InclinedSersic (3D), k-space FFT.
+            # Pass scale_height (physical h_z) to avoid GalSim reinterpreting
+            # scale_h_over_r as h_z/scale_radius (b_n^n thickness mismatch).
             gs_prof = gs.InclinedSersic(
                 n=n,
                 inclination=inc,
                 half_light_radius=hlr,
-                scale_h_over_r=h_over_r,
+                scale_height=h_over_r * hlr,
                 flux=flux,
                 gsparams=gsp,
             )
@@ -1382,11 +1387,13 @@ def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
         gs_sersic_base = gs.Sersic(n=4, half_light_radius=hlr, flux=flux, gsparams=gsp)
     else:
         inc = gs.Angle(np.arccos(cosi), gs.radians)
+        # Pass scale_height (physical h_z) to avoid GalSim reinterpreting
+        # scale_h_over_r as h_z/scale_radius (b_n^n thickness mismatch).
         gs_sersic_base = gs.InclinedSersic(
             n=4,
             inclination=inc,
             half_light_radius=hlr,
-            scale_h_over_r=h_over_r,
+            scale_height=h_over_r * hlr,
             flux=flux,
             gsparams=gsp_sersic,
         )

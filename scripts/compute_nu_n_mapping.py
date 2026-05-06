@@ -56,10 +56,16 @@ def faceon_mismatch(nu, n, hlr=5.0, npix=512, ps=0.1):
 
 
 def prerender_sersic_grid(n, cosi_values, hlr=2.0, npix=128, ps=0.11):
-    """Pre-render GalSim InclinedSersic at all inclinations (cached)."""
+    """Pre-render GalSim InclinedSersic at all inclinations (cached).
+
+    Uses scale_height (physical h_z, arcsec) to avoid GalSim reinterpreting
+    scale_h_over_r as h_z/scale_radius (which would scale h_z by b_n^n
+    relative to half_light_radius).
+    """
     gsp = gs.GSParams(
         folding_threshold=1e-3, maxk_threshold=1e-3, maximum_fft_size=65536
     )
+    h_over_hlr = 0.1  # physical convention: h_z / half_light_radius
     images = {}
     for cosi in cosi_values:
         inc = gs.Angle(np.arccos(cosi), gs.radians)
@@ -67,7 +73,7 @@ def prerender_sersic_grid(n, cosi_values, hlr=2.0, npix=128, ps=0.11):
             n=n,
             inclination=inc,
             half_light_radius=hlr,
-            scale_h_over_r=0.1,
+            scale_height=h_over_hlr * hlr,
             flux=1.0,
             gsparams=gsp,
         )
@@ -80,7 +86,12 @@ def prerender_sersic_grid(n, cosi_values, hlr=2.0, npix=128, ps=0.11):
 def inclined_mismatch_cached(
     nu, cached_sersic, cosi_values, hlr=2.0, npix=128, ps=0.11
 ):
-    """Flux-weighted L2 using cached Sersic renders. Only our model re-renders."""
+    """Flux-weighted L2 using cached Sersic renders. Only our model re-renders.
+
+    Both kl_pipe Spergel and the cached GalSim Sersic are constructed with
+    the same physical disk thickness h_z = 0.1 * hlr (= 0.2 arcsec for hlr=2.0).
+    For kl_pipe, int_h_over_r = h_z / spergel_rscale (depends on nu).
+    """
     if nu <= -1.0 or nu > 10.0:
         return 1e10
 
@@ -91,6 +102,9 @@ def inclined_mismatch_cached(
         spergel_rscale = gs.Spergel(nu=nu, half_light_radius=hlr).scale_radius
     except Exception:
         return 1e10
+
+    h_z_phys = 0.1 * hlr  # matches the scale_height used in the GalSim cache
+    int_h_over_r = h_z_phys / spergel_rscale
 
     total = 0.0
     for cosi in cosi_values:
@@ -104,7 +118,7 @@ def inclined_mismatch_cached(
                     0.0,
                     1.0,
                     spergel_rscale,
-                    0.1,
+                    int_h_over_r,
                     nu,
                     0.0,
                     0.0,

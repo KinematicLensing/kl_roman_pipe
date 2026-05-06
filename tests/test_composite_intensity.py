@@ -804,14 +804,10 @@ def test_likelihood_slice_bulge_disk(snr, composite_test_config, composite_grids
     scale-inclination) cause 1D slice peaks to shift beyond single-component
     tolerances. Lower-SNR validation requires full MCMC with priors.
 
-    Test-design rationale: the synthetic data is rendered through GalSim
-    *with PSF + pixel response on* (``_TEST_PSF``). With PSF on the emulator's
-    core error is reduced relative to the bare-cusp render, but does NOT
-    fall below per-pixel noise at SNR=1000 — see the xfail reason on this
-    test for current bias numbers per parameter. Test infrastructure is
-    kept in place (PSF, oversample, composite tolerance plumbing) so that
-    when the emulator improves and/or PR #41 lands, removing the xfail
-    gate is a one-line change.
+    Synthetic data is rendered through GalSim with PSF + pixel response on
+    (``_TEST_PSF``). The bulge GalSim render passes ``scale_height`` (physical
+    h_z) rather than ``scale_h_over_r`` to avoid GalSim reinterpreting it as
+    h_z/scale_radius (b_n^n thickness mismatch — ~3463x for n=4).
     """
     X, Y = composite_grids
     true_pars = dict(_TRUE_PARS_SHARED)
