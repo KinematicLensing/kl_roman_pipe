@@ -238,26 +238,32 @@ def compute_effective_maxk(
 ) -> float:
     """Compute effective maxk for the full rendering chain.
 
-    When ``pixel_response`` is provided, finds the wavenumber where the
-    combined product ``|profile_FT(k) × pixel_FT(k)|`` drops below
-    ``threshold``. This accounts for the sinc's attenuation of the
-    profile FT at each k, which significantly reduces maxk for
-    inclined/compact profiles. Uses ``model.ft_amplitude(k, params)``
-    for direct forward evaluation.
+    Scans wavenumbers from 0 to ``model.maxk(params, threshold)`` and
+    returns the largest k where the product
+    ``|profile_FT(k) × pixel_FT(k) × PSF_FT(k)|`` remains above ``threshold``.
 
-    Without pixel_response/psf, returns the bare profile maxk.
+    Includes whatever factors are present (profile + any of pixel/PSF).
+    The product approach is correct for grid sizing: at the min of any two
+    individual maxks, both factors are at most threshold, so their product
+    is at most threshold² — meaning the product crosses below threshold
+    well *before* either single factor.
+
+    PSF FT evaluated at ``(kx=0, ky=k)`` -- assumes radially symmetric PSF
+    (true for all common GalSim PSFs: Gaussian, Moffat, Airy without
+    anisotropy). For asymmetric PSFs, this is the radial slice along the
+    +ky direction, a defensible bandlimit proxy.
 
     Parameters
     ----------
     model : IntensityModel
-        Model with ``maxk(params, threshold)`` and ``ft_amplitude(k, params)``
+        Model with ``maxk(params, threshold)`` and ``_ft_envelope(k, params)``
         methods.
     params : dict
         Profile parameters (must include scale length and ``cosi``).
     pixel_response : PixelResponse, optional
-        Pixel response function.
+        Any subclass implementing ``ft_radial(k)``.
     psf : galsim.GSObject, optional
-        PSF profile.
+        PSF profile. Folded into the product scan via ``psf.kValue``.
     threshold : float
         FT amplitude threshold.
 
@@ -266,36 +272,34 @@ def compute_effective_maxk(
     float
         Effective maxk in rad/arcsec.
     """
-    # bare profile maxk as upper bound
+    # bare profile maxk as scan upper bound
     profile_maxk = model.maxk(params, threshold=threshold)
 
-    # PSF limits maxk independently
-    if psf is not None:
-        profile_maxk = min(profile_maxk, psf.maxk)
-
-    if pixel_response is None:
-        return profile_maxk
-
-    # combined product: scan k and find where profile_FT × pixel_FT < threshold
     if not hasattr(model, '_ft_envelope'):
         # model doesn't provide forward FT eval; fall back to bare maxk
+        # (further tightened by PSF if present).
+        if psf is not None:
+            profile_maxk = min(profile_maxk, float(psf.maxk))
         return profile_maxk
 
-    from kl_pipe.pixel import BoxPixel
-
-    if not isinstance(pixel_response, BoxPixel):
-        return profile_maxk
-
-    ps = pixel_response.pixel_scale
     n_scan = 500
     # scan from 0 (not 0.1) so degenerate small-profile cases don't return
-    # 0.1 > profile_maxk. profile_maxk == 0 case handled by short-circuit
-    # above (no _ft_envelope) but the linspace is robust regardless.
+    # 0.1 > profile_maxk.
     k_scan = np.linspace(0.0, profile_maxk, n_scan)
 
-    prof_ft = np.array([model._ft_envelope(k, params) for k in k_scan])
-    sinc_ft = np.abs(np.sinc(k_scan * ps / (2 * np.pi)))
-    product = prof_ft * sinc_ft
+    # build the product scan from whichever factors are present
+    product = np.array([model._ft_envelope(k, params) for k in k_scan])
+
+    if pixel_response is not None:
+        product = product * np.asarray(pixel_response.ft_radial(k_scan))
+
+    if psf is not None:
+        import galsim
+
+        psf_ft = np.array(
+            [abs(psf.kValue(galsim.PositionD(0.0, float(k)))) for k in k_scan]
+        )
+        product = product * psf_ft
 
     above = k_scan[product > threshold]
     if len(above) == 0:

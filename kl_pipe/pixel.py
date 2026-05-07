@@ -90,6 +90,27 @@ class PixelResponse(ABC):
         """
         ...
 
+    @abstractmethod
+    def ft_radial(self, k):
+        """1D radial FT magnitude profile, used by adaptive grid sizing.
+
+        Evaluated along a single radial axis (e.g. kx=k, ky=0). Used by
+        ``render.compute_effective_maxk`` for the product scan that picks
+        worst-case grid sizing; decoupled from the 2D ``ft(KX, KY)`` so
+        non-Box subclasses can supply a tighter or different envelope.
+
+        Parameters
+        ----------
+        k : numpy ndarray
+            1D array of wavenumbers (rad/arcsec).
+
+        Returns
+        -------
+        numpy ndarray
+            |FT(k)| at each k. Shape matches input.
+        """
+        ...
+
 
 class BoxPixel(PixelResponse):
     """Square top-hat pixel response.
@@ -155,6 +176,12 @@ class BoxPixel(PixelResponse):
         if threshold <= 0:
             raise ValueError(f"threshold must be > 0, got {threshold}")
         return 2.0 / (threshold * self.pixel_scale)
+
+    def ft_radial(self, k):
+        """Radial sinc envelope along (k, 0): |sinc(k·pixel_scale / 2π)|."""
+        import numpy as np
+
+        return np.abs(np.sinc(np.asarray(k) * self.pixel_scale / (2.0 * np.pi)))
 
     def __repr__(self) -> str:
         return f"BoxPixel(pixel_scale={self.pixel_scale})"
