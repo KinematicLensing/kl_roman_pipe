@@ -205,7 +205,7 @@ def generate_synthetic_intensity_data(
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     """
     Test parameter recovery for CenteredVelocityModel (arctan rotation curve).
@@ -290,7 +290,7 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     """
     Test parameter recovery with non-zero shear.
@@ -365,7 +365,7 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_offset_velocity(snr, test_config, velocity_grids):
     """
     Test parameter recovery for OffsetVelocityModel.
@@ -443,7 +443,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedExponentialModel."""
 
@@ -516,7 +516,7 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedExponentialModel with shear."""
 
@@ -589,7 +589,7 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
     """
     Test parameter recovery for joint velocity + intensity model.
@@ -716,7 +716,7 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_grids):
     """
     Test parameter recovery for joint model with non-zero shear.
@@ -1639,7 +1639,7 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50])
+@pytest.mark.parametrize("snr", [10000, 1000])
 def test_recover_inclined_spergel(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedSpergelModel (nu=0.5)."""
 
@@ -1705,7 +1705,7 @@ def test_recover_inclined_spergel(snr, test_config, intensity_grids):
     assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (base)')
 
 
-@pytest.mark.parametrize("snr", [1000, 50])
+@pytest.mark.parametrize("snr", [10000, 1000])
 def test_recover_inclined_spergel_devac(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedSpergelModel (nu=-0.6, de Vaucouleurs)."""
 
@@ -1771,7 +1771,7 @@ def test_recover_inclined_spergel_devac(snr, test_config, intensity_grids):
     assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (de Vauc)')
 
 
-@pytest.mark.parametrize("snr", [1000, 50])
+@pytest.mark.parametrize("snr", [10000, 1000])
 def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedSpergelModel with shear."""
 
@@ -1842,7 +1842,7 @@ def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize('snr', [1000])
+@pytest.mark.parametrize('snr', [10000])
 def test_recover_bulge_disk(snr, test_config):
     """Likelihood slices for BulgeDiskModel composite recovery.
 
@@ -1872,7 +1872,20 @@ def test_recover_bulge_disk(snr, test_config):
         true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
     )
 
-    model_eval = np.array(model(theta_true, 'obs', X, Y))
+    obs_int = build_image_obs(
+        _IMAGE_PARS,
+        psf=_TEST_PSF,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
+    )
+
+    # Render model through the same PSF + pixel-response path the likelihood
+    # uses, so the diagnostic panels compare like-with-like (flux/pixel,
+    # PSF-convolved). model(theta, 'obs', X, Y) returns un-convolved analytic
+    # surface brightness in flux/area units, which mismatches data_true and
+    # produces a misleading chi^2 in the diagnostic plot.
+    model_eval = np.array(model.render_image(theta_true, obs=obs_int))
 
     test_name = f'bulge_disk_snr{snr}'
     plot_data_comparison_panels(
@@ -1887,13 +1900,6 @@ def test_recover_bulge_disk(snr, test_config):
         enable_plots=test_config.enable_plots,
     )
 
-    obs_int = build_image_obs(
-        _IMAGE_PARS,
-        psf=_TEST_PSF,
-        data=data_noisy,
-        variance=variance,
-        int_model=model,
-    )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     slices = slice_all_parameters(

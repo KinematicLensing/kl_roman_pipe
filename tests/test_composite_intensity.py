@@ -26,7 +26,7 @@ from kl_pipe.intensity import (
     build_intensity_model,
 )
 from kl_pipe.parameters import ImagePars
-from kl_pipe.noise import add_noise
+from kl_pipe.noise import add_intensity_noise
 from kl_pipe.utils import get_test_dir
 
 
@@ -769,11 +769,12 @@ def _generate_composite_synthetic(pars, image_pars, snr, seed=42, psf=None):
     composite recovery tests, since a bare-cusp render exposes the n=4
     emulator's core-pixel approximation directly to the per-pixel data.
 
-    Noise convention: range-based (SNR = (max-min)/noise_std), matching the
-    other intensity slice tests via ``add_noise(include_poisson=False)``.
+    Noise convention: matched-filter SNR (sigma = ||I||_2 / target_snr),
+    matching the other intensity slice tests via
+    ``add_intensity_noise(include_poisson=False)``.
     """
     data_true = _generate_galsim_composite(pars, image_pars, psf=psf)
-    data_noisy, variance = add_noise(
+    data_noisy, variance = add_intensity_noise(
         data_true, target_snr=snr, include_poisson=False, seed=seed
     )
     return data_true, data_noisy, variance

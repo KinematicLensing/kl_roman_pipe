@@ -190,7 +190,7 @@ def optimize_with_gradients(
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     """Test optimizer recovery for CenteredVelocityModel (no shear)."""
 
@@ -329,7 +329,7 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     ), f"Degenerate product vcirc*sini not recovered: {product_stats['rel_error']:.1%} error"
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_optimize_offset_velocity(snr, test_config, velocity_grids):
     """Test optimizer recovery for OffsetVelocityModel with shear."""
 
@@ -476,7 +476,7 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
     """Test optimizer recovery for InclinedExponentialModel."""
 
@@ -914,9 +914,9 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
 
 
 def test_optimize_centered_velocity_masked(test_config, velocity_grids):
-    """Optimizer recovery with masked velocity data at SNR=1000."""
+    """Optimizer recovery with masked velocity data at SNR=10000."""
     X, Y = velocity_grids
-    snr = 1000
+    snr = 10000
 
     true_pars = {
         'cosi': 0.6,
@@ -1305,7 +1305,7 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50])
+@pytest.mark.parametrize("snr", [10000, 1000])
 def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
     """Test optimizer recovery for InclinedSpergelModel."""
 
@@ -1544,7 +1544,7 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize('snr', [1000, 50])
+@pytest.mark.parametrize('snr', [10000, 1000])
 def test_optimize_bulge_disk(snr, test_config):
     """Multi-start L-BFGS-B optimizer recovery for BulgeDiskModel.
 

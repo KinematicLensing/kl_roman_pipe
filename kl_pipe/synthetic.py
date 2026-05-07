@@ -837,146 +837,6 @@ def _generate_spergel_galsim(
 
 
 # ==============================================================================
-# Noise generation
-# ==============================================================================
-
-
-def add_noise(
-    image: np.ndarray,
-    target_snr: float,
-    seed: Optional[int] = None,
-    include_poisson: bool = True,
-    poisson_scale: float = 1.0,
-    return_variance: bool = True,
-) -> Tuple[np.ndarray, float] | np.ndarray:
-    """
-    Add realistic noise to achieve target total signal-to-noise ratio.
-
-    Can include both Poisson (shot) noise and Gaussian (read) noise.
-
-    The total S/N is defined as:
-        S/N = sqrt(sum(signal^2)) / sqrt(sum(noise^2))
-
-    Parameters
-    ----------
-    image : ndarray
-        Input noiseless image.
-    target_snr : float
-        Target total signal-to-noise ratio.
-    seed : int, optional
-        Random seed for reproducibility.
-    include_poisson : bool, optional
-        If True, include Poisson (shot) noise. If False, only Gaussian noise.
-        Default is True.
-    poisson_scale : float, optional
-        Scale factor to convert image values to photon counts for Poisson noise.
-        Higher values = more shot noise. Default is 1.0.
-    return_variance : bool, optional
-        If True, return both noisy image and variance used.
-        If False, return only noisy image. Default is True.
-
-    Returns
-    -------
-    noisy_image : ndarray
-        Image with noise added.
-    variance : float, optional
-        Effective variance of the noise (returned only if return_variance=True).
-
-    Notes
-    -----
-    When include_poisson=True:
-        - Poisson noise is added: sqrt(counts) per pixel
-        - Gaussian read noise is added to reach target SNR
-
-    When include_poisson=False:
-        - Only Gaussian noise with constant variance
-        - Matches the original add_gaussian_noise behavior
-
-    Examples
-    --------
-    >>> image = np.random.rand(64, 64) * 100  # counts
-    >>>
-    >>> # With Poisson + Gaussian noise (more realistic)
-    >>> noisy, var = add_noise(image, target_snr=50, include_poisson=True)
-    >>>
-    >>> # Only Gaussian noise (simpler, for testing)
-    >>> noisy, var = add_noise(image, target_snr=50, include_poisson=False)
-    """
-
-    rng = np.random.default_rng(seed)
-
-    if include_poisson:
-        if np.any(np.asarray(image) < 0):
-            raise ValueError(
-                "add_noise(include_poisson=True) requires non-negative input "
-                "(photon-count semantics). Got an array with negative values; "
-                "use include_poisson=False, or route signed data (e.g. velocity "
-                "fields) through kl_pipe.noise.add_velocity_noise."
-            )
-
-        counts = image * poisson_scale
-
-        noisy_counts = np.where(
-            counts > 0,
-            rng.poisson(counts),
-            counts,
-        )
-
-        noisy_image = noisy_counts / poisson_scale
-
-        poisson_var = np.mean(image / poisson_scale)
-
-        # Calculate how much Gaussian noise to add to reach target SNR
-        total_signal = np.sqrt(np.sum(image**2))
-        target_noise_power = total_signal / target_snr
-
-        # Current noise power from Poisson
-        current_noise_power = np.sqrt(np.sum((noisy_image - image) ** 2))
-
-        # Additional Gaussian noise needed
-        if target_noise_power > current_noise_power:
-            additional_noise_power = np.sqrt(
-                target_noise_power**2 - current_noise_power**2
-            )
-            n_pixels = image.size
-            sigma_gaussian = additional_noise_power / np.sqrt(n_pixels)
-
-            gaussian_noise = rng.normal(0, sigma_gaussian, image.shape)
-            noisy_image += gaussian_noise
-
-            # Effective variance (combination of Poisson and Gaussian)
-            variance = poisson_var + sigma_gaussian**2
-        else:
-            # Poisson noise alone is sufficient
-            variance = poisson_var
-
-    else:
-        total_signal = np.sqrt(np.sum(image**2))
-        target_noise_power = total_signal / target_snr
-
-        # Per-pixel noise stddev (constant variance)
-        n_pixels = image.size
-        sigma_per_pixel = target_noise_power / np.sqrt(n_pixels)
-
-        # Add Gaussian noise
-        noise = rng.normal(0, sigma_per_pixel, image.shape)
-        noisy_image = image + noise
-
-        variance = sigma_per_pixel**2
-
-    if return_variance:
-        return noisy_image, variance
-    else:
-        return noisy_image
-
-
-# Backward compatibility alias
-add_gaussian_noise = lambda *args, **kwargs: add_noise(
-    *args, include_poisson=False, **kwargs
-)
-
-
-# ==============================================================================
 # Synthetic observation classes
 # ==============================================================================
 
@@ -1099,15 +959,15 @@ class SyntheticVelocity:
         Velocity is a flux-weighted moment of the spectral cube, not a count
         map; Poisson statistics live on photon counts in spectral channels and
         do not enter at the 2D velocity-image layer. Noise is therefore
-        Gaussian by construction.
+        Gaussian by construction (via ``kl_pipe.noise.add_velocity_noise``).
 
         Parameters
         ----------
         image_pars : ImagePars
             Image parameters defining the coordinate grids.
         snr : float
-            Target signal-to-noise ratio. SNR convention follows
-            ``add_noise``: ``rms(velocity) / noise_std`` (L2-RMS).
+            Target matched-filter SNR (``||v||_2 / noise_std``). See
+            ``kl_pipe.noise`` module docstring.
         seed : int, optional
             Random seed for noise generation. If None, uses self.seed.
 
@@ -1131,17 +991,10 @@ class SyntheticVelocity:
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
-        # Use the local L2-RMS-SNR add_noise, with Poisson hardcoded off:
-        # velocity is signed, so include_poisson=True would hit add_noise's
-        # ValueError guard. Routing through kl_pipe.noise.add_velocity_noise
-        # would be cleaner semantically but uses a range-based SNR convention
-        # that diverges from the rest of the test suite by ~3x.
-        self.data_noisy, self.variance = add_noise(
-            self.data_true,
-            snr,
-            seed=seed,
-            include_poisson=False,
-            return_variance=True,
+        from kl_pipe.noise import add_velocity_noise
+
+        self.data_noisy, self.variance = add_velocity_noise(
+            self.data_true, target_snr=snr, seed=seed
         )
 
         return self.data_noisy
@@ -1257,18 +1110,13 @@ class SyntheticIntensity:
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
-        # NOTE: intentionally uses the local add_noise (L2-RMS SNR convention)
-        # rather than kl_pipe.noise.add_intensity_noise (L1 sum-flux SNR
-        # convention) so existing tests, tutorials, and TestConfig SNR values
-        # keep their meaning. add_noise is hardened to raise on negative input
-        # when include_poisson=True, so the velocity-rectification bug it
-        # used to harbor is still loud.
-        self.data_noisy, self.variance = add_noise(
+        from kl_pipe.noise import add_intensity_noise
+
+        self.data_noisy, self.variance = add_intensity_noise(
             self.data_true,
-            snr,
-            seed=seed,
+            target_snr=snr,
             include_poisson=include_poisson,
-            return_variance=True,
+            seed=seed,
         )
 
         return self.data_noisy

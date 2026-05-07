@@ -75,7 +75,7 @@ def simple_velocity_problem():
     # Generate synthetic data
     image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_noisy = synth.generate(image_pars, snr=100)
+    data_noisy = synth.generate(image_pars, snr=1000)
     variance = synth.variance
 
     # Define priors (sample only vcirc and cosi for speed)
@@ -178,7 +178,7 @@ class TestInferenceTaskMask:
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
         synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-        data_noisy = synth.generate(image_pars, snr=100)
+        data_noisy = synth.generate(image_pars, snr=1000)
         variance = synth.variance
 
         mask = np.ones(image_pars.shape, dtype=bool)
@@ -231,7 +231,7 @@ class TestInferenceTaskMask:
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
         synth = SyntheticIntensity(true_pars, model_type='exponential', seed=42)
-        data_noisy = synth.generate(image_pars, snr=100, include_poisson=False)
+        data_noisy = synth.generate(image_pars, snr=1000, include_poisson=False)
         variance = synth.variance
 
         mask = np.ones(image_pars.shape, dtype=bool)
@@ -300,7 +300,7 @@ class TestInferenceTaskMask:
             if k in OffsetVelocityModel.PARAMETER_NAMES
         }
         synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-        data_vel = synth_vel.generate(ip_vel, snr=100)
+        data_vel = synth_vel.generate(ip_vel, snr=1000)
         var_vel = synth_vel.variance
 
         int_pars = {
@@ -309,7 +309,7 @@ class TestInferenceTaskMask:
             if k in InclinedExponentialModel.PARAMETER_NAMES
         }
         synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
-        data_int = synth_int.generate(ip_int, snr=100, include_poisson=False)
+        data_int = synth_int.generate(ip_int, snr=1000, include_poisson=False)
         var_int = synth_int.variance
 
         mask_vel = np.ones(ip_vel.shape, dtype=bool)
@@ -376,7 +376,7 @@ class TestInferenceTaskMask:
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
         synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-        data_noisy = synth.generate(image_pars, snr=100)
+        data_noisy = synth.generate(image_pars, snr=1000)
         variance = synth.variance
 
         priors = PriorDict(

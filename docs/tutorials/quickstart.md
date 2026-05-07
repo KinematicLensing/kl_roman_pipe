@@ -126,7 +126,7 @@ image_pars = ImagePars(shape=(64, 64), pixel_scale=0.15, indexing='ij')
 # only (Poisson on velocity at the 2D-image layer is meaningless and is
 # rejected at the synthetic-data level).
 synth = SyntheticVelocity(true_params, model_type='arctan', seed=42)
-data_noisy = synth.generate(image_pars, snr=50)
+data_noisy = synth.generate(image_pars, snr=1000)
 
 # Also evaluate the model directly for comparison
 model = CenteredVelocityModel()
@@ -148,7 +148,7 @@ plt.colorbar(im0, ax=axes[0], label='km/s')
 im1 = axes[1].imshow(
     data_noisy.T, origin='lower', cmap='RdBu_r', vmin=-150, vmax=150
     )
-axes[1].set_title(f'Noisy Data (SNR={50})')
+axes[1].set_title(f'Noisy Data (SNR={1000})')
 axes[1].set_xlabel('x (pixels)')
 axes[1].set_ylabel('y (pixels)')
 plt.colorbar(im1, ax=axes[1], label='km/s')
@@ -164,7 +164,8 @@ plt.tight_layout()
 plt.show()
 
 print(f"Data shape: {data_noisy.shape}")
-print(f"Noise variance: {synth.variance:.2f} (km/s)²")
+# variance is a per-pixel array; for Gaussian-only velocity noise it is uniform
+print(f"Noise std: {float(np.sqrt(np.mean(synth.variance))):.2f} km/s")
 ```
 
 ---
@@ -299,7 +300,7 @@ int_params = {
 # flux=1.0 here is an arbitrary unit normalization, not a photon count, so
 # Poisson statistics are not meaningfully scaled at this stage.
 synth_int = SyntheticIntensity(int_params, model_type='exponential', seed=43)
-data_int = synth_int.generate(image_pars, snr=100, include_poisson=False)
+data_int = synth_int.generate(image_pars, snr=1000, include_poisson=False)
 
 # Create joint model
 vel_model = CenteredVelocityModel()
