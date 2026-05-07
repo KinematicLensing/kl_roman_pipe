@@ -855,6 +855,63 @@ class TestWrapCorrectness:
         diff = np.max(np.abs(img1 - img3)) / np.max(img3)
         assert diff > 1e-4, "wrap with oversample=3 should differ from oversample=1"
 
+    def test_fused_psf_no_double_integration(self, _check_galsim):
+        """Bug A regression: fused PSF + BoxPixel + oversample > 1 must not
+        double-integrate pixels.
+
+        Pre-PR-41 the fused PSF path called _render_kspace at fine
+        resolution then post-binned, while ALSO multiplying by sinc in
+        k-space. The bin acted as a second pixel integration on top of
+        sinc, biasing the rendered image. Under flux/pixel convention
+        this drove ~16.5% systematic in int_h_over_r recovery.
+
+        After Commit 4 (wrap engaged in fused path), the call passes
+        oversample=N to the core, wrap+sinc gives exact pixel integration,
+        no post-bin. Verified against GalSim drawImage(method='auto'),
+        which is the authoritative pixel-integrated reference.
+        """
+        import galsim as gs
+        from kl_pipe.synthetic import _generate_sersic_galsim
+
+        model = InclinedExponentialModel()
+        ip = ImagePars((64, 64), 'ij', pixel_scale=0.11)
+        psf = gs.Gaussian(fwhm=0.3)
+        theta = jnp.array([0.5, 0.5, 0.0, 0.0, 1.0, 0.3, 0.1, 0.0, 0.0])
+
+        # fused PSF path: obs.kspace_psf_fft is set (int_model passed).
+        # Default BoxPixel pixel_response is on, so wrap engages with sinc.
+        obs = build_image_obs(ip, psf=psf, int_model=model)
+        img = np.array(model.render_image(theta, obs=obs))
+
+        # GalSim reference: pixel-integrated with method='auto'
+        gsp = gs.GSParams(
+            folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6
+        )
+        gs_img = _generate_sersic_galsim(
+            ip,
+            flux=1.0,
+            int_rscale=0.3,
+            n_sersic=1.0,
+            cosi=0.5,
+            theta_int=0.5,
+            g1=0.0,
+            g2=0.0,
+            int_x0=0.0,
+            int_y0=0.0,
+            int_h_over_r=0.1,
+            psf=psf,
+            gsparams=gsp,
+            method='auto',
+        )
+        peak = np.max(np.abs(gs_img))
+        max_resid = np.max(np.abs(img - gs_img)) / peak
+
+        # under Bug A, residual was ~few×1e-3 due to second pixel integration.
+        # Post-fix, it's ~1e-4 (limited by drawKImage vs drawImage sinc gap).
+        assert (
+            max_resid < 1e-3
+        ), f"fused PSF + BoxPixel: residual vs GalSim {max_resid:.2%} > 0.1%"
+
 
 # ==============================================================================
 # J. Sub-pixel location accuracy vs GalSim
