@@ -288,7 +288,10 @@ def compute_effective_maxk(
 
     ps = pixel_response.pixel_scale
     n_scan = 500
-    k_scan = np.linspace(0.1, profile_maxk, n_scan)
+    # scan from 0 (not 0.1) so degenerate small-profile cases don't return
+    # 0.1 > profile_maxk. profile_maxk == 0 case handled by short-circuit
+    # above (no _ft_envelope) but the linspace is robust regardless.
+    k_scan = np.linspace(0.0, profile_maxk, n_scan)
 
     prof_ft = np.array([model._ft_envelope(k, params) for k in k_scan])
     sinc_ft = np.abs(np.sinc(k_scan * ps / (2 * np.pi)))
@@ -296,7 +299,9 @@ def compute_effective_maxk(
 
     above = k_scan[product > threshold]
     if len(above) == 0:
-        return float(k_scan[0])
+        # nothing crosses threshold (shouldn't happen at k=0 where DC is 1)
+        # but if it does, return 0 as a safe upper bound that won't oversize.
+        return 0.0
     return float(above[-1])
 
 

@@ -33,7 +33,6 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 if TYPE_CHECKING:
     pass
@@ -70,10 +69,14 @@ class PixelResponse(ABC):
 
     @abstractmethod
     def maxk(self, threshold: float = 1e-3) -> float:
-        """Wavenumber where the FT amplitude drops below threshold.
+        """Wavenumber where this pixel response's FT amplitude drops below threshold.
 
-        Used for adaptive grid sizing: the effective maxk of a rendering
-        chain is ``min(profile_maxk, pixel_maxk, psf_maxk)``.
+        Returns the bare-component bandlimit. The effective maxk of a full
+        rendering chain is computed in ``render.compute_effective_maxk``,
+        which scans the product ``|profile_FT × pixel_FT × PSF_FT|`` and
+        returns the largest k where the product remains above threshold
+        (not the min of individual maxks — the product crosses earlier
+        than any single factor).
 
         Parameters
         ----------

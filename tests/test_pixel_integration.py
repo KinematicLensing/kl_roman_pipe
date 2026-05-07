@@ -872,7 +872,6 @@ class TestSubPixelLocation:
         pytest.importorskip('galsim')
 
     @staticmethod
-    @staticmethod
     def _render_subpixel_grid(
         model,
         ip,

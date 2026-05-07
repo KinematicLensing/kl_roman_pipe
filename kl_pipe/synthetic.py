@@ -300,14 +300,10 @@ def _generate_inclined_kspace_scipy(
 
     I_hat = flux * ft_radial * ft_vertical * phase
 
-    # pixel response: multiply by pixel FT (e.g., sinc for box pixel)
+    # pixel response: defer to PixelResponse.ft so any subclass works
+    # (BoxPixel sinc, future RomanPixel/IPC, custom test mocks, etc.)
     if pixel_response is not None:
-        pixel_ft = np.sinc(KX * ps / (2 * np.pi)) * np.sinc(KY * ps / (2 * np.pi))
-        if hasattr(pixel_response, 'pixel_scale'):
-            # use the pixel_response's actual scale (may differ from ps)
-            w = pixel_response.pixel_scale
-            pixel_ft = np.sinc(KX * w / (2 * np.pi)) * np.sinc(KY * w / (2 * np.pi))
-        I_hat = I_hat * pixel_ft
+        I_hat = I_hat * np.asarray(pixel_response.ft(KX, KY))
 
     if psf is not None:
         # fuse PSF on the profile's k-grid before IFFT

@@ -528,12 +528,21 @@ def _inclined_sech2_ft(
     return flux * ft_radial * ft_vertical * phase
 
 
-def _auto_render_config(model, theta, pixel_scale):
+def _auto_render_config(model, theta, pixel_scale, pixel_response='_AUTO_BOXPIXEL'):
     """Auto-compute RenderConfig from model parameters for legacy path.
 
     Attempts to build a RenderConfig via ``RenderConfig.for_model``. Falls
     back to a default ``RenderConfig()`` (oversample=1, pad_factor=2) when
     the model or theta is inside a JIT trace or lacks maxk/stepk support.
+
+    Parameters
+    ----------
+    pixel_response : PixelResponse, None, or sentinel, optional
+        Pixel response to use for grid sizing. Sentinel ``'_AUTO_BOXPIXEL'``
+        (default) constructs ``BoxPixel(pixel_scale)``. Pass an explicit
+        ``PixelResponse`` instance, or ``None`` for point-sampled rendering.
+        Threading through ``None`` ensures the rc is sized for the rendering
+        chain that will actually run, not an implicit BoxPixel.
     """
     from kl_pipe.render import RenderConfig
 
@@ -544,14 +553,17 @@ def _auto_render_config(model, theta, pixel_scale):
         # inside JIT trace — cannot introspect theta
         return RenderConfig()
 
-    from kl_pipe.pixel import BoxPixel as _BP
+    if pixel_response == '_AUTO_BOXPIXEL':
+        from kl_pipe.pixel import BoxPixel as _BP
+
+        pixel_response = _BP(pixel_scale_f)
 
     try:
         return RenderConfig.for_model(
             model,
             params,
             pixel_scale_f,
-            pixel_response=_BP(pixel_scale_f),
+            pixel_response=pixel_response,
         )
     except (KeyError, NotImplementedError, AttributeError):
         return RenderConfig()
@@ -668,16 +680,19 @@ def _kspace_render_image(
         Nrow, Ncol = X.shape
         pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
-    # auto-compute render_config when not provided
-    if rc is None:
-        rc = _auto_render_config(model, theta, pixel_scale)
-
     from kl_pipe.pixel import BoxPixel as _BoxPixel
     from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
 
     pr = kwargs.get('pixel_response', _PR_UNSET)
     if pr is _PR_UNSET:
         pr = _BoxPixel(float(pixel_scale))
+
+    # auto-compute render_config when not provided; pass the actual
+    # pixel_response so grid sizing matches the rendering chain
+    # (matters when user passed pixel_response=None for point-sampling).
+    if rc is None:
+        rc = _auto_render_config(model, theta, pixel_scale, pixel_response=pr)
+
     return model._render_kspace(
         theta,
         Nrow,
@@ -1468,9 +1483,17 @@ class InclinedExponentialModel(IntensityModel):
             Nrow, Ncol = X.shape
             pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
-        # auto-compute render_config when not provided
+        from kl_pipe.pixel import BoxPixel as _BoxPixel
+        from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
+
+        pr = kwargs.get('pixel_response', _PR_UNSET)
+        if pr is _PR_UNSET:
+            pr = _BoxPixel(float(pixel_scale))
+
+        # auto-compute render_config when not provided; pass the actual
+        # pixel_response so grid sizing matches the rendering chain.
         if rc is None:
-            rc = _auto_render_config(self, theta, pixel_scale)
+            rc = _auto_render_config(self, theta, pixel_scale, pixel_response=pr)
 
         # warn if cusp aliasing likely exceeds 1% even with current oversample
         eff_os = rc.oversample if rc is not None else oversample
@@ -1492,12 +1515,6 @@ class InclinedExponentialModel(IntensityModel):
         except (TypeError, ValueError):
             pass  # inside JIT trace, skip warning
 
-        from kl_pipe.pixel import BoxPixel as _BoxPixel
-        from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
-
-        pr = kwargs.get('pixel_response', _PR_UNSET)
-        if pr is _PR_UNSET:
-            pr = _BoxPixel(float(pixel_scale))
         return self._render_kspace(
             theta,
             Nrow,
