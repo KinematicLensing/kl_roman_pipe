@@ -98,7 +98,7 @@ from astropy import units as u
 
 from ..parameters import ImagePars
 from ..utils import build_map_grid_from_image_pars
-from ..noise import add_noise
+from ..noise import add_intensity_noise, add_velocity_noise
 
 
 # TNG50 cosmology (Planck 2013)
@@ -989,7 +989,7 @@ class TNGDataVectorGenerator:
         # Add noise if requested
         if snr is not None:
             # For TNG: use Gaussian noise only (flux already in physical units)
-            intensity, variance = add_noise(
+            intensity, variance = add_intensity_noise(
                 intensity, target_snr=snr, include_poisson=False, seed=seed
             )
         else:
@@ -1142,9 +1142,7 @@ class TNGDataVectorGenerator:
 
         # Add noise if requested
         if snr is not None:
-            velocity, variance = add_noise(
-                velocity, target_snr=snr, include_poisson=False, seed=seed
-            )
+            velocity, variance = add_velocity_noise(velocity, target_snr=snr, seed=seed)
         else:
             variance = np.zeros_like(velocity)
 
@@ -1176,7 +1174,7 @@ class TNGDataVectorGenerator:
         sfr_map : np.ndarray
             2D map of star formation rate surface density, shape from image_pars
         """
-        from ..noise import add_noise
+        from ..noise import add_intensity_noise
 
         # Get star formation rates (Msun/yr per particle)
         sfr = self.gas['StarFormationRate'].copy()
@@ -1237,7 +1235,7 @@ class TNGDataVectorGenerator:
 
         # Add noise if requested
         if snr is not None:
-            sfr_map, _ = add_noise(
+            sfr_map, _ = add_intensity_noise(
                 sfr_map, target_snr=snr, include_poisson=False, seed=seed
             )
 

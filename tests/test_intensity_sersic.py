@@ -241,7 +241,7 @@ def test_flux_conservation(n):
     # n=4 (de Vaucouleurs): R_90 ~ 7*R_e, so need grid > 14*R_e on a side
     Npix = 512 if n >= 3 else 256
     img = model._render_kspace(theta, Npix, Npix, 0.11)
-    rendered_flux = float(jnp.sum(img) * 0.11**2)
+    rendered_flux = float(jnp.sum(img))
     rel_err = abs(rendered_flux - flux) / flux
     print(f"  n={n}: rendered_flux={rendered_flux:.2f}, rel_err={rel_err:.4%}")
     assert rel_err < 0.05, f"flux error {rel_err:.2%} exceeds 5% for n={n}"
@@ -263,8 +263,12 @@ def test_render_vs_call_faceon():
     img_kspace = model._render_kspace(theta, ip.Nrow, ip.Ncol, ip.pixel_scale)
     img_call = model(theta, 'obs', X, Y)
 
-    peak = float(jnp.max(jnp.abs(img_call)))
-    max_frac = float(jnp.max(jnp.abs(img_kspace - img_call))) / peak
+    # __call__ returns surface brightness; _render_kspace returns flux/pixel.
+    # Multiply __call__ by pixel area to compare in flux/pixel.
+    img_call_flux = img_call * ip.pixel_scale**2
+
+    peak = float(jnp.max(jnp.abs(img_call_flux)))
+    max_frac = float(jnp.max(jnp.abs(img_kspace - img_call_flux))) / peak
     print(f"  render vs call face-on: max_frac={max_frac:.4%}")
     # k-space band-limits; allow up to 10% at core for concentrated profiles
     assert max_frac < 0.20, f"render vs call max frac {max_frac:.4%} exceeds 20%"
@@ -294,12 +298,10 @@ def test_faceon_vs_galsim(sersic_output_dir, n):
     obs = build_image_obs(ip, psf=psf_obj, oversample=5)
     img_ours = np.array(model.render_image(theta, obs=obs))
 
-    # GalSim reference — method='no_pixel', divide by ps² to match our SB units
+    # GalSim reference — method='no_pixel' gives flux/pixel, matching our convention
     gs_prof = gs.Sersic(n=n, half_light_radius=Re, flux=flux)
     gs_conv = gs.Convolve(gs_prof, psf_obj)
-    gs_img = (
-        gs_conv.drawImage(nx=Npix, ny=Npix, scale=ps, method='no_pixel').array / ps**2
-    )
+    gs_img = gs_conv.drawImage(nx=Npix, ny=Npix, scale=ps, method='no_pixel').array
 
     peak = np.max(np.abs(gs_img))
     max_frac = np.max(np.abs(img_ours - gs_img)) / peak
@@ -377,9 +379,7 @@ def test_inclined_vs_galsim(sersic_output_dir, n, cosi):
             f"GalSim InclinedSersic(n={n}) FFT needs {fft_gb:.1f} GB "
             f"(limit {_MAX_FFT_GB} GB)"
         )
-    gs_img = (
-        gs_conv.drawImage(nx=Npix, ny=Npix, scale=ps, method='no_pixel').array / ps**2
-    )
+    gs_img = gs_conv.drawImage(nx=Npix, ny=Npix, scale=ps, method='no_pixel').array
 
     peak = np.max(np.abs(gs_img))
     diff = img_ours - gs_img
@@ -665,15 +665,12 @@ def _faceon_sersic_diagnostic(
             our_img = np.array(model.render_image(theta, image_pars=ip))
             gs_prof = gs.Sersic(n=n, half_light_radius=hlr, flux=flux, gsparams=gsp)
 
-        gs_img = (
-            gs_prof.drawImage(
-                nx=npix,
-                ny=npix,
-                scale=ps,
-                method=draw_method,
-            ).array
-            / ps**2
-        )
+        gs_img = gs_prof.drawImage(
+            nx=npix,
+            ny=npix,
+            scale=ps,
+            method=draw_method,
+        ).array
 
         # radial profiles
         mid_r, prof_ours = _radial_profile(our_img, r_re)
@@ -818,15 +815,12 @@ def _sersic_2d_diagnostic(output_dir, psf_fwhm=None, cosi=1.0):
             f'(limit {_MAX_FFT_GB} GB)'
         )
         return
-    gs_img = (
-        gs_draw.drawImage(
-            nx=npix,
-            ny=npix,
-            scale=ps,
-            method=draw_method,
-        ).array
-        / ps**2
-    )
+    gs_img = gs_draw.drawImage(
+        nx=npix,
+        ny=npix,
+        scale=ps,
+        method=draw_method,
+    ).array
 
     # our render
     theta = jnp.array([cosi, 0.0, 0.0, 0.0, flux, hlr, h_over_r, n, 0.0, 0.0])
@@ -1051,15 +1045,12 @@ def test_sersic_inclination_diagnostic(sersic_output_dir):
                 )
                 stats_all[(n, cosi)] = {'max': np.nan, 'rms': np.nan}
                 continue
-            gs_img = (
-                gs_draw.drawImage(
-                    nx=npix,
-                    ny=npix,
-                    scale=ps,
-                    method='no_pixel',
-                ).array
-                / ps**2
-            )
+            gs_img = gs_draw.drawImage(
+                nx=npix,
+                ny=npix,
+                scale=ps,
+                method='no_pixel',
+            ).array
 
             # elliptical r for inclined cases
             r_ell = np.sqrt(
@@ -1254,15 +1245,12 @@ def test_sersic_oversample_convergence_diagnostic(sersic_output_dir):
             # face-on: reference = GalSim with PSF
             gs_prof = gs.Sersic(n=n, half_light_radius=hlr, flux=flux, gsparams=gsp)
             gs_conv = gs.Convolve(gs_prof, psf_obj)
-            ref_sb = (
-                gs_conv.drawImage(
-                    nx=npix,
-                    ny=npix,
-                    scale=ps,
-                    method='auto',
-                ).array
-                / ps**2
-            )
+            ref_sb = gs_conv.drawImage(
+                nx=npix,
+                ny=npix,
+                scale=ps,
+                method='auto',
+            ).array
             ref_label = 'GalSim'
         else:
             # inclined: reference = highest oversample

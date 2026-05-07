@@ -184,8 +184,7 @@ def test_spergel_flux_conservation(nu, cosi, g1, g2, galsim_image_pars):
     flux = 1.0
     theta = jnp.array([cosi, 0.3, g1, g2, flux, 1.0, 0.1, nu, 0.0, 0.0])
     image = model.render_image(theta, image_pars=galsim_image_pars)
-    ps = galsim_image_pars.pixel_scale
-    measured_flux = float(jnp.sum(image) * ps**2)
+    measured_flux = float(jnp.sum(image))
     rel_err = abs(measured_flux - flux) / flux
     assert rel_err < 1e-3, (
         f"Flux: measured={measured_flux:.6f}, expected={flux}, "
@@ -223,8 +222,12 @@ def test_spergel_render_image_vs_call_consistency(
         model.render_image(theta, image_pars=galsim_image_pars, pixel_response=None)
     )
 
-    peak = np.max(np.abs(call_image))
-    max_frac = np.max(np.abs(render - call_image)) / peak
+    # __call__ returns surface brightness; render_image returns flux/pixel.
+    # Multiply __call__ by pixel area to compare in flux/pixel.
+    call_image_flux = call_image * galsim_image_pars.pixel_scale**2
+
+    peak = np.max(np.abs(call_image_flux))
+    max_frac = np.max(np.abs(render - call_image_flux)) / peak
 
     assert max_frac < tol, (
         f"render vs call: max|resid|/peak = {max_frac:.2e} "
@@ -640,7 +643,7 @@ def test_galsim_regression_spergel_faceon(nu, galsim_image_pars):
         scale=galsim_image_pars.pixel_scale,
         method='no_pixel',
     )
-    gs_sb = gs_im.array / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_im.array  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -697,7 +700,7 @@ def test_galsim_regression_spergel_faceon_cuspy(nu, galsim_image_pars):
         scale=galsim_image_pars.pixel_scale,
         method='auto',
     )
-    gs_sb = gs_im.array / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_im.array  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -746,7 +749,7 @@ def test_galsim_regression_spergel_faceon_with_shear(nu, g1, g2, galsim_image_pa
         scale=galsim_image_pars.pixel_scale,
         method='auto',
     )
-    gs_sb = gs_im.array / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_im.array  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -804,7 +807,7 @@ def test_galsim_regression_spergel_faceon_with_shear_negative_nu(
         scale=galsim_image_pars.pixel_scale,
         method='auto',
     )
-    gs_sb = gs_im.array / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_im.array  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -854,7 +857,7 @@ def test_galsim_regression_devaucouleurs_faceon(galsim_image_pars):
         scale=galsim_image_pars.pixel_scale,
         method='auto',
     )
-    gs_sb = gs_im.array / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_im.array  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -912,7 +915,7 @@ def test_galsim_regression_spergel_inclined_nu05(cosi, theta_int, galsim_image_p
         gsparams=gsp,
         method='auto',
     )
-    gs_sb = gs_image / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_image  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -958,7 +961,7 @@ def test_spergel_nu05_vs_inclined_sersic_n1(galsim_image_pars):
         gsparams=gsp,
         method='auto',
     )
-    gs_sb = gs_image / galsim_image_pars.pixel_scale**2
+    gs_sb = gs_image  # flux/pixel; both render_image and GalSim agree
 
     peak = np.max(np.abs(gs_sb))
     max_frac = np.max(np.abs(our_image - gs_sb)) / peak
@@ -992,12 +995,15 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
     )
     psf = gs.Gaussian(fwhm=fwhm, gsparams=gsp)
 
-    # GalSim InclinedSersic(n=4) matched at half_light_radius
+    # GalSim InclinedSersic(n=4) matched at half_light_radius.
+    # NOTE: when half_light_radius is supplied, GalSim reinterprets
+    # scale_h_over_r as h_z/scale_radius (NOT h_z/half_light_radius).
+    # Pass scale_height (physical h_z, arcsec) to avoid the b_n^n mismatch.
     gs_sersic = gs.InclinedSersic(
         n=4.0,
         inclination=inc,
         half_light_radius=hlr,
-        scale_h_over_r=h_over_r,
+        scale_height=h_over_r * hlr,
         flux=flux,
         gsparams=gsp,
     )
@@ -1020,7 +1026,7 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
         scale=ip.pixel_scale,
         method='auto',
     )
-    gs_sb = gs_im.array / ip.pixel_scale**2
+    gs_sb = gs_im.array  # flux/pixel; both render_image and GalSim agree
 
     # our Spergel(nu=-0.6) matched at same half_light_radius
     spergel_rscale = gs.Spergel(nu=-0.6, half_light_radius=hlr).scale_radius
@@ -1109,7 +1115,7 @@ def _render_spergel_vs_sersic_panel(
             n=n,
             inclination=0 * gs.radians,
             half_light_radius=hlr,
-            scale_h_over_r=h_over_r,
+            scale_height=h_over_r * hlr,
             flux=flux,
             gsparams=gsp,
         ).scale_radius
@@ -1120,12 +1126,14 @@ def _render_spergel_vs_sersic_panel(
 
             inc = gs.Angle(np.arccos(cosi), gs.radians)
 
-            # GalSim InclinedSersic (3D), k-space FFT
+            # GalSim InclinedSersic (3D), k-space FFT.
+            # Pass scale_height (physical h_z) to avoid GalSim reinterpreting
+            # scale_h_over_r as h_z/scale_radius (b_n^n thickness mismatch).
             gs_prof = gs.InclinedSersic(
                 n=n,
                 inclination=inc,
                 half_light_radius=hlr,
-                scale_h_over_r=h_over_r,
+                scale_height=h_over_r * hlr,
                 flux=flux,
                 gsparams=gsp,
             )
@@ -1162,7 +1170,7 @@ def _render_spergel_vs_sersic_panel(
 
             gs_draw = gs.Convolve(gs_prof, psf_obj) if use_psf else gs_prof
             gs_im = gs_draw.drawImage(nx=npix, ny=npix, scale=ps, method=draw_method)
-            gs_sb = gs_im.array / ps**2
+            gs_sb = gs_im.array
 
             # our InclinedSpergelModel (3D with sech²)
             theta = jnp.array(
@@ -1416,11 +1424,13 @@ def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
         gs_sersic_base = gs.Sersic(n=4, half_light_radius=hlr, flux=flux, gsparams=gsp)
     else:
         inc = gs.Angle(np.arccos(cosi), gs.radians)
+        # Pass scale_height (physical h_z) to avoid GalSim reinterpreting
+        # scale_h_over_r as h_z/scale_radius (b_n^n thickness mismatch).
         gs_sersic_base = gs.InclinedSersic(
             n=4,
             inclination=inc,
             half_light_radius=hlr,
-            scale_h_over_r=h_over_r,
+            scale_height=h_over_r * hlr,
             flux=flux,
             gsparams=gsp_sersic,
         )
@@ -1430,15 +1440,12 @@ def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
             return
 
     gs_sersic_draw = gs.Convolve(gs_sersic_base, psf_obj) if use_psf else gs_sersic_base
-    sersic_sb = (
-        gs_sersic_draw.drawImage(
-            nx=npix,
-            ny=npix,
-            scale=ps,
-            method=draw_method,
-        ).array
-        / ps**2
-    )
+    sersic_sb = gs_sersic_draw.drawImage(
+        nx=npix,
+        ny=npix,
+        scale=ps,
+        method=draw_method,
+    ).array
 
     # our Spergel renders (always available)
     our_spergels = {}
@@ -1463,15 +1470,12 @@ def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
         for nu in nu_values:
             gs_sp = gs.Spergel(nu=nu, half_light_radius=hlr, flux=flux, gsparams=gsp)
             gs_sp_draw = gs.Convolve(gs_sp, psf_obj) if use_psf else gs_sp
-            gs_spergels[nu] = (
-                gs_sp_draw.drawImage(
-                    nx=npix,
-                    ny=npix,
-                    scale=ps,
-                    method=draw_method,
-                ).array
-                / ps**2
-            )
+            gs_spergels[nu] = gs_sp_draw.drawImage(
+                nx=npix,
+                ny=npix,
+                scale=ps,
+                method=draw_method,
+            ).array
 
     peak = np.max(np.abs(sersic_sb))
 
@@ -1732,15 +1736,12 @@ def _faceon_n4_diagnostic(
     # GalSim Sersic(n=4) baseline
     gs_sersic = gs.Sersic(n=4, half_light_radius=hlr, flux=flux, gsparams=gsp)
     gs_sersic_draw = gs.Convolve(gs_sersic, psf_obj) if use_psf else gs_sersic
-    sersic_sb = (
-        gs_sersic_draw.drawImage(
-            nx=npix,
-            ny=npix,
-            scale=ps,
-            method=draw_method,
-        ).array
-        / ps**2
-    )
+    sersic_sb = gs_sersic_draw.drawImage(
+        nx=npix,
+        ny=npix,
+        scale=ps,
+        method=draw_method,
+    ).array
     r_mid, sersic_prof = _radial_profile(sersic_sb, r_re)
     valid = np.isfinite(sersic_prof) & (sersic_prof > 0)
     peak = np.nanmax(sersic_prof[valid])
@@ -1753,15 +1754,12 @@ def _faceon_n4_diagnostic(
         # GalSim Spergel
         gs_sp = gs.Spergel(nu=nu, half_light_radius=hlr, flux=flux, gsparams=gsp)
         gs_sp_draw = gs.Convolve(gs_sp, psf_obj) if use_psf else gs_sp
-        gs_sp_sb = (
-            gs_sp_draw.drawImage(
-                nx=npix,
-                ny=npix,
-                scale=ps,
-                method=draw_method,
-            ).array
-            / ps**2
-        )
+        gs_sp_sb = gs_sp_draw.drawImage(
+            nx=npix,
+            ny=npix,
+            scale=ps,
+            method=draw_method,
+        ).array
         _, gs_sp_prof = _radial_profile(gs_sp_sb, r_re)
         gs_stats = _annular_stats(gs_sp_sb, sersic_sb, r_re, _BANDS)
 
@@ -1956,15 +1954,12 @@ def test_oversample_convergence(spergel_output_dir):
 
         if ci == 0:
             gs_conv = gs.Convolve(gs_sp, psf)
-            ref_sb = (
-                gs_conv.drawImage(
-                    nx=npix,
-                    ny=npix,
-                    scale=ps,
-                    method='auto',
-                ).array
-                / ps**2
-            )
+            ref_sb = gs_conv.drawImage(
+                nx=npix,
+                ny=npix,
+                scale=ps,
+                method='auto',
+            ).array
             ref_label = 'GalSim'
         else:
             obs_ref = build_image_obs(

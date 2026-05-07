@@ -87,7 +87,7 @@ def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
 
     # bin to coarse
     if N > 1:
-        return conv_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
+        return conv_fine.reshape(ip.Nrow, N, ip.Ncol, N).sum(axis=(1, 3))
     return conv_fine
 
 
@@ -325,15 +325,19 @@ def test_gaussian_convolution_theorem(oversample_image_pars, output_dir):
     X_fine, Y_fine = build_map_grid_from_image_pars(
         fine_ip, unit='arcsec', centered=True
     )
-    # fine-scale source in surface-brightness convention (N^2 scaling)
-    source_fine = _gaussian_2d(X_fine, Y_fine, sigma_source) * (N_os * N_os)
+    # fine-scale source. Under the flux/pixel render convention, convolve_fft
+    # sums fine pixels back to coarse pixels (preserves total flux). The
+    # _gaussian_2d helper normalizes sum=1, so source_fine and analytic_jax_fine
+    # are used directly without an explicit N^2 scaling — sum-binning recovers
+    # total flux=1 at the coarse grid.
+    source_fine = _gaussian_2d(X_fine, Y_fine, sigma_source)
     pdata = precompute_psf_fft(gspsf, oversample_image_pars, oversample=N_os)
     conv_jax = np.array(convolve_fft(jnp.array(source_fine), pdata))
 
     # binned analytic reference for JAX — accounts for pixel-averaging from
     # PSF kernel integration and fine→coarse binning (adds h²/12 to variance)
-    analytic_jax_fine = _gaussian_2d(X_fine, Y_fine, sigma_out) * (N_os * N_os)
-    analytic_jax = analytic_jax_fine.reshape(nrow, N_os, ncol, N_os).mean(axis=(1, 3))
+    analytic_jax_fine = _gaussian_2d(X_fine, Y_fine, sigma_out)
+    analytic_jax = analytic_jax_fine.reshape(nrow, N_os, ncol, N_os).sum(axis=(1, 3))
 
     # --- measurements ---
     def _measure_sigma(image, X, Y):
@@ -823,7 +827,7 @@ def test_fused_kspace_psf_implementation(output_dir):
             psf_kernel_fft=kernel,
         )
     )
-    img_manual = img_manual_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
+    img_manual = img_manual_fine.reshape(ip.Nrow, N, ip.Ncol, N).sum(axis=(1, 3))
 
     peak = np.max(np.abs(img_fused))
     max_rel_resid = np.max(np.abs(img_fused - img_manual)) / peak
@@ -1066,8 +1070,8 @@ def test_oversample_convergence(oversample_image_pars, output_dir):
         img_source = sersic.drawImage(
             nx=fine_nx, ny=fine_ny, scale=fine_ip.pixel_scale, method='no_pixel'
         ).array
-        # scale from GalSim flux/pixel to surface-brightness convention
-        img_source = img_source * (N * N)
+        # GalSim drawImage returns flux/pixel; convolve_fft sum-bins fine→coarse
+        # preserving total flux. No scaling needed under flux/pixel convention.
 
         pdata = precompute_psf_fft(
             psf_obj, image_pars=oversample_image_pars, oversample=N
@@ -1206,8 +1210,8 @@ def test_galsim_regression_oversampled(
     img_source = sersic.drawImage(
         nx=fine_ip.Ncol, ny=fine_ip.Nrow, scale=fine_ip.pixel_scale, method='no_pixel'
     ).array
-    # scale from GalSim flux/pixel to surface-brightness convention
-    img_source = img_source * (N * N)
+    # GalSim drawImage returns flux/pixel; convolve_fft sum-bins fine→coarse,
+    # preserving total flux. No scaling needed under flux/pixel convention.
 
     pdata = precompute_psf_fft(
         psf_obj,
@@ -1289,12 +1293,12 @@ def test_galsim_regression_oversampled_rigorous(
     conv_gs = gs.Convolve(sersic, psf_tight)
     img_gs = conv_gs.drawImage(nx=nx, ny=ny, scale=pixel_scale).array
 
-    # oversampled JAX path — tight kernel GSParams
+    # oversampled JAX path — tight kernel GSParams. GalSim drawImage returns
+    # flux/pixel; convolve_fft sum-bins fine→coarse preserving total flux.
     fine_ip = oversample_image_pars.make_fine_scale(N)
     img_source = sersic.drawImage(
         nx=fine_ip.Ncol, ny=fine_ip.Nrow, scale=fine_ip.pixel_scale, method='no_pixel'
     ).array
-    img_source = img_source * (N * N)
 
     pdata = precompute_psf_fft(
         psf_obj,
@@ -1352,14 +1356,17 @@ def test_oversample_flux_conservation(image_pars, compact_test_image):
     psf_obj = gs.Gaussian(fwhm=0.625)
 
     for N in [1, 3, 5]:
-        # tile to fine scale — same SB value per subpixel
-        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1)
+        # split coarse-pixel flux equally across N² fine pixels (flux/pixel
+        # convention: tiling a value of v means each fine pixel gets v/N²)
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
 
         pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
         result = np.array(convolve_fft(jnp.array(fine_image), pdata))
 
-        # mean-bin preserves avg pixel value:
-        #   sum(fine)=N^2*sum(compact), conv preserves sum, mean-bin divides by N^2
+        # sum-bin preserves total flux: sum(fine)=sum(compact), conv preserves
+        # sum, sum-bin recovers the same total at coarse scale
         np.testing.assert_allclose(
             np.sum(result),
             np.sum(compact_test_image),

@@ -456,11 +456,9 @@ def test_galsim_regression_render_image(
         method='auto',
     )
 
-    # convert GalSim flux/pixel → surface brightness (flux/arcsec²)
-    gs_sb = gs_image / galsim_image_pars.pixel_scale**2
-
-    peak = np.max(np.abs(gs_sb))
-    residual = np.abs(np.array(our_image) - gs_sb)
+    # both render_image and GalSim drawImage produce flux/pixel — direct compare
+    peak = np.max(np.abs(gs_image))
+    residual = np.abs(np.array(our_image) - gs_image)
     max_frac_residual = np.max(residual) / peak
 
     assert max_frac_residual < 1e-3, (
@@ -517,7 +515,10 @@ def test_galsim_regression_call(
         method='no_pixel',
     )
 
-    # convert GalSim flux/pixel → surface brightness (flux/arcsec²)
+    # __call__ returns surface brightness (analytic profile at continuous
+    # coords); GalSim drawImage returns flux/pixel. Convert GalSim to SB for
+    # apples-to-apples. Most tests use render_image which is flux/pixel and
+    # needs no conversion.
     gs_sb = gs_image / galsim_image_pars.pixel_scale**2
 
     peak = np.max(np.abs(gs_sb))
@@ -581,11 +582,9 @@ def test_scipy_vs_galsim_backend(galsim_image_pars):
         pixel_response=None,
     )
 
-    # convert GalSim flux/pixel → surface brightness (flux/arcsec²)
-    gs_sb = gs_image / galsim_image_pars.pixel_scale**2
-
-    peak = np.max(np.abs(gs_sb))
-    max_frac_residual = np.max(np.abs(scipy_image - gs_sb)) / peak
+    # both backends produce flux/pixel — direct compare
+    peak = np.max(np.abs(gs_image))
+    max_frac_residual = np.max(np.abs(scipy_image - gs_image)) / peak
 
     # scipy now uses analytic k-space FFT (same method as render_image)
     assert (
@@ -704,19 +703,14 @@ def test_galsim_regression_render_image_shear_psf(g1, g2, rect_image_pars, outpu
         method='auto',
     )
 
-    # GalSim returns flux/pixel; our render_image returns surface brightness
-    # after PSF convolution both are in flux/pixel, but render_image divides by ps²
-    # then convolve_fft multiplies by ps² internally. Net: our output is SB.
-    # GalSim drawImage with method='auto' returns flux/pixel.
-    gs_sb = gs_image / rect_image_pars.pixel_scale**2
-
-    peak = np.max(np.abs(gs_sb))
-    residual = np.abs(our_image - gs_sb)
+    # both render_image and GalSim drawImage(method='auto') produce flux/pixel
+    peak = np.max(np.abs(gs_image))
+    residual = np.abs(our_image - gs_image)
     max_frac = np.max(residual) / peak
 
     # diagnostic plot
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    im0 = axes[0, 0].imshow(gs_sb, origin='lower')
+    im0 = axes[0, 0].imshow(gs_image, origin='lower')
     axes[0, 0].set_title('GalSim native')
     plt.colorbar(im0, ax=axes[0, 0])
 
@@ -773,6 +767,10 @@ def test_render_image_vs_call_consistency(
         model.render_image(theta, image_pars=rect_image_pars, pixel_response=None)
     )
 
+    # __call__ returns surface brightness; render_image returns flux/pixel.
+    # Multiply __call__ by pixel area to compare in flux/pixel.
+    call_image = call_image * rect_image_pars.pixel_scale**2
+
     peak = np.max(np.abs(call_image))
     residual = np.abs(render - call_image)
     max_frac = np.max(residual) / peak
@@ -780,7 +778,7 @@ def test_render_image_vs_call_consistency(
     # diagnostic plot
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     im0 = axes[0, 0].imshow(call_image, origin='lower')
-    axes[0, 0].set_title('__call__ (LOS quadrature)')
+    axes[0, 0].set_title('__call__ (LOS quadrature) × ps²')
     plt.colorbar(im0, ax=axes[0, 0])
 
     im1 = axes[0, 1].imshow(render, origin='lower')
@@ -876,15 +874,14 @@ def test_asymmetric_psf_orientation(output_dir):
         backend='galsim',
         psf=psf_obj,
     )
-    gs_sb = gs_image / ip.pixel_scale**2
-
-    peak = np.max(np.abs(gs_sb))
-    residual = np.abs(our_image - gs_sb)
+    # both render_image and GalSim backend produce flux/pixel
+    peak = np.max(np.abs(gs_image))
+    residual = np.abs(our_image - gs_image)
     max_frac = np.max(residual) / peak
 
     # diagnostic plot
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-    axes[0].imshow(gs_sb, origin='lower')
+    axes[0].imshow(gs_image, origin='lower')
     axes[0].set_title('GalSim')
     axes[1].imshow(our_image, origin='lower')
     axes[1].set_title('render_image')

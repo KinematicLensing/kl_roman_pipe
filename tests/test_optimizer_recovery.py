@@ -23,7 +23,12 @@ from scipy.optimize import minimize
 from typing import Dict, Tuple
 
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
-from kl_pipe.intensity import InclinedExponentialModel, InclinedSpergelModel
+from kl_pipe.intensity import (
+    InclinedExponentialModel,
+    InclinedSpergelModel,
+    BulgeDiskModel,
+)
+from kl_pipe.optimization import multi_start_minimize
 from kl_pipe.model import KLModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
@@ -95,12 +100,7 @@ def generate_synthetic_velocity_data(
     vel_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
 
     synth = SyntheticVelocity(vel_pars, model_type='arctan', seed=config.seed)
-    data_noisy = synth.generate(
-        image_pars,
-        snr=snr,
-        seed=config.seed,
-        include_poisson=config.include_poisson_noise,
-    )
+    data_noisy = synth.generate(image_pars, snr=snr, seed=config.seed)
     variance = synth.variance
     data_true = synth.data_true
 
@@ -190,7 +190,7 @@ def optimize_with_gradients(
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     """Test optimizer recovery for CenteredVelocityModel (no shear)."""
 
@@ -329,7 +329,7 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
     ), f"Degenerate product vcirc*sini not recovered: {product_stats['rel_error']:.1%} error"
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_optimize_offset_velocity(snr, test_config, velocity_grids):
     """Test optimizer recovery for OffsetVelocityModel with shear."""
 
@@ -476,7 +476,7 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
     """Test optimizer recovery for InclinedExponentialModel."""
 
@@ -645,10 +645,7 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     )
     variance = synth.variance
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_noisy = data_noisy / ps2
-    variance = variance / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     # build obs with PSF
     model = InclinedExponentialModel()
@@ -775,10 +772,7 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
     )
     variance_int = synth_int.variance
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_int_noisy = data_int_noisy / ps2
-    variance_int = variance_int / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     int_pars_for_vel = {
         k: v
@@ -807,7 +801,6 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
         test_config.image_pars_velocity,
         snr=snr,
         seed=test_config.seed + 1,
-        include_poisson=test_config.include_poisson_noise,
     )
     variance_vel = synth_vel.variance
 
@@ -923,9 +916,9 @@ def test_optimize_joint_with_psf(test_config, velocity_grids, intensity_grids):
 
 
 def test_optimize_centered_velocity_masked(test_config, velocity_grids):
-    """Optimizer recovery with masked velocity data at SNR=1000."""
+    """Optimizer recovery with masked velocity data at SNR=10000."""
     X, Y = velocity_grids
-    snr = 1000
+    snr = 10000
 
     true_pars = {
         'cosi': 0.6,
@@ -1314,7 +1307,7 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50])
+@pytest.mark.parametrize("snr", [10000, 1000])
 def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
     """Test optimizer recovery for InclinedSpergelModel."""
 
@@ -1546,6 +1539,121 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
         recovery_stats,
         snr,
         'Optimizer: Inclined Spergel (PSF)',
+        exclude_params=exclude_params,
+    )
+
+
+# ==============================================================================
+# Test: BulgeDisk Composite Optimizer Recovery
+# ==============================================================================
+
+
+@pytest.mark.parametrize('snr', [10000, 1000])
+def test_optimize_bulge_disk(snr, test_config):
+    """Multi-start L-BFGS-B optimizer recovery for BulgeDiskModel.
+
+    Multi-start (literature standard for B+D fits: Sheth+ 2010 / Erwin 2015 /
+    Robotham+ 2017) rather than single-start because the bulge+disk likelihood
+    has a documented ``bulge_frac=0`` boundary attractor — single-start
+    L-BFGS-B from a 5% perturbation reliably converges to the wrong basin
+    (catastrophically at low SNR).
+
+    Synthetic data is rendered with PSF + pixel response on; noise via
+    ``add_noise(include_poisson=False)`` matching every other intensity test.
+    """
+    from test_composite_intensity import (
+        _TRUE_PARS_SHARED,
+        _IMAGE_PARS,
+        _TEST_PSF,
+        _generate_composite_synthetic,
+    )
+
+    true_pars = dict(_TRUE_PARS_SHARED)
+
+    model = BulgeDiskModel(shared_centroids=True)
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = _generate_composite_synthetic(
+        true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
+    )
+
+    obs_int = build_image_obs(
+        _IMAGE_PARS,
+        psf=_TEST_PSF,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    neg_ll_and_grad = jax.jit(jax.value_and_grad(lambda t: -log_like(t)))
+
+    def objective(x):
+        val, grad = neg_ll_and_grad(jnp.array(x))
+        return float(val), np.array(grad, dtype=np.float64)
+
+    bounds = [
+        (0.1, 0.99),  # cosi
+        (0.0, np.pi),  # theta_int
+        (-0.1, 0.1),  # g1
+        (-0.1, 0.1),  # g2
+        (0.0, 0.0),  # int_x0 (fixed)
+        (0.0, 0.0),  # int_y0 (fixed)
+        (0.1, 10.0),  # total_flux
+        (0.01, 0.99),  # bulge_frac
+        (0.5, 10.0),  # disk_rscale
+        (0.1, 0.1),  # disk_h_over_r (fixed)
+        (0.1, 3.0),  # bulge_hlr
+        (0.3, 0.3),  # bulge_h_over_hlr (fixed)
+    ]
+    fixed_indices = [i for i, (lo, hi) in enumerate(bounds) if lo == hi]
+
+    result = multi_start_minimize(
+        objective,
+        np.array(theta_true),
+        bounds=bounds,
+        n_starts=10,
+        perturbation=0.2,
+        method='L-BFGS-B',
+        seed=42,
+        fixed_indices=fixed_indices,
+        jac=True,
+        options={'maxiter': 2000, 'ftol': 1e-8},
+    )
+    assert result.success, f'Optimization failed: {result.message}'
+
+    theta_opt = jnp.array(result.x)
+    pars_opt = model.theta2pars(theta_opt)
+
+    recovery_stats = {}
+    for param_name, true_val in true_pars.items():
+        recovered_val = pars_opt[param_name]
+        tolerance = test_config.get_tolerance(
+            snr,
+            param_name,
+            true_val,
+            'intensity',
+            test_type='optimizer',
+            has_psf=True,
+            model_kind='composite',
+        )
+        passed, stats = check_parameter_recovery(
+            recovered_val, true_val, tolerance, param_name
+        )
+        recovery_stats[param_name] = stats
+
+    exclude_params = [
+        'g1',
+        'g2',
+        'int_x0',
+        'int_y0',
+        'disk_h_over_r',
+        'bulge_h_over_hlr',
+    ]
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'BulgeDisk optimizer',
         exclude_params=exclude_params,
     )
 

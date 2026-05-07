@@ -307,8 +307,9 @@ class TestOversampleConvergence:
             gsparams=gsp,
             method='auto',
         )
-        gs_sb = gs_img / ps**2
-        peak = np.max(np.abs(gs_sb))
+        # render outputs flux/pixel (matches GalSim drawImage); no /ps**2
+        gs_ref = gs_img
+        peak = np.max(np.abs(gs_ref))
 
         N_values = [1, 3, 5, 7, 9, 15, 21, 31]
 
@@ -323,7 +324,7 @@ class TestOversampleConvergence:
                     pixel_response=None,
                 )
             )
-            resid_bin.append(np.max(np.abs(img - gs_sb)) / peak)
+            resid_bin.append(np.max(np.abs(img - gs_ref)) / peak)
 
         # path 2: sinc + wrap at various oversample
         resid_wrap = []
@@ -335,7 +336,7 @@ class TestOversampleConvergence:
                     render_config=RenderConfig(oversample=N),
                 )
             )
-            resid_wrap.append(np.max(np.abs(img - gs_sb)) / peak)
+            resid_wrap.append(np.max(np.abs(img - gs_ref)) / peak)
 
         # sinc+wrap at N>=3 should match GalSim to <1%
         assert (
@@ -594,7 +595,8 @@ class TestFluxConservation:
         obs = build_image_obs(image_pars, oversample=1)
 
         img = exp_model.render_image(theta, obs=obs)
-        measured_flux = float(jnp.sum(img)) * image_pars.pixel_scale**2
+        # render outputs flux/pixel; sum gives total flux directly
+        measured_flux = float(jnp.sum(img))
         # flux conservation: extended profiles (rscale >= pixel_scale * Nrow/2)
         # lose flux beyond the image boundary via pad_factor wrapping
         rtol = 0.05 if rscale < 0.5 else 0.10
@@ -696,14 +698,6 @@ class TestInferenceTaskRenderConfig:
         noise_std = float(np.max(data)) / 100
         data_noisy = np.array(data) + rng.normal(0, noise_std, data.shape)
 
-        obs = build_image_obs(
-            ip,
-            psf=psf,
-            data=jnp.array(data_noisy),
-            variance=noise_std**2,
-            int_model=model,
-        )
-
         priors = PriorDict(
             {
                 'cosi': Uniform(0.3, 0.99),
@@ -716,6 +710,22 @@ class TestInferenceTaskRenderConfig:
                 'int_x0': 0.0,
                 'int_y0': 0.0,
             }
+        )
+
+        # build obs with the priors-derived rc so PSF FFT shape matches
+        # the oversample InferenceTask will compute (single-source-of-truth)
+        from kl_pipe.pixel import BoxPixel
+
+        rc_pred = RenderConfig.for_priors(
+            model, priors, ip.pixel_scale, pixel_response=BoxPixel(ip.pixel_scale)
+        )
+        obs = build_image_obs(
+            ip,
+            psf=psf,
+            data=jnp.array(data_noisy),
+            variance=noise_std**2,
+            int_model=model,
+            render_config=rc_pred,
         )
 
         import warnings
@@ -797,9 +807,10 @@ class TestWrapCorrectness:
             gsparams=gsp,
             method='auto',
         )
-        gs_sb = gs_img / ps**2
-        peak = np.max(np.abs(gs_sb))
-        max_resid = np.max(np.abs(img - gs_sb)) / peak
+        # render outputs flux/pixel (matches GalSim drawImage); no /ps**2
+        gs_ref = gs_img
+        peak = np.max(np.abs(gs_ref))
+        max_resid = np.max(np.abs(img - gs_ref)) / peak
 
         assert (
             max_resid < 0.01
@@ -813,7 +824,8 @@ class TestWrapCorrectness:
 
         # auto RenderConfig will give oversample > 1 for cosi=0.3
         img = model.render_image(theta, image_pars=ip)
-        measured = float(jnp.sum(img)) * ip.pixel_scale**2
+        # flux/pixel convention; sum gives total flux directly
+        measured = float(jnp.sum(img))
         np.testing.assert_allclose(measured, 1e4, rtol=0.01)
 
     def test_wrap_improves_over_sinc_only(self):
@@ -831,9 +843,9 @@ class TestWrapCorrectness:
         img1 = np.array(model.render_image(theta, image_pars=ip, render_config=rc1))
         img3 = np.array(model.render_image(theta, image_pars=ip, render_config=rc3))
 
-        # both should have similar flux
-        flux1 = float(jnp.sum(img1)) * ip.pixel_scale**2
-        flux3 = float(jnp.sum(img3)) * ip.pixel_scale**2
+        # both should have similar flux (flux/pixel convention)
+        flux1 = float(jnp.sum(img1))
+        flux3 = float(jnp.sum(img3))
         np.testing.assert_allclose(flux1, flux3, rtol=0.01)
 
         # wrap should change the image (more high-k captured)
@@ -921,15 +933,16 @@ class TestSubPixelLocation:
                     gsparams=gsp,
                     method='auto',
                 )
-                gs_sb = gs_img / ps**2
-                peak = np.max(np.abs(gs_sb))
+                # flux/pixel convention (matches GalSim); no /ps**2
+                gs_ref = gs_img
+                peak = np.max(np.abs(gs_ref))
                 # signed residual for diverging colormap
-                signed_resid = (our_img - gs_sb) / peak
+                signed_resid = (our_img - gs_ref) / peak
                 residuals[iy, ix] = np.max(np.abs(signed_resid))
                 resid_images[(iy, ix)] = signed_resid
                 if ix == 0 and iy == 0:
                     baseline['ours'] = our_img
-                    baseline['gs'] = gs_sb
+                    baseline['gs'] = gs_ref
 
         return residuals, resid_images, baseline
 
