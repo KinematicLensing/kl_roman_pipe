@@ -36,6 +36,39 @@ if TYPE_CHECKING:
     from kl_pipe.observation import ImageObs, VelocityObs
 
 
+def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
+    """Raise if priors imply a more demanding grid than what obs was built for.
+
+    Bug B / Issue #42 prevention: under (b3) architecture obs holds the
+    rendering recipe (render_config), and InferenceTask must not silently
+    recompute a different one. If priors imply a tighter rc than the obs
+    was sized for, the PSF FFT shape will mismatch the wrap-path expectation
+    -- raise loudly with the fix instructions instead of crashing in the
+    middle of a JIT trace.
+    """
+    from kl_pipe.render import RenderConfig
+
+    try:
+        priors_rc = RenderConfig.for_priors(
+            model,
+            priors,
+            obs.image_pars.pixel_scale,
+            pixel_response=obs.pixel_response,
+        )
+    except (KeyError, NotImplementedError, AttributeError):
+        return  # priors-based sizing not applicable for this model
+
+    if priors_rc.oversample > obs_rc.oversample:
+        raise ValueError(
+            f"Priors imply oversample={priors_rc.oversample} but obs was built "
+            f"with oversample={obs_rc.oversample}. Rebuild obs with explicit "
+            f"render_config:\n"
+            f"    rc = RenderConfig.for_priors(model, priors, pixel_scale, "
+            f"pixel_response=...)\n"
+            f"    obs = build_image_obs(image_pars, ..., render_config=rc)"
+        )
+
+
 @dataclass
 class InferenceTask:
     """
@@ -454,18 +487,17 @@ class InferenceTask:
                 stacklevel=2,
             )
 
-        # compute render_config from priors for optimal grid sizing
+        # rc is canonical on obs (built by build_image_obs); do NOT recompute.
+        # Validate that priors fit within the obs's pre-built grid so a stale
+        # default obs doesn't silently mismatch with tighter priors.
         from kl_pipe.render import RenderConfig
 
-        try:
-            rc_int = RenderConfig.for_priors(
-                model,
-                priors,
-                obs.image_pars.pixel_scale,
-                pixel_response=obs.pixel_response,
-            )
-        except (KeyError, NotImplementedError):
-            rc_int = RenderConfig()  # fallback to defaults
+        rc_int = obs.render_config
+        if rc_int is None:
+            rc_int = (
+                RenderConfig()
+            )  # legacy obs without rc; should not happen in new code
+        _check_priors_fit_obs_rc(model, priors, obs, rc_int)
 
         from kl_pipe.likelihood import create_jitted_likelihood_intensity
 
@@ -528,23 +560,20 @@ class InferenceTask:
                 stacklevel=2,
             )
 
-        # compute render_configs from priors
+        # rc is canonical on each obs; do NOT recompute. Validate that priors
+        # fit within the obs's pre-built grid (loud failure on drift).
         from kl_pipe.render import RenderConfig
 
         int_model = model.intensity_model if hasattr(model, 'intensity_model') else None
-        rc_int = None
+        rc_int = obs_int.render_config
+        if rc_int is None:
+            rc_int = RenderConfig()
         if int_model is not None:
-            try:
-                rc_int = RenderConfig.for_priors(
-                    int_model,
-                    priors,
-                    obs_int.image_pars.pixel_scale,
-                    pixel_response=obs_int.pixel_response,
-                )
-            except (KeyError, NotImplementedError):
-                rc_int = RenderConfig()
+            _check_priors_fit_obs_rc(int_model, priors, obs_int, rc_int)
 
-        rc_vel = RenderConfig(oversample=obs_vel.oversample)
+        rc_vel = obs_vel.render_config
+        if rc_vel is None:
+            rc_vel = RenderConfig(oversample=obs_vel.oversample)
 
         from kl_pipe.likelihood import create_jitted_likelihood_joint
 
