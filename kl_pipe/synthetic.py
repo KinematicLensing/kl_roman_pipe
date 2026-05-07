@@ -906,22 +906,25 @@ def add_noise(
     rng = np.random.default_rng(seed)
 
     if include_poisson:
-        # Convert image to photon counts
-        counts = np.abs(image) * poisson_scale
+        if np.any(np.asarray(image) < 0):
+            raise ValueError(
+                "add_noise(include_poisson=True) requires non-negative input "
+                "(photon-count semantics). Got an array with negative values; "
+                "use include_poisson=False, or route signed data (e.g. velocity "
+                "fields) through kl_pipe.noise.add_velocity_noise."
+            )
 
-        # Add Poisson noise (shot noise)
-        # For negative values, we'll handle them as if they're background-subtracted
+        counts = image * poisson_scale
+
         noisy_counts = np.where(
             counts > 0,
             rng.poisson(counts),
-            counts + rng.normal(0, np.sqrt(np.abs(counts)), counts.shape),
+            counts,
         )
 
-        # Convert back to original units
         noisy_image = noisy_counts / poisson_scale
 
-        # Compute variance from Poisson noise
-        poisson_var = np.mean(np.abs(image) / poisson_scale)
+        poisson_var = np.mean(image / poisson_scale)
 
         # Calculate how much Gaussian noise to add to reach target SNR
         total_signal = np.sqrt(np.sum(image**2))
@@ -1089,21 +1092,24 @@ class SyntheticVelocity:
         image_pars: ImagePars,
         snr: float,
         seed: Optional[int] = None,
-        include_poisson: bool = True,
     ) -> np.ndarray:
         """
         Generate synthetic velocity data.
+
+        Velocity is a flux-weighted moment of the spectral cube, not a count
+        map; Poisson statistics live on photon counts in spectral channels and
+        do not enter at the 2D velocity-image layer. Noise is therefore
+        Gaussian by construction.
 
         Parameters
         ----------
         image_pars : ImagePars
             Image parameters defining the coordinate grids.
         snr : float
-            Target signal-to-noise ratio (total S/N).
+            Target signal-to-noise ratio. SNR convention follows
+            ``add_noise``: ``rms(velocity) / noise_std`` (L2-RMS).
         seed : int, optional
             Random seed for noise generation. If None, uses self.seed.
-        include_poisson : bool, optional
-            Whether to include Poisson (shot) noise. Default is True.
 
         Returns
         -------
@@ -1125,12 +1131,16 @@ class SyntheticVelocity:
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
-        # Add noise
+        # Use the local L2-RMS-SNR add_noise, with Poisson hardcoded off:
+        # velocity is signed, so include_poisson=True would hit add_noise's
+        # ValueError guard. Routing through kl_pipe.noise.add_velocity_noise
+        # would be cleaner semantically but uses a range-based SNR convention
+        # that diverges from the rest of the test suite by ~3x.
         self.data_noisy, self.variance = add_noise(
             self.data_true,
             snr,
             seed=seed,
-            include_poisson=include_poisson,
+            include_poisson=False,
             return_variance=True,
         )
 
@@ -1247,7 +1257,12 @@ class SyntheticIntensity:
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
-        # Add noise
+        # NOTE: intentionally uses the local add_noise (L2-RMS SNR convention)
+        # rather than kl_pipe.noise.add_intensity_noise (L1 sum-flux SNR
+        # convention) so existing tests, tutorials, and TestConfig SNR values
+        # keep their meaning. add_noise is hardened to raise on negative input
+        # when include_poisson=True, so the velocity-rectification bug it
+        # used to harbor is still loud.
         self.data_noisy, self.variance = add_noise(
             self.data_true,
             snr,

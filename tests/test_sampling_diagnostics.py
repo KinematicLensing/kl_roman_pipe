@@ -164,9 +164,7 @@ def generate_joint_synthetic_data(
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
 
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=seed)
-    data_vel_noisy = synth_vel.generate(
-        image_pars_vel, snr=snr, seed=seed, include_poisson=False
-    )
+    data_vel_noisy = synth_vel.generate(image_pars_vel, snr=snr, seed=seed)
     data_vel_true = synth_vel.data_true
     var_vel = synth_vel.variance
 

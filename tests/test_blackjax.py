@@ -68,7 +68,7 @@ def simple_velocity_task():
 
     # Generate synthetic data using correct API
     synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=100)
     var_vel = synth_vel.variance
 
     # Use Gaussian priors for most parameters, but TruncatedNormal for
@@ -127,7 +127,7 @@ def bounded_velocity_task():
 
     # Generate synthetic data using correct API
     synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=100)
     var_vel = synth_vel.variance
 
     # Use Uniform priors (bounded) - may have gradient issues at boundaries
@@ -599,7 +599,7 @@ def joint_model_task_bounded():
     vel_model = CenteredVelocityModel()
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-    data_vel = synth_vel.generate(image_pars_vel, snr=100, include_poisson=False)
+    data_vel = synth_vel.generate(image_pars_vel, snr=100)
     var_vel = synth_vel.variance
 
     # Generate intensity data
@@ -684,7 +684,7 @@ def joint_model_task_gaussian():
     vel_model = CenteredVelocityModel()
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-    data_vel = synth_vel.generate(image_pars_vel, snr=100, include_poisson=False)
+    data_vel = synth_vel.generate(image_pars_vel, snr=100)
     var_vel = synth_vel.variance
 
     # Generate intensity data

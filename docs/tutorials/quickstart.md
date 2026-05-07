@@ -120,8 +120,11 @@ true_params = {
 # Setup image geometry
 image_pars = ImagePars(shape=(64, 64), pixel_scale=0.15, indexing='ij')
 
-# Generate synthetic data with noise
-# NOTE: Uses simple backend model; independent of model class
+# Generate synthetic data with noise.
+# NOTE: Uses simple backend model; independent of model class.
+# Velocity is a flux-weighted moment, not a count map -- noise is Gaussian
+# only (Poisson on velocity at the 2D-image layer is meaningless and is
+# rejected at the synthetic-data level).
 synth = SyntheticVelocity(true_params, model_type='arctan', seed=42)
 data_noisy = synth.generate(image_pars, snr=50)
 
@@ -291,9 +294,12 @@ int_params = {
     'int_y0': 0.0,
 }
 
-# Generate synthetic intensity data
+# Generate synthetic intensity data.
+# include_poisson=False matches the test-suite convention (TestConfig default).
+# flux=1.0 here is an arbitrary unit normalization, not a photon count, so
+# Poisson statistics are not meaningfully scaled at this stage.
 synth_int = SyntheticIntensity(int_params, model_type='exponential', seed=43)
-data_int = synth_int.generate(image_pars, snr=100)
+data_int = synth_int.generate(image_pars, snr=100, include_poisson=False)
 
 # Create joint model
 vel_model = CenteredVelocityModel()
@@ -323,20 +329,31 @@ log_like_joint = create_jitted_likelihood_joint(kl_model, obs_vel, obs_int)
 log_prob_joint = log_like_joint(theta_joint)
 print(f"\nJoint log-likelihood: {log_prob_joint:.2f}")
 
-# Plot both datasets
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+# Plot truth + noisy data side-by-side. With flux=1.0 spread over many pixels,
+# per-pixel intensity (~1e-4) is far below the per-pixel noise std implied by
+# total-flux SNR=100, so the noisy panel is noise-dominated by design; the
+# truth panel makes the underlying disk legible.
+fig, axes = plt.subplots(2, 2, figsize=(11, 9))
 
-im0 = axes[0].imshow(data_noisy.T, origin='lower', cmap='RdBu_r')
-axes[0].set_title('Velocity Data')
-axes[0].set_xlabel('x (pixels)')
-axes[0].set_ylabel('y (pixels)')
-plt.colorbar(im0, ax=axes[0], label='km/s')
+im00 = axes[0, 0].imshow(synth.data_true.T, origin='lower', cmap='RdBu_r')
+axes[0, 0].set_title('Velocity Truth')
+plt.colorbar(im00, ax=axes[0, 0], label='km/s')
 
-im1 = axes[1].imshow(data_int.T, origin='lower', cmap='viridis')
-axes[1].set_title('Intensity Data')
-axes[1].set_xlabel('x (pixels)')
-axes[1].set_ylabel('y (pixels)')
-plt.colorbar(im1, ax=axes[1], label='flux')
+im01 = axes[0, 1].imshow(synth_int.data_true.T, origin='lower', cmap='viridis')
+axes[0, 1].set_title('Intensity Truth')
+plt.colorbar(im01, ax=axes[0, 1], label='flux')
+
+im10 = axes[1, 0].imshow(data_noisy.T, origin='lower', cmap='RdBu_r')
+axes[1, 0].set_title('Velocity Data (noisy)')
+plt.colorbar(im10, ax=axes[1, 0], label='km/s')
+
+im11 = axes[1, 1].imshow(data_int.T, origin='lower', cmap='viridis')
+axes[1, 1].set_title('Intensity Data (noisy)')
+plt.colorbar(im11, ax=axes[1, 1], label='flux')
+
+for ax in axes.flat:
+    ax.set_xlabel('x (pixels)')
+    ax.set_ylabel('y (pixels)')
 
 plt.tight_layout()
 plt.show()
@@ -430,10 +447,20 @@ print(f"Count: {len(model.PARAMETER_NAMES)}")
 
 Flux is parameterized as `total_flux` + `bulge_frac` (B/T ratio). Component fluxes are derived internally: `disk_flux = total_flux * (1 - bulge_frac)`.
 
+Render through the public `build_image_obs` + `render_image` path, with a
+PSF. PSF convolution is non-negotiable for a bulge: the de Vaucouleurs n=4
+profile has a central cusp that aliases at any finite oversample without it,
+and is also unphysical (every real observation is band-limited by the
+instrument PSF).
+
 ```{code-cell} python
-import jax.numpy as jnp
+import jax
+jax.config.update('jax_enable_x64', True)   # required by kl_pipe.psf
+
+import galsim
+import matplotlib.pyplot as plt
 from kl_pipe.parameters import ImagePars
-from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.observation import build_image_obs
 
 pars = {
     'cosi': 0.5, 'theta_int': 0.3, 'g1': 0.02, 'g2': -0.01,
@@ -444,14 +471,79 @@ pars = {
     'bulge_x0': 0.0, 'bulge_y0': 0.0,
 }
 theta = model.pars2theta(pars)
-image = model._render_kspace(theta, 64, 64, 0.11)
 
-import matplotlib.pyplot as plt
+bd_image_pars = ImagePars(shape=(64, 64), pixel_scale=0.11, indexing='ij')
+psf = galsim.Gaussian(fwhm=0.15)              # Roman-like PSF for illustration
+
+# build_image_obs(...) is the public replacement for the old configure_psf.
+# Passing int_model=model enables the fused k-space PSF path: render and
+# convolve in a single FFT pass, with cusp anti-aliasing handled by oversample.
+obs = build_image_obs(
+    image_pars=bd_image_pars,
+    psf=psf,
+    oversample=5,                              # project default
+    int_model=model,
+)
+image = model.render_image(theta, obs=obs)
+
 plt.imshow(image, origin='lower', cmap='viridis')
 plt.colorbar(label='Flux')
-plt.title('Bulge + Disk Composite')
+plt.title('Bulge + Disk Composite (PSF-convolved, oversample=5)')
 plt.show()
 ```
+
+**TODO** — once **PR #41** (render-config / tolerance API) lands on `main`,
+swap the `build_image_obs` + `render_image` snippet above for the production
+rendering entry point and expose its tolerance / oversample knobs explicitly.
+The cell below previews that workflow by varying `oversample` directly on the
+current API.
+
+### Rendering-accuracy convergence
+
+`oversample` is the current accuracy knob (see `_kspace_render_core` in
+`kl_pipe/intensity.py`): it extends the k-grid to `N × Nyquist` before IFFT
+and bins back to the coarse grid, suppressing the n=4 bulge cusp's aliasing.
+At `oversample=1` the cusp aliases into a single bright pixel + axis-aligned
+ringing even *with* PSF; `oversample=5` (the project default) is already
+qualitatively converged for Gaussian PSFs (~7e-5 relative error per the PSF
+oversampled-rendering convention); higher values vanish into numerical noise.
+
+```{code-cell} python
+import jax.numpy as jnp
+
+oversamples = [1, 5, 11, 21]
+images = []
+for N in oversamples:
+    obs_N = build_image_obs(
+        image_pars=bd_image_pars,
+        psf=psf,
+        oversample=N,
+        int_model=model,
+    )
+    images.append(model.render_image(theta, obs=obs_N))
+
+# Use the highest-oversample render as the "true" reference
+ref = images[-1]
+fig, axes = plt.subplots(1, len(oversamples), figsize=(4 * len(oversamples), 4))
+for ax, N, img in zip(axes, oversamples, images):
+    im = ax.imshow(img, origin='lower', cmap='viridis')
+    ax.set_title(f'oversample={N}')
+    plt.colorbar(im, ax=ax, label='Flux')
+plt.tight_layout()
+plt.show()
+
+# Numerical convergence: peak-pixel deviation from the oversample=21 reference
+for N, img in zip(oversamples, images):
+    rel_err = float(jnp.max(jnp.abs(img - ref)) / jnp.max(ref))
+    print(f"oversample={N:>2d}:  peak={float(jnp.max(img)):8.4f}   "
+          f"max |Δ| / peak = {rel_err:.3e}")
+```
+
+For this PSF (Gaussian FWHM=0.15", ≈1.4 px) the PSF already band-limits the
+bulge cusp before the pixel grid sees it, so the `oversample` knob is mostly
+invisible to the eye. Drop the PSF (or make it much narrower than the pixel
+scale) and the `oversample=1` panel shows the cross-shaped FFT ringing the
+old bare-`_render_kspace` cell produced.
 
 ### Shared centroids
 

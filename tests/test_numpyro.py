@@ -73,7 +73,7 @@ def simple_velocity_task():
     vel_model = CenteredVelocityModel()
 
     synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=100)
     var_vel = synth_vel.variance
 
     priors = PriorDict(
@@ -130,7 +130,7 @@ def joint_model_task():
     vel_model = CenteredVelocityModel()
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-    data_vel = synth_vel.generate(image_pars_vel, snr=100, include_poisson=False)
+    data_vel = synth_vel.generate(image_pars_vel, snr=100)
     var_vel = synth_vel.variance
 
     int_model = InclinedExponentialModel()

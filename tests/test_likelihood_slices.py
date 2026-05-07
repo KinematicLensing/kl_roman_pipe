@@ -138,12 +138,7 @@ def generate_synthetic_velocity_data(
 
     # Use synthetic module for noise generation
     synth = SyntheticVelocity(vel_pars, model_type='arctan', seed=config.seed)
-    data_noisy = synth.generate(
-        image_pars,
-        snr=snr,
-        seed=config.seed,
-        include_poisson=config.include_poisson_noise,
-    )
+    data_noisy = synth.generate(image_pars, snr=snr, seed=config.seed)
     variance = synth.variance
     data_true = synth.data_true  # Use synthetic's version for consistency
 
@@ -981,7 +976,6 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
         test_config.image_pars_velocity,
         snr=snr,
         seed=test_config.seed,
-        include_poisson=test_config.include_poisson_noise,
     )
     variance = synth.variance
 
@@ -1119,7 +1113,6 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
         test_config.image_pars_velocity,
         snr=snr,
         seed=test_config.seed + 1,
-        include_poisson=test_config.include_poisson_noise,
     )
     variance_vel = synth_vel.variance
 
