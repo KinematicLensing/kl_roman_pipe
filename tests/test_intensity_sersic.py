@@ -480,30 +480,24 @@ def test_sersic_normalization_integral(n):
 
 
 def test_sersic_psf_path_consistency():
-    """Fused k-space PSF path must match fallback real-space PSF path."""
+    """Fused k-space PSF path must match fallback real-space PSF path.
+
+    Fused: sinc (BoxPixel) × profile_FT × drawKImage_PSF, wrapped.
+    Real-space fallback: drawImage_PSF (intrinsically pixel-integrated)
+    convolved with point-sample profile (no double-integration).
+    """
     model = InclinedSersicModel()
     psf_obj = gs.Gaussian(fwhm=0.625)
     theta = jnp.array([0.7, 0.3, 0.02, -0.01, 1.0, 2.0, 0.1, 2.0, 0.0, 0.0])
 
     ip = ImagePars(shape=(64, 64), pixel_scale=0.3125, indexing='ij')
 
-    # fused k-space path (int_model triggers kspace_psf_fft)
-    obs_kspace = build_image_obs(
-        ip,
-        psf=psf_obj,
-        oversample=5,
-        int_model=model,
-        pixel_response=None,
-    )
+    # fused k-space path (default BoxPixel; int_model triggers kspace_psf_fft)
+    obs_kspace = build_image_obs(ip, psf=psf_obj, oversample=5, int_model=model)
     img_kspace = np.array(model.render_image(theta, obs=obs_kspace))
 
-    # fallback real-space path (no int_model -> no kspace_psf_fft)
-    obs_realspace = build_image_obs(
-        ip,
-        psf=psf_obj,
-        oversample=5,
-        pixel_response=None,
-    )
+    # fallback real-space path (drawImage PSF includes pixel; no sinc)
+    obs_realspace = build_image_obs(ip, psf=psf_obj, oversample=5, pixel_response=None)
     img_realspace = np.array(model.render_image(theta, obs=obs_realspace))
 
     peak = np.max(np.abs(img_kspace))

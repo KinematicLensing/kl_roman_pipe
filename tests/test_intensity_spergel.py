@@ -368,24 +368,32 @@ def test_spergel_normalization_integral(nu):
 
 
 def test_spergel_psf_path_consistency(galsim_image_pars):
-    """Fused k-space PSF path must match fallback real-space PSF path."""
+    """Fused k-space PSF path must match fallback real-space PSF path.
+
+    Both paths produce pixel-integrated output by default:
+    - Fused k-space: sinc (BoxPixel) × profile_FT × drawKImage_PSF, wrapped.
+    - Real-space fallback: drawImage_PSF (intrinsically pixel-integrated)
+      convolved with point-sample profile.
+    """
     import galsim as gs
 
     model = InclinedSpergelModel()
     psf_obj = gs.Gaussian(fwhm=0.625)
     theta = jnp.array([0.7, 0.3, 0.02, -0.01, 1.0, 2.0, 0.1, 0.5, 0.0, 0.0])
 
-    # fused k-space path (int_model triggers kspace_psf_fft)
+    # fused k-space path (int_model triggers kspace_psf_fft); default
+    # BoxPixel pixel_response so sinc is applied for pixel integration
     obs_kspace = build_image_obs(
         galsim_image_pars,
         psf=psf_obj,
         oversample=5,
         int_model=model,
-        pixel_response=None,
     )
     img_kspace = np.array(model.render_image(theta, obs=obs_kspace))
 
-    # fallback real-space path (no int_model -> no kspace_psf_fft)
+    # fallback real-space path (no int_model -> no kspace_psf_fft).
+    # drawImage PSF is intrinsically pixel-integrated; do not apply
+    # pixel_response again (would double-integrate)
     obs_realspace = build_image_obs(
         galsim_image_pars,
         psf=psf_obj,

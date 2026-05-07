@@ -58,6 +58,11 @@ def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
     convolves with drawImage PSF, then crops center and bins to coarse.
     Eliminates boundary flux difference; residual is purely the sinc gap
     between drawKImage (fused) and drawImage (this path).
+
+    Profile is rendered with ``pixel_response=None`` (point-sampled) because
+    GalSim's drawImage PSF kernel intrinsically includes pixel integration
+    (method='auto'). Applying our BoxPixel sinc on top would double-integrate.
+    This is a deliberate design choice for THIS helper, not a generic default.
     """
     N = oversample
     pad_factor = model._kspace_pad_factor
@@ -72,9 +77,10 @@ def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
     while pad_sq % 2 != fine_parity:
         pad_sq = next_fast_len(pad_sq + 1)
 
-    # render source at padded extent (no PSF path)
+    # render source at padded extent without pixel_response sinc
+    # (drawImage PSF below handles pixel integration; avoid double).
     ip_pad = ImagePars(shape=(pad_sq, pad_sq), pixel_scale=fine_ps, indexing='ij')
-    raw_padded = model.render_image(theta, ip_pad, oversample=1)
+    raw_padded = model.render_image(theta, ip_pad, oversample=1, pixel_response=None)
 
     # convolve with drawImage PSF on padded grid
     pdata = precompute_psf_fft(psf_obj, ip_pad, oversample=1)
@@ -817,17 +823,18 @@ def test_fused_kspace_psf_implementation(output_dir):
     # fused path
     img_fused = np.array(model.render_image(theta, obs=obs))
 
-    # manual path with same kernel
-    img_manual_fine = np.array(
+    # manual path with same kernel: post-Commit 5 wrap engages whenever
+    # oversample > 1, so call with COARSE grid + oversample=N (no post-bin)
+    img_manual = np.array(
         model._render_kspace(
             theta,
-            ip.Nrow * N,
-            ip.Ncol * N,
-            ip.pixel_scale / N,
+            ip.Nrow,
+            ip.Ncol,
+            ip.pixel_scale,
+            oversample=N,
             psf_kernel_fft=kernel,
         )
     )
-    img_manual = img_manual_fine.reshape(ip.Nrow, N, ip.Ncol, N).sum(axis=(1, 3))
 
     peak = np.max(np.abs(img_fused))
     max_rel_resid = np.max(np.abs(img_fused - img_manual)) / peak
@@ -876,11 +883,13 @@ def test_kspace_vs_realspace_psf_agreement(output_dir):
 
     model = InclinedExponentialModel()
 
-    # k-space fused path (drawKImage PSF)
-    obs = build_image_obs(ip, psf=psf_obj, int_model=model, pixel_response=None)
+    # k-space fused path (drawKImage PSF + default BoxPixel sinc).
+    # drawKImage PSF does NOT include pixel integration; sinc applies it.
+    obs = build_image_obs(ip, psf=psf_obj, int_model=model)
     img_kspace = np.array(model.render_image(theta, obs=obs))
 
-    # real-space path on padded extent (drawImage PSF)
+    # real-space path on padded extent (drawImage PSF intrinsically pixel-
+    # integrates; helper renders profile point-sampled to avoid double).
     img_realspace = _render_manual_padded(
         model, psf_obj, theta, ip, oversample=obs.oversample
     )
@@ -989,11 +998,12 @@ def test_psf_render_image_consistency(gaussian_psf):
     model = InclinedExponentialModel()
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
-    # fused k-space path (drawKImage PSF, default oversample)
-    obs = build_image_obs(ip, psf=gaussian_psf, int_model=model, pixel_response=None)
+    # fused k-space path (drawKImage PSF + default BoxPixel sinc).
+    obs = build_image_obs(ip, psf=gaussian_psf, int_model=model)
     rendered = model.render_image(theta, obs=obs)
 
-    # real-space path on padded extent (drawImage PSF)
+    # real-space path on padded extent (drawImage PSF intrinsically pixel-
+    # integrates; helper renders profile point-sampled to avoid double).
     manual = _render_manual_padded(
         model, gaussian_psf, theta, ip, oversample=obs.oversample
     )

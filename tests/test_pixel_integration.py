@@ -273,27 +273,26 @@ class TestOversampleConvergence:
     def test_convergence(
         self, _check_galsim, exp_model, exp_theta, image_pars, output_dir
     ):
-        """Compare pixel integration methods against GalSim reference.
+        """Compare wrap-path rendering against GalSim references.
 
-        GalSim's drawImage(method='auto') is the authoritative pixel-
-        integrated reference (uses the wrap operation internally).
+        Two wrap regimes (post-Commit 5: wrap engages whenever oversample > 1,
+        sinc presence is independent):
+        - With sinc (default BoxPixel): pixel-integrated. Compare vs
+          GalSim drawImage(method='auto') -- pixel-integrated reference.
+        - Without sinc (pixel_response=None): point-sampled. Compare vs
+          GalSim drawImage(method='no_pixel') -- point-sample reference.
 
-        Both paths should converge to GalSim:
-        - sinc + wrap converges quickly (by N=3)
-        - oversample + bin (no sinc) converges more slowly (by N=15)
+        Both should converge as N grows, each to its own reference.
         """
         import galsim as gs
         from kl_pipe.synthetic import _generate_sersic_galsim
 
-        ps = image_pars.pixel_scale
         gsp = gs.GSParams(
             folding_threshold=1e-4, maxk_threshold=1e-4, kvalue_accuracy=1e-6
         )
         params = exp_model.theta2pars(exp_theta)
 
-        # GalSim reference
-        gs_img = _generate_sersic_galsim(
-            image_pars,
+        common = dict(
             flux=float(params['flux']),
             int_rscale=float(params['int_rscale']),
             n_sersic=1.0,
@@ -305,16 +304,20 @@ class TestOversampleConvergence:
             int_y0=0.0,
             int_h_over_r=float(params['int_h_over_r']),
             gsparams=gsp,
-            method='auto',
         )
-        # render outputs flux/pixel (matches GalSim drawImage); no /ps**2
-        gs_ref = gs_img
-        peak = np.max(np.abs(gs_ref))
+
+        # pixel-integrated reference (matches default BoxPixel rendering)
+        gs_pix = _generate_sersic_galsim(image_pars, method='auto', **common)
+        peak_pix = np.max(np.abs(gs_pix))
+
+        # point-sample reference (matches pixel_response=None rendering)
+        gs_pt = _generate_sersic_galsim(image_pars, method='no_pixel', **common)
+        peak_pt = np.max(np.abs(gs_pt))
 
         N_values = [1, 3, 5, 7, 9, 15, 21, 31]
 
-        # path 1: oversample + bin (no sinc)
-        resid_bin = []
+        # path 1: wrap without sinc → converged point-sample
+        resid_pt = []
         for N in N_values:
             img = np.array(
                 exp_model.render_image(
@@ -324,9 +327,9 @@ class TestOversampleConvergence:
                     pixel_response=None,
                 )
             )
-            resid_bin.append(np.max(np.abs(img - gs_ref)) / peak)
+            resid_pt.append(np.max(np.abs(img - gs_pt)) / peak_pt)
 
-        # path 2: sinc + wrap at various oversample
+        # path 2: wrap with sinc → pixel-integrated
         resid_wrap = []
         for N in N_values:
             img = np.array(
@@ -336,22 +339,22 @@ class TestOversampleConvergence:
                     render_config=RenderConfig(oversample=N),
                 )
             )
-            resid_wrap.append(np.max(np.abs(img - gs_ref)) / peak)
+            resid_wrap.append(np.max(np.abs(img - gs_pix)) / peak_pix)
 
-        # sinc+wrap at N>=3 should match GalSim to <1%
+        # sinc+wrap at N>=3 should match GalSim pixel-integrated to <1%
         assert (
             resid_wrap[1] < 0.01
         ), f"sinc+wrap at N=3 should match GalSim to <1%, got {resid_wrap[1]:.1%}"
 
-        # bin-only at N=31 should converge to GalSim to <0.1%
+        # point-sample wrap at N=31 should match GalSim no_pixel to <0.1%
         assert (
-            resid_bin[-1] < 0.001
-        ), f"bin-only at N=31 should match GalSim to <0.1%, got {resid_bin[-1]:.2%}"
+            resid_pt[-1] < 0.001
+        ), f"point-sample wrap at N=31 should match GalSim no_pixel to <0.1%, got {resid_pt[-1]:.2%}"
 
         # diagnostic plot
         fig, ax = plt.subplots(figsize=(7, 5))
-        ax.semilogy(N_values, resid_bin, 'o-', label='oversample + bin (no sinc)')
-        ax.semilogy(N_values, resid_wrap, 's-', label='sinc + wrap (production)')
+        ax.semilogy(N_values, resid_pt, 'o-', label='wrap, no sinc (vs no_pixel)')
+        ax.semilogy(N_values, resid_wrap, 's-', label='wrap + sinc (vs auto)')
         ax.set_xlabel('Oversample factor N')
         ax.set_ylabel("max|residual| / peak (vs GalSim method='auto')")
         ax.set_title(

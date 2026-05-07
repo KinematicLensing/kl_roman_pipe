@@ -334,8 +334,13 @@ def _kspace_render_core(
     eff_Ncol = Ncol * oversample
     eff_ps = pixel_scale / oversample
 
-    # compute base padded size (without oversample) — needed for wrap path
-    _use_wrap = oversample > 1 and pixel_response is not None
+    # wrap path engages whenever oversample > 1, regardless of pixel_response.
+    # The wrap operation (fold extended k-grid onto base) is the FT of the
+    # point-sampled signal — independent of whether sinc is multiplied in.
+    # With pixel_response: sinc × profile_FT → folded → pixel-integrated.
+    # Without pixel_response: profile_FT → folded → point-sampled (no spatial
+    # bin needed; bin path was an old approximation, now removed).
+    _use_wrap = oversample > 1
 
     if _use_wrap:
         # wrap path: compute base grid first, then extend by exact multiple
@@ -372,20 +377,6 @@ def _kspace_render_core(
 
     I_hat = ft_image_fn(KX, KY)
 
-    # correct half-pixel phase for bin-only path (oversample > 1, no wrap).
-    # ft_image_fn always uses coarse-grid centering (correct for wrap path,
-    # where IFFT is at coarse resolution after folding). For the bin path,
-    # IFFT is at fine resolution before binning, so the half-pixel shift
-    # must match the fine grid. We undo the coarse offset and apply the
-    # fine-grid equivalent. Safe before wrapping because bin path never wraps.
-    if not _use_wrap and oversample > 1:
-        hx_c = 0.5 * pixel_scale * (1 - Ncol % 2)
-        hy_c = 0.5 * pixel_scale * (1 - Nrow % 2)
-        hx_f = 0.5 * eff_ps * (1 - eff_Ncol % 2)
-        hy_f = 0.5 * eff_ps * (1 - eff_Nrow % 2)
-        # exp(-i*k*Δ) shifts real-space by +Δ; we need +(hx_c - hx_f)
-        I_hat = I_hat * jnp.exp(-1j * (KX * (hx_c - hx_f) + KY * (hy_c - hy_f)))
-
     # pixel response: multiply by pixel FT (e.g., sinc for box pixel)
     # uses COARSE pixel_scale even when k-grid is at fine resolution
     if pixel_response is not None:
@@ -395,10 +386,10 @@ def _kspace_render_core(
         I_hat = I_hat * psf_kernel_fft
 
     if _use_wrap:
-        # wrap path: sinc was evaluated at TRUE k on the extended grid.
         # fold the extended k-grid onto the base (coarse) padded grid by
-        # modular addition, then IFFT at base size. This avoids double
-        # pixel integration (sinc in k-space + binning in real space).
+        # modular addition, then IFFT at base size. With pixel_response set,
+        # this is exact pixel integration; without, it's converged
+        # point-sampling. Either way, no real-space binning needed.
         I_hat_wrapped = _wrap_kspace(I_hat, base_pad_row, base_pad_col)
         full = jnp.fft.ifft2(I_hat_wrapped).real
         roll_row = Nrow // 2
@@ -407,19 +398,16 @@ def _kspace_render_core(
         # flux/pixel convention (base commit 63a30d5): no /pixel_scale**2
         image = full[:Nrow, :Ncol]
     else:
-        # standard path: IFFT on padded grid, then extract center eff_Nrow×eff_Ncol.
-        # roll amount must align with subsampling grid: (Nrow//2)*oversample
-        # ensures DC lands on a subsampled pixel for correct centering.
+        # oversample == 1: single-grid IFFT (no wrap, no extension).
+        # Output is aliased point-sample (or aliased pixel-integrated if
+        # pixel_response set). Cheap, low-accuracy mode used for tests
+        # and oversample-1 edge cases.
         full = jnp.fft.ifft2(I_hat).real
-        roll_row = (Nrow // 2) * oversample
-        roll_col = (Ncol // 2) * oversample
+        roll_row = Nrow // 2
+        roll_col = Ncol // 2
         full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
-        # flux/pixel convention (base commit 63a30d5): no /eff_ps**2;
-        # binning is sum (preserves total flux), matches GalSim drawImage.
-        image = full[:eff_Nrow, :eff_Ncol]
-        if oversample > 1:
-            # no pixel_response: binning approximates pixel integration
-            image = image.reshape(Nrow, oversample, Ncol, oversample).sum(axis=(1, 3))
+        # flux/pixel convention: no /pixel_scale**2
+        image = full[:Nrow, :Ncol]
 
     return image
 
