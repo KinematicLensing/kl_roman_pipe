@@ -727,6 +727,21 @@ class InferenceTask:
             Configured task ready for sampling.
         """
         from kl_pipe.observation import build_image_obs
+        from kl_pipe.pixel import BoxPixel
+        from kl_pipe.render import RenderConfig
+
+        # legacy convenience API builds obs internally; thread priors-derived
+        # rc so default oversample=5 doesn't undersize the grid for tight
+        # priors (would later trigger the loud-failure check in from_intensity_obs)
+        try:
+            rc = RenderConfig.for_priors(
+                model,
+                priors,
+                image_pars.pixel_scale,
+                pixel_response=BoxPixel(image_pars.pixel_scale),
+            )
+        except (KeyError, NotImplementedError, AttributeError):
+            rc = None  # fall through to default in build_image_obs
 
         obs = build_image_obs(
             image_pars,
@@ -736,6 +751,7 @@ class InferenceTask:
             variance=variance_int,
             mask=mask_int,
             int_model=model if psf is not None else None,
+            render_config=rc,
         )
 
         return cls.from_intensity_obs(model, priors, obs, meta_pars=meta_pars)
@@ -800,6 +816,21 @@ class InferenceTask:
             Configured task ready for sampling.
         """
         from kl_pipe.observation import build_joint_obs
+        from kl_pipe.pixel import BoxPixel
+        from kl_pipe.render import RenderConfig
+
+        # legacy convenience API builds obs internally; thread priors-derived
+        # rc so default oversample=5 doesn't undersize the grid for tight
+        # priors (would later trigger the loud-failure check in from_joint_obs)
+        try:
+            rc_int = RenderConfig.for_priors(
+                model.intensity_model,
+                priors,
+                image_pars_int.pixel_scale,
+                pixel_response=BoxPixel(image_pars_int.pixel_scale),
+            )
+        except (KeyError, NotImplementedError, AttributeError):
+            rc_int = None  # fall through to default in build_joint_obs
 
         obs_vel, obs_int = build_joint_obs(
             image_pars_vel,
@@ -814,6 +845,7 @@ class InferenceTask:
             data_int=data_int,
             variance_int=variance_int,
             mask_int=mask_int,
+            render_config_int=rc_int,
         )
 
         return cls.from_joint_obs(model, priors, obs_vel, obs_int, meta_pars=meta_pars)
