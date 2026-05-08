@@ -14,6 +14,12 @@ the same scenarios that caused BlackJAX to fail.
 """
 
 import pytest
+
+# All tests in this file run real NUTS/HMC sampling. Mark the entire module
+# as slow so CI's `make test-basic` (excludes slow) doesn't time out.
+# Run via `make test-sampling` or with `-m "not slow"` removed.
+pytestmark = pytest.mark.slow
+
 import numpy as np
 import jax
 import jax.numpy as jnp
