@@ -13,6 +13,9 @@ from kl_pipe.transformation import obs2cen, cen2source, source2gal
 # default number of Gauss-Legendre quadrature points for LOS integration
 _DEFAULT_N_QUAD = 200
 
+# following GalSim convention (GSParams.stepk_minimum_hlr default)
+_STEPK_MIN_HLR = 5
+
 # community convention Spergel nu for Sersic n=4 (de Vaucouleurs);
 # flux-weighted L2 matching gives -0.48 — see scripts/compute_nu_n_mapping.py
 _DEVAUCOULEURS_NU = -0.6
@@ -208,6 +211,43 @@ def spergel_to_sersic(nu, inclined=False):
 # ==============================================================================
 
 
+def _wrap_kspace(I_hat, N_row, N_col):
+    """Wrap a large k-space array onto a smaller grid by modular addition.
+
+    Equivalent to GalSim's ``kimage._wrap``: each k-bin in the output
+    accumulates all aliases from the extended grid. This ensures that the
+    pixel sinc (evaluated at true k on the extended grid) weights each
+    alias correctly, rather than applying the sinc at the aliased k.
+
+    The operation is: ``wrapped[i % N_row, j % N_col] += I_hat[i, j]``.
+    Implemented via zero-pad to next multiple + reshape + sum for JAX
+    compatibility.
+
+    Parameters
+    ----------
+    I_hat : jnp.ndarray
+        Extended k-space array, shape (Nk_row, Nk_col).
+    N_row, N_col : int
+        Output (base) grid dimensions.
+
+    Returns
+    -------
+    jnp.ndarray, shape (N_row, N_col)
+        Wrapped k-space array.
+    """
+    Nk_row, Nk_col = I_hat.shape
+    factor_r = -(-Nk_row // N_row)  # ceiling division
+    factor_c = -(-Nk_col // N_col)
+    Nk_r_pad = factor_r * N_row
+    Nk_c_pad = factor_c * N_col
+    if Nk_r_pad != Nk_row or Nk_c_pad != Nk_col:
+        padded = jnp.zeros((Nk_r_pad, Nk_c_pad), dtype=I_hat.dtype)
+        padded = padded.at[:Nk_row, :Nk_col].set(I_hat)
+    else:
+        padded = I_hat
+    return padded.reshape(factor_r, N_row, factor_c, N_col).sum(axis=(0, 2))
+
+
 def _kspace_render_core(
     ft_image_fn,
     Nrow,
@@ -216,12 +256,14 @@ def _kspace_render_core(
     pad_factor=2,
     oversample=1,
     psf_kernel_fft=None,
+    pixel_response=None,
+    render_config=None,
 ):
     """Shared IFFT plumbing for k-space intensity model rendering.
 
     Builds the padded k-grid, calls ``ft_image_fn(KX, KY)`` to get the
-    model-specific complex FT, optionally fuses a pre-computed PSF in
-    k-space, then IFFTs and crops to the output grid.
+    model-specific complex FT, optionally applies pixel response and PSF
+    in k-space, then IFFTs and crops to the output grid.
 
     Each model builds its own closure for ``ft_image_fn`` that handles
     parameter lookup, geometric transforms (shear, rotation, phase), and
@@ -234,11 +276,22 @@ def _kspace_render_core(
     BEFORE the IFFT crop, so edge pixels see PSF-scattered light from
     source regions beyond the image boundary.
 
+    When ``pixel_response`` is provided, its FT is multiplied in k-space
+    after the profile FT and before PSF multiplication. This implements
+    exact pixel integration (for a box pixel, a 2D sinc) at O(1) cost,
+    replacing the O(N²) spatial oversampling approximation. The pixel
+    response uses the COARSE ``pixel_scale`` regardless of ``oversample``.
+
     When ``oversample > 1``, the k-grid extends to N × Nyquist, reducing
     cusp aliasing. The IFFT is computed at fine resolution and subsampled
     back to (Nrow, Ncol). The half-pixel phase correction (inside the
-    model's ft_image_fn) uses coarse grid centering so subsampled positions
-    align with the standard centered grid.
+    model's ft_image_fn) always uses coarse grid centering, which is
+    correct for the wrap path (IFFT at coarse resolution). For the
+    bin-only path (no pixel_response), a compensating phase adjusts the
+    centering from coarse to fine grid before the IFFT. Most users should
+    rely on adaptive grid sizing via ``folding_threshold`` rather than
+    manual ``oversample``; this parameter is retained for real-space
+    rendering, benchmarking, and convergence testing.
 
     Parameters
     ----------
@@ -249,7 +302,7 @@ def _kspace_render_core(
     Nrow, Ncol : int
         Output (coarse) grid dimensions.
     pixel_scale : float
-        Output pixel scale (arcsec/pixel).
+        Output pixel scale (arcsec/pixel). Always the COARSE scale.
     pad_factor : int
         FFT padding factor. Default 2.
     oversample : int
@@ -257,18 +310,59 @@ def _kspace_render_core(
     psf_kernel_fft : jnp.ndarray, optional
         Pre-computed PSF FFT for fused convolution. Shape must match
         the padded grid.
+    pixel_response : PixelResponse, optional
+        Pixel response function. When provided, ``pixel_response.ft(KX, KY)``
+        is multiplied into the profile FT before PSF and IFFT. Default None
+        (no pixel integration at the core level — callers are responsible for
+        constructing a BoxPixel from pixel_scale at public entry points).
+    render_config : RenderConfig, optional
+        When provided, ``render_config.oversample`` and
+        ``render_config.pad_factor`` take precedence over the bare
+        ``oversample`` and ``pad_factor`` parameters.
 
     Returns
     -------
     jnp.ndarray, shape (Nrow, Ncol)
         Rendered image at coarse resolution.
     """
+    # render_config overrides bare oversample/pad_factor when provided
+    if render_config is not None:
+        oversample = render_config.oversample
+        pad_factor = render_config.pad_factor
+
     eff_Nrow = Nrow * oversample
     eff_Ncol = Ncol * oversample
     eff_ps = pixel_scale / oversample
 
+    # wrap path engages whenever oversample > 1, regardless of pixel_response.
+    # The wrap operation (fold extended k-grid onto base) is the FT of the
+    # point-sampled signal — independent of whether sinc is multiplied in.
+    # With pixel_response: sinc × profile_FT → folded → pixel-integrated.
+    # Without pixel_response: profile_FT → folded → point-sampled (no spatial
+    # bin needed; bin path was an old approximation, now removed).
+    _use_wrap = oversample > 1
+
+    if _use_wrap:
+        # wrap path: compute base grid first, then extend by exact multiple
+        base_pad_row = next_fast_len(pad_factor * Nrow)
+        base_pad_col = next_fast_len(pad_factor * Ncol)
+
     if psf_kernel_fft is not None:
         pad_row, pad_col = psf_kernel_fft.shape
+        if _use_wrap:
+            # PSF grid must be an exact multiple of base grid for correct
+            # wrapping. Derive base_pad by dividing PSF grid by oversample.
+            if pad_row % oversample != 0 or pad_col % oversample != 0:
+                raise ValueError(
+                    f"PSF FFT grid ({pad_row}, {pad_col}) is not divisible "
+                    f"by oversample={oversample}. Rebuild obs with a "
+                    f"render_config whose oversample divides the PSF grid."
+                )
+            base_pad_row = pad_row // oversample
+            base_pad_col = pad_col // oversample
+    elif _use_wrap:
+        pad_row = base_pad_row * oversample
+        pad_col = base_pad_col * oversample
     elif pad_factor > 1:
         pad_row = next_fast_len(pad_factor * eff_Nrow)
         pad_col = next_fast_len(pad_factor * eff_Ncol)
@@ -283,20 +377,37 @@ def _kspace_render_core(
 
     I_hat = ft_image_fn(KX, KY)
 
+    # pixel response: multiply by pixel FT (e.g., sinc for box pixel)
+    # uses COARSE pixel_scale even when k-grid is at fine resolution
+    if pixel_response is not None:
+        I_hat = I_hat * pixel_response.ft(KX, KY)
+
     if psf_kernel_fft is not None:
         I_hat = I_hat * psf_kernel_fft
 
-    # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
-    # roll amount must align with subsampling grid: (Nrow//2)*oversample
-    # ensures DC lands on a subsampled pixel for correct centering
-    full = jnp.fft.ifft2(I_hat).real
-    roll_row = (Nrow // 2) * oversample
-    roll_col = (Ncol // 2) * oversample
-    full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
-    image = full[:eff_Nrow, :eff_Ncol]
-
-    if oversample > 1:
-        image = image.reshape(Nrow, oversample, Ncol, oversample).sum(axis=(1, 3))
+    if _use_wrap:
+        # fold the extended k-grid onto the base (coarse) padded grid by
+        # modular addition, then IFFT at base size. With pixel_response set,
+        # this is exact pixel integration; without, it's converged
+        # point-sampling. Either way, no real-space binning needed.
+        I_hat_wrapped = _wrap_kspace(I_hat, base_pad_row, base_pad_col)
+        full = jnp.fft.ifft2(I_hat_wrapped).real
+        roll_row = Nrow // 2
+        roll_col = Ncol // 2
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
+        # flux/pixel convention (base commit 63a30d5): no /pixel_scale**2
+        image = full[:Nrow, :Ncol]
+    else:
+        # oversample == 1: single-grid IFFT (no wrap, no extension).
+        # Output is aliased point-sample (or aliased pixel-integrated if
+        # pixel_response set). Cheap, low-accuracy mode used for tests
+        # and oversample-1 edge cases.
+        full = jnp.fft.ifft2(I_hat).real
+        roll_row = Nrow // 2
+        roll_col = Ncol // 2
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
+        # flux/pixel convention: no /pixel_scale**2
+        image = full[:Nrow, :Ncol]
 
     return image
 
@@ -405,6 +516,47 @@ def _inclined_sech2_ft(
     return flux * ft_radial * ft_vertical * phase
 
 
+def _auto_render_config(model, theta, pixel_scale, pixel_response='_AUTO_BOXPIXEL'):
+    """Auto-compute RenderConfig from model parameters for legacy path.
+
+    Attempts to build a RenderConfig via ``RenderConfig.for_model``. Falls
+    back to a default ``RenderConfig()`` (oversample=1, pad_factor=2) when
+    the model or theta is inside a JIT trace or lacks maxk/stepk support.
+
+    Parameters
+    ----------
+    pixel_response : PixelResponse, None, or sentinel, optional
+        Pixel response to use for grid sizing. Sentinel ``'_AUTO_BOXPIXEL'``
+        (default) constructs ``BoxPixel(pixel_scale)``. Pass an explicit
+        ``PixelResponse`` instance, or ``None`` for point-sampled rendering.
+        Threading through ``None`` ensures the rc is sized for the rendering
+        chain that will actually run, not an implicit BoxPixel.
+    """
+    from kl_pipe.render import RenderConfig
+
+    try:
+        params = model.theta2pars(theta)
+        pixel_scale_f = float(pixel_scale)
+    except (TypeError, ValueError):
+        # inside JIT trace — cannot introspect theta
+        return RenderConfig()
+
+    if pixel_response == '_AUTO_BOXPIXEL':
+        from kl_pipe.pixel import BoxPixel as _BP
+
+        pixel_response = _BP(pixel_scale_f)
+
+    try:
+        return RenderConfig.for_model(
+            model,
+            params,
+            pixel_scale_f,
+            pixel_response=pixel_response,
+        )
+    except (KeyError, NotImplementedError, AttributeError):
+        return RenderConfig()
+
+
 def _kspace_render_image(
     model,
     theta,
@@ -422,9 +574,10 @@ def _kspace_render_image(
     Handles all obs-based PSF paths (fused k-space, fallback real-space),
     obs without PSF, and legacy image_pars/X,Y calling conventions.
 
-    Used by InclinedSpergelModel and InclinedDeVaucouleursModel.
-    InclinedExponentialModel keeps its own render_image (with aliasing
-    warning specific to the exponential FT decay rate).
+    Used by InclinedSpergelModel, InclinedDeVaucouleursModel, and
+    InclinedSersicModel. InclinedExponentialModel keeps its own
+    render_image (with aliasing warning specific to the exponential FT
+    decay rate).
 
     Calling conventions:
     - render_image(theta, obs=obs) -- with PSF from obs
@@ -446,48 +599,64 @@ def _kspace_render_image(
         Cusp anti-aliasing factor for no-PSF path. Default 1.
     obs : ImageObs, optional
         Observation object with PSF and oversampling config.
+    render_config : RenderConfig, optional
+        When provided via kwargs, ``render_config.oversample`` takes
+        precedence over the bare ``oversample`` arg and ``obs.oversample``.
 
     Returns
     -------
     jnp.ndarray
         Rendered image, shape (Nrow, Ncol).
     """
+    rc = kwargs.pop('render_config', None)
+
     if obs is not None:
         pixel_scale = obs.image_pars.pixel_scale
         Nrow = obs.image_pars.Nrow
         Ncol = obs.image_pars.Ncol
 
         if obs.kspace_psf_fft is not None:
-            # fused k-space path: render + convolve in one FFT pass
-            N = max(obs.oversample, 1)
+            # fused k-space path: render + convolve in one FFT pass.
+            # Engage wrap inside the core (oversample > 1 + pixel_response set)
+            # so sinc does pixel integration exactly; avoids double-integration
+            # that would result from spatial binning after sinc multiplication.
+            N = max(rc.oversample if rc is not None else obs.oversample, 1)
             image = model._render_kspace(
                 theta,
-                Nrow * N,
-                Ncol * N,
-                pixel_scale / N,
+                Nrow,
+                Ncol,
+                pixel_scale,
+                oversample=N,
                 psf_kernel_fft=obs.kspace_psf_fft,
+                pixel_response=obs.pixel_response,
             )
-            if N > 1:
-                image = image.reshape(Nrow, N, Ncol, N).sum(axis=(1, 3))
             return image
 
         if obs.psf_data is not None:
-            # fallback real-space path
+            # fallback real-space path: PSF kernel already includes pixel
+            # integration (from drawImage), do NOT apply pixel_response
             from kl_pipe.psf import convolve_fft
 
-            if obs.oversample > 1:
-                N = obs.oversample
+            eff_os = rc.oversample if rc is not None else obs.oversample
+            if eff_os > 1:
+                N = eff_os
                 image = model._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
             else:
                 image = model._render_kspace(theta, Nrow, Ncol, pixel_scale)
             return convolve_fft(image, obs.psf_data)
 
-        # no PSF on obs
+        # no PSF on obs — apply pixel response if available
         return model._render_kspace(
-            theta, Nrow, Ncol, pixel_scale, oversample=oversample
+            theta,
+            Nrow,
+            Ncol,
+            pixel_scale,
+            oversample=oversample,
+            pixel_response=obs.pixel_response,
+            render_config=rc,
         )
 
-    # legacy/convenience path (no obs)
+    # legacy/convenience path (no obs): construct BoxPixel from pixel_scale
     if image_pars is None and (X is None or Y is None):
         raise ValueError("Provide obs, image_pars, or (X, Y)")
 
@@ -499,7 +668,28 @@ def _kspace_render_image(
         Nrow, Ncol = X.shape
         pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
-    return model._render_kspace(theta, Nrow, Ncol, pixel_scale, oversample=oversample)
+    from kl_pipe.pixel import BoxPixel as _BoxPixel
+    from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
+
+    pr = kwargs.get('pixel_response', _PR_UNSET)
+    if pr is _PR_UNSET:
+        pr = _BoxPixel(float(pixel_scale))
+
+    # auto-compute render_config when not provided; pass the actual
+    # pixel_response so grid sizing matches the rendering chain
+    # (matters when user passed pixel_response=None for point-sampling).
+    if rc is None:
+        rc = _auto_render_config(model, theta, pixel_scale, pixel_response=pr)
+
+    return model._render_kspace(
+        theta,
+        Nrow,
+        Ncol,
+        pixel_scale,
+        oversample=oversample,
+        pixel_response=pr,
+        render_config=rc,
+    )
 
 
 # ==============================================================================
@@ -930,6 +1120,38 @@ class InclinedExponentialModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_exp'
 
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k.
+
+        For exponential: (1 + k²r²cosi²)^{-3/2} along ky (compressed axis).
+        """
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** 1.5
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where exponential FT drops below threshold.
+
+        Accounts for inclination: the FT extends further along the
+        compressed ky axis by a factor of 1/cosi.
+
+        Analytic: along worst-case direction (ky),
+        (1 + k²r²cosi²)^{-3/2} = threshold →
+        k = sqrt(threshold^{-2/3} - 1) / (r * cosi).
+        """
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        return np.sqrt(threshold ** (-2.0 / 3.0) - 1.0) / (rscale * cosi)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for exponential profile.
+
+        stepk = π / (stepk_min_hlr × hlr). For exponential, hlr ≈ 1.678 × rscale.
+        """
+        rscale = params['int_rscale']
+        hlr = 1.6783469900166605 * rscale  # ln(2) * ... exact for exponential
+        return np.pi / (_STEPK_MIN_HLR * hlr)
+
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
@@ -1051,6 +1273,8 @@ class InclinedExponentialModel(IntensityModel):
         pad_factor: int = None,
         oversample: int = 1,
         psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
     ) -> jnp.ndarray:
         """
         K-space FFT rendering via shared core.
@@ -1084,10 +1308,18 @@ class InclinedExponentialModel(IntensityModel):
         oversample : int, optional
             Oversampling factor for cusp anti-aliasing. Pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³. Default 1.
+            Most users should rely on adaptive grid sizing via
+            ``folding_threshold`` rather than manual ``oversample``.
         psf_kernel_fft : jnp.ndarray, optional
             Pre-computed PSF kernel FFT on the same padded grid. When provided,
             ``I_hat * psf_kernel_fft`` is computed before the IFFT, fusing
             rendering and PSF convolution. Shape must match the padded grid.
+        pixel_response : PixelResponse, optional
+            Pixel response for k-space multiplication. None = no pixel
+            integration at this level.
+        render_config : RenderConfig, optional
+            When provided, ``render_config.oversample`` and
+            ``render_config.pad_factor`` take precedence over the bare args.
 
         Returns
         -------
@@ -1105,6 +1337,8 @@ class InclinedExponentialModel(IntensityModel):
             pad_factor,
             oversample,
             psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
         )
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
@@ -1171,32 +1405,42 @@ class InclinedExponentialModel(IntensityModel):
             N × π/pixel_scale, reducing aliasing by ~N³.
             Ignored when PSF is configured via obs (PSF convolution suppresses
             high-k aliasing naturally). Default 1.
+        render_config : RenderConfig, optional
+            When provided via kwargs, ``render_config.oversample`` takes
+            precedence over the bare ``oversample`` arg and ``obs.oversample``.
         """
+        rc = kwargs.pop('render_config', None)
+
         if obs is not None:
             pixel_scale = obs.image_pars.pixel_scale
             Nrow = obs.image_pars.Nrow
             Ncol = obs.image_pars.Ncol
 
             if obs.kspace_psf_fft is not None:
-                # fused k-space path: render + convolve in one FFT pass
-                N = max(obs.oversample, 1)
+                # fused k-space path: render + convolve via wrap in core.
+                # Engage wrap (oversample > 1 + pixel_response set) so sinc does
+                # pixel integration exactly; avoids double-integration that would
+                # result from spatial binning after sinc multiplication.
+                N = max(rc.oversample if rc is not None else obs.oversample, 1)
                 image = self._render_kspace(
                     theta,
-                    Nrow * N,
-                    Ncol * N,
-                    pixel_scale / N,
+                    Nrow,
+                    Ncol,
+                    pixel_scale,
+                    oversample=N,
                     psf_kernel_fft=obs.kspace_psf_fft,
+                    pixel_response=obs.pixel_response,
                 )
-                if N > 1:
-                    image = image.reshape(Nrow, N, Ncol, N).sum(axis=(1, 3))
                 return image
 
             if obs.psf_data is not None:
-                # fallback real-space path
+                # fallback real-space path: PSF kernel already includes pixel
+                # integration (from drawImage), do NOT apply pixel_response
                 from kl_pipe.psf import convolve_fft
 
-                if obs.oversample > 1:
-                    N = obs.oversample
+                eff_os = rc.oversample if rc is not None else obs.oversample
+                if eff_os > 1:
+                    N = eff_os
                     image = self._render_kspace(
                         theta, Nrow * N, Ncol * N, pixel_scale / N
                     )
@@ -1204,12 +1448,18 @@ class InclinedExponentialModel(IntensityModel):
                     image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
                 return convolve_fft(image, obs.psf_data)
 
-            # no PSF on obs
+            # no PSF on obs — apply pixel response if available
             return self._render_kspace(
-                theta, Nrow, Ncol, pixel_scale, oversample=oversample
+                theta,
+                Nrow,
+                Ncol,
+                pixel_scale,
+                oversample=oversample,
+                pixel_response=obs.pixel_response,
+                render_config=rc,
             )
 
-        # legacy/convenience path (no obs)
+        # legacy/convenience path (no obs): construct BoxPixel from pixel_scale
         if image_pars is None and (X is None or Y is None):
             raise ValueError("Provide obs, image_pars, or (X, Y)")
 
@@ -1221,18 +1471,31 @@ class InclinedExponentialModel(IntensityModel):
             Nrow, Ncol = X.shape
             pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
+        from kl_pipe.pixel import BoxPixel as _BoxPixel
+        from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
+
+        pr = kwargs.get('pixel_response', _PR_UNSET)
+        if pr is _PR_UNSET:
+            pr = _BoxPixel(float(pixel_scale))
+
+        # auto-compute render_config when not provided; pass the actual
+        # pixel_response so grid sizing matches the rendering chain.
+        if rc is None:
+            rc = _auto_render_config(self, theta, pixel_scale, pixel_response=pr)
+
         # warn if cusp aliasing likely exceeds 1% even with current oversample
+        eff_os = rc.oversample if rc is not None else oversample
         try:
             rscale_val = float(self.get_param('int_rscale', theta))
             ps_val = float(pixel_scale)
-            k_ny_eff = oversample * np.pi / ps_val
+            k_ny_eff = eff_os * np.pi / ps_val
             alias_frac = 1.0 / (1.0 + (k_ny_eff * rscale_val) ** 2) ** 1.5
             if alias_frac > 0.01:
                 import warnings
 
                 warnings.warn(
                     f"render_image: estimated cusp aliasing {alias_frac:.1%} of peak "
-                    f"(r_s/ps={rscale_val / ps_val:.1f}, oversample={oversample}). "
+                    f"(r_s/ps={rscale_val / ps_val:.1f}, oversample={eff_os}). "
                     f"Increase oversample or use a finer pixel scale for sub-1% "
                     f"accuracy without PSF convolution.",
                     stacklevel=2,
@@ -1241,7 +1504,13 @@ class InclinedExponentialModel(IntensityModel):
             pass  # inside JIT trace, skip warning
 
         return self._render_kspace(
-            theta, Nrow, Ncol, pixel_scale, oversample=oversample
+            theta,
+            Nrow,
+            Ncol,
+            pixel_scale,
+            oversample=oversample,
+            pixel_response=pr,
+            render_config=rc,
         )
 
 
@@ -1335,6 +1604,40 @@ class InclinedSpergelModel(IntensityModel):
     @property
     def name(self) -> str:
         return 'inclined_spergel'
+
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k.
+
+        For Spergel: (1 + k²r²cosi²)^{-(1+ν)} along ky (compressed axis).
+        """
+        rscale = params['int_rscale']
+        nu = params['nu']
+        cosi = params['cosi']
+        return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** (1.0 + nu)
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where Spergel FT drops below threshold.
+
+        Accounts for inclination along worst-case direction (ky):
+        (1 + k²r²cosi²)^{-(1+ν)} = threshold →
+        k = sqrt(threshold^{-1/(1+ν)} - 1) / (r * cosi).
+        """
+        rscale = params['int_rscale']
+        nu = params['nu']
+        cosi = params['cosi']
+        return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for Spergel profile.
+
+        Uses GalSim's Spergel HLR/rscale relationship to compute the
+        half-light radius, then stepk = π / (stepk_min_hlr × hlr).
+        For simplicity, uses conservative bound: hlr ~ rscale for most ν.
+        """
+        rscale = params['int_rscale']
+        # conservative: hlr >= rscale for all ν > -1
+        hlr = rscale
+        return np.pi / (_STEPK_MIN_HLR * hlr)
 
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
@@ -1447,6 +1750,8 @@ class InclinedSpergelModel(IntensityModel):
         pad_factor: int = None,
         oversample: int = 1,
         psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
     ) -> jnp.ndarray:
         """
         K-space FFT rendering: radial FT = ``(1+k²)^{-(1+nu)}``.
@@ -1468,6 +1773,8 @@ class InclinedSpergelModel(IntensityModel):
             Oversampling factor. Default 1.
         psf_kernel_fft : jnp.ndarray, optional
             Pre-computed PSF FFT for fused convolution.
+        render_config : RenderConfig, optional
+            When provided, overrides oversample/pad_factor.
 
         Returns
         -------
@@ -1484,6 +1791,8 @@ class InclinedSpergelModel(IntensityModel):
             pad_factor,
             oversample,
             psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
         )
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
@@ -1624,6 +1933,28 @@ class InclinedDeVaucouleursModel(IntensityModel):
     def name(self) -> str:
         return 'de_vaucouleurs'
 
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k."""
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        nu = self._fixed_nu
+        return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** (1.0 + nu)
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where de Vaucouleurs FT drops below threshold.
+
+        Delegates to Spergel formula with fixed nu, accounts for cosi.
+        """
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        nu = self._fixed_nu
+        return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for de Vaucouleurs profile."""
+        rscale = params['int_rscale']
+        return np.pi / (_STEPK_MIN_HLR * rscale)
+
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT."""
         return self._render_kspace(
@@ -1720,6 +2051,8 @@ class InclinedDeVaucouleursModel(IntensityModel):
         pad_factor: int = None,
         oversample: int = 1,
         psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
     ) -> jnp.ndarray:
         """
         K-space FFT rendering with fixed nu for de Vaucouleurs.
@@ -1738,6 +2071,8 @@ class InclinedDeVaucouleursModel(IntensityModel):
             Oversampling factor. Default 1.
         psf_kernel_fft : jnp.ndarray, optional
             Pre-computed PSF FFT for fused convolution.
+        render_config : RenderConfig, optional
+            When provided, overrides oversample/pad_factor.
 
         Returns
         -------
@@ -1754,6 +2089,8 @@ class InclinedDeVaucouleursModel(IntensityModel):
             pad_factor,
             oversample,
             psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
         )
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
@@ -1897,6 +2234,67 @@ class InclinedSersicModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_sersic'
 
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k.
+
+        Evaluates Sersic emulator at dimensionless k_eff = k * hlr * cosi
+        (along the compressed ky axis for inclined profiles).
+        """
+        hlr = params['int_hlr']
+        n = params['n_sersic']
+        cosi = params['cosi']
+        k_dim_eff = k * hlr * cosi
+        return float(_sersic_ft_emulator(jnp.array(k_dim_eff), jnp.array(n)))
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where Sersic emulator FT drops below threshold.
+
+        Uses scipy root-finding on the Miller & Pasha (2025) emulator.
+        Accounts for inclination: along the compressed ky axis, the
+        effective dimensionless k is ``k_physical * hlr * cosi``.
+
+        Parameters
+        ----------
+        params : dict
+            Must contain 'int_hlr', 'n_sersic', and 'cosi'.
+        threshold : float
+            FT amplitude threshold.
+        """
+        from scipy.optimize import brentq
+
+        hlr = params['int_hlr']
+        n = params['n_sersic']
+        cosi = params['cosi']
+
+        # emulator works in dimensionless k_dim = k_physical * R_e
+        # for inclined case along ky: k_dim_eff = k_physical * R_e * cosi
+        # find k_physical where emulator(k_physical * hlr * cosi, n) = threshold
+        def residual(log_k_phys):
+            k_phys = np.exp(log_k_phys)
+            k_dim_eff = k_phys * hlr * cosi
+            ft_val = float(_sersic_ft_emulator(jnp.array(k_dim_eff), jnp.array(n)))
+            return ft_val - threshold
+
+        # bracket in physical k
+        log_k_min = np.log(1e-3 / hlr)
+        log_k_max = np.log(1e4 / (hlr * cosi))
+
+        if residual(log_k_min) < 0:
+            return np.exp(log_k_min)
+        if residual(log_k_max) > 0:
+            return np.exp(log_k_max)
+
+        log_k_phys = brentq(residual, log_k_min, log_k_max, rtol=1e-6)
+        return np.exp(log_k_phys)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for Sersic profile.
+
+        stepk = π / (stepk_min_hlr × hlr).
+        """
+        hlr = params['int_hlr']
+        return np.pi / (_STEPK_MIN_HLR * hlr)
+
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
@@ -2009,6 +2407,8 @@ class InclinedSersicModel(IntensityModel):
         pad_factor: int = None,
         oversample: int = 1,
         psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
     ) -> jnp.ndarray:
         """
         K-space FFT rendering with Sersic radial FT via emulator.
@@ -2031,6 +2431,8 @@ class InclinedSersicModel(IntensityModel):
             Oversampling factor. Default 1.
         psf_kernel_fft : jnp.ndarray, optional
             Pre-computed PSF FFT for fused convolution.
+        render_config : RenderConfig, optional
+            When provided, overrides oversample/pad_factor.
 
         Returns
         -------
@@ -2047,6 +2449,8 @@ class InclinedSersicModel(IntensityModel):
             pad_factor,
             oversample,
             psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
         )
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
@@ -2371,6 +2775,8 @@ class CompositeIntensityModel(IntensityModel):
         pad_factor: int = None,
         oversample: int = 1,
         psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
     ) -> jnp.ndarray:
         """Render composite image via summed k-space FTs + single IFFT."""
         if pad_factor is None:
@@ -2383,6 +2789,8 @@ class CompositeIntensityModel(IntensityModel):
             pad_factor,
             oversample,
             psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
         )
 
     def render_image(

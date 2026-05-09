@@ -492,7 +492,9 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
 
     # Likelihood slicing
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 
@@ -565,7 +567,9 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
 
     # Likelihood slicing
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 
@@ -1686,7 +1690,9 @@ def test_recover_inclined_spergel(snr, test_config, intensity_grids):
     )
 
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 
@@ -1752,7 +1758,9 @@ def test_recover_inclined_spergel_devac(snr, test_config, intensity_grids):
     )
 
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 
@@ -1818,7 +1826,9 @@ def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
     )
 
     obs_int = build_image_obs(
-        test_config.image_pars_intensity, data=data_noisy, variance=variance
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
     log_like = create_jitted_likelihood_intensity(model, obs_int)
 

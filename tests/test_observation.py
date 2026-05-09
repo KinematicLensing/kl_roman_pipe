@@ -68,7 +68,7 @@ class TestBuildImageObs:
         assert obs.X.shape == (16, 16)
         assert obs.Y.shape == (16, 16)
         assert obs.psf_data is None
-        assert obs.oversample == 1
+        assert obs.oversample == 5
         assert obs.data is None
         assert obs.variance is None
         assert obs.mask is None

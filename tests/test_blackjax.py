@@ -11,6 +11,13 @@ These diagnostics help catch issues early before running expensive comparison te
 """
 
 import pytest
+
+# All tests in this file run real HMC sampling and/or build inference tasks
+# with priors that imply large oversample factors (FFT grids 2752x2752+).
+# Mark the entire module as slow so CI's `make test-basic` (excludes slow)
+# doesn't time out. Run via `make test-sampling` or with `-m "not slow"` removed.
+pytestmark = pytest.mark.slow
+
 import numpy as np
 import jax
 import jax.numpy as jnp
