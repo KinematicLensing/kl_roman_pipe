@@ -169,6 +169,46 @@ All `render_image` outputs are **flux per pixel** (matching GalSim
 **surface brightness** (flux per arcsec²); multiply by `pixel_scale**2`
 for flux/pixel comparison. See base commit `63a30d5` for the migration.
 
+## Cube and grism rendering
+
+The cube intermediate `KLModel.render_cube` is the **post-PSF,
+pre-pixel-response** representation of intensity as it arrives at the
+detector. Pixel response is treated as a detector property and applies
+once at the 2D dispersed observable in `render_grism`, not per-channel
+on the cube.
+
+| Step | Function | Resolution | Pixel response |
+|---|---|---|---|
+| Per-channel intensity | `intensity_model.render_unconvolved` | fine when `obs.oversample > 1` | none (point-sampled) |
+| Per-channel PSF | `psf.convolve_fft(bin=False)` | stays fine | none |
+| Cube → 2D dispersion | `disperse_cube(..., oversample=N)` | output matches input cube (fine) | none |
+| 2D readout | `_apply_post_dispersion_pixel_response` (in `render_grism`) | **fine → coarse** via BoxPixel sinc + sum-bin | applied here |
+
+Two switches make this work:
+
+- **`convolve_fft(image, psf_data, bin=False)`** — discrete-image analog
+  of `pixel_response=None` on the analytic intensity-model k-space path.
+  PSF in k-space, no sum-bin. Used by `render_cube` when
+  `obs.oversample > 1` so the cube stays at fine spatial resolution.
+- **`disperse_cube(cube, grism_pars, lambda_grid, oversample=N)`** —
+  scales `pixel_offsets` (driven by wavelength and `grism_pars.dispersion`,
+  which is in nm per coarse pixel) by `oversample` so the wavelength
+  shift indexes correctly into the fine grid.
+
+The grism observable returns shape `(Nrow, Ncol)` at coarse detector
+resolution in flux per coarse pixel, regardless of internal oversample.
+
+The numpy reference `synthetic.generate_datacube_3d` follows the same
+convention: cube components are rendered with `pixel_response=None`
+(point-sampled) and `oversample=1` against a fine `ImagePars` when
+`spatial_oversample > 1`, so the cube has no implicit pixel response
+baked in. Pixel response composes at the 2D observable in
+`generate_grism_2d`.
+
+A future IFU/datacube observable that consumes the cube directly will
+need to apply per-channel pixel response at the readout stage (open
+work item).
+
 ## Accuracy Characterization
 
 ### Sinc vs GalSim `method='auto'`
