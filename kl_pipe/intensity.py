@@ -21,6 +21,21 @@ _STEPK_MIN_HLR = 5
 _DEVAUCOULEURS_NU = -0.6
 
 
+def _extract_param_lower_bound(priors, name):
+    """Return (lower, upper) bounds for a parameter, sampled or fixed.
+
+    Returns ``(None, None)`` if the parameter is absent from the priors.
+    For fixed (scalar) parameters returns ``(value, value)``. For sampled
+    parameters returns the prior's ``.bounds``.
+    """
+    if name in priors.sampled_names:
+        return priors.get_prior(name).bounds
+    if name in priors.fixed_values:
+        v = priors.fixed_values[name]
+        return (v, v)
+    return (None, None)
+
+
 # ==============================================================================
 # Spergel nu <-> Sersic n mapping
 # Pre-computed by scripts/compute_nu_n_mapping.py (flux-weighted L2 matching).
@@ -1605,6 +1620,37 @@ class InclinedSpergelModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_spergel'
 
+    # Spergel cusp regime: nu < CUSP_NU_THRESHOLD with high-inclination
+    # priors (cosi < CUSP_COSI_THRESHOLD) produces unphysical morphology
+    # along the minor axis. Construction-time check raises loudly.
+    _CUSP_NU_THRESHOLD = -0.5
+    _CUSP_COSI_THRESHOLD = 0.9
+
+    def check_priors_safe(self, priors) -> None:
+        """Raise if priors permit Spergel cusp regime at high inclination.
+
+        See class docstring warning: ``nu < -0.5`` with ``cosi < 0.9``
+        produces light spread over ~5 pixels along the minor axis where
+        the Sersic equivalent concentrates into ~1 pixel.
+        """
+        nu_low, _ = _extract_param_lower_bound(priors, 'nu')
+        cosi_low, _ = _extract_param_lower_bound(priors, 'cosi')
+        if nu_low is None or cosi_low is None:
+            return
+        if nu_low < self._CUSP_NU_THRESHOLD and cosi_low < self._CUSP_COSI_THRESHOLD:
+            raise ValueError(
+                f"InclinedSpergelModel: priors permit cusp regime — nu lower "
+                f"bound {nu_low} < {self._CUSP_NU_THRESHOLD} (concentrated "
+                f"profile, Sersic n>1) joint with cosi lower bound {cosi_low} "
+                f"< {self._CUSP_COSI_THRESHOLD} (inclined). At inclined "
+                f"orientations the divergent R^(2nu) cusp produces unphysical "
+                f"morphology along the minor axis (light spreads over ~5 pixels "
+                f"vs ~1 for Sersic). Restrict the nu prior lower bound to >= "
+                f"{self._CUSP_NU_THRESHOLD}, OR restrict cosi lower bound to "
+                f">= {self._CUSP_COSI_THRESHOLD} (near face-on), OR use "
+                f"InclinedSersicModel for steep-Sersic profiles."
+            )
+
     def _ft_envelope(self, k: float, params: dict) -> float:
         """Profile FT amplitude along worst-case direction at wavenumber k.
 
@@ -1932,6 +1978,31 @@ class InclinedDeVaucouleursModel(IntensityModel):
     @property
     def name(self) -> str:
         return 'de_vaucouleurs'
+
+    # DeVauc nu is hardwired to _DEVAUCOULEURS_NU (-0.6) which always
+    # falls below the Spergel cusp threshold; only cosi needs validating.
+    _CUSP_COSI_THRESHOLD = 0.9
+
+    def check_priors_safe(self, priors) -> None:
+        """Raise if priors permit cusp regime at high inclination.
+
+        DeVauc fixes ``nu = -0.6`` which is always below the cusp threshold
+        ``-0.5``, so ``cosi < 0.9`` alone triggers the unphysical regime.
+        """
+        cosi_low, _ = _extract_param_lower_bound(priors, 'cosi')
+        if cosi_low is None:
+            return
+        if cosi_low < self._CUSP_COSI_THRESHOLD:
+            raise ValueError(
+                f"InclinedDeVaucouleursModel: priors permit cusp regime — "
+                f"cosi lower bound {cosi_low} < {self._CUSP_COSI_THRESHOLD} "
+                f"(inclined) with hardwired nu={self._fixed_nu} "
+                f"(below cusp threshold {InclinedSpergelModel._CUSP_NU_THRESHOLD}). "
+                f"At inclined orientations the divergent cusp produces unphysical "
+                f"morphology along the minor axis. Restrict cosi lower bound to "
+                f">= {self._CUSP_COSI_THRESHOLD} (near face-on), OR use "
+                f"InclinedSersicModel (n=4) for steep-Sersic profiles."
+            )
 
     def _ft_envelope(self, k: float, params: dict) -> float:
         """Profile FT amplitude along worst-case direction at wavenumber k."""

@@ -551,6 +551,30 @@ class IntensityModel(Model):
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement _ft_image")
 
+    def check_priors_safe(self, priors) -> None:
+        """Raise if priors permit unphysical regimes for this model.
+
+        Default: no-op. Override in subclasses with known prior-induced
+        failure modes (e.g. ``InclinedSpergelModel`` cusp at high
+        inclination with concentrated profiles). Called by
+        ``InferenceTask.from_*_obs`` factories at construction time so
+        misconfigured priors fail loudly before the first JIT trace.
+
+        Parameters
+        ----------
+        priors : PriorDict
+            Prior specification. Sampled parameters expose ``.bounds``;
+            fixed parameters carry their scalar value.
+
+        Raises
+        ------
+        ValueError
+            If priors permit a regime where the model produces unphysical
+            output. Error message must explain the regime and suggest
+            remediation.
+        """
+        return
+
     @abstractmethod
     def evaluate_in_disk_plane(
         self, theta: jnp.ndarray, X: jnp.ndarray, Y: jnp.ndarray, Z: jnp.ndarray = None

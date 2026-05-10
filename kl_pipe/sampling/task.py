@@ -487,6 +487,11 @@ class InferenceTask:
                 stacklevel=2,
             )
 
+        # model-specific prior validation (e.g. Spergel cusp regime).
+        # Runs before grid-fit checks so misconfigured priors fail loudly
+        # without first triggering an unmanageable FFT grid computation.
+        model.check_priors_safe(priors)
+
         # rc is canonical on obs (built by build_image_obs); do NOT recompute.
         # Validate that priors fit within the obs's pre-built grid so a stale
         # default obs doesn't silently mismatch with tighter priors.
@@ -569,6 +574,10 @@ class InferenceTask:
         if rc_int is None:
             rc_int = RenderConfig()
         if int_model is not None:
+            # model-specific prior validation BEFORE grid-fit (fail fast on
+            # misconfigured priors so we don't first trigger an unmanageable
+            # FFT grid computation in for_priors)
+            int_model.check_priors_safe(priors)
             _check_priors_fit_obs_rc(int_model, priors, obs_int, rc_int)
 
         rc_vel = obs_vel.render_config
