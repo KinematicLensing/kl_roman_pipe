@@ -1423,6 +1423,13 @@ class InclinedExponentialModel(IntensityModel):
         render_config : RenderConfig, optional
             When provided via kwargs, ``render_config.oversample`` takes
             precedence over the bare ``oversample`` arg and ``obs.oversample``.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel (post-PR-41 convention). When PSF is
+            configured, the returned image is PSF-convolved and pixel-
+            integrated via the BoxPixel sinc multiply in k-space.
         """
         rc = kwargs.pop('render_config', None)
 
@@ -1901,6 +1908,11 @@ class InclinedSpergelModel(IntensityModel):
             k-space path. When obs.psf_data is set, uses fallback real-space.
         oversample : int, optional
             Cusp anti-aliasing factor for the non-PSF path. Default 1.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel (post-PR-41 convention).
         """
         # validate nu when theta is concrete (not inside JIT trace)
         if not isinstance(theta, jax.core.Tracer):
@@ -2224,6 +2236,11 @@ class InclinedDeVaucouleursModel(IntensityModel):
             k-space path. When obs.psf_data is set, uses fallback real-space.
         oversample : int, optional
             Cusp anti-aliasing factor for the non-PSF path. Default 1.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel (post-PR-41 convention).
         """
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
@@ -2238,6 +2255,17 @@ class InclinedDeVaucouleursModel(IntensityModel):
 class InclinedSersicModel(IntensityModel):
     """
     3D inclined Sersic model with sech² vertical profile.
+
+    .. note::
+
+       This class wraps a **symbolic-regression emulator** for the Sersic
+       radial Fourier transform (Miller & Pasha 2025), not a closed-form
+       analytic FT. There is no closed-form Sersic FT in elementary
+       functions; alternatives are slow numerical Hankel transforms or
+       (for some n) Spergel approximations. The emulator is
+       fully-differentiable and accurate to L2 < 2e-6 vs numerical truth
+       across n in [0.5, 6.0]. For n=1 specifically, ``InclinedExponentialModel``
+       has a true analytic FT and is preferable.
 
     Uses the Miller & Pasha (2025) symbolic-regression emulator for the
     radial Fourier transform, giving a fully differentiable k-space
@@ -2580,6 +2608,11 @@ class InclinedSersicModel(IntensityModel):
         Calling conventions:
         - render_image(theta, obs=obs) -- with PSF from obs
         - render_image(theta, image_pars=image_pars) -- no PSF
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel (post-PR-41 convention).
         """
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
@@ -2639,14 +2672,19 @@ class CompositeIntensityModel(IntensityModel):
 
     Flux is parameterized as ``total_flux`` + ``{prefix}_frac`` for
     components 1..N-1. Component 0's flux fraction is derived as
-    ``1 - sum(other fracs)``.
+    ``1 - sum(other fracs)``, so the sum of all component fluxes equals
+    ``total_flux`` exactly.
 
     When used as the intensity model in KLModel, the composite's total
-    flux weights the velocity PSF convolution. Since the bulge has
-    different kinematics than the disk (dispersion-dominated, not
-    rotation-dominated), the flux-weighted velocity field will show
-    reduced V_circ at the center. This is the physically correct
-    observable but may bias Tully-Fisher estimates.
+    flux weights the velocity PSF convolution. The flux-weighted velocity
+    field shows reduced ``V_circ`` near the center. Two physical effects
+    compound to produce this: (i) per-pixel velocity values are flux-
+    weighted, and a centrally-concentrated bulge component pulls the
+    weighted-mean toward small radii where ``V_circ`` is naturally lower;
+    (ii) the spatial PSF smoothing operation blurs the high-rotation outer
+    regions into the center. The smoothing dominates for moderate seeing.
+    This is the physically correct observable but may bias Tully-Fisher
+    estimates that assume a single rotating disk.
 
     Parameters
     ----------
@@ -2876,7 +2914,14 @@ class CompositeIntensityModel(IntensityModel):
         obs=None,
         **kwargs,
     ) -> jnp.ndarray:
-        """Render composite image with optional PSF convolution."""
+        """Render composite image with optional PSF convolution.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel (post-PR-41 convention). Sum of
+            per-component k-space FTs is IFFTed in a single pass.
+        """
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
         )
