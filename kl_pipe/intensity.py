@@ -21,6 +21,59 @@ _STEPK_MIN_HLR = 5
 _DEVAUCOULEURS_NU = -0.6
 
 
+def _format_cusp_error(
+    *,
+    model_name: str,
+    cosi_low: float,
+    cosi_threshold: float,
+    nu_threshold: float,
+    nu_low: Optional[float] = None,
+    fixed_nu: Optional[float] = None,
+    sersic_alternative: str = 'InclinedSersicModel',
+) -> str:
+    """Compose a cusp-regime prior validation error message.
+
+    Two shapes:
+    - Spergel (nu sampled): pass ``nu_low``. Both nu and cosi bounds appear
+      in the trigger description; remediation includes ``nu`` floor.
+    - DeVauc (nu fixed):    pass ``fixed_nu``. Only cosi bound appears in
+      the trigger; remediation lists cosi floor + Sersic alternative only.
+    """
+    if nu_low is not None:
+        trigger = (
+            f"nu lower bound {nu_low} < {nu_threshold} (concentrated profile, "
+            f"Sersic n>1) joint with cosi lower bound {cosi_low} < "
+            f"{cosi_threshold} (inclined)"
+        )
+        physics = (
+            "At inclined orientations the divergent R^(2nu) cusp produces "
+            "unphysical morphology along the minor axis (light spreads over "
+            "~5 pixels vs ~1 for Sersic)."
+        )
+        remediations = (
+            f"Restrict the nu prior lower bound to >= {nu_threshold}, OR "
+            f"restrict cosi lower bound to >= {cosi_threshold} (near face-on), "
+            f"OR use {sersic_alternative} for steep-Sersic profiles."
+        )
+    else:
+        trigger = (
+            f"cosi lower bound {cosi_low} < {cosi_threshold} (inclined) with "
+            f"hardwired nu={fixed_nu} (below cusp threshold {nu_threshold})"
+        )
+        physics = (
+            "At inclined orientations the divergent cusp produces unphysical "
+            "morphology along the minor axis."
+        )
+        remediations = (
+            f"Restrict cosi lower bound to >= {cosi_threshold} (near face-on), "
+            f"OR use {sersic_alternative} for steep-Sersic profiles."
+        )
+
+    return (
+        f"{model_name}: priors permit cusp regime — {trigger}. {physics} {remediations}"
+    )
+
+
 # ==============================================================================
 # Spergel nu <-> Sersic n mapping
 # Pre-computed by scripts/compute_nu_n_mapping.py (flux-weighted L2 matching).
@@ -1631,16 +1684,14 @@ class InclinedSpergelModel(IntensityModel):
             return
         if nu_low < self._CUSP_NU_THRESHOLD and cosi_low < self._CUSP_COSI_THRESHOLD:
             raise ValueError(
-                f"InclinedSpergelModel: priors permit cusp regime — nu lower "
-                f"bound {nu_low} < {self._CUSP_NU_THRESHOLD} (concentrated "
-                f"profile, Sersic n>1) joint with cosi lower bound {cosi_low} "
-                f"< {self._CUSP_COSI_THRESHOLD} (inclined). At inclined "
-                f"orientations the divergent R^(2nu) cusp produces unphysical "
-                f"morphology along the minor axis (light spreads over ~5 pixels "
-                f"vs ~1 for Sersic). Restrict the nu prior lower bound to >= "
-                f"{self._CUSP_NU_THRESHOLD}, OR restrict cosi lower bound to "
-                f">= {self._CUSP_COSI_THRESHOLD} (near face-on), OR use "
-                f"InclinedSersicModel for steep-Sersic profiles."
+                _format_cusp_error(
+                    model_name='InclinedSpergelModel',
+                    cosi_low=cosi_low,
+                    cosi_threshold=self._CUSP_COSI_THRESHOLD,
+                    nu_low=nu_low,
+                    nu_threshold=self._CUSP_NU_THRESHOLD,
+                    sersic_alternative='InclinedSersicModel',
+                )
             )
 
     def _ft_envelope(self, k: float, params: dict) -> float:
@@ -1991,14 +2042,14 @@ class InclinedDeVaucouleursModel(IntensityModel):
             return
         if cosi_low < self._CUSP_COSI_THRESHOLD:
             raise ValueError(
-                f"InclinedDeVaucouleursModel: priors permit cusp regime — "
-                f"cosi lower bound {cosi_low} < {self._CUSP_COSI_THRESHOLD} "
-                f"(inclined) with hardwired nu={self._fixed_nu} "
-                f"(below cusp threshold {InclinedSpergelModel._CUSP_NU_THRESHOLD}). "
-                f"At inclined orientations the divergent cusp produces unphysical "
-                f"morphology along the minor axis. Restrict cosi lower bound to "
-                f">= {self._CUSP_COSI_THRESHOLD} (near face-on), OR use "
-                f"InclinedSersicModel (n=4) for steep-Sersic profiles."
+                _format_cusp_error(
+                    model_name='InclinedDeVaucouleursModel',
+                    cosi_low=cosi_low,
+                    cosi_threshold=self._CUSP_COSI_THRESHOLD,
+                    fixed_nu=self._fixed_nu,
+                    nu_threshold=InclinedSpergelModel._CUSP_NU_THRESHOLD,
+                    sersic_alternative='InclinedSersicModel (n=4)',
+                )
             )
 
     def _ft_envelope(self, k: float, params: dict) -> float:
