@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from kl_pipe.noise import add_intensity_noise
+from kl_pipe.noise import add_intensity_noise, add_velocity_noise
 
 
 @pytest.fixture
@@ -61,3 +61,25 @@ class TestGainParameter:
     def test_gain_negative_raises(self, intensity_map):
         with pytest.raises(ValueError, match="gain must be positive"):
             add_intensity_noise(intensity_map, target_snr=50, gain=-1.0)
+
+
+class TestVelocityNoiseReturnTypes:
+    """Verify add_velocity_noise return type matches annotation.
+
+    Regression for Copilot review: previously annotated
+    Tuple[ndarray, float] but actually returns per-pixel variance array.
+    """
+
+    def test_returns_array_variance(self):
+        rng = np.random.default_rng(0)
+        velocity = rng.normal(0, 100, size=(8, 8))
+        _, variance = add_velocity_noise(velocity, target_snr=50, seed=0)
+        assert variance.shape == velocity.shape
+        assert variance.dtype.kind == 'f'
+
+    def test_variance_is_uniform(self):
+        # Gaussian-only noise → uniform per-pixel variance
+        rng = np.random.default_rng(0)
+        velocity = rng.normal(0, 100, size=(8, 8))
+        _, variance = add_velocity_noise(velocity, target_snr=50, seed=0)
+        np.testing.assert_allclose(variance, variance.flat[0])

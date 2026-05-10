@@ -126,7 +126,7 @@ def add_velocity_noise(
     velocity: np.ndarray,
     target_snr: float,
     seed: Optional[int] = None,
-) -> Tuple[np.ndarray, float]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """Add Gaussian noise to a velocity map.
 
     Velocity is a flux-weighted moment of the spectral cube, not a
