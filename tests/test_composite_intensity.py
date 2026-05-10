@@ -432,6 +432,90 @@ class TestFixedOverridesShared:
         assert 'g1' in model.PARAMETER_NAMES
 
 
+class TestBulgeDiskShearKwarg:
+    """Verify shear_bulge kwarg on BulgeDiskModel.
+
+    Default shear_bulge=True reproduces the prior shared-shear behavior;
+    shear_bulge=False zeros out the bulge component's shear regardless
+    of (g1, g2) in theta. Common WL preference: bulge mis-specification
+    can absorb shear signal that physically belongs to the disk; forcing
+    the bulge to be intrinsically round bounds that leakage.
+    """
+
+    def _pars(self, g1, g2):
+        return {
+            'cosi': 0.5,
+            'theta_int': 0.3,
+            'g1': g1,
+            'g2': g2,
+            'total_flux': 1e4,
+            'bulge_frac': 0.25,
+            'disk_rscale': 1.0,
+            'disk_h_over_r': 0.1,
+            'disk_x0': 0.0,
+            'disk_y0': 0.0,
+            'bulge_hlr': 0.3,
+            'bulge_h_over_hlr': 0.3,
+            'bulge_x0': 0.0,
+            'bulge_y0': 0.0,
+        }
+
+    def test_default_shear_bulge_true(self):
+        """Default behavior: bulge sees shared shear."""
+        model = BulgeDiskModel()
+        theta = model.pars2theta(self._pars(g1=0.05, g2=-0.03))
+        bulge_theta = model._get_component_theta(theta, 1)
+        bulge_model = model._components[1].model
+        assert abs(float(bulge_theta[bulge_model._param_indices['g1']]) - 0.05) < 1e-6
+        assert abs(float(bulge_theta[bulge_model._param_indices['g2']]) + 0.03) < 1e-6
+
+    def test_shear_bulge_false_zeros_bulge_shear(self):
+        """shear_bulge=False: bulge sees g1=g2=0 regardless of theta."""
+        model = BulgeDiskModel(shear_bulge=False)
+        theta = model.pars2theta(self._pars(g1=0.05, g2=-0.03))
+        bulge_theta = model._get_component_theta(theta, 1)
+        bulge_model = model._components[1].model
+        assert abs(float(bulge_theta[bulge_model._param_indices['g1']])) < 1e-6
+        assert abs(float(bulge_theta[bulge_model._param_indices['g2']])) < 1e-6
+
+    def test_shear_bulge_false_disk_still_sheared(self):
+        """shear_bulge=False: disk still gets the sampled shear."""
+        model = BulgeDiskModel(shear_bulge=False)
+        theta = model.pars2theta(self._pars(g1=0.05, g2=-0.03))
+        disk_theta = model._get_component_theta(theta, 0)
+        disk_model = model._components[0].model
+        assert abs(float(disk_theta[disk_model._param_indices['g1']]) - 0.05) < 1e-6
+        assert abs(float(disk_theta[disk_model._param_indices['g2']]) + 0.03) < 1e-6
+
+    def test_shear_bulge_false_render_invariant_to_g(self, image_pars):
+        """shear_bulge=False: bulge component's render is independent of (g1, g2).
+
+        Render at two different shear values; bulge-frac=1 isolates the
+        bulge. Outputs must match within numerical precision.
+        """
+        model = BulgeDiskModel(shear_bulge=False)
+        pars1 = self._pars(g1=0.0, g2=0.0)
+        pars2 = self._pars(g1=0.1, g2=-0.05)
+        # bulge-only by setting bulge_frac=1
+        pars1['bulge_frac'] = 1.0
+        pars2['bulge_frac'] = 1.0
+        img1 = model.render_image(model.pars2theta(pars1), image_pars=image_pars)
+        img2 = model.render_image(model.pars2theta(pars2), image_pars=image_pars)
+        np.testing.assert_allclose(img2, img1, rtol=1e-6, atol=1e-10)
+
+    def test_default_render_varies_with_g(self, image_pars):
+        """Default shear_bulge=True: bulge IS sheared → different (g1, g2) → different render."""
+        model = BulgeDiskModel()
+        pars1 = self._pars(g1=0.0, g2=0.0)
+        pars2 = self._pars(g1=0.1, g2=-0.05)
+        pars1['bulge_frac'] = 1.0
+        pars2['bulge_frac'] = 1.0
+        img1 = model.render_image(model.pars2theta(pars1), image_pars=image_pars)
+        img2 = model.render_image(model.pars2theta(pars2), image_pars=image_pars)
+        # outputs should differ measurably
+        assert float(jnp.max(jnp.abs(img2 - img1))) > 1e-3
+
+
 # ==============================================================================
 # JIT and gradient tests
 # ==============================================================================

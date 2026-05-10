@@ -2937,26 +2937,47 @@ class BulgeDiskModel(CompositeIntensityModel):
     shared_centroids : bool
         If True, share centroid (int_x0, int_y0) between components.
         Default False: disk and bulge have independent centroids.
+    shear_bulge : bool
+        If True (default), the bulge component is sheared by the same
+        ``(g1, g2)`` as the disk. If False, the bulge sees ``g1=g2=0``
+        while the disk uses the shared shear. Disabling bulge shear is
+        a common preference in WL inference because mis-specified bulges
+        can absorb shear signal that physically belongs to the disk;
+        forcing the bulge to be intrinsically round bounds that leakage.
     meta_pars : dict, optional
         Model metadata.
     """
 
-    def __init__(self, shared_centroids: bool = False, meta_pars: dict = None):
+    def __init__(
+        self,
+        shared_centroids: bool = False,
+        shear_bulge: bool = True,
+        meta_pars: dict = None,
+    ):
         shared = {'cosi', 'theta_int', 'g1', 'g2'}
         if shared_centroids:
             shared |= {'int_x0', 'int_y0'}
+
+        # n_sersic always fixed at 4 (de Vaucouleurs); optionally also
+        # zero out shear for the bulge (fixed-overrides-shared semantics).
+        bulge_fixed = {'n_sersic': 4.0}
+        if not shear_bulge:
+            bulge_fixed['g1'] = 0.0
+            bulge_fixed['g2'] = 0.0
+
         super().__init__(
             components=[
                 ComponentSpec(InclinedExponentialModel(), prefix='disk'),
                 ComponentSpec(
                     InclinedSersicModel(),
                     prefix='bulge',
-                    fixed_params={'n_sersic': 4.0},
+                    fixed_params=bulge_fixed,
                 ),
             ],
             shared_pars=shared,
             meta_pars=meta_pars,
         )
+        self._shear_bulge = shear_bulge
 
     @property
     def name(self) -> str:
