@@ -130,6 +130,11 @@ class GrismObs:
         Noise variance.
     mask : jnp.ndarray, optional
         Boolean mask (True=valid).
+    pixel_response_fft : jnp.ndarray, optional
+        Precomputed BoxPixel sinc on the fine k-grid, used by the
+        post-dispersion 2D pixel-response step in ``KLModel.render_grism``.
+        Set by ``build_grism_obs`` when ``oversample > 1``; None at
+        ``oversample == 1`` (no fine-grid sinc needed).
     """
 
     grism_pars: object  # GrismPars — avoid circular import
@@ -140,6 +145,7 @@ class GrismObs:
     data: Optional[jnp.ndarray] = None
     variance: Optional[jnp.ndarray] = None
     mask: Optional[jnp.ndarray] = None
+    pixel_response_fft: Optional[jnp.ndarray] = None
 
 
 # ============================================================================
@@ -227,7 +233,13 @@ jax.tree_util.register_pytree_node(
 
 
 def _grism_obs_flatten(obs):
-    children = (obs.psf_data, obs.data, obs.variance, obs.mask)
+    children = (
+        obs.psf_data,
+        obs.data,
+        obs.variance,
+        obs.mask,
+        obs.pixel_response_fft,
+    )
     aux = (obs.grism_pars, obs.cube_pars, obs.oversample, obs.fine_image_pars)
     return children, aux
 
@@ -242,6 +254,7 @@ def _grism_obs_unflatten(aux, children):
         data=children[1],
         variance=children[2],
         mask=children[3],
+        pixel_response_fft=children[4],
     )
 
 
@@ -687,6 +700,7 @@ def build_grism_obs(
 
     psf_data = None
     fine_image_pars = None
+    pixel_response_fft = None
 
     if psf is not None:
         from kl_pipe.psf import precompute_psf_fft
@@ -701,6 +715,16 @@ def build_grism_obs(
     # fine grid: create when oversample > 1, regardless of PSF
     if oversample > 1:
         fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
+        # precompute BoxPixel sinc on fine k-grid for post-dispersion pixel
+        # response (consumed by KLModel.render_grism). pixel response is a
+        # coarse-detector property; sinc uses the coarse pixel_scale.
+        coarse_ps = cube_pars.image_pars.pixel_scale
+        fine_ps = fine_image_pars.pixel_scale
+        Nrow_f, Ncol_f = fine_image_pars.Nrow, fine_image_pars.Ncol
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
 
     if data is not None:
         data = jnp.asarray(data)
@@ -718,4 +742,5 @@ def build_grism_obs(
         data=data,
         variance=variance,
         mask=mask,
+        pixel_response_fft=pixel_response_fft,
     )

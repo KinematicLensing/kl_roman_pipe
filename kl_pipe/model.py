@@ -423,63 +423,49 @@ def _get_flux_map(obs, plane, X, Y, flux_theta_override):
 
 def _apply_post_dispersion_pixel_response(
     dispersed: jnp.ndarray,
-    image_pars,
+    pixel_response_fft: jnp.ndarray,
+    coarse_shape: tuple,
     oversample: int,
 ) -> jnp.ndarray:
-    """Apply BoxPixel sinc + sum-bin to coarse on a fine 2D dispersed image.
+    """Apply precomputed BoxPixel sinc + sum-bin to coarse on a fine 2D image.
 
     Pixel response (square detector top-hat) is applied once at the 2D
     observable readout stage rather than per-channel on the cube. After
     grism dispersion produces a fine-resolution 2D image, this function
-    convolves with the BoxPixel sinc in k-space and sum-bins to coarse
+    convolves with the BoxPixel sinc in k-space (precomputed at obs build
+    time, stored on ``GrismObs.pixel_response_fft``) and sum-bins to coarse
     detector pixels.
 
     For ``oversample == 1`` the input is already at coarse detector
-    resolution; no fine-grid sinc is required (the cube path at
-    oversample=1 inherits pixel integration from the coarse sampling).
-    Pass-through.
+    resolution; no fine-grid sinc is required. Pass-through.
 
     Parameters
     ----------
     dispersed : jnp.ndarray
         2D dispersed image, shape ``(Nrow*N, Ncol*N)`` for ``oversample=N``,
         or ``(Nrow, Ncol)`` for ``oversample=1``.
-    image_pars : ImagePars
-        Coarse-detector grid metadata. ``pixel_scale`` is the coarse-pixel
-        size in arcsec.
+    pixel_response_fft : jnp.ndarray
+        Precomputed BoxPixel sinc on the fine k-grid (from
+        ``GrismObs.pixel_response_fft``). Unused at ``oversample == 1``.
+    coarse_shape : tuple
+        ``(Nrow_c, Ncol_c)`` of the coarse detector grid.
     oversample : int
         Spatial oversampling factor of the input.
 
     Returns
     -------
     jnp.ndarray
-        Coarse-pixel 2D image, shape ``(image_pars.Nrow, image_pars.Ncol)``,
-        in flux per coarse pixel.
+        Coarse-pixel 2D image in flux per coarse pixel, shape == coarse_shape.
     """
     if oversample <= 1:
         return dispersed
 
-    from kl_pipe.pixel import BoxPixel
-    from kl_pipe.utils import build_map_grid_from_image_pars
-
-    Nrow_c, Ncol_c = image_pars.Nrow, image_pars.Ncol
+    Nrow_c, Ncol_c = coarse_shape
     N = oversample
-    fine_image_pars = image_pars.make_fine_scale(N)
-    # k-space grid at fine resolution
-    fine_ps = fine_image_pars.pixel_scale
-    Nrow_f, Ncol_f = fine_image_pars.Nrow, fine_image_pars.Ncol
-    kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
-    ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
-    KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
-
-    # BoxPixel sinc at COARSE pixel scale (pixel response is a coarse-
-    # detector property)
-    pr = BoxPixel(image_pars.pixel_scale)
-    pixel_ft = pr.ft(KX, KY)
 
     # FFT -> sinc multiply -> IFFT at fine grid
     img_fft = jnp.fft.fft2(dispersed)
-    pixel_integrated_fine = jnp.fft.ifft2(img_fft * pixel_ft).real
+    pixel_integrated_fine = jnp.fft.ifft2(img_fft * pixel_response_fft).real
 
     # sum-bin fine to coarse (flux/pixel preservation)
     return pixel_integrated_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
@@ -981,8 +967,12 @@ class KLModel(object):
                 obs.cube_pars.lambda_grid,
                 oversample=oversample,
             )
+            coarse_shape = (
+                obs.grism_pars.image_pars.Nrow,
+                obs.grism_pars.image_pars.Ncol,
+            )
             return _apply_post_dispersion_pixel_response(
-                dispersed, obs.grism_pars.image_pars, oversample
+                dispersed, obs.pixel_response_fft, coarse_shape, oversample
             )
         else:
             # legacy path: no oversampling on this code path (cube_pars +
