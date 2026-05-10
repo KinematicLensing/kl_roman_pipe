@@ -463,6 +463,12 @@ def convolve_fft_numpy(
     """
     Numpy version of convolve_fft for synthetic data generation.
 
+    Operates at a **single spatial scale** — image and kernel must already
+    be on the same grid. No ``bin`` kwarg analog to the JAX variant; this
+    function does not know about oversampling. Callers wanting oversample-
+    aware sum-binning must either (a) use the JAX ``convolve_fft`` with a
+    ``PSFData`` object, or (b) sum-bin the output themselves.
+
     Parameters
     ----------
     image : np.ndarray
@@ -499,6 +505,12 @@ def convolve_flux_weighted_numpy(
 ) -> np.ndarray:
     """
     Numpy version of convolve_flux_weighted for synthetic data generation.
+
+    Operates at a **single spatial scale** — see notes on
+    ``convolve_fft_numpy``. No ``bin`` kwarg analog to the JAX variant;
+    the numpy path does not handle oversampled rendering. Use the JAX
+    ``convolve_flux_weighted`` with a ``PSFData`` for oversample-aware
+    flux-weighted PSF convolution.
 
     Parameters
     ----------
