@@ -1440,10 +1440,18 @@ class TestBinKwarg:
         result_default = convolve_fft(jnp.array(fine_image), pdata)
         result_bin_true = convolve_fft(jnp.array(fine_image), pdata, bin=True)
 
-        # default = bin=True
+        # default = bin=True. allclose with atol instead of array_equal:
+        # XLA can pick different reduction orderings across JIT cache
+        # states when the suite runs sequentially, producing bit-level
+        # drift at ~machine epsilon. atol covers near-zero FFT-roundoff
+        # cells where rtol is meaningless; rtol still enforces real-signal
+        # agreement.
         assert result_default.shape == pdata.coarse_shape
-        np.testing.assert_array_equal(
-            np.array(result_default), np.array(result_bin_true)
+        np.testing.assert_allclose(
+            np.array(result_default),
+            np.array(result_bin_true),
+            rtol=1e-12,
+            atol=1e-15,
         )
 
     def test_convolve_fft_bin_false_returns_fine_shape(
@@ -1476,7 +1484,9 @@ class TestBinKwarg:
         Nrow_c, Ncol_c = pdata.coarse_shape
         manual_binned = result_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
 
-        np.testing.assert_allclose(result_binned, manual_binned, rtol=1e-12)
+        # atol covers near-zero FFT-roundoff cells where rtol is meaningless;
+        # rtol enforces real-signal agreement.
+        np.testing.assert_allclose(result_binned, manual_binned, rtol=1e-12, atol=1e-15)
 
     def test_convolve_fft_oversample_1_bin_kwarg_noop(self, test_image, psf_data):
         """At oversample=1, bin kwarg has no effect (nothing to bin)."""
