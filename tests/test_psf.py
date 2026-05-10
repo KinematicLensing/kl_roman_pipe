@@ -1416,5 +1416,93 @@ def test_oversample_velocity_binning(image_pars):
     )
 
 
+class TestBinKwarg:
+    """bin kwarg on convolve_fft + convolve_flux_weighted (convention iii).
+
+    bin=True (default) preserves prior behavior: sum-bin fine→coarse on
+    oversampled images, equivalent to implicit BoxPixel pixel response.
+    bin=False returns fine-scale result without binning — used by cube
+    paths under convention (iii) where pixel response applies once at the
+    final 2D dispersed observable rather than per-channel on the cube.
+    """
+
+    def test_convolve_fft_bin_true_default_unchanged(
+        self, image_pars, compact_test_image
+    ):
+        """bin=True (default) reproduces prior coarse-shape behavior."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+
+        result_default = convolve_fft(jnp.array(fine_image), pdata)
+        result_bin_true = convolve_fft(jnp.array(fine_image), pdata, bin=True)
+
+        # default = bin=True
+        assert result_default.shape == pdata.coarse_shape
+        np.testing.assert_array_equal(
+            np.array(result_default), np.array(result_bin_true)
+        )
+
+    def test_convolve_fft_bin_false_returns_fine_shape(
+        self, image_pars, compact_test_image
+    ):
+        """bin=False returns fine-scale shape (no implicit pixel integration)."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+
+        result_fine = convolve_fft(jnp.array(fine_image), pdata, bin=False)
+        assert result_fine.shape == pdata.original_shape
+
+    def test_convolve_fft_bin_true_equivalent_to_manual_binning(
+        self, image_pars, compact_test_image
+    ):
+        """bin=True equals bin=False + manual sum-bin to coarse (equivalent ops)."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+
+        result_binned = np.array(convolve_fft(jnp.array(fine_image), pdata, bin=True))
+        result_fine = np.array(convolve_fft(jnp.array(fine_image), pdata, bin=False))
+        Nrow_c, Ncol_c = pdata.coarse_shape
+        manual_binned = result_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+
+        np.testing.assert_allclose(result_binned, manual_binned, rtol=1e-12)
+
+    def test_convolve_fft_oversample_1_bin_kwarg_noop(self, test_image, psf_data):
+        """At oversample=1, bin kwarg has no effect (nothing to bin)."""
+        result_true = np.array(convolve_fft(jnp.array(test_image), psf_data, bin=True))
+        result_false = np.array(
+            convolve_fft(jnp.array(test_image), psf_data, bin=False)
+        )
+        np.testing.assert_array_equal(result_true, result_false)
+
+    def test_convolve_flux_weighted_bin_false_returns_fine_shape(self, image_pars):
+        """convolve_flux_weighted bin=False returns fine-shape ratio."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
+        intensity = np.exp(-np.sqrt(X**2 + Y**2) / 3.0)
+        velocity = np.full_like(intensity, 42.0)
+        fine_intensity = np.repeat(np.repeat(intensity, N, axis=0), N, axis=1) / (N * N)
+        fine_velocity = np.repeat(np.repeat(velocity, N, axis=0), N, axis=1)
+
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+        result = convolve_flux_weighted(
+            jnp.array(fine_velocity), jnp.array(fine_intensity), pdata, bin=False
+        )
+
+        assert result.shape == pdata.original_shape
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
