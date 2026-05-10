@@ -78,13 +78,32 @@ class TestSpergelCuspGuard:
 
     def test_check_priors_safe_no_raise_face_on(self):
         # nu lower bound -0.7 (cusp regime), but cosi bounded > 0.9 (face-on)
-        # = safe. Test the guard method directly — full InferenceTask path
-        # would trigger an FFT grid overflow for cusp profiles even at
-        # face-on (the cusp's slow FT decay drives oversample → huge).
+        # = safe. With the PSF-on-obs fix, full InferenceTask construction
+        # also succeeds: PSF damping caps the worst-case maxk so the cusp
+        # profile's slow FT decay no longer blows up the grid.
         model = InclinedSpergelModel()
         priors = self._priors(nu_low=-0.7, nu_high=0.5, cosi_low=0.95, cosi_high=0.99)
-        # should not raise
+        # direct method does not raise
         model.check_priors_safe(priors)
+
+    def test_face_on_inference_task_construction(self, imaging_setup):
+        """Spergel cusp profile face-on: full from_intensity_obs succeeds."""
+        image_pars, psf, data, variance = imaging_setup
+        model = InclinedSpergelModel()
+        priors = self._priors(nu_low=-0.7, nu_high=0.5, cosi_low=0.95, cosi_high=0.99)
+        obs = build_image_obs(
+            image_pars=image_pars,
+            psf=psf,
+            data=data,
+            variance=variance,
+            int_model=model,
+        )
+        # should not raise; PSF damping makes the worst-case grid tractable
+        task = InferenceTask.from_intensity_obs(model, priors, obs)
+        assert task is not None
+        assert (
+            obs.oversample <= 7
+        ), f"face-on Spergel cusp should be tractable: oversample={obs.oversample}"
 
     def test_check_priors_safe_no_raise_safe_nu(self):
         # nu lower bound 0.0 (above -0.5), cosi can range freely = safe
@@ -133,11 +152,32 @@ class TestDeVaucouleursCuspGuard:
             InferenceTask.from_intensity_obs(model, priors, obs)
 
     def test_check_priors_safe_no_raise_face_on(self):
-        # cosi bounded > 0.9 → safe regime; method returns without raising.
-        # (Full InferenceTask construction triggers an enormous FFT grid for
-        # DeVauc face-on rendering; the cusp guard semantics is what we
-        # actually want to test, so call the method directly.)
+        # cosi bounded > 0.9 -> safe regime; method returns without raising.
+        # With the PSF-on-obs fix, the full InferenceTask path also succeeds:
+        # PSF damping caps the bare nu=-0.6 profile FT's slow decay so the
+        # face-on grid is tractable (~oversample=5 vs the formerly spurious
+        # ~17 reported when PSF was dropped from the worst-case scan).
         model = InclinedDeVaucouleursModel()
         priors = self._priors(cosi_low=0.95, cosi_high=0.99)
-        # should not raise
+        # direct method does not raise
         model.check_priors_safe(priors)
+
+    def test_face_on_inference_task_construction(self, imaging_setup):
+        """DeVauc face-on: full from_intensity_obs succeeds with PSF damping."""
+        image_pars, psf, data, variance = imaging_setup
+        model = InclinedDeVaucouleursModel()
+        priors = self._priors(cosi_low=0.95, cosi_high=0.99)
+        obs = build_image_obs(
+            image_pars=image_pars,
+            psf=psf,
+            data=data,
+            variance=variance,
+            int_model=model,
+        )
+        # should not raise; PSF caps the slow nu=-0.6 FT decay
+        task = InferenceTask.from_intensity_obs(model, priors, obs)
+        assert task is not None
+        assert obs.oversample <= 7, (
+            f"face-on DeVauc with PSF should be tractable: "
+            f"oversample={obs.oversample}"
+        )

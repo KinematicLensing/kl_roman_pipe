@@ -755,11 +755,17 @@ class TestInferenceTaskRenderConfig:
         )
 
         # build obs with the priors-derived rc so PSF FFT shape matches
-        # the oversample InferenceTask will compute (single-source-of-truth)
+        # the oversample InferenceTask will compute (single-source-of-truth).
+        # threads psf= so the worst-case scan matches what InferenceTask
+        # does at validation time (obs.psf is passed through).
         from kl_pipe.pixel import BoxPixel
 
         rc_pred = RenderConfig.for_priors(
-            model, priors, ip.pixel_scale, pixel_response=BoxPixel(ip.pixel_scale)
+            model,
+            priors,
+            ip.pixel_scale,
+            pixel_response=BoxPixel(ip.pixel_scale),
+            psf=psf,
         )
         obs = build_image_obs(
             ip,

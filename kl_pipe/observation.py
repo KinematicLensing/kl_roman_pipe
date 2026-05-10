@@ -70,6 +70,13 @@ class ImageObs:
         Pixel response function for k-space intensity rendering.
         Default BoxPixel is created by build_image_obs. None disables
         pixel integration (for testing or point-sampled comparisons).
+    psf : galsim.GSObject, optional
+        Original galsim PSF object retained so prior-based grid validation
+        can include PSF damping in the worst-case maxk product scan. The
+        rendered/precomputed PSF lives in ``psf_data``/``kspace_psf_fft``;
+        this field is the source-of-truth galsim object kept for off-grid
+        evaluation (e.g., ``RenderConfig.for_priors(..., psf=obs.psf)``).
+        Stored as static pytree aux.
     """
 
     image_pars: ImagePars
@@ -84,6 +91,7 @@ class ImageObs:
     mask: Optional[jnp.ndarray] = None
     kspace_psf_fft: Optional[jnp.ndarray] = None
     pixel_response: Optional[PixelResponse] = None
+    psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
 
     @property
     def oversample(self) -> int:
@@ -166,7 +174,7 @@ def _image_obs_flatten(obs):
         obs.kspace_psf_fft,
         obs.pixel_response,
     )
-    aux = (obs.image_pars, obs.render_config)
+    aux = (obs.image_pars, obs.render_config, obs.psf)
     return children, aux
 
 
@@ -184,6 +192,7 @@ def _image_obs_unflatten(aux, children):
         mask=children[7],
         kspace_psf_fft=children[8],
         pixel_response=children[9],
+        psf=aux[2],
     )
 
 
@@ -204,7 +213,7 @@ def _velocity_obs_flatten(obs):
         obs.flux_theta,
         obs.flux_image,
     )
-    aux = (obs.image_pars, obs.render_config, obs.flux_model)
+    aux = (obs.image_pars, obs.render_config, obs.flux_model, obs.psf)
     return children, aux
 
 
@@ -224,6 +233,7 @@ def _velocity_obs_unflatten(aux, children):
         flux_model=aux[2],
         flux_theta=children[9],
         flux_image=children[10],
+        psf=aux[3],
     )
 
 
@@ -388,6 +398,7 @@ def build_image_obs(
         mask=mask,
         kspace_psf_fft=kspace_psf_fft,
         pixel_response=pixel_response,
+        psf=psf,
     )
 
 
@@ -532,6 +543,7 @@ def build_velocity_obs(
         flux_model=flux_model,
         flux_theta=flux_theta,
         flux_image=processed_flux_image,
+        psf=psf,
     )
 
 
@@ -661,6 +673,7 @@ def _build_velocity_obs_joint(
         flux_model=flux_model,
         flux_theta=None,
         flux_image=None,
+        psf=psf,
     )
 
 

@@ -133,11 +133,16 @@ def test_issue_42_does_not_crash(setup, tight_priors):
     New code: InferenceTask reads rc from obs and validates against priors;
     raises ValueError with rebuild instructions if priors imply more
     demanding rc than obs was built for.
+
+    Built without PSF (psf=None) so PSF damping doesn't tame tight_priors'
+    bare-profile maxk requirement. The original Issue #42 mid-JIT crash
+    was a shape-mismatch bug independent of PSF presence; the validation
+    path is exercised here in the bare-profile + pixel-sinc regime.
     """
-    image_pars, psf, model, data, variance = setup
+    image_pars, _, model, data, variance = setup
     obs = build_image_obs(
         image_pars,
-        psf=psf,
+        psf=None,
         data=jnp.array(data),
         variance=jnp.array(variance),
         int_model=model,
@@ -166,12 +171,19 @@ def test_priors_tighter_than_obs_rc_ok(setup, loose_priors):
 
 
 def test_priors_wider_than_obs_rc_raises(setup, tight_priors):
-    """Priors that demand larger rc than obs was built for — loud failure."""
-    image_pars, psf, model, data, variance = setup
-    # build obs with default oversample=5; tight priors will require more
+    """Priors that demand larger rc than obs was built for — loud failure.
+
+    Built without PSF (psf=None). With PSF in the worst-case scan, the
+    Gaussian damping caps maxk far below the bare profile FT's reach, so
+    realistic inference setups with real PSF + tight priors almost never
+    trip this validation — the loud-failure path is mainly a safety net
+    for the no-PSF case (or extreme priors). That's the intended behavior
+    after the PSF-on-obs fix.
+    """
+    image_pars, _, model, data, variance = setup
     obs = build_image_obs(
         image_pars,
-        psf=psf,
+        psf=None,
         data=jnp.array(data),
         variance=jnp.array(variance),
         int_model=model,

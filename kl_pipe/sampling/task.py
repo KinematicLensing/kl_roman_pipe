@@ -45,6 +45,12 @@ def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
     was sized for, the PSF FFT shape will mismatch the wrap-path expectation
     -- raise loudly with the fix instructions instead of crashing in the
     middle of a JIT trace.
+
+    Threads the obs's PSF into the worst-case scan so slow-decay profiles
+    (DeVauc, Spergel cusp) don't over-estimate the required grid. Without
+    the PSF, the product scan terminates only when ``profile_FT * pixel_FT``
+    drops below threshold — which for steep-Sersic profiles is far beyond
+    where the Gaussian-like PSF would damp it.
     """
     from kl_pipe.render import RenderConfig
 
@@ -54,6 +60,7 @@ def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
             priors,
             obs.image_pars.pixel_scale,
             pixel_response=obs.pixel_response,
+            psf=getattr(obs, 'psf', None),
         )
     except (KeyError, NotImplementedError, AttributeError):
         return  # priors-based sizing not applicable for this model
@@ -64,7 +71,7 @@ def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
             f"with oversample={obs_rc.oversample}. Rebuild obs with explicit "
             f"render_config:\n"
             f"    rc = RenderConfig.for_priors(model, priors, pixel_scale, "
-            f"pixel_response=...)\n"
+            f"pixel_response=..., psf=...)\n"
             f"    obs = build_image_obs(image_pars, ..., render_config=rc)"
         )
 
@@ -748,6 +755,7 @@ class InferenceTask:
                 priors,
                 image_pars.pixel_scale,
                 pixel_response=BoxPixel(image_pars.pixel_scale),
+                psf=psf,
             )
         except (KeyError, NotImplementedError, AttributeError):
             rc = None  # fall through to default in build_image_obs
@@ -837,6 +845,7 @@ class InferenceTask:
                 priors,
                 image_pars_int.pixel_scale,
                 pixel_response=BoxPixel(image_pars_int.pixel_scale),
+                psf=psf_int,
             )
         except (KeyError, NotImplementedError, AttributeError):
             rc_int = None  # fall through to default in build_joint_obs
