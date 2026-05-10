@@ -48,6 +48,19 @@ from kl_pipe.utils import build_map_grid_from_image_pars
 # =============================================================================
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), 'out', 'cube_psf')
+
+
+def _bin_cube_to_coarse(cube_fine, Nrow_c, Ncol_c, N):
+    """Sum-bin a fine 3D cube (Nrow_c*N, Ncol_c*N, Nlam) to coarse spatial grid.
+
+    Pass-through for N == 1.
+    """
+    if N == 1:
+        return np.asarray(cube_fine)
+    arr = np.asarray(cube_fine)
+    return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
+
+
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # =============================================================================
@@ -610,16 +623,12 @@ class TestDiagnostics:
         """
         Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
 
-        def _bin_cube_to_coarse(cube_fine, N):
-            if N == 1:
-                return np.asarray(cube_fine)
-            arr = np.asarray(cube_fine)
-            return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
-
         # render reference at N=9 and bin to coarse
         N_ref = 9
         obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=N_ref)
-        cube_ref = _bin_cube_to_coarse(kl_model.render_cube(theta, obs_ref), N_ref)
+        cube_ref = _bin_cube_to_coarse(
+            kl_model.render_cube(theta, obs_ref), Nrow_c, Ncol_c, N_ref
+        )
 
         # find peak slice for comparison
         slice_flux = np.sum(cube_ref, axis=(0, 1))
@@ -634,7 +643,9 @@ class TestDiagnostics:
 
         for N in ns:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-            cube_n = _bin_cube_to_coarse(kl_model.render_cube(theta, obs_n), N)
+            cube_n = _bin_cube_to_coarse(
+                kl_model.render_cube(theta, obs_n), Nrow_c, Ncol_c, N
+            )
             test_slice = cube_n[:, :, peak_k]
             slices[N] = test_slice
             residuals[N] = np.max(np.abs(test_slice - ref_slice)) / peak
@@ -723,12 +734,6 @@ class TestDiagnostics:
         """
         Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
 
-        def _bin_cube_to_coarse(cube_fine, N):
-            if N == 1:
-                return np.asarray(cube_fine)
-            arr = np.asarray(cube_fine)
-            return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
-
         cube_no_psf = np.array(kl_model.render_cube(theta, cube_pars))
         slice_flux = np.sum(cube_no_psf, axis=(0, 1))
         peak_k = int(np.argmax(slice_flux))
@@ -745,7 +750,9 @@ class TestDiagnostics:
 
         for N in [1, 5]:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-            cube_n = _bin_cube_to_coarse(kl_model.render_cube(theta, obs_n), N)
+            cube_n = _bin_cube_to_coarse(
+                kl_model.render_cube(theta, obs_n), Nrow_c, Ncol_c, N
+            )
             profiles[f'N={N}'] = cube_n[:, :, peak_k]
             labels[f'N={N}'] = f'PSF N={N}'
 
