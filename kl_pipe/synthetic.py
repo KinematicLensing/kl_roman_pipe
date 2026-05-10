@@ -1158,13 +1158,23 @@ def generate_datacube_3d(
 ):
     """Independent numpy datacube generator for validation.
 
-    Uses generate_arctan_velocity_2d() and generate_sersic_intensity_2d()
-    internally. Completely independent from SpectralModel/JAX code paths.
+    The cube is the post-PSF, pre-pixel-response intermediate — pixel
+    response is a detector property applied only at the 2D dispersed
+    observable in ``generate_grism_2d``, not per-channel on the cube.
+
+    When ``spatial_oversample > 1`` the cube is built at fine spatial
+    resolution ``(Nrow*N, Ncol*N, Nlambda)``. Each component (velocity
+    map, broadband intensity, per-line intensity) is rendered on the
+    fine grid via ``generate_*_2d(oversample=1)`` against a fine
+    ``image_pars`` (point-sampled at fine pixel centers, no sinc + bin).
+    PSF convolution is applied per-channel at fine resolution, no
+    sum-bin to coarse — the caller composes pixel response separately
+    once the dispersed 2D image is in hand.
 
     Parameters
     ----------
     image_pars : ImagePars
-        Spatial grid.
+        Coarse-detector spatial grid.
     vel_pars : dict
         {v0, vcirc, vel_rscale, cosi, theta_int, g1, g2}
     int_pars : dict
@@ -1172,13 +1182,22 @@ def generate_datacube_3d(
     spectral_pars : dict
         {z, vel_dispersion, lines: [{lambda_rest, flux, cont}, ...]}
     lambda_grid : ndarray
-        Wavelength array nm, shape (Nlambda,)
+        Wavelength array nm, shape (Nlambda,).
     psf : galsim.GSObject, optional
         PSF to convolve each wavelength slice.
+    spatial_oversample : int, default 1
+        Spatial oversampling factor; the cube is rendered at
+        ``(Nrow*N, Ncol*N, Nlambda)``.
+    spectral_oversample : int, default 1
+        Sub-bin factor for the wavelength grid; spectral fine grid is
+        averaged back to coarse.
 
     Returns
     -------
-    ndarray, shape (Nrow, Ncol, Nlambda)
+    ndarray
+        Datacube. Shape ``(Nrow, Ncol, Nlambda)`` when
+        ``spatial_oversample == 1``; ``(Nrow*N, Ncol*N, Nlambda)`` when
+        ``spatial_oversample == N > 1``.
     """
     C_KMS = 299792.458
 
@@ -1186,20 +1205,32 @@ def generate_datacube_3d(
     vel_disp = spectral_pars['vel_dispersion']
     lines = spectral_pars['lines']
 
-    # velocity map (LOS, includes v0)
-    v_map = generate_arctan_velocity_2d(image_pars, **vel_pars)
+    # spatial fine grid: when oversample > 1, render everything (vel,
+    # intensity) on a fine ImagePars with oversample=1 (no internal
+    # sinc + bin). This gives a point-sampled fine grid suitable as a
+    # cube intermediate.
+    N = max(spatial_oversample, 1)
+    if N > 1:
+        spatial_image_pars = image_pars.make_fine_scale(N)
+    else:
+        spatial_image_pars = image_pars
+
+    # velocity map (LOS, includes v0) at fine resolution
+    v_map = generate_arctan_velocity_2d(spatial_image_pars, **vel_pars)
     v0 = vel_pars['v0']
     v_rotation = v_map - v0
 
-    # broadband intensity (for continuum)
+    # broadband intensity (for continuum). Cube is the pre-pixel-response
+    # intermediate; pass pixel_response=None so the numpy backend does not
+    # apply the BoxPixel sinc (point-sampled, matching JAX render_unconvolved).
     int_pars_full = dict(int_pars)
     if 'n_sersic' not in int_pars_full:
         int_pars_full['n_sersic'] = 1.0
     I_broadband = generate_sersic_intensity_2d(
-        image_pars, **int_pars_full, oversample=spatial_oversample
+        spatial_image_pars, **int_pars_full, oversample=1, pixel_response=None
     )
 
-    Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
+    Nrow_s, Ncol_s = spatial_image_pars.Nrow, spatial_image_pars.Ncol
     Nlam = len(lambda_grid)
     osf = spectral_oversample
 
@@ -1214,7 +1245,7 @@ def generate_datacube_3d(
         osf = 1
 
     n_fine = len(lambda_fine)
-    cube_fine = np.zeros((Nrow, Ncol, n_fine))
+    cube_fine = np.zeros((Nrow_s, Ncol_s, n_fine))
 
     R_func = spectral_pars.get('R_func', lambda lam: 461.0 * lam / 1000.0)
 
@@ -1223,14 +1254,13 @@ def generate_datacube_3d(
         line_flux = line_info['flux']
         cont = line_info.get('cont', 0.0)
 
-        # per-line intensity: scale broadband by line flux ratio
-        # (simplified: uses broadband morphology with different total flux)
+        # per-line intensity (point-sampled, no pixel response)
         line_int_pars = dict(int_pars_full)
         if 'line_int_pars' in line_info:
             line_int_pars.update(line_info['line_int_pars'])
         line_int_pars['flux'] = line_flux
         I_line = generate_sersic_intensity_2d(
-            image_pars, **line_int_pars, oversample=spatial_oversample
+            spatial_image_pars, **line_int_pars, oversample=1, pixel_response=None
         )
 
         # Doppler-shifted observed wavelength per pixel
@@ -1242,7 +1272,7 @@ def generate_datacube_3d(
         sigma_eff = np.sqrt(vel_disp**2 + sigma_inst**2)
         sigma_lambda = lam_obs * sigma_eff / C_KMS
 
-        # normalized Gaussian on fine grid
+        # normalized Gaussian on fine wavelength grid
         dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
         sig = sigma_lambda[:, :, None]
         gauss = (1.0 / (sig * np.sqrt(2.0 * np.pi))) * np.exp(-0.5 * (dlam / sig) ** 2)
@@ -1250,16 +1280,19 @@ def generate_datacube_3d(
         cube_fine += I_line[:, :, None] * gauss
         cube_fine += I_broadband[:, :, None] * cont
 
-    # bin fine -> coarse
+    # spectral mean-bin fine -> coarse (pure averaging in the wavelength
+    # direction; spatial dimension stays at fine resolution)
     if osf > 1:
-        cube = cube_fine.reshape(Nrow, Ncol, Nlam, osf).mean(axis=-1)
+        cube = cube_fine.reshape(Nrow_s, Ncol_s, Nlam, osf).mean(axis=-1)
     else:
         cube = cube_fine
 
+    # PSF per-channel at the cube's spatial resolution. No spatial
+    # binning here — pixel response applies at the 2D observable stage.
     if psf is not None:
         from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
 
-        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
+        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=spatial_image_pars)
         for k in range(Nlam):
             cube[:, :, k] = convolve_fft_numpy(cube[:, :, k], kernel, padded_shape)
 

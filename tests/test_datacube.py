@@ -391,20 +391,14 @@ class TestCorrectness:
             float(diff) < 1e-4
         ), f"Cube collapse vs broadband max diff = {float(diff):.6f}"
 
-    @pytest.mark.xfail(
-        reason=(
-            "Post-PR-41 wrap-path generalization: render_unconvolved is now "
-            "point-sampled (no implicit pixel integration), while the numpy "
-            "reference generate_datacube_3d still applies BoxPixel via the "
-            "scipy backend default. JAX vs numpy peak diverges by ~1%. "
-            "Datacube/grism path (cube assembly + PSF convolution + final "
-            "pixel integration) needs alignment with the new architecture; "
-            "deferred to se/grism-core. Re-enable there."
-        ),
-        strict=True,
-    )
     def test_cube_vs_numpy_reference(self, vel_model, int_model):
-        """JAX datacube matches independent numpy implementation."""
+        """JAX datacube matches independent numpy implementation.
+
+        Both paths produce a point-sampled cube at native (coarse) spatial
+        resolution: the cube is the pre-pixel-response intermediate.
+        Pixel response is a detector property and applies only at the 2D
+        observable readout stage, never on the cube.
+        """
         from kl_pipe.synthetic import generate_datacube_3d
 
         z = 1.0
@@ -425,7 +419,8 @@ class TestCorrectness:
 
         cube_jax = sm.build_cube(theta_spec, theta_vel, theta_int, cube_pars)
 
-        # numpy path
+        # numpy path: spatial_oversample=1 = point-sampled at native, matching
+        # JAX's build_cube which uses render_unconvolved (point-sampled).
         np_spectral_pars = {
             'z': z,
             'vel_dispersion': 50.0,
@@ -442,9 +437,14 @@ class TestCorrectness:
             np_int_pars,
             np_spectral_pars,
             np.array(cube_pars.lambda_grid),
-            spatial_oversample=5,
+            spatial_oversample=1,
             spectral_oversample=5,
         )
+
+        # shapes must match (both at native resolution)
+        assert (
+            cube_jax.shape == cube_np.shape
+        ), f"shape mismatch: jax={cube_jax.shape}, np={cube_np.shape}"
 
         # total flux
         jax_total = float(jnp.sum(cube_jax))
@@ -454,7 +454,7 @@ class TestCorrectness:
             np_total, rel=0.001
         ), f"JAX total={jax_total:.3f}, numpy total={np_total:.3f}"
 
-        # peak pixel: both paths now use 5x spatial oversampling
+        # peak pixel
         jax_peak = float(jnp.max(cube_jax))
         np_peak = float(np.max(cube_np))
         assert jax_peak == pytest.approx(
