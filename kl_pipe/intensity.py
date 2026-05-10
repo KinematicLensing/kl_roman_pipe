@@ -21,21 +21,6 @@ _STEPK_MIN_HLR = 5
 _DEVAUCOULEURS_NU = -0.6
 
 
-def _extract_param_lower_bound(priors, name):
-    """Return (lower, upper) bounds for a parameter, sampled or fixed.
-
-    Returns ``(None, None)`` if the parameter is absent from the priors.
-    For fixed (scalar) parameters returns ``(value, value)``. For sampled
-    parameters returns the prior's ``.bounds``.
-    """
-    if name in priors.sampled_names:
-        return priors.get_prior(name).bounds
-    if name in priors.fixed_values:
-        v = priors.fixed_values[name]
-        return (v, v)
-    return (None, None)
-
-
 # ==============================================================================
 # Spergel nu <-> Sersic n mapping
 # Pre-computed by scripts/compute_nu_n_mapping.py (flux-weighted L2 matching).
@@ -1640,8 +1625,8 @@ class InclinedSpergelModel(IntensityModel):
         produces light spread over ~5 pixels along the minor axis where
         the Sersic equivalent concentrates into ~1 pixel.
         """
-        nu_low, _ = _extract_param_lower_bound(priors, 'nu')
-        cosi_low, _ = _extract_param_lower_bound(priors, 'cosi')
+        nu_low, _ = priors.get_param_bounds('nu')
+        cosi_low, _ = priors.get_param_bounds('cosi')
         if nu_low is None or cosi_low is None:
             return
         if nu_low < self._CUSP_NU_THRESHOLD and cosi_low < self._CUSP_COSI_THRESHOLD:
@@ -2001,7 +1986,7 @@ class InclinedDeVaucouleursModel(IntensityModel):
         DeVauc fixes ``nu = -0.6`` which is always below the cusp threshold
         ``-0.5``, so ``cosi < 0.9`` alone triggers the unphysical regime.
         """
-        cosi_low, _ = _extract_param_lower_bound(priors, 'cosi')
+        cosi_low, _ = priors.get_param_bounds('cosi')
         if cosi_low is None:
             return
         if cosi_low < self._CUSP_COSI_THRESHOLD:
