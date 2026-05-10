@@ -67,16 +67,11 @@ def test_psf_in_product_scan_tightens_grid(model, params):
     threshold = 1e-3
     pixel_response = BoxPixel(0.11)
 
-    psf_wide = galsim.Gaussian(fwhm=0.1)
+    # naming follows real-space FWHM (smaller FWHM = narrower PSF in real space)
+    psf_narrow = galsim.Gaussian(fwhm=0.1)
     psf_med = galsim.Gaussian(fwhm=0.3)
-    psf_narrow = galsim.Gaussian(fwhm=0.6)
+    psf_wide = galsim.Gaussian(fwhm=0.6)
 
-    maxk_wide = compute_effective_maxk(
-        model, params, pixel_response=pixel_response, psf=psf_wide, threshold=threshold
-    )
-    maxk_med = compute_effective_maxk(
-        model, params, pixel_response=pixel_response, psf=psf_med, threshold=threshold
-    )
     maxk_narrow = compute_effective_maxk(
         model,
         params,
@@ -84,10 +79,15 @@ def test_psf_in_product_scan_tightens_grid(model, params):
         psf=psf_narrow,
         threshold=threshold,
     )
-    # narrower PSF in real space = wider FT decay; broader FT in k-space
-    # actually, wider FWHM in real → narrower FT → tighter maxk.
+    maxk_med = compute_effective_maxk(
+        model, params, pixel_response=pixel_response, psf=psf_med, threshold=threshold
+    )
+    maxk_wide = compute_effective_maxk(
+        model, params, pixel_response=pixel_response, psf=psf_wide, threshold=threshold
+    )
+    # wider FWHM in real → narrower FT → tighter maxk.
     # Verify monotonic decrease as PSF FWHM grows (FT decays faster).
-    assert maxk_narrow < maxk_med < maxk_wide
+    assert maxk_wide < maxk_med < maxk_narrow
 
 
 def test_generic_pixel_response_no_boxpixel_assumption(model, params):

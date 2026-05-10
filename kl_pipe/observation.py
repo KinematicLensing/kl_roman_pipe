@@ -49,8 +49,8 @@ class ImageObs:
     render_config : RenderConfig
         Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
         SINGLE SOURCE OF TRUTH for grid sizing -- ``obs.oversample`` is a
-        property that reads from this. Default ``RenderConfig()`` provides
-        conservative GalSim-like settings (oversample=5, pad_factor=2);
+        property that reads from this. Bare ``RenderConfig()`` defaults to
+        ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
         for inference, pass ``RenderConfig.for_priors(...)`` to size the
         grid against prior bounds.
     psf_data : PSFData, optional
