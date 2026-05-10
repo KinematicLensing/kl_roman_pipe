@@ -3022,11 +3022,16 @@ class BulgeDiskModel(CompositeIntensityModel):
             shared_pars=shared,
             meta_pars=meta_pars,
         )
-        self._shear_bulge = shear_bulge
 
     @property
     def name(self) -> str:
         return 'bulge_disk'
+
+    @property
+    def shear_bulge(self) -> bool:
+        # SSOT for the toggle is the bulge component's fixed_params:
+        # shear_bulge=False writes g1=g2=0 into bulge_fixed at __init__.
+        return 'g1' not in self._components[1].fixed_params
 
 
 # ==============================================================================

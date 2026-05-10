@@ -469,6 +469,12 @@ class TestBulgeDiskShearKwarg:
         assert abs(float(bulge_theta[bulge_model._param_indices['g1']]) - 0.05) < 1e-6
         assert abs(float(bulge_theta[bulge_model._param_indices['g2']]) + 0.03) < 1e-6
 
+    def test_shear_bulge_property_roundtrip(self):
+        """shear_bulge property derives from fixed_params (no stored state)."""
+        assert BulgeDiskModel().shear_bulge is True
+        assert BulgeDiskModel(shear_bulge=True).shear_bulge is True
+        assert BulgeDiskModel(shear_bulge=False).shear_bulge is False
+
     def test_shear_bulge_false_zeros_bulge_shear(self):
         """shear_bulge=False: bulge sees g1=g2=0 regardless of theta."""
         model = BulgeDiskModel(shear_bulge=False)
