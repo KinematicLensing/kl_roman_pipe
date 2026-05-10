@@ -39,9 +39,13 @@ def multi_start_minimize(
     converges to the wrong basin in galaxy bulge+disk decomposition (the
     ``bulge_frac=0`` attractor; see refs in module docstring).
 
-    Each start is perturbed by ``perturbation * |x0| * randn``, clipped
-    into ``bounds`` (when supplied). The first start uses the unperturbed
-    ``x0`` to preserve the single-start solution as a baseline.
+    Each start is perturbed by ``perturbation * scale * randn``, clipped
+    into ``bounds`` (when supplied). Per-parameter ``scale`` is ``|x0[i]|``
+    when nonzero; for parameters with ``x0[i] == 0`` it falls back to the
+    bound width ``hi - lo`` (when bounded) or a small fixed floor (1e-3,
+    when unbounded), so zero-initial parameters still get perturbed across
+    starts. The first start uses the unperturbed ``x0`` to preserve the
+    single-start solution as a baseline.
 
     Parameters
     ----------
@@ -108,10 +112,33 @@ def multi_start_minimize(
         if len(bounds) != n_params:
             raise ValueError(f'bounds length {len(bounds)} != n_params {n_params}')
 
+    # per-parameter perturbation scale: |x0| for nonzero, bound width for
+    # x0=0 with bounds, small floor otherwise. Ensures zero-initial params
+    # actually get perturbed across starts (otherwise multi-start collapses
+    # to single-start for those dims).
+    abs_x0 = np.abs(x0)
+    scale = abs_x0.copy()
+    zero_mask = abs_x0 == 0
+    if zero_mask.any():
+        if bounds is not None:
+            widths = np.array(
+                [
+                    (
+                        (hi - lo)
+                        if (lo is not None and hi is not None and hi > lo)
+                        else 0.0
+                    )
+                    for (lo, hi) in bounds
+                ]
+            )
+            scale[zero_mask] = widths[zero_mask]
+        # anything still zero (unbounded x0=0): small fixed floor
+        scale[scale == 0] = 1e-3
+
     starts = [x0.copy()]  # first start: unperturbed, preserves baseline
     for _ in range(n_starts - 1):
         noise = rng.randn(n_params)
-        delta = perturbation * np.abs(x0) * noise
+        delta = perturbation * scale * noise
         x_try = x0 + delta
         x_try[fixed_mask] = x0[fixed_mask]  # never perturb fixed params
         if bounds is not None:
