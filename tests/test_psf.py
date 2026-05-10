@@ -1417,13 +1417,13 @@ def test_oversample_velocity_binning(image_pars):
 
 
 class TestBinKwarg:
-    """bin kwarg on convolve_fft + convolve_flux_weighted (convention iii).
+    """bin kwarg on convolve_fft + convolve_flux_weighted.
 
     bin=True (default) preserves prior behavior: sum-bin fine→coarse on
     oversampled images, equivalent to implicit BoxPixel pixel response.
     bin=False returns fine-scale result without binning — used by cube
-    paths under convention (iii) where pixel response applies once at the
-    final 2D dispersed observable rather than per-channel on the cube.
+    paths where pixel response applies once at the final 2D dispersed
+    observable rather than per-channel on the cube intermediate.
     """
 
     def test_convolve_fft_bin_true_default_unchanged(

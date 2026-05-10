@@ -1427,7 +1427,7 @@ class InclinedExponentialModel(IntensityModel):
         Returns
         -------
         jnp.ndarray, shape (Nrow, Ncol)
-            Image in flux per pixel (post-PR-41 convention). When PSF is
+            Image in flux per pixel. When a PSF is
             configured, the returned image is PSF-convolved and pixel-
             integrated via the BoxPixel sinc multiply in k-space.
         """
@@ -1912,7 +1912,7 @@ class InclinedSpergelModel(IntensityModel):
         Returns
         -------
         jnp.ndarray, shape (Nrow, Ncol)
-            Image in flux per pixel (post-PR-41 convention).
+            Image in flux per pixel.
         """
         # validate nu when theta is concrete (not inside JIT trace)
         if not isinstance(theta, jax.core.Tracer):
@@ -2240,7 +2240,7 @@ class InclinedDeVaucouleursModel(IntensityModel):
         Returns
         -------
         jnp.ndarray, shape (Nrow, Ncol)
-            Image in flux per pixel (post-PR-41 convention).
+            Image in flux per pixel.
         """
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
@@ -2612,7 +2612,7 @@ class InclinedSersicModel(IntensityModel):
         Returns
         -------
         jnp.ndarray, shape (Nrow, Ncol)
-            Image in flux per pixel (post-PR-41 convention).
+            Image in flux per pixel.
         """
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
@@ -2919,7 +2919,7 @@ class CompositeIntensityModel(IntensityModel):
         Returns
         -------
         jnp.ndarray, shape (Nrow, Ncol)
-            Image in flux per pixel (post-PR-41 convention). Sum of
+            Image in flux per pixel. Sum of
             per-component k-space FTs is IFFTed in a single pass.
         """
         return _kspace_render_image(

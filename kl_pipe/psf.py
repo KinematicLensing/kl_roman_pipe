@@ -343,13 +343,12 @@ def convolve_fft(
 
     When psf_data.oversample > 1, the input image must be at fine-scale
     (shape == original_shape == coarse_shape * oversample). With ``bin=True``
-    (default), the result is binned down to coarse_shape by summing N×N
-    blocks (preserves total flux under the flux/pixel render convention,
-    and acts as the implicit BoxPixel pixel response on the convolved image).
-    With ``bin=False``, the fine-scale convolved image is returned without
-    binning — used by cube-rendering paths under convention (iii) where
-    pixel response is applied at the final 2D dispersed observable rather
-    than per-channel on the cube.
+    (default), the result is sum-binned to coarse_shape (preserves total
+    flux per pixel and acts as an implicit BoxPixel pixel response on the
+    convolved image). With ``bin=False``, the fine-scale convolved image
+    is returned without binning — used by cube-rendering paths where
+    pixel response is applied once at the final 2D dispersed observable
+    rather than per-channel on the cube intermediate.
 
     The ``bin=False`` mode is the discrete-image analog of
     ``pixel_response=None`` on the analytic intensity-model k-space path

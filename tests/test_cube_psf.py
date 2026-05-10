@@ -232,10 +232,17 @@ class TestRenderCubeWithPsf:
     def test_render_cube_psf_oversample_5(
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
-        """oversample=5: fine-scale rendering + binning, output at coarse shape."""
-        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
+        """oversample=5: fine-scale rendering, cube returned at fine shape.
+
+        The cube is the post-PSF, pre-pixel-response
+        intermediate. At oversample=N the cube spatial shape is fine
+        (Nrow*N, Ncol*N). Pixel response is applied once at the 2D
+        dispersed observable in render_grism.
+        """
+        N = 5
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
         cube = kl_model.render_cube(theta, obs)
-        assert cube.shape == (32, 48, cube_pars.n_lambda)
+        assert cube.shape == (32 * N, 48 * N, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
         assert float(jnp.sum(cube)) > 0
 
@@ -354,12 +361,17 @@ class TestJaxCompatibility:
     def test_render_cube_psf_jit_oversample_5(
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
-        """jax.jit through render_cube with PSF oversample=5."""
-        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
+        """jax.jit through render_cube with PSF oversample=5.
+
+        Cube returns at fine spatial shape (Nrow*N,
+        Ncol*N, Nlam) when oversample > 1.
+        """
+        N = 5
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
 
         render_jit = jax.jit(partial(kl_model.render_cube, obs_or_cube_pars=obs))
         cube = render_jit(theta)
-        assert cube.shape == (32, 48, cube_pars.n_lambda)
+        assert cube.shape == (32 * N, 48 * N, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
 
     def test_render_grism_psf_jit(
@@ -590,10 +602,24 @@ class TestDiagnostics:
     def test_cube_psf_oversample_convergence(
         self, kl_model, cube_pars, theta, gaussian_psf, output_dir
     ):
-        """Multi-row convergence grid: cube slices at N=1,3,5,7 vs N=9 reference."""
-        # render reference at N=9
-        obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=9)
-        cube_ref = np.array(kl_model.render_cube(theta, obs_ref))
+        """Multi-row convergence grid: cube slices at N=1,3,5,7 vs N=9 reference.
+
+        Cubes are at fine spatial resolution (Nrow*N,
+        Ncol*N). To compare across different N, each fine cube is sum-binned
+        to coarse detector resolution — the IFU-style observable comparison.
+        """
+        Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
+
+        def _bin_cube_to_coarse(cube_fine, N):
+            if N == 1:
+                return np.asarray(cube_fine)
+            arr = np.asarray(cube_fine)
+            return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
+
+        # render reference at N=9 and bin to coarse
+        N_ref = 9
+        obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=N_ref)
+        cube_ref = _bin_cube_to_coarse(kl_model.render_cube(theta, obs_ref), N_ref)
 
         # find peak slice for comparison
         slice_flux = np.sum(cube_ref, axis=(0, 1))
@@ -608,7 +634,7 @@ class TestDiagnostics:
 
         for N in ns:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-            cube_n = np.array(kl_model.render_cube(theta, obs_n))
+            cube_n = _bin_cube_to_coarse(kl_model.render_cube(theta, obs_n), N)
             test_slice = cube_n[:, :, peak_k]
             slices[N] = test_slice
             residuals[N] = np.max(np.abs(test_slice - ref_slice)) / peak
@@ -690,7 +716,19 @@ class TestDiagnostics:
     def test_cube_psf_radial_profiles(
         self, kl_model, cube_pars, theta, gaussian_psf, output_dir
     ):
-        """Semilogy azimuthal average of peak slice: no-PSF vs PSF oversample=1,5."""
+        """Semilogy azimuthal average of peak slice: no-PSF vs PSF oversample=1,5.
+
+        Cubes are fine-resolution post-PSF when N>1; bin
+        to coarse for radial-profile comparison on a common grid.
+        """
+        Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
+
+        def _bin_cube_to_coarse(cube_fine, N):
+            if N == 1:
+                return np.asarray(cube_fine)
+            arr = np.asarray(cube_fine)
+            return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
+
         cube_no_psf = np.array(kl_model.render_cube(theta, cube_pars))
         slice_flux = np.sum(cube_no_psf, axis=(0, 1))
         peak_k = int(np.argmax(slice_flux))
@@ -701,13 +739,13 @@ class TestDiagnostics:
         profiles = {}
         labels = {}
 
-        # no PSF
+        # no PSF (already coarse)
         profiles['no_psf'] = cube_no_psf[:, :, peak_k]
         labels['no_psf'] = 'no PSF'
 
         for N in [1, 5]:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-            cube_n = np.array(kl_model.render_cube(theta, obs_n))
+            cube_n = _bin_cube_to_coarse(kl_model.render_cube(theta, obs_n), N)
             profiles[f'N={N}'] = cube_n[:, :, peak_k]
             labels[f'N={N}'] = f'PSF N={N}'
 

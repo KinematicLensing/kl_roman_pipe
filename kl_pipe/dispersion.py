@@ -101,11 +101,11 @@ def disperse_cube(
     Uses pull-semantics map_coordinates: [Y - dy, X - dx] shifts content
     by (+dy, +dx). Fully differentiable via JAX bilinear interpolation.
 
-    Under convention (iii) the input cube may be at fine spatial
-    resolution (post-PSF, pre-pixel-response). When ``oversample > 1``,
-    the cube spatial shape is ``(Nrow * oversample, Ncol * oversample,
-    Nlambda)`` and ``grism_pars.dispersion`` is in nm per coarse detector
-    pixel; the function rescales pixel offsets by ``oversample`` so the
+    The input cube may be at fine spatial resolution (post-PSF,
+    pre-pixel-response). When ``oversample > 1``, the cube spatial shape
+    is ``(Nrow * oversample, Ncol * oversample, Nlambda)`` and
+    ``grism_pars.dispersion`` is in nm per coarse detector pixel; the
+    function rescales pixel offsets by ``oversample`` so the
     wavelength-driven shift indexes correctly into the fine grid. The
     output spatial shape matches the input cube's spatial shape (fine
     if ``oversample > 1``); the caller is responsible for applying the
