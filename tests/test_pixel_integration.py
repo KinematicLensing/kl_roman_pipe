@@ -183,6 +183,45 @@ class TestObsDefaults:
         assert obs2.pixel_response == obs.pixel_response
 
 
+class TestBaseRenderImageUnits:
+    """Pin units convention of base Model.render_image (no-PSF + oversample)."""
+
+    def test_base_no_psf_oversample_returns_flux_per_pixel(self, image_pars):
+        """Base path SB->flux/pixel conversion: total sum approximates model flux.
+
+        The path at Model.render_image (no PSF, oversample > 1) is dead in
+        production (all IntensityModel subclasses override). This pins the
+        documented flux/pixel convention so a future caller hitting the
+        base path gets correctly-scaled output.
+        """
+        from kl_pipe.model import Model
+
+        model = InclinedExponentialModel()
+        pars = {
+            'flux': 1.0,
+            'cosi': 0.95,  # near face-on so the profile fits the stamp
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'int_rscale': 0.2,
+            'int_h_over_r': 0.1,
+            'int_x0': 0.0,
+            'int_y0': 0.0,
+        }
+        theta = model.pars2theta(pars)
+        obs = build_image_obs(image_pars, oversample=5, psf=None, pixel_response=None)
+        img = Model.render_image(model, theta, obs=obs)
+        assert img.shape == image_pars.shape
+        # flux convention: sum over pixels ≈ total flux. tolerance accounts
+        # for stamp truncation of the exponential tail.
+        total = float(jnp.sum(img))
+        assert total == pytest.approx(1.0, rel=0.05), (
+            f"Base path returned total {total}; expected ~1.0 (flux/pixel "
+            f"convention). If this fails check the pixel_scale**2 conversion "
+            f"in Model.render_image."
+        )
+
+
 # ==============================================================================
 # B. Point-sampling vs pixel response
 # ==============================================================================

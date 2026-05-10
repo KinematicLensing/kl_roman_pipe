@@ -161,11 +161,15 @@ class Model(ABC):
                     from kl_pipe.psf import convolve_fft
 
                     return convolve_fft(model_map, obs.psf_data)
-                # no PSF but oversampled → bin for pixel integration
+                # no PSF but oversampled → mean-bin SB over fine cells, then
+                # multiply by coarse pixel area to convert SB-coarse → flux/pixel
+                # (sum-over-N² fine cells × fine area = mean × coarse area).
                 N = oversample
                 Nrow = obs.image_pars.Nrow
                 Ncol = obs.image_pars.Ncol
-                return model_map.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                ps = obs.image_pars.pixel_scale
+                sb_coarse = model_map.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                return sb_coarse * (ps * ps)
 
             model_map = self(theta, plane, obs.X, obs.Y, **kwargs)
 
