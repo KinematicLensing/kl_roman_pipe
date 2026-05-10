@@ -302,6 +302,61 @@ class TestDispersion:
         row_profile = np.array(result[:, 16])
         assert np.std(row_profile) > np.std(col_profile)
 
+    def test_disperse_oversample_kwarg(self):
+        """disperse_cube(oversample=N) on a fine cube reproduces the dispersion
+        of the coarse cube (after sum-binning the fine output).
+
+        Pins convention-(iii) refactor: when render_cube returns fine cubes,
+        disperse_cube must scale pixel_offsets by oversample so the
+        wavelength shifts index correctly into the fine grid. The fine 2D
+        output sum-binned to coarse must match the coarse-cube dispersion.
+        """
+        Nrow, Ncol, Nlam = 32, 32, 7
+        N = 3  # oversample factor
+        # point source at center of coarse cube, gaussian in lambda
+        cube_coarse = jnp.zeros((Nrow, Ncol, Nlam))
+        weights = jnp.array([0.05, 0.2, 0.5, 1.0, 0.5, 0.2, 0.05])
+        cube_coarse = cube_coarse.at[16, 16, :].set(weights)
+
+        # tile to fine: each coarse pixel becomes N×N fine pixels with the
+        # same total flux (so each fine pixel = coarse value / N²)
+        cube_fine = jnp.zeros((Nrow * N, Ncol * N, Nlam))
+        # place fine source: spread the coarse(16,16) flux over the N×N
+        # fine pixels covering it
+        for di in range(N):
+            for dj in range(N):
+                cube_fine = cube_fine.at[16 * N + di, 16 * N + dj, :].set(
+                    weights / N**2
+                )
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        lam = jnp.linspace(1306, 1318, Nlam)
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=1.1,
+            lambda_ref=float(lam[3]),
+            dispersion_angle=0.0,
+        )
+
+        result_coarse = disperse_cube(cube_coarse, gp, lam, oversample=1)
+        result_fine = disperse_cube(cube_fine, gp, lam, oversample=N)
+
+        # output shape: coarse=(Nrow,Ncol), fine=(Nrow*N, Ncol*N)
+        assert result_coarse.shape == (Nrow, Ncol)
+        assert result_fine.shape == (Nrow * N, Ncol * N)
+
+        # sum-bin the fine output to coarse and compare to coarse output
+        result_fine_binned = (
+            np.array(result_fine).reshape(Nrow, N, Ncol, N).sum(axis=(1, 3))
+        )
+        # bilinear interpolation of integer-shifted source from coarse
+        # vs bilinear at fine grid then sum-bin gives ~exact equality
+        # for integer pixel_offsets, slight bilinear-aliasing diff for
+        # non-integer offsets. Use a loose tolerance to permit this.
+        np.testing.assert_allclose(
+            result_fine_binned, np.array(result_coarse), rtol=0.05, atol=1e-6
+        )
+
 
 # =============================================================================
 # KLModel integration tests
