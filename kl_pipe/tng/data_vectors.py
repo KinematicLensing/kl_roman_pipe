@@ -92,7 +92,7 @@ This avoids negative cos(i) in projection math.
 
 from typing import Dict, Optional, Tuple
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
 
@@ -111,6 +111,7 @@ from .tng_dust import (
 from ..parameters import ImagePars
 from ..utils import build_map_grid_from_image_pars
 from ..noise import add_intensity_noise, add_velocity_noise
+from .filters import VALID_COMBINATIONS
 
 
 # TNG50 cosmology (Planck 2013)
@@ -245,6 +246,9 @@ class TNGRenderConfig:
     preserve_gas_stellar_offset: bool = True
     apply_cosmological_dimming: bool = False
     psf: Optional[object] = None  # galsim.GSObject for PSF convolution
+    stellar_filters: list = field(default_factory=list)
+    gas_filters: list = field(default_factory=list)
+    image_filters: list = field(default_factory=list)
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -259,6 +263,29 @@ class TNGRenderConfig:
                     f'Shear too large: |g|={gamma:.3f} >= {weak_lensing_limit}. '
                     f'Weak lensing requires |g| < {weak_lensing_limit}.'
                 )
+
+        # Validate particle filters: disk-frame filters require custom orientation
+        for f in self.stellar_filters + self.gas_filters:
+            if getattr(f, 'REQUIRES_DISK_FRAME', False) and self.use_native_orientation:
+                raise ValueError(
+                    f"Filter '{f.FILTER_NAME}' requires disk-frame coordinates "
+                    f"(REQUIRES_DISK_FRAME=True) but use_native_orientation=True. "
+                    f"Set use_native_orientation=False to use this filter."
+                )
+
+        # Validate multi-filter combinations against allowlist
+        for filter_list, list_name in [
+            (self.stellar_filters, 'stellar_filters'),
+            (self.gas_filters, 'gas_filters'),
+        ]:
+            if len(filter_list) > 1:
+                names = frozenset(f.FILTER_NAME for f in filter_list)
+                if names not in VALID_COMBINATIONS:
+                    raise ValueError(
+                        f"Filter combination {set(names)} in {list_name} is not in "
+                        f"VALID_COMBINATIONS. Add it to kl_pipe/tng/filters.py once "
+                        f"the combination has been experimentally validated."
+                    )
 
 
 class TNGDataVectorGenerator:
@@ -1460,6 +1487,91 @@ class TNGDataVectorGenerator:
 
         return result
 
+    def _apply_particle_filters(
+        self,
+        filters: list,
+        positions_disk: np.ndarray,
+        velocities_disk: np.ndarray,
+        extra_kwargs: dict,
+    ) -> np.ndarray:
+        """
+        Apply a list of ParticleFilters, return AND-combined boolean mask.
+
+        Parameters
+        ----------
+        filters : list of ParticleFilter
+        positions_disk : np.ndarray, shape (N, 3)
+            Particle positions in the face-on disk frame.
+        velocities_disk : np.ndarray, shape (N, 3)
+            Particle velocities in the face-on disk frame.
+        extra_kwargs : dict
+            Additional particle arrays keyed by generic name (masses, luminosities,
+            sfr, temperature, metallicity, hi_fraction, ...).
+
+        Returns
+        -------
+        np.ndarray, shape (N,), dtype bool
+        """
+        full_kwargs = {'positions': positions_disk, 'velocities': velocities_disk}
+        full_kwargs.update(extra_kwargs)
+
+        n = len(positions_disk)
+        combined = np.ones(n, dtype=bool)
+        for f in filters:
+            missing = f.REQUIRED_KEYS - set(full_kwargs.keys())
+            if missing:
+                raise KeyError(
+                    f"Filter '{f.FILTER_NAME}' requires keys {missing} but only "
+                    f"{set(full_kwargs.keys())} are available."
+                )
+            mask = f(**{k: full_kwargs[k] for k in f.REQUIRED_KEYS})
+            combined &= mask
+
+        if not combined.any():
+            names = [f.FILTER_NAME for f in filters]
+            raise ValueError(
+                f"Particle filters produced an empty mask (0 particles surviving). "
+                f"Filters applied: {names}"
+            )
+        return combined
+
+    def _apply_image_filters(
+        self,
+        filters: list,
+        image: np.ndarray,
+        mask_image: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """
+        Apply a list of ImageFilters to a rendered map.
+
+        Each filter returns a 2D boolean mask; masks are AND-combined and pixels
+        outside the combined mask are set to zero.
+
+        Parameters
+        ----------
+        filters : list of ImageFilter
+        image : np.ndarray, shape (Ny, Nx)
+            Map to be masked.
+        mask_image : np.ndarray, shape (Ny, Nx), optional
+            Image passed to each filter for connectivity analysis.  Defaults to
+            ``image`` itself.  Pass a separate occupancy map when ``image`` has
+            signed values (e.g. velocity maps), so that filters using a zero
+            threshold correctly identify occupied pixels rather than splitting
+            the map at v=0.
+
+        Returns
+        -------
+        np.ndarray, shape (Ny, Nx)
+        """
+        if mask_image is None:
+            mask_image = image
+        combined = np.ones(image.shape, dtype=bool)
+        for f in filters:
+            combined &= f(image=mask_image)
+        result = image.copy()
+        result[~combined] = 0.0
+        return result
+
     def generate_intensity_map(
         self,
         config: TNGRenderConfig,
@@ -1506,10 +1618,36 @@ class TNGDataVectorGenerator:
                     'pars must be provided when use_native_orientation=False'
                 )
 
-            # Undo native orientation to get face-on stellar disk
-            coords_disk, _ = self._undo_native_orientation(
-                coords_centered, np.zeros_like(coords_centered), particle_type='stellar'
+            # Subtract systemic stellar velocity (luminosity-weighted, inner 50% by radius)
+            stellar_velocities = self.stellar['Velocities'].copy()
+            radii_stellar = np.sqrt(np.sum(coords_centered ** 2, axis=1))
+            inner_mask_stellar = radii_stellar < np.percentile(radii_stellar, 50)
+            if inner_mask_stellar.sum() > 0:
+                v_sys_stellar = np.average(
+                    stellar_velocities[inner_mask_stellar],
+                    axis=0,
+                    weights=luminosities[inner_mask_stellar],
+                )
+            else:
+                v_sys_stellar = np.median(stellar_velocities, axis=0)
+            stellar_velocities -= v_sys_stellar
+
+            # Undo native orientation to get face-on stellar disk (with real velocities
+            # so kinematic particle filters have valid v_phi data)
+            coords_disk, stellar_vel_disk = self._undo_native_orientation(
+                coords_centered, stellar_velocities, particle_type='stellar'
             )
+
+            # Apply stellar particle filters in the disk frame
+            if config.stellar_filters:
+                stellar_kwargs: dict = {'luminosities': luminosities_norm}
+                if 'Masses' in self.stellar:
+                    stellar_kwargs['masses'] = self.stellar['Masses']
+                mask = self._apply_particle_filters(
+                    config.stellar_filters, coords_disk, stellar_vel_disk, stellar_kwargs
+                )
+                coords_disk = coords_disk[mask]
+                luminosities_norm = luminosities_norm[mask]
 
             # Apply new stellar orientation from pars
             coords_2d, _, _ = self._apply_new_orientation(
@@ -1574,6 +1712,10 @@ class TNGDataVectorGenerator:
 
         # Rescale back to original units
         intensity *= lum_scale
+
+        # Apply 2D image filters (before PSF so connectivity is assessed on raw grid)
+        if config.image_filters:
+            intensity = self._apply_image_filters(config.image_filters, intensity)
 
         # Apply cosmological surface brightness dimming if requested
         if config.apply_cosmological_dimming:
@@ -1698,6 +1840,24 @@ class TNGDataVectorGenerator:
                 coords_centered, velocities, particle_type=particle_type
             )
 
+            # Apply gas particle filters in the disk frame
+            if config.gas_filters:
+                gas_kwargs: dict = {'masses': self.gas['Masses']}
+                for tng_key, generic_key in [
+                    ('StarFormationRate', 'sfr'),
+                    ('Temperature', 'temperature'),
+                    ('GFM_Metallicity', 'metallicity'),
+                    ('NeutralHydrogenAbundance', 'hi_fraction'),
+                ]:
+                    if tng_key in self.gas:
+                        gas_kwargs[generic_key] = self.gas[tng_key]
+                mask = self._apply_particle_filters(
+                    config.gas_filters, coords_disk, velocities_disk, gas_kwargs
+                )
+                coords_disk = coords_disk[mask]
+                velocities_disk = velocities_disk[mask]
+                masses_norm = masses_norm[mask]
+
             # Apply requested orientation to disk
             coords_2d, vel_los, _ = self._apply_new_orientation(
                 coords_disk, velocities_disk, config.pars
@@ -1724,6 +1884,16 @@ class TNGDataVectorGenerator:
                 masses_norm,
                 config.image_pars,
                 mode='weighted_average',
+            )
+
+        # Apply 2D image filters (before PSF).
+        # Pass occupancy (velocity != 0) as the mask image so filters that
+        # threshold at zero correctly identify occupied pixels instead of
+        # splitting the map along the v=0 contour of the rotation field.
+        if config.image_filters:
+            occupancy = (velocity != 0).astype(float)
+            velocity = self._apply_image_filters(
+                config.image_filters, velocity, mask_image=occupancy
             )
 
         # Apply flux-weighted PSF convolution if requested
