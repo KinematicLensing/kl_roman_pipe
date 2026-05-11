@@ -40,7 +40,9 @@ from kl_pipe.spectral import (
 )
 from kl_pipe.dispersion import GrismPars, disperse_cube, build_grism_pars_for_line
 from kl_pipe.psf import precompute_psf_fft, convolve_fft
-from kl_pipe.observation import GrismObs, build_image_obs
+from kl_pipe.observation import GrismObs, build_image_obs, build_grism_obs
+from kl_pipe.pixel import BoxPixel
+from kl_pipe.model import _apply_post_dispersion_pixel_response
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # =============================================================================
@@ -897,3 +899,145 @@ class TestDiagnostics:
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, 'grism_residual.png'), dpi=150)
         plt.close(fig)
+
+
+# =============================================================================
+# Post-dispersion pixel response precompute equivalence (commit 3301d3a)
+# =============================================================================
+#
+# 3301d3a moved the BoxPixel sinc + fine k-grid build from inside
+# `_apply_post_dispersion_pixel_response` (rebuilt every call) to `build_grism_obs`
+# (precomputed once into `GrismObs.pixel_response_fft`). The refactor is meant
+# to be a pure speedup with bit-equivalent output for the same theta.
+#
+# This test pins that equivalence against silent unit / axis / fftshift /
+# k-grid-spacing drift in the precompute, by comparing the production path
+# against a freshly-built reference sinc at render time.
+
+
+class TestPostDispersionPixelResponsePrecompute:
+    """Pins 3301d3a: precomputed pixel_response_fft matches inline rebuild."""
+
+    @staticmethod
+    def _inline_apply_post_dispersion(dispersed, coarse_image_pars, oversample):
+        """Reference: rebuild fine k-grid + BoxPixel sinc inline, apply, sum-bin.
+
+        Mimics the pre-3301d3a path with no precompute. Any divergence from
+        ``_apply_post_dispersion_pixel_response(..., obs.pixel_response_fft, ...)``
+        means the precompute and the rebuild don't agree.
+        """
+        if oversample <= 1:
+            return dispersed
+        fine_ip = coarse_image_pars.make_fine_scale(oversample)
+        Nrow_c, Ncol_c = coarse_image_pars.Nrow, coarse_image_pars.Ncol
+        Nrow_f, Ncol_f = fine_ip.Nrow, fine_ip.Ncol
+        fine_ps = fine_ip.pixel_scale
+        coarse_ps = coarse_image_pars.pixel_scale
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        sinc_ft = BoxPixel(coarse_ps).ft(KX, KY)
+        img_fft = jnp.fft.fft2(dispersed)
+        fine_integrated = jnp.fft.ifft2(img_fft * sinc_ft).real
+        N = oversample
+        return fine_integrated.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+
+    def _build_grism_obs_via_factory(self, cube_pars, oversample):
+        """Build a GrismObs via the production factory (precomputes pixel_response_fft)."""
+        gp = build_grism_pars_for_line(
+            HALPHA.lambda_rest,
+            redshift=1.0,
+            image_pars=cube_pars.image_pars,
+            dispersion=1.1,
+        )
+        return build_grism_obs(gp, z=1.0, psf=None, oversample=oversample)
+
+    @pytest.mark.parametrize('oversample', [3, 5, 7])
+    def test_precompute_matches_inline_rebuild(self, cube_pars, oversample):
+        """For a synthetic fine dispersed image, precomputed sinc == inline sinc."""
+        obs = self._build_grism_obs_via_factory(cube_pars, oversample)
+        coarse_ip = cube_pars.image_pars
+        fine_shape = (coarse_ip.Nrow * oversample, coarse_ip.Ncol * oversample)
+
+        # synthetic fine-resolution 2D dispersed image (deterministic, non-zero)
+        rng = np.random.default_rng(0)
+        dispersed = jnp.asarray(rng.normal(size=fine_shape))
+
+        coarse_via_precompute = _apply_post_dispersion_pixel_response(
+            dispersed,
+            obs.pixel_response_fft,
+            (coarse_ip.Nrow, coarse_ip.Ncol),
+            oversample,
+        )
+        coarse_via_inline = self._inline_apply_post_dispersion(
+            dispersed, coarse_ip, oversample
+        )
+
+        # bit-exact equivalence is the goal; allow only floating-point noise
+        np.testing.assert_allclose(
+            np.asarray(coarse_via_precompute),
+            np.asarray(coarse_via_inline),
+            rtol=1e-12,
+            atol=1e-15,
+        )
+
+    def test_oversample_one_is_passthrough(self, cube_pars):
+        """At oversample=1 the function returns the input unchanged."""
+        coarse_ip = cube_pars.image_pars
+        dispersed = jnp.ones((coarse_ip.Nrow, coarse_ip.Ncol))
+        out = _apply_post_dispersion_pixel_response(
+            dispersed,
+            None,  # pixel_response_fft unused at oversample=1
+            (coarse_ip.Nrow, coarse_ip.Ncol),
+            1,
+        )
+        np.testing.assert_array_equal(np.asarray(out), np.asarray(dispersed))
+
+    def test_grid_alignment_uses_coarse_pixel_scale(self, cube_pars):
+        """Sinc must use the COARSE pixel_scale (detector), not the fine one.
+
+        A regression that grabs ``fine_ps`` for the BoxPixel arg would produce
+        a much narrower sinc, indistinguishable from passing pixel_response=None
+        in some regimes but observably different here. We pin the choice by
+        comparing the precompute against a deliberate ``BoxPixel(fine_ps)``
+        rebuild and asserting they disagree.
+        """
+        oversample = 5
+        obs = self._build_grism_obs_via_factory(cube_pars, oversample)
+        coarse_ip = cube_pars.image_pars
+        fine_ip = coarse_ip.make_fine_scale(oversample)
+        fine_shape = (coarse_ip.Nrow * oversample, coarse_ip.Ncol * oversample)
+
+        rng = np.random.default_rng(1)
+        dispersed = jnp.asarray(rng.normal(size=fine_shape))
+
+        # production path: coarse-pixel sinc (correct convention)
+        coarse_correct = _apply_post_dispersion_pixel_response(
+            dispersed,
+            obs.pixel_response_fft,
+            (coarse_ip.Nrow, coarse_ip.Ncol),
+            oversample,
+        )
+
+        # wrong convention: fine-pixel sinc (much narrower)
+        Nrow_f, Ncol_f = fine_ip.Nrow, fine_ip.Ncol
+        fine_ps = fine_ip.pixel_scale
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        wrong_sinc = BoxPixel(fine_ps).ft(KX, KY)
+        img_fft = jnp.fft.fft2(dispersed)
+        wrong_fine = jnp.fft.ifft2(img_fft * wrong_sinc).real
+        N = oversample
+        coarse_wrong = wrong_fine.reshape(coarse_ip.Nrow, N, coarse_ip.Ncol, N).sum(
+            axis=(1, 3)
+        )
+
+        # the two must disagree non-trivially — pins the convention
+        diff = np.max(np.abs(np.asarray(coarse_correct) - np.asarray(coarse_wrong)))
+        peak = np.max(np.abs(np.asarray(coarse_correct)))
+        assert diff > 1e-3 * max(peak, 1e-15), (
+            "Coarse-vs-fine BoxPixel sinc should disagree non-trivially; "
+            f"got max diff {diff:.2e} vs peak {peak:.2e}. The precompute "
+            "may be using the wrong pixel scale."
+        )

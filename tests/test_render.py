@@ -10,7 +10,8 @@ import pytest
 
 from kl_pipe.intensity import InclinedExponentialModel
 from kl_pipe.pixel import BoxPixel, PixelResponse
-from kl_pipe.render import compute_effective_maxk
+from kl_pipe.priors import LogUniform, PriorDict, Uniform
+from kl_pipe.render import RenderConfig, compute_effective_maxk
 
 
 @pytest.fixture
@@ -156,3 +157,129 @@ def test_compute_effective_maxk_handles_small_profile_maxk(model, params):
     )
     # must not exceed the model's own profile_maxk
     assert res <= 0.05 + 1e-9
+
+
+# =============================================================================
+# RenderConfig.for_priors with PSF (regression for commit eb9b8b5)
+# =============================================================================
+#
+# Isolated unit test of the worst-case sizing arithmetic. Complementary to
+# tests/test_render_config.py::TestPSFEffectiveMaxk (which uses cusp profiles
+# at face-on inclination). Here we use the smooth exponential profile so any
+# PSF-vs-no-PSF divergence comes from the PSF factor, not from a cusp.
+
+
+@pytest.fixture
+def exp_priors():
+    """Smooth, non-cusp exponential priors with moderate inclination."""
+    return PriorDict(
+        {
+            'cosi': Uniform(0.3, 0.99),
+            'theta_int': Uniform(0, np.pi),
+            'flux': LogUniform(0.01, 1000.0),
+            'int_rscale': Uniform(0.5, 2.0),
+            'int_h_over_r': 0.2,
+            'g1': 0.0,
+            'g2': 0.0,
+            'int_x0': 0.0,
+            'int_y0': 0.0,
+        }
+    )
+
+
+def test_for_priors_psf_caps_effective_maxk(model, exp_priors):
+    """RenderConfig.for_priors with PSF returns strictly tighter maxk than without."""
+    pixel_scale = 0.1
+    pixel_response = BoxPixel(pixel_scale)
+
+    rc_bare = RenderConfig.for_priors(
+        model,
+        exp_priors,
+        pixel_scale,
+        pixel_response=pixel_response,
+        psf=None,
+    )
+    rc_psf = RenderConfig.for_priors(
+        model,
+        exp_priors,
+        pixel_scale,
+        pixel_response=pixel_response,
+        psf=galsim.Gaussian(fwhm=0.2),
+    )
+
+    assert rc_psf.effective_maxk < rc_bare.effective_maxk
+    assert rc_psf.oversample <= rc_bare.oversample
+
+
+def test_for_priors_oversample_monotone_in_psf_width(model, exp_priors):
+    """Sweep PSF width: wider real-space PSF → smaller worst-case oversample.
+
+    Detects regressions in the PSF kValue handling inside compute_effective_maxk
+    that would flatten or invert this trend (e.g., dropping abs(), missing the
+    galsim.PositionD wrapping, computing kValue at fixed k).
+    """
+    pixel_scale = 0.1
+    pixel_response = BoxPixel(pixel_scale)
+    fwhms = [0.05, 0.10, 0.20, 0.40, 0.80]
+
+    oversamples = []
+    eff_maxks = []
+    for fwhm in fwhms:
+        rc = RenderConfig.for_priors(
+            model,
+            exp_priors,
+            pixel_scale,
+            pixel_response=pixel_response,
+            psf=galsim.Gaussian(fwhm=fwhm),
+        )
+        oversamples.append(rc.oversample)
+        eff_maxks.append(rc.effective_maxk)
+
+    # non-increasing in PSF width (allow plateaus from oversample rounding)
+    for a, b in zip(oversamples[:-1], oversamples[1:]):
+        assert (
+            b <= a
+        ), f"oversample(fwhm={fwhms}) = {oversamples}; expected non-increasing"
+    # effective_maxk must monotonically decrease (no rounding to hide drift)
+    for a, b in zip(eff_maxks[:-1], eff_maxks[1:]):
+        assert b < a, (
+            f"effective_maxk(fwhm={fwhms}) = "
+            f"{[f'{m:.2f}' for m in eff_maxks]}; expected strictly decreasing"
+        )
+    # widest fwhm must yield strictly smaller oversample than narrowest
+    assert oversamples[-1] < oversamples[0], (
+        f"oversample({fwhms[0]}) == oversample({fwhms[-1]}); "
+        f"PSF factor not contributing to product scan"
+    )
+
+
+def test_for_priors_tiny_psf_approaches_no_psf(model, exp_priors):
+    """In the narrow-PSF limit, with-PSF effective_maxk approaches no-PSF."""
+    pixel_scale = 0.1
+    pixel_response = BoxPixel(pixel_scale)
+
+    rc_bare = RenderConfig.for_priors(
+        model,
+        exp_priors,
+        pixel_scale,
+        pixel_response=pixel_response,
+        psf=None,
+    )
+    rc_tiny = RenderConfig.for_priors(
+        model,
+        exp_priors,
+        pixel_scale,
+        pixel_response=pixel_response,
+        psf=galsim.Gaussian(fwhm=1e-3),  # essentially a delta
+    )
+    # PSF FT of a near-delta is ~1 over the scan range → product unchanged
+    # by the PSF factor → effective_maxk matches the no-PSF case to within
+    # the scan resolution (n_scan=500 points).
+    rel_diff = (
+        abs(rc_tiny.effective_maxk - rc_bare.effective_maxk) / rc_bare.effective_maxk
+    )
+    assert rel_diff < 0.02, (
+        f"Near-delta PSF should not change effective_maxk significantly; "
+        f"got bare={rc_bare.effective_maxk:.2f}, tiny={rc_tiny.effective_maxk:.2f}, "
+        f"rel_diff={rel_diff:.3f}"
+    )

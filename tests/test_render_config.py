@@ -17,7 +17,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.intensity import (
+    InclinedDeVaucouleursModel,
+    InclinedExponentialModel,
+    InclinedSpergelModel,
+)
 from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.pixel import BoxPixel
@@ -219,3 +223,182 @@ def test_for_priors_obs_construction_works(setup, tight_priors):
     theta_test = jnp.array([0.3, 0.0, 0.0, 0.0, 12.0, 1.5, 0.2, 0.0, 0.0])
     log_prob = task.likelihood_fn(theta_test)
     assert jnp.isfinite(log_prob)
+
+
+# =============================================================================
+# PSF damping of effective maxk (regression for commit eb9b8b5)
+# =============================================================================
+#
+# eb9b8b5 fixed every production `RenderConfig.for_priors` call site to pass
+# `psf=`. The load-bearing claim: for slow-decay profiles (Spergel cusp,
+# DeVauc nu=-0.6) at high inclination, the bare-profile FT × pixel-sinc
+# product overestimates the required grid by ~3-10x; folding the PSF into
+# the scan caps the worst-case maxk before it blows up.
+#
+# These tests pin the claim numerically against silent regressions in the
+# product-scan logic in `render.py:compute_effective_maxk` (e.g., someone
+# accidentally drops the `if psf is not None` branch, or `_extract_worst_case_params`
+# stops handing back the right worst-case nu/cosi).
+
+
+class TestPSFEffectiveMaxk:
+    """Pins eb9b8b5: PSF threading caps effective_maxk for cusp profiles."""
+
+    @pytest.fixture
+    def pixel_scale(self):
+        return 0.1
+
+    @pytest.fixture
+    def devauc_priors(self):
+        """DeVauc face-on prior set (cosi safely above the cusp guard)."""
+        return PriorDict(
+            {
+                'cosi': Uniform(0.95, 0.99),
+                'theta_int': Uniform(0, np.pi),
+                'flux': LogUniform(0.01, 1000.0),
+                'int_rscale': Uniform(1.0, 2.0),
+                'int_h_over_r': 0.2,
+                'g1': 0.0,
+                'g2': 0.0,
+                'int_x0': 0.0,
+                'int_y0': 0.0,
+            }
+        )
+
+    @pytest.fixture
+    def spergel_priors(self):
+        """Spergel prior set with nu just above the cusp guard (-0.5)."""
+        return PriorDict(
+            {
+                'cosi': Uniform(0.95, 0.99),
+                'theta_int': Uniform(0, np.pi),
+                'flux': LogUniform(0.01, 1000.0),
+                'int_rscale': Uniform(1.0, 2.0),
+                'int_h_over_r': 0.2,
+                'nu': Uniform(-0.4, 0.5),
+                'g1': 0.0,
+                'g2': 0.0,
+                'int_x0': 0.0,
+                'int_y0': 0.0,
+            }
+        )
+
+    def test_devauc_psf_caps_oversample(self, pixel_scale, devauc_priors):
+        """DeVauc (nu=-0.6, k^-0.4 decay): PSF fwhm=0.2 caps oversample vs bare."""
+        model = InclinedDeVaucouleursModel()
+        psf = galsim.Gaussian(fwhm=0.2)
+        pixel_response = BoxPixel(pixel_scale)
+
+        rc_bare = RenderConfig.for_priors(
+            model,
+            devauc_priors,
+            pixel_scale,
+            pixel_response=pixel_response,
+            psf=None,
+        )
+        rc_psf = RenderConfig.for_priors(
+            model,
+            devauc_priors,
+            pixel_scale,
+            pixel_response=pixel_response,
+            psf=psf,
+        )
+
+        # PSF damping must strictly reduce both effective_maxk and oversample
+        assert rc_psf.effective_maxk < rc_bare.effective_maxk, (
+            f"PSF must cap effective_maxk: bare={rc_bare.effective_maxk:.1f}, "
+            f"psf={rc_psf.effective_maxk:.1f}"
+        )
+        assert rc_psf.oversample <= rc_bare.oversample, (
+            f"PSF must not inflate oversample: bare={rc_bare.oversample}, "
+            f"psf={rc_psf.oversample}"
+        )
+        # post-fix worst-case for DeVauc face-on with fwhm=0.2: oversample <= 7
+        # (the commit message reports the original eb9b8b5 fix dropped this
+        # from 17 to 5; we leave a small safety margin against tolerance drift)
+        assert rc_psf.oversample <= 7, (
+            f"PSF-damped oversample should be small for face-on DeVauc; got "
+            f"{rc_psf.oversample}"
+        )
+
+    def test_spergel_psf_caps_oversample(self, pixel_scale, spergel_priors):
+        """Spergel with nu in [-0.4, 0.5]: PSF damping must reduce oversample."""
+        model = InclinedSpergelModel()
+        psf = galsim.Gaussian(fwhm=0.2)
+        pixel_response = BoxPixel(pixel_scale)
+
+        rc_bare = RenderConfig.for_priors(
+            model,
+            spergel_priors,
+            pixel_scale,
+            pixel_response=pixel_response,
+            psf=None,
+        )
+        rc_psf = RenderConfig.for_priors(
+            model,
+            spergel_priors,
+            pixel_scale,
+            pixel_response=pixel_response,
+            psf=psf,
+        )
+
+        assert rc_psf.effective_maxk < rc_bare.effective_maxk
+        assert rc_psf.oversample <= rc_bare.oversample
+
+    def test_psf_only_path_consistent(self, pixel_scale, devauc_priors):
+        """Without pixel_response, PSF alone must still tighten the maxk scan.
+
+        Guards against a regression where the PSF branch is gated on
+        ``pixel_response is not None``.
+        """
+        model = InclinedDeVaucouleursModel()
+        psf = galsim.Gaussian(fwhm=0.2)
+
+        rc_bare = RenderConfig.for_priors(
+            model,
+            devauc_priors,
+            pixel_scale,
+            pixel_response=None,
+            psf=None,
+        )
+        rc_psf_only = RenderConfig.for_priors(
+            model,
+            devauc_priors,
+            pixel_scale,
+            pixel_response=None,
+            psf=psf,
+        )
+        assert rc_psf_only.effective_maxk < rc_bare.effective_maxk
+        assert rc_psf_only.oversample <= rc_bare.oversample
+
+    def test_oversample_monotone_in_psf_width(self, pixel_scale, devauc_priors):
+        """Wider PSF → more high-k damping → smaller worst-case oversample.
+
+        Monotonic decrease pins the product-scan arithmetic: a regression that
+        breaks the PSF factor (e.g., dropping ``abs(psf.kValue(...))``) would
+        often flip or flatten this trend.
+        """
+        model = InclinedDeVaucouleursModel()
+        pixel_response = BoxPixel(pixel_scale)
+        fwhms = [0.10, 0.20, 0.40]
+
+        oversamples = []
+        for fwhm in fwhms:
+            rc = RenderConfig.for_priors(
+                model,
+                devauc_priors,
+                pixel_scale,
+                pixel_response=pixel_response,
+                psf=galsim.Gaussian(fwhm=fwhm),
+            )
+            oversamples.append(rc.oversample)
+
+        # non-increasing in PSF width (allow equality for ceil/odd-rounding)
+        assert (
+            oversamples[0] >= oversamples[1] >= oversamples[2]
+        ), f"oversample(fwhm={fwhms}) = {oversamples}; expected non-increasing"
+        # strict somewhere across the 4x range
+        assert oversamples[-1] < oversamples[0], (
+            f"oversample(fwhm={fwhms[0]}) == oversample(fwhm={fwhms[-1]}); "
+            f"PSF factor probably stuck at unity"
+        )
