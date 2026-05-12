@@ -936,6 +936,7 @@ class KLModel(object):
     def render_cube(
         self,
         theta: jnp.ndarray,
+        theta_spec: jnp.ndarray,
         cube_pars,
         plane: str = 'obs',
     ) -> jnp.ndarray:
@@ -951,7 +952,7 @@ class KLModel(object):
 
         theta_vel = self.get_velocity_pars(theta)
         theta_int = self.get_intensity_pars(theta)
-        theta_spec = self.get_spectral_pars(theta)
+        #theta_spec = self.get_spectral_pars(theta) #comment out if theta_spec is argument
 
         cube = self.spectral_model.build_cube(
             theta_spec, theta_vel, theta_int, cube_pars, plane=plane
@@ -1022,137 +1023,11 @@ class KLModel(object):
             oversample=oversample,
             gsparams=gsparams,
         )
-
-    def render_fiber(
-        self,
-        theta: jnp.ndarray,
-        fiber_pars,
-        plane: str = 'obs',
-        cube_pars=None,
-        force_noise_free=True,
-        run_mode='ETC',
-    ) -> jnp.ndarray:
-
-        if self.spectral_model is None:
-            raise ValueError("No spectral model configured")
-
-        # if cube_pars is None: #I don't think I have actually tried this out
-        ## convenience path: auto-build from z (not JIT-compatible)
-        # theta_spec = self.get_spectral_pars(theta)
-        # z = float(self.spectral_model.get_param('z', theta_spec))
-        # cube_pars = fiber_pars.to_cube_pars(z) #yeah this is not a thing yet
-
-        cube = self.render_cube(theta, cube_pars, plane=plane)  # theoretical cube
-        # intensity model
-        intensity_model = self.intensity_model
-
-        return self.fiber_observe_cube(cube, fiber_pars, force_noise_free, run_mode)
-
-    def fiber_observe_cube(
-        self, cube, fiber_pars, force_noise_free=True, run_mode='ETC'
-    ):
-        # if photometry image...wip
-        if not fiber_pars.is_dispersed:
-            from kl_pipe.psf import precompute_psf_fft, convolve_fft
-
-            self.ATMPSF_conv_fiber_mask = None
-            self.resolution_mat = None
-            psfdata = self._fiber_psf_data
-            # galsim_psf = self._build_PSF_model_fiber(fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff)
-            # self.intensity_model.configure_psf(galsim_psf, image_pars = fiber_pars.cube_pars.image_pars, image_shape= (fiber_pars.obs_conf.NAXIS1,fiber_pars.obs_conf.NAXIS2), pixel_scale=fiber_pars.obs_conf['PIXSCALE'], oversample=1)
-            if run_mode == 'ETC':
-                # psf_convolved_int = self.intensity_model.render_image(theta=theta_int, image_pars = fiberpars_instance.cube_pars.image_pars, plane='obs', oversample =1)
-                cube_bp = cube * jnp.array(fiber_pars._bp_array)
-                raw_img = jnp.sum(cube_bp, axis=2) * fiber_pars.dlambda
-                print(fiber_pars.dlambda)
-                # if self._fiber_psf_data.oversample == 1:
-                # highres_img = raw_img
-                # elif self._fiber_psf_data.oversample > 1: #might not be correct
-                # highres_img = jnp.repeat(
-                # jnp.repeat(raw_img, self._fiber_psf_data.oversample, axis=0),
-                # self._fiber_psf_data.oversample,
-                # axis=1,
-                # )
-                factor = (
-                    jnp.pi
-                    * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
-                    * fiber_pars.obs_conf['EXPTIME']
-                    / fiber_pars.obs_conf['GAIN']
-                )
-
-                img = factor * convolve_fft(
-                    raw_img, psfdata
-                )  # downsampling baked into convolve_fft
-
-            # add SNR mode too
-
-            if force_noise_free:
-                return img, None
-
-            else:
-                print('photometry noise implementation WIP')
-                # noise_type = fiber_pars.obs_conf['NOISETYP']
-                # if noise_type == 'ccd':
-                # read_noise = fiber_pars.obs_conf['RDNOISE'] #electrons/pixel probably
-                # gain = fiber_pars.obs_conf['GAIN'] #electrons/ADU
-                # exp_time = fiber_pars.obs_conf['EXPTIME']
-                # sky_level = fiber_pars.obs_conf['SKYLEVEL']*exp_time/gain #what are the units of this? ADU/pixel? ADU/pixel/second? if /second then I should multiply by exposure time. #divide sky level by gain to get electrons/pixel
-                # noise_std = ((sky_level+img)+read_noise**2)**0.5
-                # key = jax.random.key(0)
-                # noise = (jax.random.normal(key, shape=(img.shape[0],img.shape[1])) * noise_std)
-                # print('noise', noise)
-                # print('shape', jnp.shape(noise))
-                # img_withNoise = img.copy()
-                # img_withNoise += noise
-                # noise_img = img_withNoise - img
-                # assert (img_withNoise.array is not None), "Null data"
-                # assert (img.array is not None), "Null data"
-                # if fiber_pars.obs_conf['ADDNOISE']:
-                # return img_withNoise.array, noise_img.array
-                # else:
-                # return img.array, noise_img.array
-                return img, None
-
-        # if fiber 1D spectrum
-        else:
-            # see notes in kl-tools for why it can be done this way
-            self.wave = fiber_pars.lambda_grid
-            spec_1D = jnp.sum(
-                (self.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
-                axis=jnp.array([0, 1]),
-            )
-            if (
-                run_mode == 'ETC'
-            ):  # "exposure time calculator" -- unit of spectrum = counts in detector.
-                spec_1D = spec_1D * fiber_pars._bp_array
-                factor = (
-                    jnp.pi
-                    * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
-                    * fiber_pars.obs_conf['EXPTIME']
-                    / fiber_pars.obs_conf['GAIN']
-                )  # units cm^2 * seconds * ADU/electron
-                spec_1D = spec_1D * factor
-
-            # fiber PSF can result in degrade in spectra resolution
-            if self.resolution_mat is not None:
-                spec_1D = jnp.dot(self.resolution_mat, spec_1D)
-            if force_noise_free:
-                return spec_1D, None
-            else:
-                if (
-                    run_mode == 'ETC'
-                ):  # noise computed from sky level; realistic sky level from kitt peak for example
-                    # poisson noise is included too
-                    # dark current is ignored; readout noise not ignored
-
-<<<<<<< Updated upstream
-=======
-            cube = self.render_cube(theta, cube_pars, plane=plane)
-            return disperse_cube(cube, gp, cube_pars.lambda_grid)
         
     def render_fiber(
         self,
         theta: jnp.ndarray,
+        theta_spec: jnp.ndarray,
         #fiber_pars,
         obs,
         plane: str = 'obs',
@@ -1172,7 +1047,8 @@ class KLModel(object):
 
         fiber_pars=obs.fiber_pars
         cube_pars=fiber_pars.cube_pars
-        cube = self.render_cube(theta, cube_pars, plane=plane)  # theoretical cube
+        cube = self.render_cube(theta, theta_spec, cube_pars, plane=plane)  # theoretical cube
+        #cube = self.render_cube(theta, cube_pars, plane=plane)
 
         return self.fiber_observe_cube(cube, fiber_pars, obs, force_noise_free, run_mode)
 
@@ -1268,7 +1144,7 @@ class KLModel(object):
             # fiber PSF can result in degrade in spectra resolution
             if obs.resolution_matrix is not None: #self.resolution_mat
                 spec_1D = jnp.dot(obs.resolution_matrix, spec_1D)
-                print(spec_1D)
+                #print(spec_1D)
             if force_noise_free:
                 return spec_1D, None
             else: #work in progress
@@ -1277,18 +1153,12 @@ class KLModel(object):
                 ):  # noise computed from sky level; realistic sky level from kitt peak for example
                     # poisson noise is included too
                     # dark current is ignored; readout noise not ignored
-
->>>>>>> Stashed changes
                     # should precompute skysb, definitely don't repeat every likelihood eval
                     skysb = galsim.LookupTable.from_file(
                         fiber_pars.obs_conf["SKYMODEL"], f_log=True
                     )  # Ang v.s. 1e-17 erg s-1 cm-2 A-1 arcsec-2
                     fiber_area = jnp.pi * (fiber_pars.obs_conf["FIBERRAD"]) ** 2
-<<<<<<< Updated upstream
-                    _wave = self.wave * 10  # Angstrom
-=======
                     _wave = wave * 10  # Angstrom
->>>>>>> Stashed changes
                     _dwave = _wave[1] - _wave[0]  # Angstrom
                     _hnu = 1986445857.148928 / _wave  # 1e-17 erg
                     skyct = skysb(_wave) * fiber_area * _dwave / _hnu  # s-1 cm-2
@@ -1320,160 +1190,6 @@ class KLModel(object):
                     return spec_1D + noise, noise
                 else:
                     return spec_1D, noise
-
-<<<<<<< Updated upstream
-    def get_fiber_mask(self, fiber_pars):
-        from photutils.geometry import (
-            circular_overlap_grid as cog,
-        )  # is it alright for me to still use this?
-
-        mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
-        mscale = fiber_pars.pix_scale
-        if fiber_pars.is_dispersed:
-            fiber_cen = [
-                fiber_pars.obs_conf['FIBERDX'],
-                fiber_pars.obs_conf['FIBERDY'],
-            ]  # dx, dy in arcsec
-            fiber_rad = fiber_pars.obs_conf['FIBERRAD']  # radius in arcsec
-            xmin, xmax = -mNx / 2 * mscale, mNx / 2 * mscale
-            ymin, ymax = -mNy / 2 * mscale, mNy / 2 * mscale
-            mask = cog(
-                xmin - fiber_cen[0],
-                xmax - fiber_cen[0],
-                ymin - fiber_cen[1],
-                ymax - fiber_cen[1],
-                mNx,
-                mNy,
-                fiber_rad,
-                1,
-                2,
-            )
-        else:
-            mask = jnp.ones([mNy, mNx])
-        return mask
-
-    def configure_fiber_psf(
-        self,
-        gsobj,
-        cube_pars,
-        oversample: int = 1,  # oversampling not really necessary unless you don't have an analytical PSF
-        gsparams=None,
-    ):
-        """Pre-compute PSF FFT at the cube's spatial grid.
-
-        Uses existing precompute_psf_fft() from psf.py.
-        Stores _grism_psf_data for use by render_cube.
-        """
-        from kl_pipe.psf import precompute_psf_fft
-
-        self._fiber_psf_data = precompute_psf_fft(
-            gsobj,
-            image_pars=cube_pars.image_pars,
-            oversample=oversample,
-            gsparams=gsparams,
-        )
-        # return self._fiber_psf_data  # grism version doesn't return anything here btw
-
-    def precompute_PSF_convolved_fiber_mask(
-        self, fiber_pars
-    ):  # precompute fiber mask and make it a jax array
-        '''get atm-PSF convolved fiber mask'''
-        mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
-        mscale = fiber_pars.pix_scale
-
-        galsim_psf = self._build_PSF_model_fiber(
-            fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff
-        )
-
-        mask = galsim.InterpolatedImage(
-            galsim.Image(array=self.get_fiber_mask(fiber_pars)), scale=mscale
-        )
-
-        # convolve fiber mask with atmospheric PSF
-        maskC = mask if galsim_psf is None else galsim.Convolve([mask, galsim_psf])
-        ary = maskC.drawImage(nx=mNx, ny=mNy, scale=mscale).array
-
-        # replace galsim convolution?
-        # fiber_psf_data = self.configure_fiber_psf(galsim_psf, fiber_pars.cube_pars)
-        # if self._fiber_psf_data is not None:
-        # from kl_pipe.psf import convolve_fft
-        # oversample = self._fiber_psf_data.oversample
-        # maskC = convolve_fft(self.get_fiber_mask(fiber_pars), self._fiber_psf_data) #mask needs to be 5x bigger in size if oversampling = 5
-        ##maskC = convolve_fft(self.get_fiber_mask(fiber_pars), fiber_psf_data)
-        # else:
-        # maskC = self.get_fiber_mask(fiber_pars)
-        # print('maskC', maskC)
-        # ary=maskC
-
-        self.ATMPSF_conv_fiber_mask = jnp.array(ary)
-
-    def _build_PSF_model_fiber(self, config, **kwargs):  # should check all this stuff
-        '''Generate Galsim PSF model
-
-        Inputs:
-        =======
-        kwargs: keyword arguments for building psf model
-            - lam: wavelength in nm
-            - scale: pixel scale
-
-        Outputs:
-        ========
-        psf_model: GalSim PSF object
-
-        '''
-        _type = config.get('PSFTYPE', 'none').lower()
-        if _type != 'none':
-            if _type == 'airy':
-                lam = kwargs.get('lam', 1000)  # nm
-                scale_unit = kwargs.get('scale_unit', galsim.arcsec)
-                return galsim.Airy(
-                    lam=lam, diam=config['DIAMETER'] / 100, scale_unit=scale_unit
-                )
-            elif _type == 'airy_mean':
-                scale_unit = kwargs.get('scale_unit', galsim.arcsec)
-                # return galsim.Airy(config['psf_fwhm']/1.028993969962188,
-                #               scale_unit=scale_unit)
-                lam = kwargs.get("lam_mean", 1000)  # nm
-                return galsim.Airy(
-                    lam=lam, diam=config['DIAMETER'] / 100, scale_unit=scale_unit
-                )
-            elif _type == 'airy_fwhm':
-                loverd = config['PSFFWHM'] / 1.028993969962188
-                scale_unit = kwargs.get('scale_unit', galsim.arcsec)
-                return galsim.Airy(lam_over_diam=loverd, scale_unit=scale_unit)
-            elif _type == 'moffat':
-                beta = config.get('PSFBETA', 2.5)
-                fwhm = config.get('PSFFWHM', 0.5)
-                return galsim.Moffat(beta=beta, fwhm=fwhm)
-            else:
-                raise ValueError(f'{_type} has not been implemented yet!')
-        else:
-            return None
-
-    def get_resolution_matrix_fiber(self, fiber_pars):
-        from scipy.sparse import dia_matrix
-
-        if fiber_pars.is_dispersed:
-            diameter_in_pixel = fiber_pars.obs_conf['FIBRBLUR']
-            sigma = diameter_in_pixel / 4.0
-            x_in_pixel = jnp.arange(-5, 6)
-            # assume Gaussian for now
-            kernel = jnp.exp(-0.5 * (x_in_pixel / sigma) ** 2) / (
-                (2 * jnp.pi) ** 0.5 * sigma
-            )
-            # get the resolution matrix (sparse matrix)
-            band = jnp.array([kernel]).repeat(fiber_pars.n_lambda, axis=0).T
-            offset = jnp.arange(kernel.shape[0] // 2, -(kernel.shape[0] // 2) - 1, -1)
-            Rmat = dia_matrix(
-                (band, offset), shape=(fiber_pars.n_lambda, fiber_pars.n_lambda)
-            )
-        else:
-            Rmat = None
-        self.resolution_mat = jnp.array(
-            Rmat.toarray()
-        )  # need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
-=======
->>>>>>> Stashed changes
 
     def evaluate_velocity(
         self,

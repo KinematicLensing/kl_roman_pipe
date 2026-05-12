@@ -595,3 +595,53 @@ class InferenceTask:
             mask={'velocity': mask_vel, 'intensity': mask_int},
             meta_pars=meta_pars or {},
         )
+    
+    #idk if this will work
+    @classmethod
+    def from_joint_model_fiber(
+        cls,
+        model: 'KLModel',
+        priors: 'PriorDict',
+        theta_spec: jnp.ndarray,
+        obs_list: list,
+        meta_pars: Optional[Dict] = None,
+        mask_vel: Optional[jnp.ndarray] = None,
+        mask_int: Optional[jnp.ndarray] = None,
+    ) -> 'InferenceTask':
+
+        #if psf_vel is not None or psf_int is not None: #need to figure out what this is anyways
+            #model.configure_joint_psf(
+                #psf_vel=psf_vel,
+                #psf_int=psf_int,
+                #image_pars_vel=image_pars_vel,
+                #image_pars_int=image_pars_int,
+                #freeze=True,
+                #gsparams=psf_gsparams,
+            #)
+
+        #missing = []
+        #if not model.velocity_model.has_psf:
+            #missing.append('velocity')
+        #if not model.intensity_model.has_psf:
+            #missing.append('intensity')
+        #if missing:
+            #channels = ' and '.join(missing)
+            #warnings.warn(
+                #f"\nNo PSF configured for {channels} channel(s) — model will be unconvolved. Intentional?\n",
+                #NoPSFWarning,
+                #stacklevel=2,
+            #)
+
+        from kl_pipe.likelihood import create_jitted_likelihood_fiber
+
+        likelihood_fn = create_jitted_likelihood_fiber(theta_spec = theta_spec, obs_list=obs_list, kl_model=model)
+        
+        return cls(
+            model=model,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={'velocity0': obs_list[0].data, 'velocity1': obs_list[1].data, 'velocity2': obs_list[2].data, 'velocity3': obs_list[3].data, 'velocity4': obs_list[4].data, 'intensity': obs_list[5].data}, #for now
+            variance={'velocity0': obs_list[0].variance, 'velocity1': obs_list[1].variance, 'velocity2': obs_list[2].variance, 'velocity3': obs_list[3].variance, 'velocity4': obs_list[4].variance, 'intensity': obs_list[5].variance},
+            mask={'velocity0': mask_vel, 'velocity1': mask_vel, 'velocity2': mask_vel, 'velocity3': mask_vel, 'velocity4': mask_vel, 'intensity': mask_int},
+            meta_pars=meta_pars or {},
+        )

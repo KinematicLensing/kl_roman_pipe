@@ -110,6 +110,8 @@ class NautilusSampler(Sampler):
                 if prior_class == 'Uniform':
                     # Simple linear transform for uniform
                     theta[i] = low + u[i] * (high - low)
+                    #theta[i] = u[i] #TEMPORARY
+                    #print('AAAAAAH')
 
                 elif prior_class == 'LogUniform':
                     # Log-uniform: sample uniformly in log space

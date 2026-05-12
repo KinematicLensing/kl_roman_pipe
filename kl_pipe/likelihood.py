@@ -54,19 +54,11 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from kl_pipe.model import VelocityModel, IntensityModel, KLModel
-<<<<<<< Updated upstream
-    from kl_pipe.parameters import ImagePars
 
-    #    from kl_pipe.spectral import FiberPars
-
-from kl_pipe.spectral import FiberPars
-
+from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import build_map_grid_from_image_pars
-=======
-    from kl_pipe.observation import ImageObs, VelocityObs, FiberObs
-
+from kl_pipe.observation import ImageObs, VelocityObs, FiberObs
 from kl_pipe.spectral import FiberPars
->>>>>>> Stashed changes
 
 
 def _log_likelihood_velocity_only(
@@ -299,160 +291,35 @@ def _log_likelihood_separate_images(
     # independent observations: joint likelihood is sum of log-likelihoods
     return log_prob_vel + log_prob_int
 
-#class FiberLikelihood:
-    # make init?
-
 def _log_likelihood_fiber(
     theta: jnp.ndarray,
-    #datavector: list,  # contains both spectra and photometric images?
-    #noisevector: list,  # would be better to have noise contained within datavector, but whatever this is fine. I should make a FiberObs class
-    # X_vel: jnp.ndarray,
-    # Y_vel: jnp.ndarray,
-    # image_pars_int: 'ImagePars', #Image parameters for intensity map (shape, pixel_scale).
-    #fiber_pars_list: list,
-    obs_list: list, #FiberObs, #actually, make this a list of Fiberobs or something
-    #cubepars_vel: jnp.ndarray,
-    #cubepars_int: jnp.ndarray,
-    #obs_conf_list: list,  # is this ok
+    theta_spec: jnp.ndarray,
+    obs_list: list, #list of Fiberobs
     kl_model: KLModel,
-    # mask_vel: jnp.ndarray = None, #not gonna worry about these yet
-    # mask_int: jnp.ndarray = None,
 ) -> float:
 
-    # take a combined KL model instance and extract the spectrum or photometry
-    # the model itself is not parameter-dependent; the rendering of course is
-    # make fiberpars from obs config and cube pars
-    # make cube pars from image pars?
-    # each separate datavector likelihood is added; see kl-tools
-    #img_list = []  # this might not be jax-compatible like this
     loglike = 0
 
     n_obs = len(obs_list)
     for i in range(n_obs):
-        #data = datavector[i]
-        #noise = noisevector[i]
         obs = obs_list[i]
-
-        #for now I'll just directly feed fiberpars
-        #fiber_pars = fiber_pars_list[i]
-        #_cube_pars = obs.fiber_pars.cube_pars
 
         data = obs.data
         variance = obs.variance
 
-        #print(dir(fiber_pars))
-        #print(dir(kl_model))
-
-        ## you know what I'll just take cubepars as input for now idk
-        #is_dispersed = (obs_conf_list[i])['OBSTYPE'] == 1
-        #if not is_dispersed:  # photometric image
-            #_cubepars = cubepars_int  # you can have different model dimension from fiber spectrum
-            ##fiberpars = FiberPars.from_cube_pars(_cubepars, obs_conf_list[i])
-            #fiberpars = FiberPars(_cubepars, obs_conf_list[i])
-        #else:  # fiber spectrum
-            #_cubepars = cubepars_vel
-            ##fiberpars = FiberPars.from_cube_pars(_cubepars, obs_conf_list[i])
-            #fiberpars = FiberPars(_cubepars, obs_conf_list[i])
-
-        # kl_model = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS) already takes kl_model as input. this thing has also already been given the spectral model?
-        # and these things already done as well:
-        # kl_model.precompute_PSF_convolved_fiber_mask(fiberpars)
-        # kl_model.get_resolution_matrix_fiber(fiberpars)
-
-        #print(theta, fiberpars, _cubepars)
         img_and_noise = kl_model.render_fiber(
             theta=theta,
-            #fiber_pars=fiber_pars,
+            theta_spec = theta_spec,
             obs=obs,
             plane='obs',
-            #cube_pars=_cube_pars,
             force_noise_free=True,
         )  # spectrum or photometric image from model
         img = img_and_noise[0]
-        #img_list.append(img)
 
-        #print('data', data)
-        #print('noise', noise)
-        #print('img', img)
-
-        chi2 = jnp.sum(((data - img) / variance) ** 2)
+        chi2 = jnp.sum((data - img)**2 / variance)
         loglike += -0.5 * chi2
 
     return loglike
-
-# i hope it's ok for me to make a class. for now I'm gonna throw everything into one function though anyways
-class FiberLikelihood:
-    # make init?
-
-    def _log_likelihood_fiber(
-        theta: jnp.ndarray,
-        # data_fiber: jnp.ndarray,
-        # data_photo: jnp.ndarray,
-        datavector: jnp.ndarray,  # contains both spectra and photometric images?
-        noisevector: jnp.ndarray,  # would be better to have noise contained within datavector, but whatever this is fine. I should make a FiberObs class
-        # X_vel: jnp.ndarray,
-        # Y_vel: jnp.ndarray,
-        # image_pars_int: 'ImagePars', #Image parameters for intensity map (shape, pixel_scale).
-        cubepars_vel: jnp.ndarray,
-        cubepars_int: jnp.ndarray,
-        obs_conf_list: list,  # is this ok
-        kl_model: KLModel,
-        # mask_vel: jnp.ndarray = None, #not gonna worry about these yet
-        # mask_int: jnp.ndarray = None,
-    ) -> float:
-
-        # take a combined KL model instance and extract the spectrum or photometry
-        # the model itself is not parameter-dependent; the rendering of course is
-        # make fiberpars from obs config and cube pars
-        # make cube pars from image pars?
-        # each separate datavector likelihood is added; see kl-tools
-        n_obs = len(datavector)
-        img_list = []  # this might not be jax-compatible like this
-        loglike = 0
-        for i in range(n_obs):
-            data = datavector[i]
-            noise = noisevector[i]
-
-            # you know what I'll just take cubepars as input for now idk
-            is_dispersed = (obs_conf_list[i])['OBSTYPE'] == 1
-            if not is_dispersed:  # photometric image
-                _cubepars = cubepars_int  # you can have different model dimension from fiber spectrum
-                fiberpars = FiberPars.from_cube_pars(_cubepars, obs_conf_list[i])
-            else:  # fiber spectrum
-                _cubepars = cubepars_vel
-                fiberpars = FiberPars.from_cube_pars(_cubepars, obs_conf_list[i])
-
-            # kl_model = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS) already takes kl_model as input. this thing has also already been given the spectral model?
-            # and these things already done as well:
-            # kl_model.precompute_PSF_convolved_fiber_mask(fiberpars)
-            # kl_model.get_resolution_matrix_fiber(fiberpars)
-
-            img, img_noise = kl_model.render_fiber(
-                theta=theta,
-                fiber_pars=fiberpars,
-                plane='obs',
-                cube_pars=_cubepars,
-                force_noise_free=True,
-            )  # spectrum or photometric image from model
-            img_list.append(img)
-
-            print('data', data)
-            print('noise', noise)
-            print('img', img)
-
-            chi2 = jnp.sum(((data - img) / noise) ** 2)
-            loglike += -0.5 * chi2
-
-        return loglike
-
-    # def get_fiber_data(self, theta, force_noise_free=True, return_noise=False):
-    #''' Get simulated images and data given parameter values
-    #'''
-
-    # def _setup_model(self, theta_pars, datavector):
-    # make the intensity and velocity models, given some input theta
-    # build KLModel here?
-    # fiber_pars = self.FiberPars
 
 
 # ==============================================================================
@@ -766,47 +633,9 @@ def create_jitted_likelihood_joint(
         )
     )
 
-<<<<<<< Updated upstream
 
-# NOTE: OLD!!!
-# TODO: Remove when ready
-# This was the first implementation for simple JAX testing; now replaced by above
-# should be removed when ready
-# def log_likelihood(
-#     theta: jnp.ndarray, kl_model: KLModel, datavector: jnp.ndarray, meta_pars: dict
-# ) -> float:
-#     """
-#     Compute log-likelihood for kinematic lensing model.
-
-#     Parameters
-#     ----------
-#     theta : jnp.ndarray
-#         Composite parameter array.
-#     kl_model : KLModel
-#         Combined velocity and intensity model.
-#     datavector : jnp.ndarray
-#         Observed data vector.
-#     meta_pars : dict
-#         Fixed metadata including coordinate grids.
-
-#     Returns
-#     -------
-#     float
-#         Log-likelihood value.
-#     """
-
-#     velocity_map, intensity_map = kl_model(
-#         theta, plane='obs', X=meta_pars['X'], Y=meta_pars['Y']
-#     )
-
-#     model_prediction = velocity_map * intensity_map
-
-#     residuals = datavector - model_prediction
-#     chi2 = jnp.sum(residuals**2)
-
-#     return -0.5 * chi2
-=======
 def create_jitted_likelihood_fiber(
+    theta_spec: jnp.ndarray,
     kl_model: 'KLModel',
     obs_list: list, 
 ) -> Callable[[jnp.ndarray], float]:
@@ -821,8 +650,9 @@ def create_jitted_likelihood_fiber(
     return jax.jit(
         partial(
             _log_likelihood_fiber,
+            theta_spec = theta_spec,
             obs_list=obs_list,
             kl_model=kl_model,
         )
     )
->>>>>>> Stashed changes
+
