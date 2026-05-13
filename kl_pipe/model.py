@@ -384,7 +384,15 @@ class VelocityModel(Model):
                     )
                     return convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
 
-                # no PSF but oversampled → bin for pixel integration
+                # no PSF but oversampled → bin for pixel integration.
+                # Unweighted mean is a documented approximation for the
+                # velocity-only setup (no flux source on obs); it is
+                # physically correct only when fine intensity is uniform
+                # within each coarse pixel. Real-data production uses the
+                # PSF branch above with convolve_flux_weighted, which
+                # applies proper sum(I*V)/sum(I) flux weighting. See
+                # follow-up issue for the velocity-only oversample-no-PSF
+                # path discussion.
                 N = oversample
                 Nrow = obs.image_pars.Nrow
                 Ncol = obs.image_pars.Ncol
