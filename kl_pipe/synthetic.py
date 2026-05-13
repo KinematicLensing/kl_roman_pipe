@@ -1066,7 +1066,7 @@ class SyntheticIntensity:
         image_pars: ImagePars,
         snr: float,
         seed: Optional[int] = None,
-        include_poisson: bool = True,
+        include_poisson: bool = False,
         sersic_backend: str = 'scipy',
         oversample: int = 1,
     ) -> np.ndarray:
@@ -1082,7 +1082,11 @@ class SyntheticIntensity:
         seed : int, optional
             Random seed for noise generation. If None, uses self.seed.
         include_poisson : bool, optional
-            Whether to include Poisson (shot) noise. Default is True.
+            Whether to include Poisson (shot) noise. Default is False:
+            ``add_intensity_noise`` raises when Poisson alone overshoots the
+            matched-filter target (true for most realistic Roman stamps with
+            ``flux=1``, ``gain=1``). Set explicitly to ``True`` only when
+            Poisson is sub-dominant for the chosen ``target_snr``.
         sersic_backend : str, optional
             Backend for Sersic profile generation ('scipy' or 'galsim'). Default is
             'scipy'.

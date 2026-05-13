@@ -52,7 +52,7 @@ from typing import Optional, Tuple
 def add_intensity_noise(
     intensity: np.ndarray,
     target_snr: float,
-    include_poisson: bool = True,
+    include_poisson: bool = False,
     gain: float = 1.0,
     seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -65,9 +65,13 @@ def add_intensity_noise(
         ``include_poisson=True``.
     target_snr : float
         Matched-filter amplitude SNR (see module docstring).
-    include_poisson : bool, default True
+    include_poisson : bool, default False
         Add Poisson shot noise. Raises ``ValueError`` on any negative
-        input pixel.
+        input pixel. Raises ``ValueError`` if Poisson alone would
+        overshoot the matched-filter target (see Notes); use
+        ``include_poisson=False`` or lower ``target_snr`` in that case.
+        Default flipped to ``False`` because the matched-filter SNR
+        contract is only honestly satisfiable when Poisson is sub-dominant.
     gain : float, default 1.0
         Detector gain converting intensity units to photon counts:
         ``counts = intensity * gain``. Per-pixel Poisson variance in
@@ -80,6 +84,18 @@ def add_intensity_noise(
     noisy_image : ndarray
     variance : ndarray
         Per-pixel variance map, same shape as ``intensity``.
+
+    Notes
+    -----
+    ``include_poisson=True`` enforces a hard consistency check: the mean
+    per-pixel Poisson variance, ``mean(intensity / gain)``, must not
+    exceed the matched-filter target variance, ``(||intensity||_2 /
+    target_snr)**2``. If it does, Poisson noise alone delivers a lower
+    effective SNR than ``target_snr`` and the labeled SNR cannot be
+    honored. The function raises ``ValueError`` rather than silently
+    clipping the Gaussian contribution to zero (the prior behavior). See
+    issue #24 for the consolidation work tracking the broader sim/inference
+    variance-model alignment.
     """
     if gain <= 0:
         raise ValueError(f"gain must be positive, got {gain}")
@@ -112,7 +128,23 @@ def add_intensity_noise(
     # Matched-filter target: pick uniform Gaussian sigma so that the
     # uniform-equivalent per-pixel variance matches (||I||_2 / SNR)^2.
     target_pixel_var = (norm_l2 / target_snr) ** 2
-    gauss_var = max(0.0, target_pixel_var - float(poisson_var_per_pixel.mean()))
+    poisson_var_mean = float(poisson_var_per_pixel.mean())
+
+    if include_poisson and poisson_var_mean > target_pixel_var:
+        # Poisson alone overshoots the matched-filter target. The previous
+        # silent max(0.0, ...) clamp hid this and let labeled SNRs run at
+        # effective SNRs orders of magnitude lower. See issue #24.
+        effective_snr = norm_l2 / np.sqrt(poisson_var_mean)
+        raise ValueError(
+            f"include_poisson=True is inconsistent with target_snr="
+            f"{target_snr:g}: mean Poisson variance "
+            f"({poisson_var_mean:.3g}) exceeds matched-filter target "
+            f"({target_pixel_var:.3g}). Effective SNR with Poisson alone "
+            f"would be {effective_snr:.3g}. Lower target_snr or set "
+            f"include_poisson=False."
+        )
+
+    gauss_var = target_pixel_var - poisson_var_mean
 
     if gauss_var > 0:
         sigma_g = float(np.sqrt(gauss_var))
