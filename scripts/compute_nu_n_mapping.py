@@ -61,6 +61,12 @@ def prerender_sersic_grid(n, cosi_values, hlr=2.0, npix=128, ps=0.11):
     Uses scale_height (physical h_z, arcsec) to avoid GalSim reinterpreting
     scale_h_over_r as h_z/scale_radius (which would scale h_z by b_n^n
     relative to half_light_radius).
+
+    Uses method='auto' (GalSim's default — applies pixel convolution via
+    its internal Pixel(scale)) so the GalSim reference matches kl_pipe's
+    BoxPixel(pixel_scale) sinc applied in InclinedSpergelModel.render_image.
+    Using method='no_pixel' here biased _NU_TABLE_INCLINED (~few-% to ~10%
+    for n>=2); see PR #43 / Copilot 2026-05-12 review.
     """
     gsp = gs.GSParams(
         folding_threshold=1e-3, maxk_threshold=1e-3, maximum_fft_size=65536
@@ -77,8 +83,10 @@ def prerender_sersic_grid(n, cosi_values, hlr=2.0, npix=128, ps=0.11):
             flux=1.0,
             gsparams=gsp,
         )
-        im = se.drawImage(nx=npix, ny=npix, scale=ps, method='no_pixel')
-        # GalSim and InclinedSpergelModel both produce flux/pixel
+        im = se.drawImage(nx=npix, ny=npix, scale=ps, method='auto')
+        # GalSim 'auto' applies square Pixel(scale) convolution matching
+        # kl_pipe's BoxPixel(ps) sinc. Both sides now produce flux/pixel
+        # with consistent pixel-response convention.
         images[cosi] = im.array
     return images
 
