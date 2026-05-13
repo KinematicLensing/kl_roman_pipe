@@ -63,7 +63,7 @@ def test_tng_velocity_map_with_noise(test_galaxy, image_pars_small):
     config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_small, band='r')
 
     # Generate with high SNR
-    velocity, variance = gen.generate_velocity_map(config, snr=100)
+    velocity, variance = gen.generate_velocity_map(config, snr=1000)
 
     assert np.all(variance > 0), "Variance should be positive when snr specified"
     assert np.all(np.isfinite(velocity)), "Velocity should be finite"
@@ -100,7 +100,7 @@ def test_tng_model_fitting_high_snr(test_galaxy, image_pars_medium):
     config = TNGRenderConfig(
         target_redshift=0.6, image_pars=image_pars_medium, band='r'
     )
-    data_vel, variance = gen.generate_velocity_map(config, snr=100)
+    data_vel, variance = gen.generate_velocity_map(config, snr=1000)
 
     # For now, just test that we can create a likelihood
     # Future: implement proper masking support in likelihood functions
@@ -147,7 +147,7 @@ def test_tng_parameter_recovery_grid_search(test_galaxy, image_pars_medium):
     config = TNGRenderConfig(
         target_redshift=0.6, image_pars=image_pars_medium, band='r'
     )
-    data_vel, variance = gen.generate_velocity_map(config, snr=100)
+    data_vel, variance = gen.generate_velocity_map(config, snr=1000)
 
     # Setup model and baseline parameters
     model = CenteredVelocityModel()

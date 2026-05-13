@@ -493,16 +493,12 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
             "Install astro-geko with grism support or fix the error above."
         )
 
-    # --- convert to kl_pipe conventions before saving ---
-    # geko renders in pixel coords (pix^-2); kl_pipe uses arcsec^-2.
-    # Convention: all .npz outputs use kl_pipe units:
-    #   imap: arcsec^-2 (surface brightness)
+    # --- save in kl_pipe-native units ---
+    # geko renders in flux/pixel, matching kl_pipe's convention. No conversion.
+    #   imap: flux/pixel (same in both codes)
     #   vmap: km/s (same in both codes)
     #   grism: TBD — may need similar conversion; diagnosed via comparison
     #   cube: TBD — diagnostic only
-    imap_arcsec = imap / pixel_scale**2
-
-    # --- save ---
     outdir.mkdir(parents=True, exist_ok=True)
     outpath = outdir / f'{test_name}.npz'
     np.savez(
@@ -510,7 +506,7 @@ def render_test(test_name: str, config: dict, outdir: Path) -> None:
         cube=np.asarray(cube),
         grism=np.asarray(grism),
         vmap=np.asarray(vmap),
-        imap=np.asarray(imap_arcsec),
+        imap=np.asarray(imap),
         lambda_grid=np.asarray(lambda_grid),
     )
     print(f"  saved {outpath}")

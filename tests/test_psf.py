@@ -58,6 +58,11 @@ def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
     convolves with drawImage PSF, then crops center and bins to coarse.
     Eliminates boundary flux difference; residual is purely the sinc gap
     between drawKImage (fused) and drawImage (this path).
+
+    Profile is rendered with ``pixel_response=None`` (point-sampled) because
+    GalSim's drawImage PSF kernel intrinsically includes pixel integration
+    (method='auto'). Applying our BoxPixel sinc on top would double-integrate.
+    This is a deliberate design choice for THIS helper, not a generic default.
     """
     N = oversample
     pad_factor = model._kspace_pad_factor
@@ -72,9 +77,10 @@ def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
     while pad_sq % 2 != fine_parity:
         pad_sq = next_fast_len(pad_sq + 1)
 
-    # render source at padded extent (no PSF path)
+    # render source at padded extent without pixel_response sinc
+    # (drawImage PSF below handles pixel integration; avoid double).
     ip_pad = ImagePars(shape=(pad_sq, pad_sq), pixel_scale=fine_ps, indexing='ij')
-    raw_padded = model.render_image(theta, ip_pad, oversample=1)
+    raw_padded = model.render_image(theta, ip_pad, oversample=1, pixel_response=None)
 
     # convolve with drawImage PSF on padded grid
     pdata = precompute_psf_fft(psf_obj, ip_pad, oversample=1)
@@ -87,7 +93,7 @@ def _render_manual_padded(model, psf_obj, theta, ip, oversample=5):
 
     # bin to coarse
     if N > 1:
-        return conv_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
+        return conv_fine.reshape(ip.Nrow, N, ip.Ncol, N).sum(axis=(1, 3))
     return conv_fine
 
 
@@ -325,15 +331,19 @@ def test_gaussian_convolution_theorem(oversample_image_pars, output_dir):
     X_fine, Y_fine = build_map_grid_from_image_pars(
         fine_ip, unit='arcsec', centered=True
     )
-    # fine-scale source in surface-brightness convention (N^2 scaling)
-    source_fine = _gaussian_2d(X_fine, Y_fine, sigma_source) * (N_os * N_os)
+    # fine-scale source. Under the flux/pixel render convention, convolve_fft
+    # sums fine pixels back to coarse pixels (preserves total flux). The
+    # _gaussian_2d helper normalizes sum=1, so source_fine and analytic_jax_fine
+    # are used directly without an explicit N^2 scaling — sum-binning recovers
+    # total flux=1 at the coarse grid.
+    source_fine = _gaussian_2d(X_fine, Y_fine, sigma_source)
     pdata = precompute_psf_fft(gspsf, oversample_image_pars, oversample=N_os)
     conv_jax = np.array(convolve_fft(jnp.array(source_fine), pdata))
 
     # binned analytic reference for JAX — accounts for pixel-averaging from
     # PSF kernel integration and fine→coarse binning (adds h²/12 to variance)
-    analytic_jax_fine = _gaussian_2d(X_fine, Y_fine, sigma_out) * (N_os * N_os)
-    analytic_jax = analytic_jax_fine.reshape(nrow, N_os, ncol, N_os).mean(axis=(1, 3))
+    analytic_jax_fine = _gaussian_2d(X_fine, Y_fine, sigma_out)
+    analytic_jax = analytic_jax_fine.reshape(nrow, N_os, ncol, N_os).sum(axis=(1, 3))
 
     # --- measurements ---
     def _measure_sigma(image, X, Y):
@@ -806,24 +816,25 @@ def test_fused_kspace_psf_implementation(output_dir):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     model = InclinedExponentialModel()
-    obs = build_image_obs(ip, psf=psf_obj, int_model=model)
+    obs = build_image_obs(ip, psf=psf_obj, int_model=model, pixel_response=None)
     N = obs.oversample
     kernel = obs.kspace_psf_fft
 
     # fused path
     img_fused = np.array(model.render_image(theta, obs=obs))
 
-    # manual path with same kernel
-    img_manual_fine = np.array(
+    # manual path with same kernel: post-Commit 5 wrap engages whenever
+    # oversample > 1, so call with COARSE grid + oversample=N (no post-bin)
+    img_manual = np.array(
         model._render_kspace(
             theta,
-            ip.Nrow * N,
-            ip.Ncol * N,
-            ip.pixel_scale / N,
+            ip.Nrow,
+            ip.Ncol,
+            ip.pixel_scale,
+            oversample=N,
             psf_kernel_fft=kernel,
         )
     )
-    img_manual = img_manual_fine.reshape(ip.Nrow, N, ip.Ncol, N).mean(axis=(1, 3))
 
     peak = np.max(np.abs(img_fused))
     max_rel_resid = np.max(np.abs(img_fused - img_manual)) / peak
@@ -872,11 +883,13 @@ def test_kspace_vs_realspace_psf_agreement(output_dir):
 
     model = InclinedExponentialModel()
 
-    # k-space fused path (drawKImage PSF)
+    # k-space fused path (drawKImage PSF + default BoxPixel sinc).
+    # drawKImage PSF does NOT include pixel integration; sinc applies it.
     obs = build_image_obs(ip, psf=psf_obj, int_model=model)
     img_kspace = np.array(model.render_image(theta, obs=obs))
 
-    # real-space path on padded extent (drawImage PSF)
+    # real-space path on padded extent (drawImage PSF intrinsically pixel-
+    # integrates; helper renders profile point-sampled to avoid double).
     img_realspace = _render_manual_padded(
         model, psf_obj, theta, ip, oversample=obs.oversample
     )
@@ -961,7 +974,7 @@ def test_no_psf_regression(image_pars):
     model = InclinedExponentialModel()
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
-    rendered = model.render_image(theta, image_pars, oversample=1)
+    rendered = model.render_image(theta, image_pars, oversample=1, pixel_response=None)
     raw = model._render_kspace(
         theta, image_pars.Nrow, image_pars.Ncol, image_pars.pixel_scale
     )
@@ -985,11 +998,12 @@ def test_psf_render_image_consistency(gaussian_psf):
     model = InclinedExponentialModel()
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
-    # fused k-space path (drawKImage PSF, default oversample)
+    # fused k-space path (drawKImage PSF + default BoxPixel sinc).
     obs = build_image_obs(ip, psf=gaussian_psf, int_model=model)
     rendered = model.render_image(theta, obs=obs)
 
-    # real-space path on padded extent (drawImage PSF)
+    # real-space path on padded extent (drawImage PSF intrinsically pixel-
+    # integrates; helper renders profile point-sampled to avoid double).
     manual = _render_manual_padded(
         model, gaussian_psf, theta, ip, oversample=obs.oversample
     )
@@ -1066,8 +1080,8 @@ def test_oversample_convergence(oversample_image_pars, output_dir):
         img_source = sersic.drawImage(
             nx=fine_nx, ny=fine_ny, scale=fine_ip.pixel_scale, method='no_pixel'
         ).array
-        # scale from GalSim flux/pixel to surface-brightness convention
-        img_source = img_source * (N * N)
+        # GalSim drawImage returns flux/pixel; convolve_fft sum-bins fine→coarse
+        # preserving total flux. No scaling needed under flux/pixel convention.
 
         pdata = precompute_psf_fft(
             psf_obj, image_pars=oversample_image_pars, oversample=N
@@ -1206,8 +1220,8 @@ def test_galsim_regression_oversampled(
     img_source = sersic.drawImage(
         nx=fine_ip.Ncol, ny=fine_ip.Nrow, scale=fine_ip.pixel_scale, method='no_pixel'
     ).array
-    # scale from GalSim flux/pixel to surface-brightness convention
-    img_source = img_source * (N * N)
+    # GalSim drawImage returns flux/pixel; convolve_fft sum-bins fine→coarse,
+    # preserving total flux. No scaling needed under flux/pixel convention.
 
     pdata = precompute_psf_fft(
         psf_obj,
@@ -1289,12 +1303,12 @@ def test_galsim_regression_oversampled_rigorous(
     conv_gs = gs.Convolve(sersic, psf_tight)
     img_gs = conv_gs.drawImage(nx=nx, ny=ny, scale=pixel_scale).array
 
-    # oversampled JAX path — tight kernel GSParams
+    # oversampled JAX path — tight kernel GSParams. GalSim drawImage returns
+    # flux/pixel; convolve_fft sum-bins fine→coarse preserving total flux.
     fine_ip = oversample_image_pars.make_fine_scale(N)
     img_source = sersic.drawImage(
         nx=fine_ip.Ncol, ny=fine_ip.Nrow, scale=fine_ip.pixel_scale, method='no_pixel'
     ).array
-    img_source = img_source * (N * N)
 
     pdata = precompute_psf_fft(
         psf_obj,
@@ -1352,14 +1366,17 @@ def test_oversample_flux_conservation(image_pars, compact_test_image):
     psf_obj = gs.Gaussian(fwhm=0.625)
 
     for N in [1, 3, 5]:
-        # tile to fine scale — same SB value per subpixel
-        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1)
+        # split coarse-pixel flux equally across N² fine pixels (flux/pixel
+        # convention: tiling a value of v means each fine pixel gets v/N²)
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
 
         pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
         result = np.array(convolve_fft(jnp.array(fine_image), pdata))
 
-        # mean-bin preserves avg pixel value:
-        #   sum(fine)=N^2*sum(compact), conv preserves sum, mean-bin divides by N^2
+        # sum-bin preserves total flux: sum(fine)=sum(compact), conv preserves
+        # sum, sum-bin recovers the same total at coarse scale
         np.testing.assert_allclose(
             np.sum(result),
             np.sum(compact_test_image),
@@ -1397,6 +1414,104 @@ def test_oversample_velocity_binning(image_pars):
         atol=1e-6,
         err_msg="Constant velocity not preserved through oversampled flux-weighted PSF",
     )
+
+
+class TestBinKwarg:
+    """bin kwarg on convolve_fft + convolve_flux_weighted.
+
+    bin=True (default) preserves prior behavior: sum-bin fine→coarse on
+    oversampled images, equivalent to implicit BoxPixel pixel response.
+    bin=False returns fine-scale result without binning — used by cube
+    paths where pixel response applies once at the final 2D dispersed
+    observable rather than per-channel on the cube intermediate.
+    """
+
+    def test_convolve_fft_bin_true_default_unchanged(
+        self, image_pars, compact_test_image
+    ):
+        """bin=True (default) reproduces prior coarse-shape behavior."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+
+        result_default = convolve_fft(jnp.array(fine_image), pdata)
+        result_bin_true = convolve_fft(jnp.array(fine_image), pdata, bin=True)
+
+        # default = bin=True. allclose with atol instead of array_equal:
+        # XLA can pick different reduction orderings across JIT cache
+        # states when the suite runs sequentially, producing bit-level
+        # drift at ~machine epsilon. atol covers near-zero FFT-roundoff
+        # cells where rtol is meaningless; rtol still enforces real-signal
+        # agreement.
+        assert result_default.shape == pdata.coarse_shape
+        np.testing.assert_allclose(
+            np.array(result_default),
+            np.array(result_bin_true),
+            rtol=1e-12,
+            atol=1e-15,
+        )
+
+    def test_convolve_fft_bin_false_returns_fine_shape(
+        self, image_pars, compact_test_image
+    ):
+        """bin=False returns fine-scale shape (no implicit pixel integration)."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+
+        result_fine = convolve_fft(jnp.array(fine_image), pdata, bin=False)
+        assert result_fine.shape == pdata.original_shape
+
+    def test_convolve_fft_bin_true_equivalent_to_manual_binning(
+        self, image_pars, compact_test_image
+    ):
+        """bin=True equals bin=False + manual sum-bin to coarse (equivalent ops)."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        fine_image = np.repeat(np.repeat(compact_test_image, N, axis=0), N, axis=1) / (
+            N * N
+        )
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+
+        result_binned = np.array(convolve_fft(jnp.array(fine_image), pdata, bin=True))
+        result_fine = np.array(convolve_fft(jnp.array(fine_image), pdata, bin=False))
+        Nrow_c, Ncol_c = pdata.coarse_shape
+        manual_binned = result_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+
+        # atol covers near-zero FFT-roundoff cells where rtol is meaningless;
+        # rtol enforces real-signal agreement.
+        np.testing.assert_allclose(result_binned, manual_binned, rtol=1e-12, atol=1e-15)
+
+    def test_convolve_fft_oversample_1_bin_kwarg_noop(self, test_image, psf_data):
+        """At oversample=1, bin kwarg has no effect (nothing to bin)."""
+        result_true = np.array(convolve_fft(jnp.array(test_image), psf_data, bin=True))
+        result_false = np.array(
+            convolve_fft(jnp.array(test_image), psf_data, bin=False)
+        )
+        np.testing.assert_array_equal(result_true, result_false)
+
+    def test_convolve_flux_weighted_bin_false_returns_fine_shape(self, image_pars):
+        """convolve_flux_weighted bin=False returns fine-shape ratio."""
+        psf_obj = gs.Gaussian(fwhm=0.625)
+        N = 3
+        X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
+        intensity = np.exp(-np.sqrt(X**2 + Y**2) / 3.0)
+        velocity = np.full_like(intensity, 42.0)
+        fine_intensity = np.repeat(np.repeat(intensity, N, axis=0), N, axis=1) / (N * N)
+        fine_velocity = np.repeat(np.repeat(velocity, N, axis=0), N, axis=1)
+
+        pdata = precompute_psf_fft(psf_obj, image_pars=image_pars, oversample=N)
+        result = convolve_flux_weighted(
+            jnp.array(fine_velocity), jnp.array(fine_intensity), pdata, bin=False
+        )
+
+        assert result.shape == pdata.original_shape
 
 
 if __name__ == "__main__":

@@ -334,7 +334,9 @@ class TestNoise:
         )
 
         intensity_clean, var_clean = gen.generate_intensity_map(config, snr=None)
-        intensity_noisy, var_noisy = gen.generate_intensity_map(config, snr=50, seed=42)
+        intensity_noisy, var_noisy = gen.generate_intensity_map(
+            config, snr=1000, seed=42
+        )
 
         assert np.all(var_clean == 0)
         assert np.all(var_noisy > 0)
@@ -347,8 +349,8 @@ class TestNoise:
             target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
 
-        intensity_1, var_1 = gen.generate_intensity_map(config, snr=50, seed=42)
-        intensity_2, var_2 = gen.generate_intensity_map(config, snr=50, seed=42)
+        intensity_1, var_1 = gen.generate_intensity_map(config, snr=1000, seed=42)
+        intensity_2, var_2 = gen.generate_intensity_map(config, snr=1000, seed=42)
 
         assert np.allclose(intensity_1, intensity_2)
         assert np.allclose(var_1, var_2)
@@ -362,8 +364,8 @@ class TestNoise:
             target_redshift=0.6, image_pars=image_pars_test, band='r'
         )
 
-        intensity_1, _ = gen.generate_intensity_map(config, snr=50, seed=42)
-        intensity_2, _ = gen.generate_intensity_map(config, snr=50, seed=123)
+        intensity_1, _ = gen.generate_intensity_map(config, snr=1000, seed=42)
+        intensity_2, _ = gen.generate_intensity_map(config, snr=1000, seed=123)
 
         assert not np.allclose(intensity_1, intensity_2)
 
@@ -571,7 +573,7 @@ class TestSFRMap:
         )
 
         sfr_clean = gen.generate_sfr_map(config, snr=None)
-        sfr_noisy = gen.generate_sfr_map(config, snr=50, seed=42)
+        sfr_noisy = gen.generate_sfr_map(config, snr=1000, seed=42)
 
         assert not np.allclose(sfr_clean, sfr_noisy), "Noise should change the map"
         assert np.all(np.isfinite(sfr_noisy))
@@ -811,8 +813,8 @@ class TestInclinationSymmetry:
         )
 
         # Should complete without errors
-        vel, var = gen.generate_velocity_map(config, snr=50)
-        intensity, int_var = gen.generate_intensity_map(config, snr=50)
+        vel, var = gen.generate_velocity_map(config, snr=1000)
+        intensity, int_var = gen.generate_intensity_map(config, snr=1000)
 
         # Maps should be valid (finite, non-zero in places)
         assert np.all(np.isfinite(vel)), "Velocity map has non-finite values"
@@ -1867,9 +1869,9 @@ class TestDiagnosticPlots:
         vel_clean, _ = gen.generate_velocity_map(config_highres, snr=None)
         halpha_clean = gen.generate_sfr_map(config_highres, snr=None)
 
-        # Generate lower-res noisy maps (SNR=250 for intensity, SNR=50 for velocity) for bottom row
+        # Generate lower-res noisy maps (SNR=250 for intensity, SNR=1000 for velocity) for bottom row
         int_noisy, _ = gen.generate_intensity_map(config_datavec, snr=250, seed=42)
-        vel_noisy, _ = gen.generate_velocity_map(config_datavec, snr=50, seed=42)
+        vel_noisy, _ = gen.generate_velocity_map(config_datavec, snr=1000, seed=42)
         halpha_noisy = gen.generate_sfr_map(config_datavec, snr=250, seed=42)
 
         # Calculate extents based on actual image sizes

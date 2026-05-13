@@ -16,6 +16,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Callable, Union, Tuple, Any, TYPE_CHECKING
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 
@@ -24,11 +25,55 @@ class NoPSFWarning(UserWarning):
     """Inference task created without PSF — model will be unconvolved."""
 
 
+class GridAdequacyWarning(UserWarning):
+    """FFT grid may be too small for the model + prior combination."""
+
+
 if TYPE_CHECKING:
     from kl_pipe.model import Model, VelocityModel, IntensityModel, KLModel
     from kl_pipe.parameters import ImagePars
     from kl_pipe.priors import PriorDict
     from kl_pipe.observation import ImageObs, VelocityObs
+
+
+def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
+    """Raise if priors imply a more demanding grid than what obs was built for.
+
+    Bug B / Issue #42 prevention: under (b3) architecture obs holds the
+    rendering recipe (render_config), and InferenceTask must not silently
+    recompute a different one. If priors imply a tighter rc than the obs
+    was sized for, the PSF FFT shape will mismatch the wrap-path expectation
+    -- raise loudly with the fix instructions instead of crashing in the
+    middle of a JIT trace.
+
+    Threads the obs's PSF into the worst-case scan so slow-decay profiles
+    (DeVauc, Spergel cusp) don't over-estimate the required grid. Without
+    the PSF, the product scan terminates only when ``profile_FT * pixel_FT``
+    drops below threshold — which for steep-Sersic profiles is far beyond
+    where the Gaussian-like PSF would damp it.
+    """
+    from kl_pipe.render import RenderConfig
+
+    try:
+        priors_rc = RenderConfig.for_priors(
+            model,
+            priors,
+            obs.image_pars.pixel_scale,
+            pixel_response=obs.pixel_response,
+            psf=getattr(obs, 'psf', None),
+        )
+    except (KeyError, NotImplementedError, AttributeError):
+        return  # priors-based sizing not applicable for this model
+
+    if priors_rc.oversample > obs_rc.oversample:
+        raise ValueError(
+            f"Priors imply oversample={priors_rc.oversample} but obs was built "
+            f"with oversample={obs_rc.oversample}. Rebuild obs with explicit "
+            f"render_config:\n"
+            f"    rc = RenderConfig.for_priors(model, priors, pixel_scale, "
+            f"pixel_response=..., psf=...)\n"
+            f"    obs = build_image_obs(image_pars, ..., render_config=rc)"
+        )
 
 
 @dataclass
@@ -325,6 +370,49 @@ class InferenceTask:
         return self.priors.sample(rng_key, n_samples)
 
     # =========================================================================
+    # Grid adequacy validation
+    # =========================================================================
+
+    @staticmethod
+    def _validate_grid_adequacy(model, priors, obs, psf=None):
+        """Warn if the obs FFT grid is likely inadequate for the model + priors.
+
+        Computes worst-case maxk from priors and compares to the obs grid's
+        effective Nyquist. Issues a GridAdequacyWarning if the grid is too
+        small. Does not raise — the rendering will still work, just with
+        potential aliasing.
+        """
+        try:
+            from kl_pipe.render import RenderConfig
+
+            pixel_scale = obs.image_pars.pixel_scale
+            pixel_response = getattr(obs, 'pixel_response', None)
+
+            rc = RenderConfig.for_priors(
+                model,
+                priors,
+                pixel_scale,
+                pixel_response=pixel_response,
+                psf=psf,
+            )
+
+            # current effective Nyquist including oversample
+            k_nyquist = np.pi / pixel_scale
+            current_nyq = obs.oversample * k_nyquist
+            if rc.effective_maxk > current_nyq * 1.1:  # 10% margin
+                warnings.warn(
+                    f"\nFFT grid may be inadequate for worst-case priors: "
+                    f"effective_maxk={rc.effective_maxk:.1f} rad/arcsec > "
+                    f"grid Nyquist={current_nyq:.1f} rad/arcsec "
+                    f"(oversample={obs.oversample}). "
+                    f"Recommended oversample={rc.oversample}.\n",
+                    GridAdequacyWarning,
+                    stacklevel=3,
+                )
+        except (NotImplementedError, KeyError, TypeError):
+            pass  # model doesn't support maxk/stepk; skip validation
+
+    # =========================================================================
     # Factory Methods
     # =========================================================================
 
@@ -406,11 +494,30 @@ class InferenceTask:
                 stacklevel=2,
             )
 
+        # model-specific prior validation (e.g. Spergel cusp regime).
+        # Runs before grid-fit checks so misconfigured priors fail loudly
+        # without first triggering an unmanageable FFT grid computation.
+        model.check_priors_safe(priors)
+
+        # rc is canonical on obs (built by build_image_obs); do NOT recompute.
+        # Validate that priors fit within the obs's pre-built grid so a stale
+        # default obs doesn't silently mismatch with tighter priors.
+        from kl_pipe.render import RenderConfig
+
+        rc_int = obs.render_config
+        if rc_int is None:
+            rc_int = (
+                RenderConfig()
+            )  # legacy obs without rc; should not happen in new code
+        _check_priors_fit_obs_rc(model, priors, obs, rc_int)
+
         from kl_pipe.likelihood import create_jitted_likelihood_intensity
 
-        likelihood_fn = create_jitted_likelihood_intensity(model, obs)
+        likelihood_fn = create_jitted_likelihood_intensity(
+            model, obs, render_config=rc_int
+        )
 
-        return cls(
+        task = cls(
             model=model,
             likelihood_fn=likelihood_fn,
             priors=priors,
@@ -419,6 +526,8 @@ class InferenceTask:
             mask={'intensity': obs.mask},
             meta_pars=meta_pars or {},
         )
+        task._render_configs = {'intensity': rc_int}
+        return task
 
     @classmethod
     def from_joint_obs(
@@ -463,11 +572,36 @@ class InferenceTask:
                 stacklevel=2,
             )
 
+        # rc is canonical on each obs; do NOT recompute. Validate that priors
+        # fit within the obs's pre-built grid (loud failure on drift).
+        from kl_pipe.render import RenderConfig
+
+        int_model = model.intensity_model if hasattr(model, 'intensity_model') else None
+        rc_int = obs_int.render_config
+        if rc_int is None:
+            rc_int = RenderConfig()
+        if int_model is not None:
+            # model-specific prior validation BEFORE grid-fit (fail fast on
+            # misconfigured priors so we don't first trigger an unmanageable
+            # FFT grid computation in for_priors)
+            int_model.check_priors_safe(priors)
+            _check_priors_fit_obs_rc(int_model, priors, obs_int, rc_int)
+
+        rc_vel = obs_vel.render_config
+        if rc_vel is None:
+            rc_vel = RenderConfig(oversample=obs_vel.oversample)
+
         from kl_pipe.likelihood import create_jitted_likelihood_joint
 
-        likelihood_fn = create_jitted_likelihood_joint(model, obs_vel, obs_int)
+        likelihood_fn = create_jitted_likelihood_joint(
+            model,
+            obs_vel,
+            obs_int,
+            render_config_int=rc_int,
+            render_config_vel=rc_vel,
+        )
 
-        return cls(
+        task = cls(
             model=model,
             likelihood_fn=likelihood_fn,
             priors=priors,
@@ -476,6 +610,8 @@ class InferenceTask:
             mask={'velocity': obs_vel.mask, 'intensity': obs_int.mask},
             meta_pars=meta_pars or {},
         )
+        task._render_configs = {'velocity': rc_vel, 'intensity': rc_int}
+        return task
 
     # =========================================================================
     # Legacy Factory Methods (delegate to new ones)
@@ -607,6 +743,22 @@ class InferenceTask:
             Configured task ready for sampling.
         """
         from kl_pipe.observation import build_image_obs
+        from kl_pipe.pixel import BoxPixel
+        from kl_pipe.render import RenderConfig
+
+        # legacy convenience API builds obs internally; thread priors-derived
+        # rc so default oversample=5 doesn't undersize the grid for tight
+        # priors (would later trigger the loud-failure check in from_intensity_obs)
+        try:
+            rc = RenderConfig.for_priors(
+                model,
+                priors,
+                image_pars.pixel_scale,
+                pixel_response=BoxPixel(image_pars.pixel_scale),
+                psf=psf,
+            )
+        except (KeyError, NotImplementedError, AttributeError):
+            rc = None  # fall through to default in build_image_obs
 
         obs = build_image_obs(
             image_pars,
@@ -616,6 +768,7 @@ class InferenceTask:
             variance=variance_int,
             mask=mask_int,
             int_model=model if psf is not None else None,
+            render_config=rc,
         )
 
         return cls.from_intensity_obs(model, priors, obs, meta_pars=meta_pars)
@@ -680,6 +833,22 @@ class InferenceTask:
             Configured task ready for sampling.
         """
         from kl_pipe.observation import build_joint_obs
+        from kl_pipe.pixel import BoxPixel
+        from kl_pipe.render import RenderConfig
+
+        # legacy convenience API builds obs internally; thread priors-derived
+        # rc so default oversample=5 doesn't undersize the grid for tight
+        # priors (would later trigger the loud-failure check in from_joint_obs)
+        try:
+            rc_int = RenderConfig.for_priors(
+                model.intensity_model,
+                priors,
+                image_pars_int.pixel_scale,
+                pixel_response=BoxPixel(image_pars_int.pixel_scale),
+                psf=psf_int,
+            )
+        except (KeyError, NotImplementedError, AttributeError):
+            rc_int = None  # fall through to default in build_joint_obs
 
         obs_vel, obs_int = build_joint_obs(
             image_pars_vel,
@@ -694,6 +863,7 @@ class InferenceTask:
             data_int=data_int,
             variance_int=variance_int,
             mask_int=mask_int,
+            render_config_int=rc_int,
         )
 
         return cls.from_joint_obs(model, priors, obs_vel, obs_int, meta_pars=meta_pars)

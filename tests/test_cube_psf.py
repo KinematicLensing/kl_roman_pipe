@@ -40,7 +40,9 @@ from kl_pipe.spectral import (
 )
 from kl_pipe.dispersion import GrismPars, disperse_cube, build_grism_pars_for_line
 from kl_pipe.psf import precompute_psf_fft, convolve_fft
-from kl_pipe.observation import GrismObs, build_image_obs
+from kl_pipe.observation import GrismObs, build_image_obs, build_grism_obs
+from kl_pipe.pixel import BoxPixel
+from kl_pipe.model import _apply_post_dispersion_pixel_response
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # =============================================================================
@@ -48,6 +50,19 @@ from kl_pipe.utils import build_map_grid_from_image_pars
 # =============================================================================
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), 'out', 'cube_psf')
+
+
+def _bin_cube_to_coarse(cube_fine, Nrow_c, Ncol_c, N):
+    """Sum-bin a fine 3D cube (Nrow_c*N, Ncol_c*N, Nlam) to coarse spatial grid.
+
+    Pass-through for N == 1.
+    """
+    if N == 1:
+        return np.asarray(cube_fine)
+    arr = np.asarray(cube_fine)
+    return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
+
+
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # =============================================================================
@@ -232,10 +247,17 @@ class TestRenderCubeWithPsf:
     def test_render_cube_psf_oversample_5(
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
-        """oversample=5: fine-scale rendering + binning, output at coarse shape."""
-        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
+        """oversample=5: fine-scale rendering, cube returned at fine shape.
+
+        The cube is the post-PSF, pre-pixel-response
+        intermediate. At oversample=N the cube spatial shape is fine
+        (Nrow*N, Ncol*N). Pixel response is applied once at the 2D
+        dispersed observable in render_grism.
+        """
+        N = 5
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
         cube = kl_model.render_cube(theta, obs)
-        assert cube.shape == (32, 48, cube_pars.n_lambda)
+        assert cube.shape == (32 * N, 48 * N, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
         assert float(jnp.sum(cube)) > 0
 
@@ -354,12 +376,17 @@ class TestJaxCompatibility:
     def test_render_cube_psf_jit_oversample_5(
         self, kl_model, cube_pars, theta, gaussian_psf
     ):
-        """jax.jit through render_cube with PSF oversample=5."""
-        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=5)
+        """jax.jit through render_cube with PSF oversample=5.
+
+        Cube returns at fine spatial shape (Nrow*N,
+        Ncol*N, Nlam) when oversample > 1.
+        """
+        N = 5
+        obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
 
         render_jit = jax.jit(partial(kl_model.render_cube, obs_or_cube_pars=obs))
         cube = render_jit(theta)
-        assert cube.shape == (32, 48, cube_pars.n_lambda)
+        assert cube.shape == (32 * N, 48 * N, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
 
     def test_render_grism_psf_jit(
@@ -419,8 +446,12 @@ class TestGalSimRegression:
         fine_ip = _IMAGE_PARS.make_fine_scale(N)
         pdata = precompute_psf_fft(gaussian_psf, image_pars=_IMAGE_PARS, oversample=N)
 
-        # upsample intrinsic slice to fine scale via nearest-neighbor repeat
-        fine_slice = np.repeat(np.repeat(intrinsic_slice, N, axis=0), N, axis=1)
+        # upsample intrinsic slice to fine scale via nearest-neighbor repeat;
+        # divide by N² to split each coarse pixel's flux equally across N² fine
+        # pixels (flux/pixel convention). convolve_fft sum-bins back to coarse.
+        fine_slice = np.repeat(np.repeat(intrinsic_slice, N, axis=0), N, axis=1) / (
+            N * N
+        )
         jax_result = np.array(convolve_fft(jnp.array(fine_slice), pdata))
 
         # GalSim ground truth: FFT convolve at native resolution
@@ -586,10 +617,20 @@ class TestDiagnostics:
     def test_cube_psf_oversample_convergence(
         self, kl_model, cube_pars, theta, gaussian_psf, output_dir
     ):
-        """Multi-row convergence grid: cube slices at N=1,3,5,7 vs N=9 reference."""
-        # render reference at N=9
-        obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=9)
-        cube_ref = np.array(kl_model.render_cube(theta, obs_ref))
+        """Multi-row convergence grid: cube slices at N=1,3,5,7 vs N=9 reference.
+
+        Cubes are at fine spatial resolution (Nrow*N,
+        Ncol*N). To compare across different N, each fine cube is sum-binned
+        to coarse detector resolution — the IFU-style observable comparison.
+        """
+        Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
+
+        # render reference at N=9 and bin to coarse
+        N_ref = 9
+        obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=N_ref)
+        cube_ref = _bin_cube_to_coarse(
+            kl_model.render_cube(theta, obs_ref), Nrow_c, Ncol_c, N_ref
+        )
 
         # find peak slice for comparison
         slice_flux = np.sum(cube_ref, axis=(0, 1))
@@ -604,7 +645,9 @@ class TestDiagnostics:
 
         for N in ns:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-            cube_n = np.array(kl_model.render_cube(theta, obs_n))
+            cube_n = _bin_cube_to_coarse(
+                kl_model.render_cube(theta, obs_n), Nrow_c, Ncol_c, N
+            )
             test_slice = cube_n[:, :, peak_k]
             slices[N] = test_slice
             residuals[N] = np.max(np.abs(test_slice - ref_slice)) / peak
@@ -686,7 +729,13 @@ class TestDiagnostics:
     def test_cube_psf_radial_profiles(
         self, kl_model, cube_pars, theta, gaussian_psf, output_dir
     ):
-        """Semilogy azimuthal average of peak slice: no-PSF vs PSF oversample=1,5."""
+        """Semilogy azimuthal average of peak slice: no-PSF vs PSF oversample=1,5.
+
+        Cubes are fine-resolution post-PSF when N>1; bin
+        to coarse for radial-profile comparison on a common grid.
+        """
+        Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
+
         cube_no_psf = np.array(kl_model.render_cube(theta, cube_pars))
         slice_flux = np.sum(cube_no_psf, axis=(0, 1))
         peak_k = int(np.argmax(slice_flux))
@@ -697,13 +746,15 @@ class TestDiagnostics:
         profiles = {}
         labels = {}
 
-        # no PSF
+        # no PSF (already coarse)
         profiles['no_psf'] = cube_no_psf[:, :, peak_k]
         labels['no_psf'] = 'no PSF'
 
         for N in [1, 5]:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-            cube_n = np.array(kl_model.render_cube(theta, obs_n))
+            cube_n = _bin_cube_to_coarse(
+                kl_model.render_cube(theta, obs_n), Nrow_c, Ncol_c, N
+            )
             profiles[f'N={N}'] = cube_n[:, :, peak_k]
             labels[f'N={N}'] = f'PSF N={N}'
 
@@ -848,3 +899,145 @@ class TestDiagnostics:
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, 'grism_residual.png'), dpi=150)
         plt.close(fig)
+
+
+# =============================================================================
+# Post-dispersion pixel response precompute equivalence (commit 3301d3a)
+# =============================================================================
+#
+# 3301d3a moved the BoxPixel sinc + fine k-grid build from inside
+# `_apply_post_dispersion_pixel_response` (rebuilt every call) to `build_grism_obs`
+# (precomputed once into `GrismObs.pixel_response_fft`). The refactor is meant
+# to be a pure speedup with bit-equivalent output for the same theta.
+#
+# This test pins that equivalence against silent unit / axis / fftshift /
+# k-grid-spacing drift in the precompute, by comparing the production path
+# against a freshly-built reference sinc at render time.
+
+
+class TestPostDispersionPixelResponsePrecompute:
+    """Pins 3301d3a: precomputed pixel_response_fft matches inline rebuild."""
+
+    @staticmethod
+    def _inline_apply_post_dispersion(dispersed, coarse_image_pars, oversample):
+        """Reference: rebuild fine k-grid + BoxPixel sinc inline, apply, sum-bin.
+
+        Mimics the pre-3301d3a path with no precompute. Any divergence from
+        ``_apply_post_dispersion_pixel_response(..., obs.pixel_response_fft, ...)``
+        means the precompute and the rebuild don't agree.
+        """
+        if oversample <= 1:
+            return dispersed
+        fine_ip = coarse_image_pars.make_fine_scale(oversample)
+        Nrow_c, Ncol_c = coarse_image_pars.Nrow, coarse_image_pars.Ncol
+        Nrow_f, Ncol_f = fine_ip.Nrow, fine_ip.Ncol
+        fine_ps = fine_ip.pixel_scale
+        coarse_ps = coarse_image_pars.pixel_scale
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        sinc_ft = BoxPixel(coarse_ps).ft(KX, KY)
+        img_fft = jnp.fft.fft2(dispersed)
+        fine_integrated = jnp.fft.ifft2(img_fft * sinc_ft).real
+        N = oversample
+        return fine_integrated.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+
+    def _build_grism_obs_via_factory(self, cube_pars, oversample):
+        """Build a GrismObs via the production factory (precomputes pixel_response_fft)."""
+        gp = build_grism_pars_for_line(
+            HALPHA.lambda_rest,
+            redshift=1.0,
+            image_pars=cube_pars.image_pars,
+            dispersion=1.1,
+        )
+        return build_grism_obs(gp, z=1.0, psf=None, oversample=oversample)
+
+    @pytest.mark.parametrize('oversample', [3, 5, 7])
+    def test_precompute_matches_inline_rebuild(self, cube_pars, oversample):
+        """For a synthetic fine dispersed image, precomputed sinc == inline sinc."""
+        obs = self._build_grism_obs_via_factory(cube_pars, oversample)
+        coarse_ip = cube_pars.image_pars
+        fine_shape = (coarse_ip.Nrow * oversample, coarse_ip.Ncol * oversample)
+
+        # synthetic fine-resolution 2D dispersed image (deterministic, non-zero)
+        rng = np.random.default_rng(0)
+        dispersed = jnp.asarray(rng.normal(size=fine_shape))
+
+        coarse_via_precompute = _apply_post_dispersion_pixel_response(
+            dispersed,
+            obs.pixel_response_fft,
+            (coarse_ip.Nrow, coarse_ip.Ncol),
+            oversample,
+        )
+        coarse_via_inline = self._inline_apply_post_dispersion(
+            dispersed, coarse_ip, oversample
+        )
+
+        # bit-exact equivalence is the goal; allow only floating-point noise
+        np.testing.assert_allclose(
+            np.asarray(coarse_via_precompute),
+            np.asarray(coarse_via_inline),
+            rtol=1e-12,
+            atol=1e-15,
+        )
+
+    def test_oversample_one_is_passthrough(self, cube_pars):
+        """At oversample=1 the function returns the input unchanged."""
+        coarse_ip = cube_pars.image_pars
+        dispersed = jnp.ones((coarse_ip.Nrow, coarse_ip.Ncol))
+        out = _apply_post_dispersion_pixel_response(
+            dispersed,
+            None,  # pixel_response_fft unused at oversample=1
+            (coarse_ip.Nrow, coarse_ip.Ncol),
+            1,
+        )
+        np.testing.assert_array_equal(np.asarray(out), np.asarray(dispersed))
+
+    def test_grid_alignment_uses_coarse_pixel_scale(self, cube_pars):
+        """Sinc must use the COARSE pixel_scale (detector), not the fine one.
+
+        A regression that grabs ``fine_ps`` for the BoxPixel arg would produce
+        a much narrower sinc, indistinguishable from passing pixel_response=None
+        in some regimes but observably different here. We pin the choice by
+        comparing the precompute against a deliberate ``BoxPixel(fine_ps)``
+        rebuild and asserting they disagree.
+        """
+        oversample = 5
+        obs = self._build_grism_obs_via_factory(cube_pars, oversample)
+        coarse_ip = cube_pars.image_pars
+        fine_ip = coarse_ip.make_fine_scale(oversample)
+        fine_shape = (coarse_ip.Nrow * oversample, coarse_ip.Ncol * oversample)
+
+        rng = np.random.default_rng(1)
+        dispersed = jnp.asarray(rng.normal(size=fine_shape))
+
+        # production path: coarse-pixel sinc (correct convention)
+        coarse_correct = _apply_post_dispersion_pixel_response(
+            dispersed,
+            obs.pixel_response_fft,
+            (coarse_ip.Nrow, coarse_ip.Ncol),
+            oversample,
+        )
+
+        # wrong convention: fine-pixel sinc (much narrower)
+        Nrow_f, Ncol_f = fine_ip.Nrow, fine_ip.Ncol
+        fine_ps = fine_ip.pixel_scale
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        wrong_sinc = BoxPixel(fine_ps).ft(KX, KY)
+        img_fft = jnp.fft.fft2(dispersed)
+        wrong_fine = jnp.fft.ifft2(img_fft * wrong_sinc).real
+        N = oversample
+        coarse_wrong = wrong_fine.reshape(coarse_ip.Nrow, N, coarse_ip.Ncol, N).sum(
+            axis=(1, 3)
+        )
+
+        # the two must disagree non-trivially — pins the convention
+        diff = np.max(np.abs(np.asarray(coarse_correct) - np.asarray(coarse_wrong)))
+        peak = np.max(np.abs(np.asarray(coarse_correct)))
+        assert diff > 1e-3 * max(peak, 1e-15), (
+            "Coarse-vs-fine BoxPixel sinc should disagree non-trivially; "
+            f"got max diff {diff:.2e} vs peak {peak:.2e}. The precompute "
+            "may be using the wrong pixel scale."
+        )

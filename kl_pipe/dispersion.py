@@ -94,31 +94,54 @@ def disperse_cube(
     cube: jnp.ndarray,
     grism_pars: GrismPars,
     lambda_grid: jnp.ndarray,
+    oversample: int = 1,
 ) -> jnp.ndarray:
     """Project 3D datacube onto 2D dispersed grism image.
 
     Uses pull-semantics map_coordinates: [Y - dy, X - dx] shifts content
     by (+dy, +dx). Fully differentiable via JAX bilinear interpolation.
 
+    The input cube may be at fine spatial resolution (post-PSF,
+    pre-pixel-response). When ``oversample > 1``, the cube spatial shape
+    is ``(Nrow * oversample, Ncol * oversample, Nlambda)`` and
+    ``grism_pars.dispersion`` is in nm per coarse detector pixel; the
+    function rescales pixel offsets by ``oversample`` so the
+    wavelength-driven shift indexes correctly into the fine grid. The
+    output spatial shape matches the input cube's spatial shape (fine
+    if ``oversample > 1``); the caller is responsible for applying the
+    BoxPixel sinc + sum-bin to coarse detector pixels at the 2D output.
+
     Parameters
     ----------
     cube : jnp.ndarray
-        PSF-convolved datacube, shape (Nrow, Ncol, Nlambda).
+        PSF-convolved datacube, shape ``(Nrow, Ncol, Nlambda)`` or
+        ``(Nrow * oversample, Ncol * oversample, Nlambda)`` when
+        ``oversample > 1``.
     grism_pars : GrismPars
-        Grism parameters.
+        Grism parameters. ``dispersion`` is in nm/coarse-pixel.
     lambda_grid : jnp.ndarray
         Wavelength array nm, shape (Nlambda,).
+    oversample : int, default 1
+        Spatial oversampling factor of the input cube relative to
+        ``grism_pars.image_pars``. Pixel offsets are scaled by this
+        factor so wavelength shifts map correctly into the fine grid.
 
     Returns
     -------
     jnp.ndarray
-        Dispersed 2D image, shape (Nrow, Ncol).
+        Dispersed 2D image, shape matches the spatial dimensions of
+        ``cube`` (fine when ``oversample > 1``).
     """
     Nrow, Ncol, Nlam = cube.shape
     angle = grism_pars.dispersion_angle
 
-    # pixel offsets for each wavelength slice relative to reference
-    pixel_offsets = (lambda_grid - grism_pars.lambda_ref) / grism_pars.dispersion
+    # pixel offsets for each wavelength slice relative to reference. The
+    # dispersion is in nm per *coarse* detector pixel; if the input cube
+    # is at fine resolution (oversample > 1), scale offsets up to fine
+    # pixels so the shift indexes the fine grid correctly.
+    pixel_offsets = (
+        (lambda_grid - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
+    )
 
     cos_a = jnp.cos(angle)
     sin_a = jnp.sin(angle)

@@ -442,8 +442,8 @@ def check_grid_centering():
     row_start = (im_shape - Nrow) // 2
     imap_crop = imap_sq[row_start : row_start + Nrow, :]
 
-    # convert kl_pipe from arcsec^-2 to pix^-2 so units match geko
-    imap_kl_pix = imap_kl * pixel_scale**2
+    # kl_pipe and geko both produce flux/pixel — direct comparison
+    imap_kl_pix = imap_kl
 
     # centroid comparison (sub-pixel) — units don't affect centroids
     c_kl = _compute_centroid(imap_kl)
