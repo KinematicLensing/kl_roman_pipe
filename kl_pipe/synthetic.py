@@ -1158,9 +1158,11 @@ def generate_datacube_3d(
 ):
     """Independent numpy datacube generator for validation.
 
-    The cube is the post-PSF, pre-pixel-response intermediate — pixel
-    response is a detector property applied only at the 2D dispersed
-    observable in ``generate_grism_2d``, not per-channel on the cube.
+    The cube is the pre-pixel-response intermediate (PSF convolved per
+    channel only when ``psf`` is supplied; JAX ``SpectralModel.build_cube``
+    is pre-PSF by construction). Pixel response is a detector property
+    applied only at the 2D dispersed observable in ``generate_grism_2d``,
+    not per-channel on the cube.
 
     When ``spatial_oversample > 1`` the cube is built at fine spatial
     resolution ``(Nrow*N, Ncol*N, Nlambda)``. Each component (velocity

@@ -1869,7 +1869,7 @@ class TestDiagnosticPlots:
         vel_clean, _ = gen.generate_velocity_map(config_highres, snr=None)
         halpha_clean = gen.generate_sfr_map(config_highres, snr=None)
 
-        # Generate lower-res noisy maps (SNR=250 for intensity, SNR=50 for velocity) for bottom row
+        # Generate lower-res noisy maps (SNR=250 for intensity, SNR=1000 for velocity) for bottom row
         int_noisy, _ = gen.generate_intensity_map(config_datavec, snr=250, seed=42)
         vel_noisy, _ = gen.generate_velocity_map(config_datavec, snr=1000, seed=42)
         halpha_noisy = gen.generate_sfr_map(config_datavec, snr=250, seed=42)
