@@ -128,12 +128,13 @@ priors = PriorDict({
     'vel_y0': 0.0,
 })
 
-task = InferenceTask.from_velocity_model(
+from kl_pipe.observation import build_velocity_obs
+
+obs = build_velocity_obs(image_pars, data=observed_velocity, variance=25.0)
+task = InferenceTask.from_velocity_obs(
     model=CenteredVelocityModel(),
     priors=priors,
-    data_vel=observed_velocity,
-    variance_vel=25.0,
-    image_pars=image_pars,
+    obs=obs,
 )
 
 config = EnsembleSamplerConfig(n_walkers=64, n_iterations=5000, burn_in=1000, seed=42)
@@ -254,7 +255,15 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `get_bounds` | `() -> list[(low, high)]` | Parameter bounds from priors |
 | `sample_prior` | `(rng_key, n_samples) -> jnp.ndarray` | Draw prior samples |
 
-### Factory Methods
+### Factory Methods (preferred — obs-based)
+
+```python
+InferenceTask.from_velocity_obs(model, priors, obs, meta_pars=None)
+InferenceTask.from_intensity_obs(model, priors, obs, meta_pars=None)
+InferenceTask.from_joint_obs(model, priors, obs_vel, obs_int, meta_pars=None)
+```
+
+### Legacy Factory Methods (backward-compatible wrappers)
 
 ```python
 InferenceTask.from_velocity_model(model, priors, data_vel, variance_vel, image_pars, meta_pars=None)

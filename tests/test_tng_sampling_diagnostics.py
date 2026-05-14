@@ -39,7 +39,7 @@ from kl_pipe.sampling.diagnostics import (
     plot_recovery,
     print_summary,
 )
-from kl_pipe.diagnostics import plot_combined_data_comparison
+from kl_pipe.diagnostics.imaging import plot_combined_data_comparison
 from kl_pipe.utils import get_test_dir
 
 # Import from local test_utils (pytest adds tests/ to sys.path automatically)

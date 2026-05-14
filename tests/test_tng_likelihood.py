@@ -12,6 +12,7 @@ from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.likelihood import create_jitted_likelihood_velocity
+from kl_pipe.observation import build_velocity_obs
 
 
 # Mark all tests in this file to require TNG data
@@ -62,7 +63,7 @@ def test_tng_velocity_map_with_noise(test_galaxy, image_pars_small):
     config = TNGRenderConfig(target_redshift=0.6, image_pars=image_pars_small, band='r')
 
     # Generate with high SNR
-    velocity, variance = gen.generate_velocity_map(config, snr=100)
+    velocity, variance = gen.generate_velocity_map(config, snr=1000)
 
     assert np.all(variance > 0), "Variance should be positive when snr specified"
     assert np.all(np.isfinite(velocity)), "Velocity should be finite"
@@ -99,7 +100,7 @@ def test_tng_model_fitting_high_snr(test_galaxy, image_pars_medium):
     config = TNGRenderConfig(
         target_redshift=0.6, image_pars=image_pars_medium, band='r'
     )
-    data_vel, variance = gen.generate_velocity_map(config, snr=100)
+    data_vel, variance = gen.generate_velocity_map(config, snr=1000)
 
     # For now, just test that we can create a likelihood
     # Future: implement proper masking support in likelihood functions
@@ -107,9 +108,10 @@ def test_tng_model_fitting_high_snr(test_galaxy, image_pars_medium):
 
     # Simple check: likelihood function can be created and evaluated
     try:
-        log_like = create_jitted_likelihood_velocity(
-            model, image_pars_medium, variance, data_vel
+        obs_vel = build_velocity_obs(
+            image_pars_medium, data=data_vel, variance=variance
         )
+        log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
         # Test with reasonable parameters
         pars_test = {
@@ -145,7 +147,7 @@ def test_tng_parameter_recovery_grid_search(test_galaxy, image_pars_medium):
     config = TNGRenderConfig(
         target_redshift=0.6, image_pars=image_pars_medium, band='r'
     )
-    data_vel, variance = gen.generate_velocity_map(config, snr=100)
+    data_vel, variance = gen.generate_velocity_map(config, snr=1000)
 
     # Setup model and baseline parameters
     model = CenteredVelocityModel()
@@ -160,9 +162,8 @@ def test_tng_parameter_recovery_grid_search(test_galaxy, image_pars_medium):
     }
 
     # Create likelihood
-    log_like = create_jitted_likelihood_velocity(
-        model, image_pars_medium, variance, data_vel
-    )
+    obs_vel = build_velocity_obs(image_pars_medium, data=data_vel, variance=variance)
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     # Grid search over vcirc
     vcirc_values = np.linspace(100, 300, 20)

@@ -21,5 +21,10 @@ tests/out/
 # Docs (generated notebooks)
 docs/tutorials/*.ipynb
 
+# Working plan docs default to ignored; use `git add -f docs/plans/<file>.md`
+# to track specific plans. Keep the dir itself via .gitkeep.
+docs/plans/*
+!docs/plans/.gitkeep
+
 # macOS
 .DS_Store

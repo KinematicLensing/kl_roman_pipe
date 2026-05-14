@@ -1,7 +1,10 @@
 import numpy as np
 import jax.numpy as jnp
 import jax
+from dataclasses import dataclass, field
 from scipy.fft import next_fast_len
+from scipy.special import kve as scipy_kve
+from typing import Dict, List, Optional, Set
 
 from kl_pipe.model import IntensityModel
 from kl_pipe.transformation import obs2cen, cen2source, source2gal
@@ -9,6 +12,1107 @@ from kl_pipe.transformation import obs2cen, cen2source, source2gal
 
 # default number of Gauss-Legendre quadrature points for LOS integration
 _DEFAULT_N_QUAD = 200
+
+# following GalSim convention (GSParams.stepk_minimum_hlr default)
+_STEPK_MIN_HLR = 5
+
+# community convention Spergel nu for Sersic n=4 (de Vaucouleurs);
+# flux-weighted L2 matching gives -0.48 — see scripts/compute_nu_n_mapping.py
+_DEVAUCOULEURS_NU = -0.6
+
+
+def _format_cusp_error(
+    *,
+    model_name: str,
+    cosi_low: float,
+    cosi_threshold: float,
+    nu_threshold: float,
+    nu_low: Optional[float] = None,
+    fixed_nu: Optional[float] = None,
+    sersic_alternative: str = 'InclinedSersicModel',
+) -> str:
+    """Compose a cusp-regime prior validation error message.
+
+    Two shapes:
+    - Spergel (nu sampled): pass ``nu_low``. Both nu and cosi bounds appear
+      in the trigger description; remediation includes ``nu`` floor.
+    - DeVauc (nu fixed):    pass ``fixed_nu``. Only cosi bound appears in
+      the trigger; remediation lists cosi floor + Sersic alternative only.
+    """
+    if nu_low is not None:
+        trigger = (
+            f"nu lower bound {nu_low} < {nu_threshold} (concentrated profile, "
+            f"Sersic n>1) joint with cosi lower bound {cosi_low} < "
+            f"{cosi_threshold} (inclined)"
+        )
+        physics = (
+            "At inclined orientations the divergent R^(2nu) cusp produces "
+            "unphysical morphology along the minor axis (light spreads over "
+            "~5 pixels vs ~1 for Sersic)."
+        )
+        remediations = (
+            f"Restrict the nu prior lower bound to >= {nu_threshold}, OR "
+            f"restrict cosi lower bound to >= {cosi_threshold} (near face-on), "
+            f"OR use {sersic_alternative} for steep-Sersic profiles."
+        )
+    else:
+        trigger = (
+            f"cosi lower bound {cosi_low} < {cosi_threshold} (inclined) with "
+            f"hardwired nu={fixed_nu} (below cusp threshold {nu_threshold})"
+        )
+        physics = (
+            "At inclined orientations the divergent cusp produces unphysical "
+            "morphology along the minor axis."
+        )
+        remediations = (
+            f"Restrict cosi lower bound to >= {cosi_threshold} (near face-on), "
+            f"OR use {sersic_alternative} for steep-Sersic profiles."
+        )
+
+    return (
+        f"{model_name}: priors permit cusp regime — {trigger}. {physics} {remediations}"
+    )
+
+
+# ==============================================================================
+# Spergel nu <-> Sersic n mapping
+# Pre-computed by scripts/compute_nu_n_mapping.py (flux-weighted L2 matching).
+# Two tables: face-on (galsim.Spergel vs galsim.Sersic) and inclined
+# (our InclinedSpergelModel vs galsim.InclinedSersic, averaged over cosi).
+# Exact at n=1/nu=0.5. Valid for n in [0.65, 4.0] (saturates at nu~4 for n<0.65).
+# ==============================================================================
+
+_N_GRID = np.array(
+    [
+        0.300000,
+        0.350000,
+        0.400000,
+        0.450000,
+        0.500000,
+        0.550000,
+        0.600000,
+        0.650000,
+        0.700000,
+        0.750000,
+        0.800000,
+        0.850000,
+        0.900000,
+        0.950000,
+        1.000000,
+        1.100000,
+        1.200000,
+        1.300000,
+        1.400000,
+        1.500000,
+        1.600000,
+        1.700000,
+        1.800000,
+        1.900000,
+        2.000000,
+        2.200000,
+        2.400000,
+        2.600000,
+        2.800000,
+        3.000000,
+        3.200000,
+        3.400000,
+        3.600000,
+        3.800000,
+        4.000000,
+    ]
+)
+
+_NU_TABLE_FACEON = np.array(
+    [
+        4.000000,
+        4.000000,
+        4.000000,
+        3.999999,
+        4.000000,
+        4.000000,
+        3.999985,
+        2.565989,
+        1.839106,
+        1.400138,
+        1.104737,
+        0.891520,
+        0.729871,
+        0.602743,
+        0.500000,
+        0.343574,
+        0.229593,
+        0.142302,
+        0.072840,
+        0.015778,
+        -0.032252,
+        -0.073571,
+        -0.109774,
+        -0.141940,
+        -0.170920,
+        -0.221439,
+        -0.264560,
+        -0.302262,
+        -0.335768,
+        -0.365888,
+        -0.393272,
+        -0.418261,
+        -0.441244,
+        -0.462466,
+        -0.482161,
+    ]
+)
+
+_NU_TABLE_INCLINED = np.array(
+    [
+        3.999998,
+        3.999955,
+        3.999949,
+        3.999985,
+        3.999998,
+        3.999978,
+        3.999993,
+        2.665108,
+        1.903350,
+        1.444072,
+        1.135042,
+        0.911718,
+        0.742101,
+        0.608394,
+        0.500000,
+        0.334091,
+        0.212401,
+        0.118604,
+        0.043726,
+        -0.017748,
+        -0.069592,
+        -0.113852,
+        -0.152676,
+        -0.186638,
+        -0.218780,
+        -0.271304,
+        -0.314825,
+        -0.351515,
+        -0.382937,
+        -0.410561,
+        -0.435412,
+        -0.458352,
+        -0.479108,
+        -0.497986,
+        -0.514669,
+    ]
+)
+
+
+def sersic_to_spergel(n_sersic, inclined=False):
+    """Best-fit Spergel nu for a given Sersic n.
+
+    Interpolates a pre-computed lookup table from flux-weighted L2
+    profile matching. Exact at n=1 (nu=0.5). Valid for n in [0.65, 4.0].
+
+    Parameters
+    ----------
+    n_sersic : float or array
+        Sersic index.
+    inclined : bool, optional
+        If True, use the inclined table (our 3D model vs GalSim
+        InclinedSersic, averaged over cosi). Default False (face-on).
+
+    Returns
+    -------
+    float or array
+        Best-fit Spergel nu.
+    """
+    table = _NU_TABLE_INCLINED if inclined else _NU_TABLE_FACEON
+    return np.interp(n_sersic, _N_GRID, table)
+
+
+def spergel_to_sersic(nu, inclined=False):
+    """Best-fit Sersic n for a given Spergel nu.
+
+    Inverse of ``sersic_to_spergel``. Valid for nu in [-0.48, 2.6]
+    (face-on) or [-0.16, 1.4] (inclined).
+
+    Parameters
+    ----------
+    nu : float or array
+        Spergel index.
+    inclined : bool, optional
+        If True, use the inclined table. Default False (face-on).
+
+    Returns
+    -------
+    float or array
+        Best-fit Sersic n.
+    """
+    table = _NU_TABLE_INCLINED if inclined else _NU_TABLE_FACEON
+    # tables are monotonically decreasing for n >= ~0.65; reverse for interp
+    mask = table < 3.99  # exclude saturated region
+    n_valid = _N_GRID[mask]
+    nu_valid = table[mask]
+    nu_lo, nu_hi = float(nu_valid[-1]), float(nu_valid[0])
+    nu_arr = np.asarray(nu)
+    if np.any(nu_arr < nu_lo) or np.any(nu_arr > nu_hi):
+        raise ValueError(
+            f"nu={nu} outside valid range [{nu_lo:.2f}, {nu_hi:.2f}] "
+            f"for {'inclined' if inclined else 'face-on'} table"
+        )
+    return np.interp(nu, nu_valid[::-1], n_valid[::-1])
+
+
+# ==============================================================================
+# Shared k-space rendering
+# ==============================================================================
+
+
+def _wrap_kspace(I_hat, N_row, N_col):
+    """Wrap a large k-space array onto a smaller grid by modular addition.
+
+    Equivalent to GalSim's ``kimage._wrap``: each k-bin in the output
+    accumulates all aliases from the extended grid. This ensures that the
+    pixel sinc (evaluated at true k on the extended grid) weights each
+    alias correctly, rather than applying the sinc at the aliased k.
+
+    The operation is: ``wrapped[i % N_row, j % N_col] += I_hat[i, j]``.
+    Implemented via zero-pad to next multiple + reshape + sum for JAX
+    compatibility.
+
+    Parameters
+    ----------
+    I_hat : jnp.ndarray
+        Extended k-space array, shape (Nk_row, Nk_col).
+    N_row, N_col : int
+        Output (base) grid dimensions.
+
+    Returns
+    -------
+    jnp.ndarray, shape (N_row, N_col)
+        Wrapped k-space array.
+    """
+    Nk_row, Nk_col = I_hat.shape
+    factor_r = -(-Nk_row // N_row)  # ceiling division
+    factor_c = -(-Nk_col // N_col)
+    Nk_r_pad = factor_r * N_row
+    Nk_c_pad = factor_c * N_col
+    if Nk_r_pad != Nk_row or Nk_c_pad != Nk_col:
+        padded = jnp.zeros((Nk_r_pad, Nk_c_pad), dtype=I_hat.dtype)
+        padded = padded.at[:Nk_row, :Nk_col].set(I_hat)
+    else:
+        padded = I_hat
+    return padded.reshape(factor_r, N_row, factor_c, N_col).sum(axis=(0, 2))
+
+
+def _kspace_render_core(
+    ft_image_fn,
+    Nrow,
+    Ncol,
+    pixel_scale,
+    pad_factor=2,
+    oversample=1,
+    psf_kernel_fft=None,
+    pixel_response=None,
+    render_config=None,
+):
+    """Shared IFFT plumbing for k-space intensity model rendering.
+
+    Builds the padded k-grid, calls ``ft_image_fn(KX, KY)`` to get the
+    model-specific complex FT, optionally applies pixel response and PSF
+    in k-space, then IFFTs and crops to the output grid.
+
+    Each model builds its own closure for ``ft_image_fn`` that handles
+    parameter lookup, geometric transforms (shear, rotation, phase), and
+    the analytic FT of its radial + vertical profile.
+
+    Anti-aliasing: the IFFT is computed on a padded grid (pad_factor × N)
+    to suppress periodic boundary wrap-around, then cropped to (Nrow, Ncol).
+
+    When ``psf_kernel_fft`` is provided, the PSF is multiplied in k-space
+    BEFORE the IFFT crop, so edge pixels see PSF-scattered light from
+    source regions beyond the image boundary.
+
+    When ``pixel_response`` is provided, its FT is multiplied in k-space
+    after the profile FT and before PSF multiplication. This implements
+    exact pixel integration (for a box pixel, a 2D sinc) at O(1) cost,
+    replacing the O(N²) spatial oversampling approximation. The pixel
+    response uses the COARSE ``pixel_scale`` regardless of ``oversample``.
+
+    When ``oversample > 1``, the k-grid extends to N × Nyquist, reducing
+    cusp aliasing. The IFFT is computed at fine resolution and subsampled
+    back to (Nrow, Ncol). The half-pixel phase correction (inside the
+    model's ft_image_fn) always uses coarse grid centering, which is
+    correct for the wrap path (IFFT at coarse resolution). For the
+    bin-only path (no pixel_response), a compensating phase adjusts the
+    centering from coarse to fine grid before the IFFT. Most users should
+    rely on adaptive grid sizing via ``folding_threshold`` rather than
+    manual ``oversample``; this parameter is retained for real-space
+    rendering, benchmarking, and convergence testing.
+
+    Parameters
+    ----------
+    ft_image_fn : callable
+        (KX, KY) -> complex I_hat array. Each model builds its own closure
+        that handles all physics (parameter lookup, geometric transforms,
+        analytic FT, normalization).
+    Nrow, Ncol : int
+        Output (coarse) grid dimensions.
+    pixel_scale : float
+        Output pixel scale (arcsec/pixel). Always the COARSE scale.
+    pad_factor : int
+        FFT padding factor. Default 2.
+    oversample : int
+        Oversampling factor for sub-pixel anti-aliasing. Default 1.
+    psf_kernel_fft : jnp.ndarray, optional
+        Pre-computed PSF FFT for fused convolution. Shape must match
+        the padded grid.
+    pixel_response : PixelResponse, optional
+        Pixel response function. When provided, ``pixel_response.ft(KX, KY)``
+        is multiplied into the profile FT before PSF and IFFT. Default None
+        (no pixel integration at the core level — callers are responsible for
+        constructing a BoxPixel from pixel_scale at public entry points).
+    render_config : RenderConfig, optional
+        When provided, ``render_config.oversample`` and
+        ``render_config.pad_factor`` take precedence over the bare
+        ``oversample`` and ``pad_factor`` parameters.
+
+    Returns
+    -------
+    jnp.ndarray, shape (Nrow, Ncol)
+        Rendered image at coarse resolution.
+    """
+    # render_config overrides bare oversample/pad_factor when provided
+    if render_config is not None:
+        oversample = render_config.oversample
+        pad_factor = render_config.pad_factor
+
+    eff_Nrow = Nrow * oversample
+    eff_Ncol = Ncol * oversample
+    eff_ps = pixel_scale / oversample
+
+    # wrap path engages whenever oversample > 1, regardless of pixel_response.
+    # The wrap operation (fold extended k-grid onto base) is the FT of the
+    # point-sampled signal — independent of whether sinc is multiplied in.
+    # With pixel_response: sinc × profile_FT → folded → pixel-integrated.
+    # Without pixel_response: profile_FT → folded → point-sampled (no spatial
+    # bin needed; bin path was an old approximation, now removed).
+    _use_wrap = oversample > 1
+
+    if _use_wrap:
+        # wrap path: compute base grid first, then extend by exact multiple
+        base_pad_row = next_fast_len(pad_factor * Nrow)
+        base_pad_col = next_fast_len(pad_factor * Ncol)
+
+    if psf_kernel_fft is not None:
+        pad_row, pad_col = psf_kernel_fft.shape
+        if _use_wrap:
+            # PSF grid must be an exact multiple of base grid for correct
+            # wrapping. Derive base_pad by dividing PSF grid by oversample.
+            if pad_row % oversample != 0 or pad_col % oversample != 0:
+                raise ValueError(
+                    f"PSF FFT grid ({pad_row}, {pad_col}) is not divisible "
+                    f"by oversample={oversample}. Rebuild obs with a "
+                    f"render_config whose oversample divides the PSF grid."
+                )
+            base_pad_row = pad_row // oversample
+            base_pad_col = pad_col // oversample
+    elif _use_wrap:
+        pad_row = base_pad_row * oversample
+        pad_col = base_pad_col * oversample
+    elif pad_factor > 1:
+        pad_row = next_fast_len(pad_factor * eff_Nrow)
+        pad_col = next_fast_len(pad_factor * eff_Ncol)
+    else:
+        pad_row = eff_Nrow
+        pad_col = eff_Ncol
+
+    # k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
+    ky = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
+    kx = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
+    KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+
+    I_hat = ft_image_fn(KX, KY)
+
+    # pixel response: multiply by pixel FT (e.g., sinc for box pixel)
+    # uses COARSE pixel_scale even when k-grid is at fine resolution
+    if pixel_response is not None:
+        I_hat = I_hat * pixel_response.ft(KX, KY)
+
+    if psf_kernel_fft is not None:
+        I_hat = I_hat * psf_kernel_fft
+
+    if _use_wrap:
+        # fold the extended k-grid onto the base (coarse) padded grid by
+        # modular addition, then IFFT at base size. With pixel_response set,
+        # this is exact pixel integration; without, it's converged
+        # point-sampling. Either way, no real-space binning needed.
+        I_hat_wrapped = _wrap_kspace(I_hat, base_pad_row, base_pad_col)
+        full = jnp.fft.ifft2(I_hat_wrapped).real
+        roll_row = Nrow // 2
+        roll_col = Ncol // 2
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
+        # flux/pixel convention (base commit 63a30d5): no /pixel_scale**2
+        image = full[:Nrow, :Ncol]
+    else:
+        # oversample == 1: single-grid IFFT (no wrap, no extension).
+        # Output is aliased point-sample (or aliased pixel-integrated if
+        # pixel_response set). Cheap, low-accuracy mode used for tests
+        # and oversample-1 edge cases.
+        full = jnp.fft.ifft2(I_hat).real
+        roll_row = Nrow // 2
+        roll_col = Ncol // 2
+        full = jnp.roll(full, (roll_row, roll_col), axis=(0, 1))
+        # flux/pixel convention: no /pixel_scale**2
+        image = full[:Nrow, :Ncol]
+
+    return image
+
+
+def _inclined_sech2_ft(
+    KX,
+    KY,
+    radial_ft_fn,
+    flux,
+    x0,
+    y0,
+    g1,
+    g2,
+    theta_int,
+    cosi,
+    rscale,
+    h_over_r,
+    pixel_scale,
+    Nrow,
+    Ncol,
+):
+    """FT of an inclined model with pluggable radial profile and sech² vertical.
+
+    Computes the physical/geometric transforms shared by all inclined models
+    with sech²(z/h_z) vertical structure:
+
+    1. Centroid phase shift
+    2. Area-preserving shear of k-vectors
+    3. Rotation by position angle
+    4. Scaling by scale length → dimensionless k
+    5. Radial FT via ``radial_ft_fn(k_sq)`` (model-specific)
+    6. Vertical FT: ``u/sinh(u)`` where ``u = (π/2)·h/r·ky·sin(i)``
+
+    Parameters
+    ----------
+    KX, KY : jnp.ndarray
+        k-space grids from ``_kspace_render_core``.
+    radial_ft_fn : callable
+        k_sq -> ft_radial array. Model-specific radial profile FT.
+        Exponential: ``1/(1+k²)^{3/2}``.
+        Spergel: ``1/(1+k²)^{1+nu}``.
+    flux : float
+        Total integrated flux.
+    x0, y0 : float
+        Centroid position (arcsec).
+    g1, g2 : float
+        Shear components.
+    theta_int : float
+        Position angle (radians).
+    cosi : float
+        Cosine of inclination.
+    rscale : float
+        Scale length (arcsec).
+    h_over_r : float
+        Vertical scale height / radial scale length.
+    pixel_scale : float
+        Coarse pixel scale for half-pixel phase correction.
+    Nrow, Ncol : int
+        Coarse grid dimensions for half-pixel phase correction.
+
+    Returns
+    -------
+    jnp.ndarray
+        Complex FT array, same shape as KX/KY.
+    """
+    sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+
+    # centroid phase: pair kx with x0 (horizontal), ky with y0 (vertical)
+    #   half-pixel correction based on OUTPUT grid centering
+    hx = 0.5 * pixel_scale * (1 - Ncol % 2)
+    hy = 0.5 * pixel_scale * (1 - Nrow % 2)
+    phase = jnp.exp(-1j * (KX * (x0 - hx) + KY * (y0 - hy)))
+
+    # shear: area-preserving M = (1/sqrt(1-|g|²)) * [[1+g1, g2], [g2, 1-g1]]
+    #   (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
+    norm_shear = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
+    kx_s = norm_shear * ((1.0 + g1) * KX + g2 * KY)
+    ky_s = norm_shear * (g2 * KX + (1.0 - g1) * KY)
+
+    # rotation: R(-theta_int) on (kx, ky)
+    c = jnp.cos(-theta_int)
+    s = jnp.sin(-theta_int)
+    kx_gal = c * kx_s - s * ky_s
+    ky_gal = s * kx_s + c * ky_s
+
+    # scale to dimensionless k
+    kx_scaled = kx_gal * rscale
+    ky_scaled = ky_gal * rscale
+
+    # radial FT (model-specific via callback)
+    # cosi compresses rows=vertical in k-space (gal2disk)
+    k_sq = kx_scaled**2 + (ky_scaled * cosi) ** 2
+    ft_radial = radial_ft_fn(k_sq)
+
+    # vertical FT: u/sinh(u), u = (π/2)·h_over_r·ky_scaled·sini
+    # safe-where pattern: substitute finite dummy in non-selected branch
+    # so JAX autodiff never sees 0/sinh(0) = 0/0 = NaN
+    u = (jnp.pi / 2.0) * h_over_r * ky_scaled * sini
+    u_safe = jnp.where(jnp.abs(u) < 1e-4, jnp.ones_like(u), u)
+    ft_vertical = jnp.where(
+        jnp.abs(u) < 1e-4,
+        1.0 - u**2 / 6.0,
+        u_safe / jnp.sinh(u_safe),
+    )
+
+    return flux * ft_radial * ft_vertical * phase
+
+
+def _auto_render_config(model, theta, pixel_scale, pixel_response='_AUTO_BOXPIXEL'):
+    """Auto-compute RenderConfig from model parameters for legacy path.
+
+    Attempts to build a RenderConfig via ``RenderConfig.for_model``. Falls
+    back to a default ``RenderConfig()`` (oversample=1, pad_factor=2) when
+    the model or theta is inside a JIT trace or lacks maxk/stepk support.
+
+    Parameters
+    ----------
+    pixel_response : PixelResponse, None, or sentinel, optional
+        Pixel response to use for grid sizing. Sentinel ``'_AUTO_BOXPIXEL'``
+        (default) constructs ``BoxPixel(pixel_scale)``. Pass an explicit
+        ``PixelResponse`` instance, or ``None`` for point-sampled rendering.
+        Threading through ``None`` ensures the rc is sized for the rendering
+        chain that will actually run, not an implicit BoxPixel.
+    """
+    from kl_pipe.render import RenderConfig
+
+    try:
+        params = model.theta2pars(theta)
+        pixel_scale_f = float(pixel_scale)
+    except (TypeError, ValueError):
+        # inside JIT trace — cannot introspect theta
+        return RenderConfig()
+
+    if pixel_response == '_AUTO_BOXPIXEL':
+        from kl_pipe.pixel import BoxPixel as _BP
+
+        pixel_response = _BP(pixel_scale_f)
+
+    try:
+        return RenderConfig.for_model(
+            model,
+            params,
+            pixel_scale_f,
+            pixel_response=pixel_response,
+        )
+    except (KeyError, NotImplementedError, AttributeError):
+        return RenderConfig()
+
+
+def _kspace_render_image(
+    model,
+    theta,
+    image_pars=None,
+    plane='obs',
+    X=None,
+    Y=None,
+    oversample=1,
+    *,
+    obs=None,
+    **kwargs,
+):
+    """Shared render_image dispatcher for k-space intensity models.
+
+    Handles all obs-based PSF paths (fused k-space, fallback real-space),
+    obs without PSF, and legacy image_pars/X,Y calling conventions.
+
+    Used by InclinedSpergelModel, InclinedDeVaucouleursModel, and
+    InclinedSersicModel. InclinedExponentialModel keeps its own
+    render_image (with aliasing warning specific to the exponential FT
+    decay rate).
+
+    Calling conventions:
+    - render_image(theta, obs=obs) -- with PSF from obs
+    - render_image(theta, image_pars=image_pars) -- no PSF
+
+    Parameters
+    ----------
+    model : IntensityModel
+        Model instance with ``_render_kspace`` method.
+    theta : jnp.ndarray
+        Parameter array.
+    image_pars : ImagePars, optional
+        Image parameters defining grid geometry.
+    plane : str
+        Coordinate plane (unused — k-space renders in obs plane).
+    X, Y : jnp.ndarray, optional
+        Pre-computed grids (for legacy calling convention).
+    oversample : int
+        Cusp anti-aliasing factor for no-PSF path. Default 1.
+    obs : ImageObs, optional
+        Observation object with PSF and oversampling config.
+    render_config : RenderConfig, optional
+        When provided via kwargs, ``render_config.oversample`` takes
+        precedence over the bare ``oversample`` arg and ``obs.oversample``.
+
+    Returns
+    -------
+    jnp.ndarray
+        Rendered image, shape (Nrow, Ncol).
+    """
+    rc = kwargs.pop('render_config', None)
+
+    if obs is not None:
+        pixel_scale = obs.image_pars.pixel_scale
+        Nrow = obs.image_pars.Nrow
+        Ncol = obs.image_pars.Ncol
+
+        if obs.kspace_psf_fft is not None:
+            # fused k-space path: render + convolve in one FFT pass.
+            # Engage wrap inside the core (oversample > 1 + pixel_response set)
+            # so sinc does pixel integration exactly; avoids double-integration
+            # that would result from spatial binning after sinc multiplication.
+            N = max(rc.oversample if rc is not None else obs.oversample, 1)
+            image = model._render_kspace(
+                theta,
+                Nrow,
+                Ncol,
+                pixel_scale,
+                oversample=N,
+                psf_kernel_fft=obs.kspace_psf_fft,
+                pixel_response=obs.pixel_response,
+            )
+            return image
+
+        if obs.psf_data is not None:
+            # fallback real-space path: PSF kernel already includes pixel
+            # integration (from drawImage), do NOT apply pixel_response
+            from kl_pipe.psf import convolve_fft
+
+            eff_os = rc.oversample if rc is not None else obs.oversample
+            if eff_os > 1:
+                N = eff_os
+                image = model._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
+            else:
+                image = model._render_kspace(theta, Nrow, Ncol, pixel_scale)
+            return convolve_fft(image, obs.psf_data)
+
+        # no PSF on obs — apply pixel response if available
+        return model._render_kspace(
+            theta,
+            Nrow,
+            Ncol,
+            pixel_scale,
+            oversample=oversample,
+            pixel_response=obs.pixel_response,
+            render_config=rc,
+        )
+
+    # legacy/convenience path (no obs): construct BoxPixel from pixel_scale
+    if image_pars is None and (X is None or Y is None):
+        raise ValueError("Provide obs, image_pars, or (X, Y)")
+
+    if image_pars is not None:
+        pixel_scale = image_pars.pixel_scale
+        Nrow = image_pars.Nrow
+        Ncol = image_pars.Ncol
+    else:
+        Nrow, Ncol = X.shape
+        pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
+
+    from kl_pipe.pixel import BoxPixel as _BoxPixel
+    from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
+
+    pr = kwargs.get('pixel_response', _PR_UNSET)
+    if pr is _PR_UNSET:
+        pr = _BoxPixel(float(pixel_scale))
+
+    # auto-compute render_config when not provided; pass the actual
+    # pixel_response so grid sizing matches the rendering chain
+    # (matters when user passed pixel_response=None for point-sampling).
+    if rc is None:
+        rc = _auto_render_config(model, theta, pixel_scale, pixel_response=pr)
+
+    return model._render_kspace(
+        theta,
+        Nrow,
+        Ncol,
+        pixel_scale,
+        oversample=oversample,
+        pixel_response=pr,
+        render_config=rc,
+    )
+
+
+# ==============================================================================
+# Spergel profile helpers (real-space, non-differentiable via scipy callback)
+# ==============================================================================
+
+
+def _bessel_kve_jax(nu, x):
+    """K_nu(x) * exp(x), JIT-safe via pure_callback wrapping scipy.
+
+    Returns the exponentially-scaled modified Bessel function of the
+    second kind. Wraps ``scipy.special.kve`` through ``jax.pure_callback``
+    so it can be called inside JIT-compiled functions.
+
+    NOTE: not auto-differentiable. The k-space inference path (render_image)
+    never calls this — it uses the analytic FT ``(1+k²)^{-(1+nu)}`` which
+    is fully differentiable. If autodiff through real-space K_nu is ever
+    needed, replace with Gauss-Laguerre quadrature of
+    ``K_nu(x) = integral_0^inf exp(-x*cosh(t))*cosh(nu*t) dt``.
+
+    Parameters
+    ----------
+    nu : float or jnp.ndarray (scalar)
+        Order of the Bessel function.
+    x : jnp.ndarray
+        Argument array (must be positive).
+
+    Returns
+    -------
+    jnp.ndarray
+        kve(nu, x) = K_nu(x) * exp(x), same shape as x.
+    """
+    result_shape = jax.ShapeDtypeStruct(x.shape, x.dtype)
+
+    def _scipy_kve(nu_val, x_np):
+        return scipy_kve(float(nu_val), x_np).astype(x_np.dtype)
+
+    return jax.pure_callback(_scipy_kve, result_shape, nu, x)
+
+
+def _spergel_radial(r, nu, c):
+    """Evaluate (r/c)^nu * K_nu(r/c), numerically stable via kve.
+
+    The Spergel radial profile is proportional to x^nu * K_nu(x) where
+    x = r/c. Computed in log-space to avoid overflow::
+
+        log[(r/c)^nu * K_nu(r/c)]
+        = nu*log(r/c) + log(kve(nu, r/c)) - r/c
+
+    since kve(nu, x) = K_nu(x) * exp(x).
+
+    Parameters
+    ----------
+    r : jnp.ndarray
+        Radius array.
+    nu : float or jnp.ndarray (scalar)
+        Spergel index.
+    c : float or jnp.ndarray (scalar)
+        Scale length.
+
+    Returns
+    -------
+    jnp.ndarray
+        Profile values, same shape as r.
+    """
+    x = r / c
+    x_safe = jnp.maximum(x, 1e-30)  # avoid log(0)
+    log_profile = nu * jnp.log(x_safe) + jnp.log(_bessel_kve_jax(nu, x_safe)) - x_safe
+    return jnp.exp(log_profile)
+
+
+def _spergel_norm_2d(rscale, nu):
+    """Face-on Spergel flux normalization factor.
+
+    The total flux of the Spergel profile integrates to::
+
+        F = 2*pi * c^2 * 2^nu * Gamma(nu+1) * I_0
+
+    so this returns the ``2*pi * c^2 * 2^nu * Gamma(nu+1)`` factor.
+    For nu=0.5 this reduces to ``2*pi * c^2 * sqrt(pi/2)``, recovering
+    the exponential normalization ``F = 2*pi * r_s^2 * I_0`` after the
+    ``sqrt(pi/2)`` factor from ``K_{0.5}`` cancels.
+
+    Parameters
+    ----------
+    rscale : float
+        Scale length c (arcsec).
+    nu : float
+        Spergel index.
+
+    Returns
+    -------
+    float
+        Normalization factor.
+    """
+    return (
+        2.0
+        * jnp.pi
+        * rscale**2
+        * jnp.power(2.0, nu)
+        * jnp.exp(jax.scipy.special.gammaln(nu + 1.0))
+    )
+
+
+def _spergel_evaluate_faceon(flux, rscale, nu, x, y):
+    """Face-on Spergel surface brightness in disk plane.
+
+    Computes I(r) = I_0 * (r/c)^nu * K_nu(r/c) where
+    I_0 = flux / (2*pi * c^2 * 2^nu * Gamma(nu+1)).
+
+    Parameters
+    ----------
+    flux : float
+        Total integrated flux.
+    rscale : float
+        Scale length c (arcsec).
+    nu : float
+        Spergel index.
+    x, y : jnp.ndarray
+        Disk-plane coordinates.
+
+    Returns
+    -------
+    jnp.ndarray
+        Surface brightness, same shape as x/y.
+    """
+    r = jnp.sqrt(x**2 + y**2)
+    I0 = flux / _spergel_norm_2d(rscale, nu)
+    return I0 * _spergel_radial(r, nu, rscale)
+
+
+def _inclined_sech2_los_integrate(
+    rho0,
+    radial_fn,
+    h_z,
+    cosi,
+    sini,
+    xp,
+    yp,
+    gl_nodes,
+    gl_weights,
+):
+    """General LOS Gauss-Legendre integration: radial_fn(R) × sech²(z/h_z).
+
+    Integrates rho(R, z) = rho0 * radial_fn(R) * sech²(z/h_z) along
+    the line of sight at each pixel in the galaxy frame. The radial
+    profile and normalization are model-specific; the GL plumbing is
+    shared across all inclined models with sech² vertical structure.
+
+    Parameters
+    ----------
+    rho0 : float
+        Volume density normalization (model-specific).
+    radial_fn : callable
+        R -> radial profile array. Model-specific radial density.
+        Exponential: ``lambda R: exp(-R/r_s)``.
+        Spergel: ``lambda R: _spergel_radial(R, nu, c)``.
+    h_z : float
+        Vertical scale height (arcsec).
+    cosi, sini : float
+        Cosine and sine of inclination.
+    xp, yp : jnp.ndarray
+        Coordinates in galaxy frame (NOT disk frame).
+    gl_nodes, gl_weights : jnp.ndarray
+        Gauss-Legendre quadrature nodes and weights on [-1, 1].
+
+    Returns
+    -------
+    jnp.ndarray
+        Surface brightness, same shape as xp/yp.
+    """
+    # per-pixel GL centering: sech²(z/h_z) peak at ell_center = y_gal*sini/cosi
+    # integration half-width delta = 5*h_z/cosi captures >99.99% of sech²
+    delta = 5.0 * h_z / jnp.maximum(cosi, 0.1)
+    ell_center = yp * sini / jnp.maximum(cosi, 0.1)
+
+    ell = ell_center[..., None] + delta * gl_nodes
+    w = delta * gl_weights
+
+    # disk coords at each quadrature point
+    y_disk = yp[..., None] * cosi + ell * sini
+    z_val = ell * cosi - yp[..., None] * sini
+    x_disk = xp[..., None]
+
+    R = jnp.sqrt(x_disk**2 + y_disk**2)
+
+    radial = radial_fn(R)
+    z_norm = z_val / h_z
+    cosh_z = jnp.cosh(jnp.clip(z_norm, -20.0, 20.0))
+    vertical = 1.0 / (cosh_z**2)
+
+    integrand = rho0 * radial * vertical
+    return jnp.sum(integrand * w, axis=-1)
+
+
+def _spergel_los_integrate(
+    flux,
+    rscale,
+    nu,
+    h_over_r,
+    cosi,
+    sini,
+    xp,
+    yp,
+    gl_nodes,
+    gl_weights,
+):
+    """3D LOS integration with Spergel radial + sech² vertical.
+
+    Thin wrapper around ``_inclined_sech2_los_integrate`` with Spergel-specific
+    normalization and radial profile.
+    """
+    h_z = h_over_r * rscale
+    rho0 = flux / (2.0 * h_z * _spergel_norm_2d(rscale, nu))
+    return _inclined_sech2_los_integrate(
+        rho0,
+        lambda R: _spergel_radial(R, nu, rscale),
+        h_z,
+        cosi,
+        sini,
+        xp,
+        yp,
+        gl_nodes,
+        gl_weights,
+    )
+
+
+# ==============================================================================
+# Sersic profile helpers
+# ==============================================================================
+
+
+def _sersic_bn(n):
+    """Sersic b_n via Ciotti & Bertin (1999) asymptotic expansion.
+
+    Solves the half-light condition: gamma(2n, b_n) = Gamma(2n)/2.
+    Accurate to < 1e-4 for n > 0.36. Pure arithmetic — JIT-safe.
+
+    Parameters
+    ----------
+    n : float or jnp.ndarray
+        Sersic index.
+
+    Returns
+    -------
+    float or jnp.ndarray
+        b_n coefficient.
+    """
+    return (
+        2.0 * n
+        - 1.0 / 3.0
+        + 4.0 / (405.0 * n)
+        + 46.0 / (25515.0 * n**2)
+        + 131.0 / (1148175.0 * n**3)
+        - 2194697.0 / (30690717750.0 * n**4)
+    )
+
+
+# Miller & Pasha (2025, arxiv:2508.20266) emulator constants
+_MP_A0 = 2.245374
+_MP_A1 = 0.029371526
+_MP_A2 = 2.1431181
+_MP_A3 = -3.7275262
+_MP_A4 = 0.091609545
+_MP_A5 = 0.32785136
+
+
+def _sersic_ft_emulator(k, n):
+    """Sersic radial FT via Miller & Pasha (2025) symbolic-regression emulator.
+
+    Returns the normalized Hankel transform of the Sersic profile at
+    dimensionless wavenumber ``k = k_physical * R_e`` (unit flux, unit R_e).
+    Valid for 0.5 <= n <= 6.0.
+
+    F_r(k, n) = 1 / (1 + exp(G(k, n)))
+
+    where G is built from elementary functions (exp, log, sqrt). Fully
+    differentiable w.r.t. both k and n via JAX autodiff.
+
+    Parameters
+    ----------
+    k : jnp.ndarray
+        Dimensionless wavenumber (k_physical * R_e). Must be >= 0.
+    n : float or jnp.ndarray
+        Sersic index. Valid range: [0.5, 6.0].
+
+    Returns
+    -------
+    jnp.ndarray
+        Normalized FT values in [0, 1]. F_r(0) = 1 (unit total flux).
+    """
+    # guard k=0 (log(0) = -inf) — DC component is exactly 1
+    k_safe = jnp.maximum(k, 1e-30)
+
+    # sub-expressions
+    H = _MP_A0 * jnp.sqrt(
+        n + _MP_A1 * (k_safe - _MP_A2) * jnp.exp(jnp.exp(jnp.sqrt(n) - n**3))
+    )
+    J = jnp.exp(_MP_A3 * k_safe - jnp.exp(n - n**2))
+    G = (1.0 / n) * ((H + J) * (jnp.log(k_safe) - _MP_A4) - _MP_A5)
+
+    F_r = 1.0 / (1.0 + jnp.exp(G))
+
+    # exact DC: F_r(0) = 1
+    return jnp.where(k < 1e-30, 1.0, F_r)
+
+
+def _sersic_norm_2d(Re, n):
+    """2D flux normalization factor for the Sersic profile.
+
+    Returns the factor N such that I_0 = flux / N gives a profile
+    ``I(r) = I_0 * exp(-b_n * (r/R_e)^{1/n})`` with total flux = flux.
+
+    N = 2*pi * n * R_e^2 * Gamma(2n) / b_n^{2n}
+
+    Parameters
+    ----------
+    Re : float
+        Half-light radius (arcsec).
+    n : float
+        Sersic index.
+
+    Returns
+    -------
+    float
+        Normalization factor (arcsec^2).
+    """
+    bn = _sersic_bn(n)
+    log_norm = (
+        jnp.log(2.0 * jnp.pi)
+        + jnp.log(n)
+        + 2.0 * jnp.log(Re)
+        + jax.scipy.special.gammaln(2.0 * n)
+        - 2.0 * n * jnp.log(bn)
+    )
+    return jnp.exp(log_norm)
+
+
+def _sersic_evaluate_faceon(flux, Re, n, x, y):
+    """Face-on Sersic surface brightness in the disk plane.
+
+    I(r) = I_0 * exp(-b_n * (r / R_e)^{1/n})
+
+    where I_0 = flux / (2*pi * n * R_e^2 * Gamma(2n) / b_n^{2n}).
+
+    Parameters
+    ----------
+    flux : float
+        Total integrated flux.
+    Re : float
+        Half-light radius (arcsec).
+    n : float
+        Sersic index.
+    x, y : jnp.ndarray
+        Coordinates in disk plane (arcsec).
+
+    Returns
+    -------
+    jnp.ndarray
+        Surface brightness array.
+    """
+    r = jnp.sqrt(x**2 + y**2)
+    bn = _sersic_bn(n)
+    I0 = flux / _sersic_norm_2d(Re, n)
+    return I0 * jnp.exp(-bn * (r / Re) ** (1.0 / n))
+
+
+# ==============================================================================
+# InclinedExponentialModel
+# ==============================================================================
 
 
 class InclinedExponentialModel(IntensityModel):
@@ -69,48 +1173,50 @@ class InclinedExponentialModel(IntensityModel):
     def name(self) -> str:
         return 'inclined_exp'
 
-    def configure_psf(
-        self,
-        gsobj,
-        image_pars=None,
-        *,
-        image_shape=None,
-        pixel_scale=None,
-        oversample=5,
-        gsparams=None,
-        freeze=False,
-    ):
-        """Configure PSF with fused k-space convolution kernel."""
-        super().configure_psf(
-            gsobj,
-            image_pars=image_pars,
-            image_shape=image_shape,
-            pixel_scale=pixel_scale,
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k.
+
+        For exponential: (1 + k²r²cosi²)^{-3/2} along ky (compressed axis).
+        """
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** 1.5
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where exponential FT drops below threshold.
+
+        Accounts for inclination: the FT extends further along the
+        compressed ky axis by a factor of 1/cosi.
+
+        Analytic: along worst-case direction (ky),
+        (1 + k²r²cosi²)^{-3/2} = threshold →
+        k = sqrt(threshold^{-2/3} - 1) / (r * cosi).
+        """
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        return np.sqrt(threshold ** (-2.0 / 3.0) - 1.0) / (rscale * cosi)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for exponential profile.
+
+        stepk = π / (stepk_min_hlr × hlr). For exponential, hlr ≈ 1.678 × rscale.
+        """
+        rscale = params['int_rscale']
+        hlr = 1.6783469900166605 * rscale  # ln(2) * ... exact for exponential
+        return np.pi / (_STEPK_MIN_HLR * hlr)
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Calls _render_kspace without psf_kernel_fft.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
             oversample=oversample,
-            gsparams=gsparams,
-            freeze=freeze,
-        )
-
-        # compute padded grid dims matching _render_kspace
-        if image_pars is not None:
-            coarse_Nrow = image_pars.Nrow
-            coarse_Ncol = image_pars.Ncol
-            ps = image_pars.pixel_scale
-        else:
-            coarse_Nrow, coarse_Ncol = image_shape
-            ps = pixel_scale
-
-        N = max(self._psf_oversample, 1)
-        fine_Nrow = coarse_Nrow * N
-        fine_Ncol = coarse_Ncol * N
-        fine_ps = ps / N
-
-        pad_sq = next_fast_len(self._kspace_pad_factor * max(fine_Nrow, fine_Ncol))
-
-        from kl_pipe.psf import precompute_psf_kspace_fft
-
-        self._psf_kspace_fft = precompute_psf_kspace_fft(
-            gsobj, (pad_sq, pad_sq), fine_ps, gsparams=gsparams
         )
 
     def evaluate_in_disk_plane(
@@ -199,39 +1305,17 @@ class InclinedExponentialModel(IntensityModel):
         # rho0 = flux / (4 * pi * h_z * r_s^2)
         rho0 = flux / (4.0 * jnp.pi * h_z * rscale**2)
 
-        # Per-pixel GL centering: sech²(z/h_z) peak is at ell where
-        # z = ell*cosi - y_gal*sini = 0, i.e. ell_center = y_gal*sini/cosi.
-        # Integration half-width delta = 5*h_z/cosi captures >99.99% of sech².
-        delta = 5.0 * h_z / jnp.maximum(cosi, 0.1)
-        ell_center = yp * sini / jnp.maximum(cosi, 0.1)  # (...,)
-
-        # Gauss-Legendre on [ell_center - delta, ell_center + delta]
-        ell = ell_center[..., None] + delta * self._gl_nodes  # (..., N_QUAD)
-        w = delta * self._gl_weights  # (N_QUAD,)
-
-        # at each quadrature point, compute disk coords
-        # y_disk = y_gal * cosi + l * sini
-        # z = l * cosi - y_gal * sini
-        # x_disk = x_gal (unchanged)
-        y_disk = yp[..., None] * cosi + ell * sini  # (..., N_QUAD)
-        z_val = ell * cosi - yp[..., None] * sini  # (..., N_QUAD)
-        x_disk = xp[..., None]  # (..., N_QUAD)
-
-        R = jnp.sqrt(x_disk**2 + y_disk**2)  # (..., N_QUAD)
-
-        # rho = rho0 * exp(-R/r_s) * sech²(z/h_z)
-        radial = jnp.exp(-R / rscale)
-        z_norm = z_val / h_z
-        # sech²(x) = 1/cosh²(x); clip to avoid overflow
-        cosh_z = jnp.cosh(jnp.clip(z_norm, -20.0, 20.0))
-        vertical = 1.0 / (cosh_z**2)
-
-        integrand = rho0 * radial * vertical  # (..., N_QUAD)
-
-        # weighted sum over quadrature points
-        intensity = jnp.sum(integrand * w, axis=-1)
-
-        return intensity
+        return _inclined_sech2_los_integrate(
+            rho0,
+            lambda R: jnp.exp(-R / rscale),
+            h_z,
+            cosi,
+            sini,
+            xp,
+            yp,
+            self._gl_nodes,
+            self._gl_weights,
+        )
 
     def _render_kspace(
         self,
@@ -242,28 +1326,20 @@ class InclinedExponentialModel(IntensityModel):
         pad_factor: int = None,
         oversample: int = 1,
         psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
     ) -> jnp.ndarray:
         """
-        Core k-space FFT rendering (analytic FT of 3D inclined exponential).
+        K-space FFT rendering via shared core.
+
+        Builds a closure computing the analytic FT of the 3D inclined
+        exponential (radial: ``(1+k²)^{-3/2}``, vertical: ``u/sinh(u)``
+        via ``_inclined_sech2_ft``), then delegates IFFT plumbing to
+        ``_kspace_render_core``.
 
         Matches GalSim's SBInclinedExponential kValueHelper exactly.
         No point-sampling aliasing; the thin-disk limit (h_over_r -> 0)
         falls out naturally as ft_vertical -> 1.
-
-        Anti-aliasing: the IFFT is computed on a padded grid (pad_factor × N)
-        to suppress periodic boundary wrap-around, then cropped to (Nrow, Ncol).
-        Analogous to the zero-padding in convolve_fft for linear convolution.
-
-        When ``psf_kernel_fft`` is provided, the PSF is multiplied in k-space
-        BEFORE the IFFT crop, so edge pixels see PSF-scattered light from
-        source regions beyond the image boundary. This fuses rendering +
-        convolution into a single FFT pass and eliminates boundary flux loss.
-
-        When ``oversample > 1``, the k-grid extends to N × Nyquist, reducing
-        cusp aliasing by ~N³ (exponential FT decays as k⁻³). The IFFT is
-        computed at fine resolution and subsampled back to (Nrow, Ncol).
-        The half-pixel phase correction uses the coarse grid centering so
-        subsampled positions align with the standard centered grid.
 
         Axis convention
         ---------------
@@ -285,10 +1361,18 @@ class InclinedExponentialModel(IntensityModel):
         oversample : int, optional
             Oversampling factor for cusp anti-aliasing. Pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³. Default 1.
+            Most users should rely on adaptive grid sizing via
+            ``folding_threshold`` rather than manual ``oversample``.
         psf_kernel_fft : jnp.ndarray, optional
             Pre-computed PSF kernel FFT on the same padded grid. When provided,
             ``I_hat * psf_kernel_fft`` is computed before the IFFT, fusing
             rendering and PSF convolution. Shape must match the padded grid.
+        pixel_response : PixelResponse, optional
+            Pixel response for k-space multiplication. None = no pixel
+            integration at this level.
+        render_config : RenderConfig, optional
+            When provided, ``render_config.oversample`` and
+            ``render_config.pad_factor`` take precedence over the bare args.
 
         Returns
         -------
@@ -298,91 +1382,47 @@ class InclinedExponentialModel(IntensityModel):
         if pad_factor is None:
             pad_factor = self._kspace_pad_factor
 
-        # effective (fine) grid for k-space evaluation
-        eff_Nrow = Nrow * oversample
-        eff_Ncol = Ncol * oversample
-        eff_ps = pixel_scale / oversample
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
+        )
 
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate exponential FT: radial ``(1 + k^2)^{-3/2}``."""
         x0 = self.get_param('int_x0', theta)
         y0 = self.get_param('int_y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
-        theta_int = self.get_param('theta_int', theta)
+        pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
         rscale = self.get_param('int_rscale', theta)
         h_over_r = self.get_param('int_h_over_r', theta)
 
-        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
-
-        # padded FFT grid for anti-aliasing (reduces periodic boundary wrap-around)
-        if psf_kernel_fft is not None:
-            # fused path: padded grid must match the pre-computed PSF kernel FFT
-            pad_row, pad_col = psf_kernel_fft.shape
-        elif pad_factor > 1:
-            pad_row = next_fast_len(pad_factor * eff_Nrow)
-            pad_col = next_fast_len(pad_factor * eff_Ncol)
-        else:
-            pad_row = eff_Nrow
-            pad_col = eff_Ncol
-
-        # 1. k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
-        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_row, d=eff_ps)
-        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(pad_col, d=eff_ps)
-        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
-
-        # 2. centroid phase: pair kx with x0 (horizontal), ky with y0 (vertical)
-        #    half-pixel correction based on OUTPUT grid centering
-        hx = 0.5 * pixel_scale * (1 - Ncol % 2)
-        hy = 0.5 * pixel_scale * (1 - Nrow % 2)
-        phase = jnp.exp(-1j * (KX * (x0 - hx) + KY * (y0 - hy)))
-
-        # 3. shear: area-preserving M = (1/sqrt(1-|g|^2)) * [[1+g1, g2], [g2, 1-g1]]
-        #    (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
-        norm_shear = 1.0 / jnp.sqrt(1.0 - (g1**2 + g2**2))
-        kx_s = norm_shear * ((1.0 + g1) * KX + g2 * KY)
-        ky_s = norm_shear * (g2 * KX + (1.0 - g1) * KY)
-
-        # rotation: R(-theta_int) on (kx, ky)
-        c = jnp.cos(-theta_int)
-        s = jnp.sin(-theta_int)
-        kx_gal = c * kx_s - s * ky_s
-        ky_gal = s * kx_s + c * ky_s
-
-        # 4. analytic FT in galaxy frame
-        kx_scaled = kx_gal * rscale
-        ky_scaled = ky_gal * rscale
-
-        # radial FT: (1 + kx² + (ky*cosi)²)^{-3/2}  [cosi compresses rows=vertical]
-        k_sq = kx_scaled**2 + (ky_scaled * cosi) ** 2
-        ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
-
-        # vertical FT: u/sinh(u), u = (pi/2)*h_over_r*ky_scaled*sini
-        # safe-where pattern: substitute finite dummy in non-selected branch
-        # so JAX autodiff never sees 0/sinh(0) = 0/0 = NaN
-        u = (jnp.pi / 2.0) * h_over_r * ky_scaled * sini
-        u_safe = jnp.where(jnp.abs(u) < 1e-4, jnp.ones_like(u), u)
-        ft_vertical = jnp.where(
-            jnp.abs(u) < 1e-4,
-            1.0 - u**2 / 6.0,
-            u_safe / jnp.sinh(u_safe),
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5,
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            rscale,
+            h_over_r,
+            pixel_scale,
+            Nrow,
+            Ncol,
         )
-
-        I_hat = flux * ft_radial * ft_vertical * phase
-
-        # fused PSF convolution: multiply in k-space BEFORE IFFT crop
-        if psf_kernel_fft is not None:
-            I_hat = I_hat * psf_kernel_fft
-
-        # IFFT on padded grid, then extract center eff_Nrow×eff_Ncol
-        full = jnp.fft.ifft2(I_hat).real
-        full = jnp.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
-        image = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
-
-        if oversample > 1:
-            image = image[::oversample, ::oversample]
-
-        return image
 
     def render_image(
         self,
@@ -392,26 +1432,96 @@ class InclinedExponentialModel(IntensityModel):
         X: jnp.ndarray = None,
         Y: jnp.ndarray = None,
         oversample: int = 1,
+        *,
+        obs=None,
         **kwargs,
     ) -> jnp.ndarray:
         """
         Render via k-space FFT, with optional PSF convolution.
 
-        When PSF is configured with oversampling, renders at fine scale
-        so convolve_fft can bin down to coarse scale.
+        When obs has oversampling, renders at fine scale so convolve_fft
+        can bin down to coarse scale.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
 
         Parameters
         ----------
+        obs : ImageObs, optional
+            Observation object. When obs.kspace_psf_fft is set, uses fused
+            k-space path. When obs.psf_data is set, uses fallback real-space.
         oversample : int, optional
             Cusp anti-aliasing factor for the non-PSF path. The exponential
             profile has a cusp at R=0 whose FT decays as k⁻³; power above
             Nyquist aliases into the image. Oversampling pushes Nyquist to
             N × π/pixel_scale, reducing aliasing by ~N³.
-            Ignored when PSF is configured (PSF convolution suppresses
-            high-k aliasing naturally). Default 2.
+            Ignored when PSF is configured via obs (PSF convolution suppresses
+            high-k aliasing naturally). Default 1.
+        render_config : RenderConfig, optional
+            When provided via kwargs, ``render_config.oversample`` takes
+            precedence over the bare ``oversample`` arg and ``obs.oversample``.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel. When a PSF is
+            configured, the returned image is PSF-convolved and pixel-
+            integrated via the BoxPixel sinc multiply in k-space.
         """
+        rc = kwargs.pop('render_config', None)
+
+        if obs is not None:
+            pixel_scale = obs.image_pars.pixel_scale
+            Nrow = obs.image_pars.Nrow
+            Ncol = obs.image_pars.Ncol
+
+            if obs.kspace_psf_fft is not None:
+                # fused k-space path: render + convolve via wrap in core.
+                # Engage wrap (oversample > 1 + pixel_response set) so sinc does
+                # pixel integration exactly; avoids double-integration that would
+                # result from spatial binning after sinc multiplication.
+                N = max(rc.oversample if rc is not None else obs.oversample, 1)
+                image = self._render_kspace(
+                    theta,
+                    Nrow,
+                    Ncol,
+                    pixel_scale,
+                    oversample=N,
+                    psf_kernel_fft=obs.kspace_psf_fft,
+                    pixel_response=obs.pixel_response,
+                )
+                return image
+
+            if obs.psf_data is not None:
+                # fallback real-space path: PSF kernel already includes pixel
+                # integration (from drawImage), do NOT apply pixel_response
+                from kl_pipe.psf import convolve_fft
+
+                eff_os = rc.oversample if rc is not None else obs.oversample
+                if eff_os > 1:
+                    N = eff_os
+                    image = self._render_kspace(
+                        theta, Nrow * N, Ncol * N, pixel_scale / N
+                    )
+                else:
+                    image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
+                return convolve_fft(image, obs.psf_data)
+
+            # no PSF on obs — apply pixel response if available
+            return self._render_kspace(
+                theta,
+                Nrow,
+                Ncol,
+                pixel_scale,
+                oversample=oversample,
+                pixel_response=obs.pixel_response,
+                render_config=rc,
+            )
+
+        # legacy/convenience path (no obs): construct BoxPixel from pixel_scale
         if image_pars is None and (X is None or Y is None):
-            raise ValueError("Provide image_pars or (X, Y)")
+            raise ValueError("Provide obs, image_pars, or (X, Y)")
 
         if image_pars is not None:
             pixel_scale = image_pars.pixel_scale
@@ -421,44 +1531,31 @@ class InclinedExponentialModel(IntensityModel):
             Nrow, Ncol = X.shape
             pixel_scale = jnp.abs(X[0, 1] - X[0, 0])
 
-        if self._psf_kspace_fft is not None:
-            # fused k-space path: render + convolve in one FFT pass
-            N = max(self._psf_oversample, 1)
-            image = self._render_kspace(
-                theta,
-                Nrow * N,
-                Ncol * N,
-                pixel_scale / N,
-                psf_kernel_fft=self._psf_kspace_fft,
-            )
-            if N > 1:
-                image = image.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
-            return image
+        from kl_pipe.pixel import BoxPixel as _BoxPixel
+        from kl_pipe.pixel import _PIXEL_RESPONSE_UNSET as _PR_UNSET
 
-        if self._psf_data is not None:
-            # fallback real-space path (shouldn't happen for this model,
-            # but keeps base class contract)
-            from kl_pipe.psf import convolve_fft
+        pr = kwargs.get('pixel_response', _PR_UNSET)
+        if pr is _PR_UNSET:
+            pr = _BoxPixel(float(pixel_scale))
 
-            if self._psf_oversample > 1:
-                N = self._psf_oversample
-                image = self._render_kspace(theta, Nrow * N, Ncol * N, pixel_scale / N)
-            else:
-                image = self._render_kspace(theta, Nrow, Ncol, pixel_scale)
-            return convolve_fft(image, self._psf_data)
+        # auto-compute render_config when not provided; pass the actual
+        # pixel_response so grid sizing matches the rendering chain.
+        if rc is None:
+            rc = _auto_render_config(self, theta, pixel_scale, pixel_response=pr)
 
         # warn if cusp aliasing likely exceeds 1% even with current oversample
+        eff_os = rc.oversample if rc is not None else oversample
         try:
             rscale_val = float(self.get_param('int_rscale', theta))
             ps_val = float(pixel_scale)
-            k_ny_eff = oversample * np.pi / ps_val
+            k_ny_eff = eff_os * np.pi / ps_val
             alias_frac = 1.0 / (1.0 + (k_ny_eff * rscale_val) ** 2) ** 1.5
             if alias_frac > 0.01:
                 import warnings
 
                 warnings.warn(
                     f"render_image: estimated cusp aliasing {alias_frac:.1%} of peak "
-                    f"(r_s/ps={rscale_val / ps_val:.1f}, oversample={oversample}). "
+                    f"(r_s/ps={rscale_val / ps_val:.1f}, oversample={eff_os}). "
                     f"Increase oversample or use a finer pixel scale for sub-1% "
                     f"accuracy without PSF convolution.",
                     stacklevel=2,
@@ -467,13 +1564,1526 @@ class InclinedExponentialModel(IntensityModel):
             pass  # inside JIT trace, skip warning
 
         return self._render_kspace(
-            theta, Nrow, Ncol, pixel_scale, oversample=oversample
+            theta,
+            Nrow,
+            Ncol,
+            pixel_scale,
+            oversample=oversample,
+            pixel_response=pr,
+            render_config=rc,
         )
+
+
+# ==============================================================================
+# InclinedSpergelModel
+# ==============================================================================
+
+
+class InclinedSpergelModel(IntensityModel):
+    """
+    3D inclined Spergel model with sech² vertical profile.
+
+    .. warning::
+
+       For nu < 0 (concentrated profiles, Sersic n > 1), the Spergel
+       radial density diverges as R^{2nu} at R=0. This power-law cusp
+       produces fundamentally different inclined morphology from Sersic
+       profiles, which have finite central density. At high inclination,
+       the cusp causes unphysical broadening along the minor axis — light
+       spreads over ~5 pixels where the Sersic equivalent concentrates
+       into ~1 pixel. This is a mathematical limitation of the Spergel
+       functional form, not a rendering artifact.
+
+       **nu=0.5 (exponential / Sersic n=1) is exact and works perfectly
+       at all inclinations.** For concentrated bulge profiles (n >= 2),
+       use with caution and only face-on, or consider alternative
+       approaches (numerical Sersic FT, composite models).
+
+    The Spergel profile (Spergel 2010) generalizes the exponential via an
+    analytic FT ``(1+k²)^{-(1+nu)}`` in k-space. Native parameter is nu
+    (Spergel index); nu=0.5 recovers the exponential exactly.
+
+    Two evaluation paths:
+    - ``render_image``: k-space FFT (exact analytic FT, fully differentiable).
+      Use this for gradient-based inference.
+    - ``__call__``: real-space Gauss-Legendre quadrature (uses scipy K_nu
+      callback via ``jax.pure_callback``, NOT auto-differentiable).
+
+    Face-on radial profile: ``I(r) = I_0 * (r/c)^nu * K_nu(r/c)``
+    where ``I_0 = flux / (2*pi * c^2 * 2^nu * Gamma(nu+1))``.
+
+    K-space radial FT: ``(1 + k_x'^2 + (k_y'*cos(i))^2)^{-(1+nu)}``
+    where primed k-vectors are in the galaxy frame after shear + rotation.
+
+    Parameters
+    ----------
+    cosi : float
+        Cosine of inclination (0=edge-on, 1=face-on)
+    theta_int : float
+        Position angle (radians)
+    g1, g2 : float
+        Shear components
+    flux : float
+        Total integrated flux
+    int_rscale : float
+        Spergel scale length c (arcsec). For nu=0.5, equals exponential r_s.
+    int_h_over_r : float
+        Vertical scale height / radial scale length.
+        h_z = int_h_over_r * int_rscale.
+    nu : float
+        Spergel index. nu=0.5 is exponential (Sersic n=1),
+        nu=-0.6 approximates de Vaucouleurs (Sersic n=4).
+        Must satisfy nu > -1 for the profile to be physical.
+    int_x0, int_y0 : float
+        Centroid position (arcsec)
+    """
+
+    PARAMETER_NAMES = (
+        'cosi',
+        'theta_int',
+        'g1',
+        'g2',
+        'flux',
+        'int_rscale',
+        'int_h_over_r',
+        'nu',
+        'int_x0',
+        'int_y0',
+    )
+
+    _kspace_pad_factor = 2
+
+    def __init__(self, meta_pars=None, n_quad=None):
+        super().__init__(meta_pars)
+        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
+        self._n_quad = n
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        self._gl_nodes = jnp.array(nodes)
+        self._gl_weights = jnp.array(weights)
+
+    @property
+    def name(self) -> str:
+        return 'inclined_spergel'
+
+    # Spergel cusp regime: nu < CUSP_NU_THRESHOLD with high-inclination
+    # priors (cosi < CUSP_COSI_THRESHOLD) produces unphysical morphology
+    # along the minor axis. Construction-time check raises loudly.
+    _CUSP_NU_THRESHOLD = -0.5
+    _CUSP_COSI_THRESHOLD = 0.9
+
+    def check_priors_safe(self, priors) -> None:
+        """Raise if priors permit Spergel cusp regime at high inclination.
+
+        See class docstring warning: ``nu < -0.5`` with ``cosi < 0.9``
+        produces light spread over ~5 pixels along the minor axis where
+        the Sersic equivalent concentrates into ~1 pixel.
+        """
+        nu_low, _ = priors.get_param_bounds('nu')
+        cosi_low, _ = priors.get_param_bounds('cosi')
+        if nu_low is None or cosi_low is None:
+            return
+        if nu_low < self._CUSP_NU_THRESHOLD and cosi_low < self._CUSP_COSI_THRESHOLD:
+            raise ValueError(
+                _format_cusp_error(
+                    model_name='InclinedSpergelModel',
+                    cosi_low=cosi_low,
+                    cosi_threshold=self._CUSP_COSI_THRESHOLD,
+                    nu_low=nu_low,
+                    nu_threshold=self._CUSP_NU_THRESHOLD,
+                    sersic_alternative='InclinedSersicModel',
+                )
+            )
+
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k.
+
+        For Spergel: (1 + k²r²cosi²)^{-(1+ν)} along ky (compressed axis).
+        """
+        rscale = params['int_rscale']
+        nu = params['nu']
+        cosi = params['cosi']
+        return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** (1.0 + nu)
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where Spergel FT drops below threshold.
+
+        Accounts for inclination along worst-case direction (ky):
+        (1 + k²r²cosi²)^{-(1+ν)} = threshold →
+        k = sqrt(threshold^{-1/(1+ν)} - 1) / (r * cosi).
+        """
+        rscale = params['int_rscale']
+        nu = params['nu']
+        cosi = params['cosi']
+        return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for Spergel profile.
+
+        Uses GalSim's Spergel HLR/rscale relationship to compute the
+        half-light radius, then stepk = π / (stepk_min_hlr × hlr).
+        For simplicity, uses conservative bound: hlr ~ rscale for most ν.
+        """
+        rscale = params['int_rscale']
+        # conservative: hlr >= rscale for all ν > -1
+        hlr = rscale
+        return np.pi / (_STEPK_MIN_HLR * hlr)
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
+    def evaluate_in_disk_plane(
+        self,
+        theta: jnp.ndarray,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate face-on Spergel profile in disk plane.
+
+        Computes I(r) = I_0 * (r/c)^nu * K_nu(r/c). Uses scipy callback
+        for K_nu — not auto-differentiable. For velocity flux weighting
+        in gradient-based inference, prefer pre-computed flux maps via
+        render_image (k-space path).
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Model parameters.
+        x, y : jnp.ndarray
+            Coordinates in disk plane.
+        z : jnp.ndarray, optional
+            Currently unused.
+        """
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        nu = self.get_param('nu', theta)
+        return _spergel_evaluate_faceon(flux, rscale, nu, x, y)
+
+    def __call__(
+        self,
+        theta: jnp.ndarray,
+        plane: str,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate 3D inclined Spergel via LOS Gauss-Legendre quadrature.
+
+        Integrates rho(R, z) = rho0 * (R/c)^nu * K_nu(R/c) * sech²(z/h_z)
+        along the line of sight at each pixel in the galaxy frame.
+
+        NOT auto-differentiable (uses scipy K_nu via pure_callback);
+        use render_image for gradient-based inference.
+        """
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        h_over_r = self.get_param('int_h_over_r', theta)
+        nu = self.get_param('nu', theta)
+        if not isinstance(theta, jax.core.Tracer) and float(nu) <= -1.0:
+            raise ValueError(
+                f"nu={float(nu)} <= -1 is unphysical (Spergel profile has "
+                f"infinite spatial extent). Valid range: nu > -1."
+            )
+
+        if plane == 'disk':
+            return _spergel_evaluate_faceon(flux, rscale, nu, x, y)
+
+        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+
+        # transform to galaxy frame (NOT disk — we integrate LOS ourselves)
+        xp, yp = x, y
+        if plane == 'obs':
+            xp, yp = obs2cen(x0, y0, xp, yp)
+        if plane in ('obs', 'cen'):
+            xp, yp = cen2source(g1, g2, xp, yp)
+        if plane in ('obs', 'cen', 'source'):
+            xp, yp = source2gal(pa, xp, yp)
+
+        return _spergel_los_integrate(
+            flux,
+            rscale,
+            nu,
+            h_over_r,
+            cosi,
+            sini,
+            xp,
+            yp,
+            self._gl_nodes,
+            self._gl_weights,
+        )
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
+    ) -> jnp.ndarray:
+        """
+        K-space FFT rendering: radial FT = ``(1+k²)^{-(1+nu)}``.
+
+        Builds a closure via ``_inclined_sech2_ft`` with the Spergel
+        radial FT, then delegates IFFT plumbing to ``_kspace_render_core``.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array (10 elements).
+        Nrow, Ncol : int
+            Output grid dimensions.
+        pixel_scale : float
+            Output pixel scale (arcsec/pixel).
+        pad_factor : int, optional
+            IFFT padding factor. Defaults to ``self._kspace_pad_factor``.
+        oversample : int, optional
+            Oversampling factor. Default 1.
+        psf_kernel_fft : jnp.ndarray, optional
+            Pre-computed PSF FFT for fused convolution.
+        render_config : RenderConfig, optional
+            When provided, overrides oversample/pad_factor.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+        """
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate Spergel FT: radial ``(1 + k^2)^{-(1+nu)}``."""
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        h_over_r = self.get_param('int_h_over_r', theta)
+        nu = self.get_param('nu', theta)
+
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            rscale,
+            h_over_r,
+            pixel_scale,
+            Nrow,
+            Ncol,
+        )
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        *,
+        obs=None,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """
+        Render via k-space FFT, with optional PSF convolution.
+
+        When obs has oversampling, renders at fine scale so convolve_fft
+        can bin down to coarse scale.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
+
+        Parameters
+        ----------
+        obs : ImageObs, optional
+            Observation object. When obs.kspace_psf_fft is set, uses fused
+            k-space path. When obs.psf_data is set, uses fallback real-space.
+        oversample : int, optional
+            Cusp anti-aliasing factor for the non-PSF path. Default 1.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel.
+        """
+        # validate nu when theta is concrete (not inside JIT trace)
+        if not isinstance(theta, jax.core.Tracer):
+            nu = float(theta[self.PARAMETER_NAMES.index('nu')])
+            if nu <= -1.0:
+                raise ValueError(
+                    f"nu={nu} <= -1 is unphysical (Spergel profile has "
+                    f"infinite spatial extent). Valid range: nu > -1."
+                )
+        return _kspace_render_image(
+            self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
+        )
+
+
+# ==============================================================================
+# InclinedDeVaucouleursModel
+# ==============================================================================
+
+
+class InclinedDeVaucouleursModel(IntensityModel):
+    """
+    3D inclined de Vaucouleurs model via Spergel profile with fixed nu.
+
+    Thin wrapper around the Spergel profile functions with ``nu`` fixed
+    at ``_DEVAUCOULEURS_NU`` (community convention for Sersic n=4). Same
+    PARAMETER_NAMES as InclinedExponentialModel (no ``nu`` parameter).
+
+    .. warning::
+
+       The Spergel approximation to de Vaucouleurs breaks down at high
+       inclination due to the divergent cusp (see InclinedSpergelModel
+       warning). Use face-on only, or consider alternative approaches.
+
+    Parameters
+    ----------
+    cosi : float
+        Cosine of inclination (0=edge-on, 1=face-on)
+    theta_int : float
+        Position angle (radians)
+    g1, g2 : float
+        Shear components
+    flux : float
+        Total integrated flux
+    int_rscale : float
+        Spergel scale length c (arcsec).
+    int_h_over_r : float
+        Vertical scale height / radial scale length.
+    int_x0, int_y0 : float
+        Centroid position (arcsec)
+    """
+
+    PARAMETER_NAMES = (
+        'cosi',
+        'theta_int',
+        'g1',
+        'g2',
+        'flux',
+        'int_rscale',
+        'int_h_over_r',
+        'int_x0',
+        'int_y0',
+    )
+
+    _kspace_pad_factor = 2
+    _fixed_nu = _DEVAUCOULEURS_NU
+
+    def __init__(self, meta_pars=None, n_quad=None):
+        super().__init__(meta_pars)
+        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
+        self._n_quad = n
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        self._gl_nodes = jnp.array(nodes)
+        self._gl_weights = jnp.array(weights)
+
+    @property
+    def name(self) -> str:
+        return 'de_vaucouleurs'
+
+    # DeVauc nu is hardwired to _DEVAUCOULEURS_NU (-0.6) which always
+    # falls below the Spergel cusp threshold; only cosi needs validating.
+    _CUSP_COSI_THRESHOLD = 0.9
+
+    def check_priors_safe(self, priors) -> None:
+        """Raise if priors permit cusp regime at high inclination.
+
+        DeVauc fixes ``nu = -0.6`` which is always below the cusp threshold
+        ``-0.5``, so ``cosi < 0.9`` alone triggers the unphysical regime.
+        """
+        cosi_low, _ = priors.get_param_bounds('cosi')
+        if cosi_low is None:
+            return
+        if cosi_low < self._CUSP_COSI_THRESHOLD:
+            raise ValueError(
+                _format_cusp_error(
+                    model_name='InclinedDeVaucouleursModel',
+                    cosi_low=cosi_low,
+                    cosi_threshold=self._CUSP_COSI_THRESHOLD,
+                    fixed_nu=self._fixed_nu,
+                    nu_threshold=InclinedSpergelModel._CUSP_NU_THRESHOLD,
+                    sersic_alternative='InclinedSersicModel (n=4)',
+                )
+            )
+
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k."""
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        nu = self._fixed_nu
+        return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** (1.0 + nu)
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where de Vaucouleurs FT drops below threshold.
+
+        Delegates to Spergel formula with fixed nu, accounts for cosi.
+        """
+        rscale = params['int_rscale']
+        cosi = params['cosi']
+        nu = self._fixed_nu
+        return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for de Vaucouleurs profile."""
+        rscale = params['int_rscale']
+        return np.pi / (_STEPK_MIN_HLR * rscale)
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT."""
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
+    def evaluate_in_disk_plane(
+        self,
+        theta: jnp.ndarray,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate face-on de Vaucouleurs profile in disk plane.
+
+        Delegates to Spergel profile with fixed ``nu = _DEVAUCOULEURS_NU``.
+        Uses scipy callback for K_nu — not auto-differentiable.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Model parameters.
+        x, y : jnp.ndarray
+            Coordinates in disk plane.
+        z : jnp.ndarray, optional
+            Currently unused.
+        """
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        return _spergel_evaluate_faceon(flux, rscale, self._fixed_nu, x, y)
+
+    def __call__(
+        self,
+        theta: jnp.ndarray,
+        plane: str,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate 3D inclined de Vaucouleurs via LOS Gauss-Legendre quadrature.
+
+        Delegates to Spergel LOS integration with fixed ``nu``.
+        NOT auto-differentiable; use render_image for inference.
+        """
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        h_over_r = self.get_param('int_h_over_r', theta)
+
+        if plane == 'disk':
+            return _spergel_evaluate_faceon(flux, rscale, self._fixed_nu, x, y)
+
+        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+
+        # transform to galaxy frame (NOT disk — we integrate LOS ourselves)
+        xp, yp = x, y
+        if plane == 'obs':
+            xp, yp = obs2cen(x0, y0, xp, yp)
+        if plane in ('obs', 'cen'):
+            xp, yp = cen2source(g1, g2, xp, yp)
+        if plane in ('obs', 'cen', 'source'):
+            xp, yp = source2gal(pa, xp, yp)
+
+        return _spergel_los_integrate(
+            flux,
+            rscale,
+            self._fixed_nu,
+            h_over_r,
+            cosi,
+            sini,
+            xp,
+            yp,
+            self._gl_nodes,
+            self._gl_weights,
+        )
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
+    ) -> jnp.ndarray:
+        """
+        K-space FFT rendering with fixed nu for de Vaucouleurs.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array (9 elements, no nu).
+        Nrow, Ncol : int
+            Output grid dimensions.
+        pixel_scale : float
+            Output pixel scale (arcsec/pixel).
+        pad_factor : int, optional
+            IFFT padding factor. Defaults to ``self._kspace_pad_factor``.
+        oversample : int, optional
+            Oversampling factor. Default 1.
+        psf_kernel_fft : jnp.ndarray, optional
+            Pre-computed PSF FFT for fused convolution.
+        render_config : RenderConfig, optional
+            When provided, overrides oversample/pad_factor.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+        """
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate de Vaucouleurs FT: Spergel with fixed nu=-0.6."""
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        rscale = self.get_param('int_rscale', theta)
+        h_over_r = self.get_param('int_h_over_r', theta)
+        nu = self._fixed_nu
+
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            rscale,
+            h_over_r,
+            pixel_scale,
+            Nrow,
+            Ncol,
+        )
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        *,
+        obs=None,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """
+        Render via k-space FFT, with optional PSF convolution.
+
+        When obs has oversampling, renders at fine scale so convolve_fft
+        can bin down to coarse scale.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
+
+        Parameters
+        ----------
+        obs : ImageObs, optional
+            Observation object. When obs.kspace_psf_fft is set, uses fused
+            k-space path. When obs.psf_data is set, uses fallback real-space.
+        oversample : int, optional
+            Cusp anti-aliasing factor for the non-PSF path. Default 1.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel.
+        """
+        return _kspace_render_image(
+            self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
+        )
+
+
+# ==============================================================================
+# InclinedSersicModel
+# ==============================================================================
+
+
+class InclinedSersicModel(IntensityModel):
+    """
+    3D inclined Sersic model with sech² vertical profile.
+
+    .. note::
+
+       This class wraps a **symbolic-regression emulator** for the Sersic
+       radial Fourier transform (Miller & Pasha 2025), not a closed-form
+       analytic FT. There is no closed-form Sersic FT in elementary
+       functions; alternatives are slow numerical Hankel transforms or
+       (for some n) Spergel approximations. The emulator is
+       fully-differentiable and accurate to L2 < 2e-6 vs numerical truth
+       across n in [0.5, 6.0]. For n=1 specifically, ``InclinedExponentialModel``
+       has a true analytic FT and is preferable.
+
+    Uses the Miller & Pasha (2025) symbolic-regression emulator for the
+    radial Fourier transform, giving a fully differentiable k-space
+    rendering path. The Sersic profile ``exp(-b_n (r/R_e)^{1/n})`` is
+    finite at R=0 (no cusp), so this model works correctly at all
+    inclinations — unlike the Spergel approximation which diverges for
+    n >= 2.
+
+    .. note::
+
+       For n=1 (exponential), ``InclinedExponentialModel`` uses an
+       exact analytic FT and is preferable. This model uses an emulator
+       approximation at all n including n=1.
+
+    Two evaluation paths:
+    - ``render_image``: k-space FFT with emulator radial FT. Fully
+      differentiable — use for gradient-based inference.
+    - ``__call__``: real-space Gauss-Legendre LOS quadrature with
+      exact ``exp(-b_n (r/R_e)^{1/n})`` radial profile.
+
+    Parameters
+    ----------
+    cosi : float
+        Cosine of inclination (0=edge-on, 1=face-on).
+    theta_int : float
+        Position angle (radians).
+    g1, g2 : float
+        Shear components.
+    flux : float
+        Total integrated flux.
+    int_hlr : float
+        Half-light radius R_e (arcsec).
+    int_h_over_hlr : float
+        Vertical scale height / half-light radius. h_z = int_h_over_hlr * int_hlr.
+    n_sersic : float
+        Sersic index. Valid range: [0.5, 6.0].
+    int_x0, int_y0 : float
+        Centroid position (arcsec).
+    """
+
+    PARAMETER_NAMES = (
+        'cosi',
+        'theta_int',
+        'g1',
+        'g2',
+        'flux',
+        'int_hlr',
+        'int_h_over_hlr',
+        'n_sersic',
+        'int_x0',
+        'int_y0',
+    )
+
+    _kspace_pad_factor = 2
+
+    def __init__(self, meta_pars=None, n_quad=None):
+        super().__init__(meta_pars)
+        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
+        self._n_quad = n
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        self._gl_nodes = jnp.array(nodes)
+        self._gl_weights = jnp.array(weights)
+
+    @property
+    def name(self) -> str:
+        return 'inclined_sersic'
+
+    def _ft_envelope(self, k: float, params: dict) -> float:
+        """Profile FT amplitude along worst-case direction at wavenumber k.
+
+        Evaluates Sersic emulator at dimensionless k_eff = k * hlr * cosi
+        (along the compressed ky axis for inclined profiles).
+        """
+        hlr = params['int_hlr']
+        n = params['n_sersic']
+        cosi = params['cosi']
+        k_dim_eff = k * hlr * cosi
+        return float(_sersic_ft_emulator(jnp.array(k_dim_eff), jnp.array(n)))
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where Sersic emulator FT drops below threshold.
+
+        Uses scipy root-finding on the Miller & Pasha (2025) emulator.
+        Accounts for inclination: along the compressed ky axis, the
+        effective dimensionless k is ``k_physical * hlr * cosi``.
+
+        Parameters
+        ----------
+        params : dict
+            Must contain 'int_hlr', 'n_sersic', and 'cosi'.
+        threshold : float
+            FT amplitude threshold.
+        """
+        from scipy.optimize import brentq
+
+        hlr = params['int_hlr']
+        n = params['n_sersic']
+        cosi = params['cosi']
+
+        # emulator works in dimensionless k_dim = k_physical * R_e
+        # for inclined case along ky: k_dim_eff = k_physical * R_e * cosi
+        # find k_physical where emulator(k_physical * hlr * cosi, n) = threshold
+        def residual(log_k_phys):
+            k_phys = np.exp(log_k_phys)
+            k_dim_eff = k_phys * hlr * cosi
+            ft_val = float(_sersic_ft_emulator(jnp.array(k_dim_eff), jnp.array(n)))
+            return ft_val - threshold
+
+        # bracket in physical k
+        log_k_min = np.log(1e-3 / hlr)
+        log_k_max = np.log(1e4 / (hlr * cosi))
+
+        if residual(log_k_min) < 0:
+            return np.exp(log_k_min)
+        if residual(log_k_max) > 0:
+            return np.exp(log_k_max)
+
+        log_k_phys = brentq(residual, log_k_min, log_k_max, rtol=1e-6)
+        return np.exp(log_k_phys)
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing for Sersic profile.
+
+        stepk = π / (stepk_min_hlr × hlr).
+        """
+        hlr = params['int_hlr']
+        return np.pi / (_STEPK_MIN_HLR * hlr)
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        """
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
+    def evaluate_in_disk_plane(
+        self,
+        theta: jnp.ndarray,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate face-on Sersic profile in disk plane.
+
+        Computes I(r) = I_0 * exp(-b_n * (r/R_e)^{1/n}).
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Model parameters.
+        x, y : jnp.ndarray
+            Coordinates in disk plane (arcsec).
+        z : jnp.ndarray, optional
+            Currently unused.
+        """
+        flux = self.get_param('flux', theta)
+        hlr = self.get_param('int_hlr', theta)
+        n = self.get_param('n_sersic', theta)
+        return _sersic_evaluate_faceon(flux, hlr, n, x, y)
+
+    def __call__(
+        self,
+        theta: jnp.ndarray,
+        plane: str,
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        z: jnp.ndarray = None,
+    ) -> jnp.ndarray:
+        """
+        Evaluate 3D inclined Sersic via LOS Gauss-Legendre quadrature.
+
+        Integrates rho(R, z) = rho0 * exp(-b_n*(R/R_e)^{1/n}) * sech²(z/h_z)
+        along the line of sight at each pixel in the galaxy frame.
+        """
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        hlr = self.get_param('int_hlr', theta)
+        h_over_hlr = self.get_param('int_h_over_hlr', theta)
+        n = self.get_param('n_sersic', theta)
+
+        if not isinstance(theta, jax.core.Tracer):
+            n_val = float(n)
+            if n_val < 0.5 or n_val > 6.0:
+                raise ValueError(
+                    f"n_sersic={n_val} outside valid range [0.5, 6.0] "
+                    f"for the Sersic FT emulator."
+                )
+
+        if plane == 'disk':
+            return _sersic_evaluate_faceon(flux, hlr, n, x, y)
+
+        sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
+        h_z = h_over_hlr * hlr
+
+        # transform to galaxy frame (NOT disk — we integrate LOS ourselves)
+        xp, yp = x, y
+        if plane == 'obs':
+            xp, yp = obs2cen(x0, y0, xp, yp)
+        if plane in ('obs', 'cen'):
+            xp, yp = cen2source(g1, g2, xp, yp)
+        if plane in ('obs', 'cen', 'source'):
+            xp, yp = source2gal(pa, xp, yp)
+
+        # volume density normalization: rho0 = flux / (2 * h_z * norm_2d)
+        rho0 = flux / (2.0 * h_z * _sersic_norm_2d(hlr, n))
+        bn = _sersic_bn(n)
+
+        return _inclined_sech2_los_integrate(
+            rho0,
+            lambda R: jnp.exp(-bn * (R / hlr) ** (1.0 / n)),
+            h_z,
+            cosi,
+            sini,
+            xp,
+            yp,
+            self._gl_nodes,
+            self._gl_weights,
+        )
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
+    ) -> jnp.ndarray:
+        """
+        K-space FFT rendering with Sersic radial FT via emulator.
+
+        Builds a closure via ``_inclined_sech2_ft`` with the Miller & Pasha
+        emulator for the radial FT, then delegates IFFT plumbing to
+        ``_kspace_render_core``.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array (10 elements).
+        Nrow, Ncol : int
+            Output grid dimensions.
+        pixel_scale : float
+            Output pixel scale (arcsec/pixel).
+        pad_factor : int, optional
+            IFFT padding factor. Defaults to ``self._kspace_pad_factor``.
+        oversample : int, optional
+            Oversampling factor. Default 1.
+        psf_kernel_fft : jnp.ndarray, optional
+            Pre-computed PSF FFT for fused convolution.
+        render_config : RenderConfig, optional
+            When provided, overrides oversample/pad_factor.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+        """
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
+        )
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Evaluate Sersic FT via Miller & Pasha emulator."""
+        x0 = self.get_param('int_x0', theta)
+        y0 = self.get_param('int_y0', theta)
+        g1 = self.get_param('g1', theta)
+        g2 = self.get_param('g2', theta)
+        pa = self.get_param('theta_int', theta)
+        cosi = self.get_param('cosi', theta)
+        flux = self.get_param('flux', theta)
+        hlr = self.get_param('int_hlr', theta)
+        h_over_hlr = self.get_param('int_h_over_hlr', theta)
+        n = self.get_param('n_sersic', theta)
+
+        # safe-where: sqrt(0) has gradient inf — substitute dummy=1
+        # in the DC branch so autodiff never sees sqrt(0)
+        def _safe_sersic_ft(k_sq):
+            is_dc = k_sq < 1e-20
+            k = jnp.sqrt(jnp.where(is_dc, jnp.ones_like(k_sq), k_sq))
+            return jnp.where(is_dc, 1.0, _sersic_ft_emulator(k, n))
+
+        return _inclined_sech2_ft(
+            KX,
+            KY,
+            _safe_sersic_ft,
+            flux,
+            x0,
+            y0,
+            g1,
+            g2,
+            pa,
+            cosi,
+            hlr,
+            h_over_hlr,
+            pixel_scale,
+            Nrow,
+            Ncol,
+        )
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        *,
+        obs=None,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """
+        Render via k-space FFT, with optional PSF convolution.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars=image_pars) -- no PSF
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel.
+        """
+        return _kspace_render_image(
+            self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
+        )
+
+
+# ==============================================================================
+# Composite intensity models
+# ==============================================================================
+
+
+@dataclass
+class ComponentSpec:
+    """Specification for one component in a CompositeIntensityModel.
+
+    Parameters
+    ----------
+    model : IntensityModel
+        The component model instance (e.g. InclinedExponentialModel()).
+    prefix : str
+        Prefix for this component's non-shared parameters (e.g. 'disk').
+    fixed_params : dict
+        Parameters to fix (not exposed in composite PARAMETER_NAMES).
+        Keys must match the component model's PARAMETER_NAMES.
+        If a fixed param is also in shared_pars, fixed takes precedence
+        for this component while other components still get the shared value.
+    """
+
+    model: IntensityModel
+    prefix: str
+    fixed_params: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class _ComponentMapping:
+    """Pre-computed index mapping for extracting one component's theta."""
+
+    template: jnp.ndarray
+    gather_idx: jnp.ndarray
+    scatter_pos: jnp.ndarray
+    flux_pos: int
+
+
+def _rename_param(name: str, prefix: str) -> str:
+    """Rename a component param: strip int_ prefix, prepend component prefix."""
+    base = name[4:] if name.startswith('int_') else name
+    return f'{prefix}_{base}'
+
+
+class CompositeIntensityModel(IntensityModel):
+    """Composite intensity model summing N inclined components in k-space.
+
+    Each component is an existing IntensityModel instance. The composite
+    sums their k-space FTs before a single IFFT pass (exact via linearity
+    of FT). Component-specific parameters are prefixed to avoid collision;
+    geometric parameters are shared by default.
+
+    Flux is parameterized as ``total_flux`` + ``{prefix}_frac`` for
+    components 1..N-1. Component 0's flux fraction is derived as
+    ``1 - sum(other fracs)``, so the sum of all component fluxes equals
+    ``total_flux`` exactly.
+
+    When used as the intensity model in KLModel, the composite's total
+    flux weights the velocity PSF convolution. The flux-weighted velocity
+    field shows reduced ``V_circ`` near the center. Two physical effects
+    compound to produce this: (i) per-pixel velocity values are flux-
+    weighted, and a centrally-concentrated bulge component pulls the
+    weighted-mean toward small radii where ``V_circ`` is naturally lower;
+    (ii) the spatial PSF smoothing operation blurs the high-rotation outer
+    regions into the center. The smoothing dominates for moderate seeing.
+    This is the physically correct observable but may bias Tully-Fisher
+    estimates that assume a single rotating disk.
+
+    Parameters
+    ----------
+    components : list of ComponentSpec
+        Component specifications. Component 0 is the flux reference.
+    shared_pars : set of str, optional
+        Original model param names to share across components.
+        Default: ``{'cosi', 'theta_int', 'g1', 'g2'}``.
+        Centroids NOT shared by default; add ``'int_x0', 'int_y0'``
+        to share them.
+    meta_pars : dict, optional
+        Model metadata.
+    """
+
+    # placeholder; set dynamically in __init__
+    PARAMETER_NAMES = ()
+
+    _DEFAULT_SHARED = frozenset({'cosi', 'theta_int', 'g1', 'g2'})
+
+    def __init__(
+        self,
+        components: List[ComponentSpec],
+        shared_pars: Set[str] = None,
+        meta_pars: dict = None,
+    ):
+        if len(components) < 2:
+            raise ValueError('CompositeIntensityModel requires >= 2 components')
+
+        self._components = components
+        self._shared_pars = (
+            set(shared_pars) if shared_pars is not None else set(self._DEFAULT_SHARED)
+        )
+
+        # validate fixed_params keys exist in component PARAMETER_NAMES
+        for spec in self._components:
+            for p in spec.fixed_params:
+                if p not in spec.model.PARAMETER_NAMES:
+                    raise ValueError(
+                        f"fixed_params key '{p}' not in "
+                        f"{type(spec.model).__name__}.PARAMETER_NAMES"
+                    )
+
+        # validate shared_pars exist in at least one component
+        all_component_pars = set()
+        for spec in self._components:
+            all_component_pars |= set(spec.model.PARAMETER_NAMES)
+        invalid_shared = self._shared_pars - all_component_pars
+        if invalid_shared:
+            raise ValueError(f"shared_pars {invalid_shared} not found in any component")
+
+        self.PARAMETER_NAMES, self._component_mappings = (
+            self._build_parameter_structure()
+        )
+        self._kspace_pad_factor = max(
+            getattr(s.model, '_kspace_pad_factor', 2) for s in self._components
+        )
+
+        super().__init__(meta_pars)
+
+    def _build_parameter_structure(self):
+        """Build composite PARAMETER_NAMES and per-component index mappings.
+
+        Returns
+        -------
+        param_names : tuple of str
+        mappings : list of _ComponentMapping
+        """
+        param_list = []
+        # track which shared params we've already added
+        shared_added = set()
+
+        # pass 1: collect shared params (first occurrence order)
+        for spec in self._components:
+            for p in spec.model.PARAMETER_NAMES:
+                if p == 'flux':
+                    continue
+                if p in self._shared_pars and p not in shared_added:
+                    # only add to composite if at least one component
+                    # doesn't fix it (otherwise it's fully fixed)
+                    has_non_fixed = any(
+                        p not in s.fixed_params for s in self._components
+                    )
+                    if has_non_fixed:
+                        param_list.append(p)
+                        shared_added.add(p)
+
+        # pass 2: add total_flux and fraction params
+        param_list.append('total_flux')
+        for spec in self._components[1:]:
+            param_list.append(f'{spec.prefix}_frac')
+
+        # pass 3: add component-specific (non-shared, non-fixed, non-flux) params
+        for spec in self._components:
+            for p in spec.model.PARAMETER_NAMES:
+                if p == 'flux':
+                    continue
+                if p in self._shared_pars:
+                    continue
+                if p in spec.fixed_params:
+                    continue
+                param_list.append(_rename_param(p, spec.prefix))
+
+        param_names = tuple(param_list)
+
+        # build index for composite param lookup
+        composite_idx = {name: i for i, name in enumerate(param_names)}
+
+        # build per-component mappings
+        mappings = []
+        for spec in self._components:
+            comp_pars = spec.model.PARAMETER_NAMES
+            n_comp = len(comp_pars)
+            template = jnp.zeros(n_comp)
+            gather_list = []
+            scatter_list = []
+            flux_pos = -1
+
+            for j, p in enumerate(comp_pars):
+                if p == 'flux':
+                    flux_pos = j
+                    # flux injected separately via _get_component_theta
+                    continue
+
+                if p in spec.fixed_params:
+                    # fixed value goes into template (even if shared)
+                    template = template.at[j].set(spec.fixed_params[p])
+                    continue
+
+                if p in self._shared_pars:
+                    if p in composite_idx:
+                        gather_list.append(composite_idx[p])
+                        scatter_list.append(j)
+                    continue
+
+                # non-shared, non-fixed: use renamed param
+                renamed = _rename_param(p, spec.prefix)
+                gather_list.append(composite_idx[renamed])
+                scatter_list.append(j)
+
+            if flux_pos < 0:
+                raise ValueError(
+                    f"Component model {type(spec.model).__name__} has no "
+                    f"'flux' parameter — cannot use in composite"
+                )
+
+            mappings.append(
+                _ComponentMapping(
+                    template=template,
+                    gather_idx=jnp.array(gather_list, dtype=jnp.int32),
+                    scatter_pos=jnp.array(scatter_list, dtype=jnp.int32),
+                    flux_pos=flux_pos,
+                )
+            )
+
+        return param_names, mappings
+
+    def _get_component_theta(self, theta: jnp.ndarray, i: int) -> jnp.ndarray:
+        """Extract component i's parameter array from composite theta.
+
+        JIT-compatible: uses precomputed template + index scatter.
+        Injects derived flux from total_flux and fraction params.
+        """
+        m = self._component_mappings[i]
+        comp_theta = m.template.at[m.scatter_pos].set(theta[m.gather_idx])
+
+        total_flux = self.get_param('total_flux', theta)
+        if i == 0:
+            # reference component: flux = total * (1 - sum of other fracs)
+            frac_sum = 0.0
+            for j in range(1, len(self._components)):
+                frac_name = f'{self._components[j].prefix}_frac'
+                frac_sum = frac_sum + self.get_param(frac_name, theta)
+            comp_theta = comp_theta.at[m.flux_pos].set(total_flux * (1.0 - frac_sum))
+        else:
+            frac_name = f'{self._components[i].prefix}_frac'
+            frac = self.get_param(frac_name, theta)
+            comp_theta = comp_theta.at[m.flux_pos].set(total_flux * frac)
+
+        return comp_theta
+
+    def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
+        """Sum k-space FTs of all components (exact via linearity of FT)."""
+        ft_total = jnp.zeros_like(KX, dtype=complex)
+        for i, spec in enumerate(self._components):
+            comp_theta = self._get_component_theta(theta, i)
+            ft_total = ft_total + spec.model._ft_image(
+                comp_theta, KX, KY, pixel_scale, Nrow, Ncol
+            )
+        return ft_total
+
+    def _render_kspace(
+        self,
+        theta: jnp.ndarray,
+        Nrow: int,
+        Ncol: int,
+        pixel_scale: float,
+        pad_factor: int = None,
+        oversample: int = 1,
+        psf_kernel_fft: jnp.ndarray = None,
+        pixel_response=None,
+        render_config=None,
+    ) -> jnp.ndarray:
+        """Render composite image via summed k-space FTs + single IFFT."""
+        if pad_factor is None:
+            pad_factor = self._kspace_pad_factor
+        return _kspace_render_core(
+            lambda KX, KY: self._ft_image(theta, KX, KY, pixel_scale, Nrow, Ncol),
+            Nrow,
+            Ncol,
+            pixel_scale,
+            pad_factor,
+            oversample,
+            psf_kernel_fft,
+            pixel_response=pixel_response,
+            render_config=render_config,
+        )
+
+    def render_image(
+        self,
+        theta: jnp.ndarray,
+        image_pars=None,
+        plane: str = 'obs',
+        X: jnp.ndarray = None,
+        Y: jnp.ndarray = None,
+        oversample: int = 1,
+        *,
+        obs=None,
+        **kwargs,
+    ) -> jnp.ndarray:
+        """Render composite image with optional PSF convolution.
+
+        Returns
+        -------
+        jnp.ndarray, shape (Nrow, Ncol)
+            Image in flux per pixel. Sum of
+            per-component k-space FTs is IFFTed in a single pass.
+        """
+        return _kspace_render_image(
+            self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
+        )
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render without PSF, for datacube building."""
+        return self._render_kspace(
+            theta,
+            image_pars.Nrow,
+            image_pars.Ncol,
+            image_pars.pixel_scale,
+            oversample=oversample,
+        )
+
+    def __call__(self, theta, plane, x, y, z=None):
+        """Sum real-space component evaluations."""
+        total = jnp.zeros_like(x)
+        for i, spec in enumerate(self._components):
+            comp_theta = self._get_component_theta(theta, i)
+            total = total + spec.model(comp_theta, plane, x, y, z)
+        return total
+
+    def evaluate_in_disk_plane(self, theta, X, Y, Z=None):
+        """Sum component face-on profiles in disk plane."""
+        total = jnp.zeros_like(X)
+        for i, spec in enumerate(self._components):
+            comp_theta = self._get_component_theta(theta, i)
+            total = total + spec.model.evaluate_in_disk_plane(comp_theta, X, Y, Z)
+        return total
+
+    @property
+    def name(self) -> str:
+        parts = '+'.join(f'{s.prefix}:{s.model.name}' for s in self._components)
+        return f'composite({parts})'
+
+    def theta2pars(self, theta: jnp.ndarray) -> dict:
+        """Convert theta array to parameter dict (instance method)."""
+        return {name: float(theta[i]) for i, name in enumerate(self.PARAMETER_NAMES)}
+
+    def pars2theta(self, pars: dict) -> jnp.ndarray:
+        """Convert parameter dict to theta array (instance method)."""
+        return jnp.array([pars[name] for name in self.PARAMETER_NAMES])
+
+
+class BulgeDiskModel(CompositeIntensityModel):
+    """Exponential disk (n=1) + Sersic bulge (n=4, fixed) composite.
+
+    The disk component uses ``InclinedExponentialModel`` with the exact
+    analytic Fourier transform ``(1 + k^2)^{-3/2}`` -- no approximation.
+
+    The bulge component uses ``InclinedSersicModel`` with the Miller &
+    Pasha (2025) symbolic regression emulator for the radial FT
+    (L2 < 2e-6 vs numerical truth, valid 0.5 <= n <= 6). The Sersic
+    index is fixed at n=4 (de Vaucouleurs).
+
+    Parameters
+    ----------
+    shared_centroids : bool
+        If True, share centroid (int_x0, int_y0) between components.
+        Default False: disk and bulge have independent centroids.
+    shear_bulge : bool
+        If True (default), the bulge component is sheared by the same
+        ``(g1, g2)`` as the disk. If False, the bulge sees ``g1=g2=0``
+        while the disk uses the shared shear. Disabling bulge shear is
+        a common preference in WL inference because mis-specified bulges
+        can absorb shear signal that physically belongs to the disk;
+        forcing the bulge to be intrinsically round bounds that leakage.
+    meta_pars : dict, optional
+        Model metadata.
+    """
+
+    def __init__(
+        self,
+        shared_centroids: bool = False,
+        shear_bulge: bool = True,
+        meta_pars: dict = None,
+    ):
+        shared = {'cosi', 'theta_int', 'g1', 'g2'}
+        if shared_centroids:
+            shared |= {'int_x0', 'int_y0'}
+
+        # n_sersic always fixed at 4 (de Vaucouleurs); optionally also
+        # zero out shear for the bulge (fixed-overrides-shared semantics).
+        bulge_fixed = {'n_sersic': 4.0}
+        if not shear_bulge:
+            bulge_fixed['g1'] = 0.0
+            bulge_fixed['g2'] = 0.0
+
+        super().__init__(
+            components=[
+                ComponentSpec(InclinedExponentialModel(), prefix='disk'),
+                ComponentSpec(
+                    InclinedSersicModel(),
+                    prefix='bulge',
+                    fixed_params=bulge_fixed,
+                ),
+            ],
+            shared_pars=shared,
+            meta_pars=meta_pars,
+        )
+
+    @property
+    def name(self) -> str:
+        return 'bulge_disk'
+
+    @property
+    def shear_bulge(self) -> bool:
+        # SSOT for the toggle is the bulge component's fixed_params:
+        # shear_bulge=False writes g1=g2=0 into bulge_fixed at __init__.
+        return 'g1' not in self._components[1].fixed_params
+
+
+# ==============================================================================
+# Factory
+# ==============================================================================
 
 
 INTENSITY_MODEL_TYPES = {
     'default': InclinedExponentialModel,
     'inclined_exp': InclinedExponentialModel,
+    'inclined_spergel': InclinedSpergelModel,
+    'spergel': InclinedSpergelModel,
+    'de_vaucouleurs': InclinedDeVaucouleursModel,
+    'inclined_sersic': InclinedSersicModel,
+    'sersic': InclinedSersicModel,
+    'bulge_disk': BulgeDiskModel,
 }
 
 
