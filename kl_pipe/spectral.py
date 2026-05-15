@@ -340,6 +340,7 @@ class SpectralModel:
     def get_param(self, name: str, theta_spec: jnp.ndarray):
         return theta_spec[self._param_indices[name]]
 
+    #@profile
     def build_cube(
         self,
         theta_spec: jnp.ndarray,

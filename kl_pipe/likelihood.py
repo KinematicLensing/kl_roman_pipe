@@ -60,6 +60,8 @@ from kl_pipe.utils import build_map_grid_from_image_pars
 from kl_pipe.observation import ImageObs, VelocityObs, FiberObs
 from kl_pipe.spectral import FiberPars
 
+#import line_profiler
+
 
 def _log_likelihood_velocity_only(
     theta: jnp.ndarray,
@@ -291,6 +293,7 @@ def _log_likelihood_separate_images(
     # independent observations: joint likelihood is sum of log-likelihoods
     return log_prob_vel + log_prob_int
 
+#@profile
 def _log_likelihood_fiber(
     theta: jnp.ndarray,
     theta_spec: jnp.ndarray,
@@ -633,7 +636,7 @@ def create_jitted_likelihood_joint(
         )
     )
 
-
+#@profile
 def create_jitted_likelihood_fiber(
     theta_spec: jnp.ndarray,
     kl_model: 'KLModel',

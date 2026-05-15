@@ -933,6 +933,7 @@ class KLModel(object):
             raise ValueError("No spectral model configured")
         return theta[self._spectral_indices]
 
+    #@profile
     def render_cube(
         self,
         theta: jnp.ndarray,
@@ -1024,6 +1025,7 @@ class KLModel(object):
             gsparams=gsparams,
         )
         
+    #@profile
     def render_fiber(
         self,
         theta: jnp.ndarray,
@@ -1041,7 +1043,7 @@ class KLModel(object):
 
         # if cube_pars is None: #I don't think I have actually tried this out
         ## convenience path: auto-build from z (not JIT-compatible)
-        # theta_spec = self.get_spectral_pars(theta)
+        #theta_spec = self.get_spectral_pars(theta)
         # z = float(self.spectral_model.get_param('z', theta_spec))
         # cube_pars = fiber_pars.to_cube_pars(z) #yeah this is not a thing yet
 
@@ -1339,65 +1341,3 @@ class KLModel(object):
         """
 
         return jnp.array([pars[name] for name in self.PARAMETER_NAMES])
-
-
-# class FiberModel(object):
-# SpectralModel returns INTRINSIC cube (no PSF). PSF applied by KLModel per-slice.
-# so, should I be using KLModel first?
-
-#'''This class wraps the theoretical cube after it is generated to produce
-# simulated images.
-#'''
-
-##first make fiber parameters
-#''' Store the `FiberPars` object'''
-# def __init__(
-# self,
-# meta_pars: dict,
-# obs_conf: dict,
-# spectral_model: SpectralModel):
-
-# right now I have FiberPars taking cube_pars but I should just have it take meta_pars idk
-# self.Fpars = FiberPars(meta_pars, obs_conf=obs_conf)
-
-# calculate the atmospheric PSF convolved fiber mask, if PSF model is
-# not sampled.
-# if self.Fpars.is_dispersed:
-# self.ATMPSF_conv_fiber_mask = self.get_PSF_convolved_fiber_mask() #need to make these
-# self.resolution_mat = self.get_resolution_matrix() #need to make these
-# else:
-# self.ATMPSF_conv_fiber_mask = None
-# self.resolution_mat = None
-
-# return
-
-# @property
-# def bp_array(self):
-# return self.Fpars.bp_array
-# @property
-# def conf(self):
-# return self.Fpars.conf
-# @property
-# def lambdas(self): # (Nlam, 2)
-# return self.Fpars.lambdas
-# @property
-# def wave(self):
-# return self.Fpars.wave
-# @property
-# def lambda_eff(self):
-# return self.Fpars.lambda_eff
-
-# def get_fiber_mask(self):
-# mNx, mNy = self.Fpars['shape'][2], self.Fpars['shape'][1]
-# mscale = self.Fpars['pix_scale']
-# if self.Fpars.is_dispersed:
-# fiber_cen = [self.conf['FIBERDX'], self.conf['FIBERDY']] # dx, dy in arcsec
-# fiber_rad = self.conf['FIBERRAD'] # radius in arcsec
-# xmin, xmax = -mNx/2*mscale, mNx/2*mscale
-# ymin, ymax = -mNy/2*mscale, mNy/2*mscale
-# mask = cog(xmin-fiber_cen[0], xmax-fiber_cen[0],
-# ymin-fiber_cen[1], ymax-fiber_cen[1],
-# mNx, mNy, fiber_rad, 1, 2)
-# else:
-# mask = np.ones([mNy, mNx])
-# return mask
