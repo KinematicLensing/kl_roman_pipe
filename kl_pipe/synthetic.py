@@ -56,6 +56,7 @@ from typing import Tuple, Dict, Optional
 from scipy.special import gamma
 
 from kl_pipe.parameters import ImagePars
+from kl_pipe.pixel import BoxPixel, _PIXEL_RESPONSE_UNSET
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # Required parameters for each model type
@@ -96,6 +97,16 @@ REQUIRED_PARAMS = {
         # TODO: we could add support for optional parameters later
         # 'int_x0',
         # 'int_y0',
+    },
+    'spergel': {
+        'flux',
+        'int_rscale',
+        'nu',
+        'int_h_over_r',
+        'cosi',
+        'theta_int',
+        'g1',
+        'g2',
     },
 }
 
@@ -206,6 +217,125 @@ def generate_arctan_velocity_3d():
 # ==============================================================================
 
 
+def _generate_inclined_kspace_scipy(
+    radial_ft_fn,
+    image_pars,
+    flux,
+    int_rscale,
+    cosi,
+    theta_int,
+    g1,
+    g2,
+    int_x0,
+    int_y0,
+    int_h_over_r,
+    psf=None,
+    oversample=1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
+):
+    """Shared numpy k-space rendering with pluggable radial FT.
+
+    Independent numpy implementation matching JAX ``_kspace_render_core`` +
+    ``_inclined_sech2_ft``. Used by both Sersic (exponential) and Spergel
+    synthetic backends.
+
+    Parameters
+    ----------
+    radial_ft_fn : callable
+        k_sq -> radial FT array.
+        Exponential: ``lambda k_sq: 1/(1+k_sq)**1.5``
+        Spergel: ``lambda k_sq: 1/(1+k_sq)**(1+nu)``
+    """
+    from scipy.fft import next_fast_len as _next_fast_len
+
+    # default pixel response: BoxPixel from pixel_scale
+    if pixel_response is _PIXEL_RESPONSE_UNSET:
+        pixel_response = BoxPixel(image_pars.pixel_scale)
+
+    sini = np.sqrt(1.0 - cosi**2)
+    Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
+    ps = image_pars.pixel_scale
+
+    eff_Nrow = Nrow * oversample
+    eff_Ncol = Ncol * oversample
+    eff_ps = ps / oversample
+
+    pad = 2
+    if psf is not None:
+        # square padding matching model's fused k-space path
+        pad_sq = _next_fast_len(pad * max(eff_Nrow, eff_Ncol))
+        pr = pc = pad_sq
+    else:
+        pr = int(np.ceil(pad * eff_Nrow / 2) * 2)
+        pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
+
+    ky = 2 * np.pi * np.fft.fftfreq(pr, d=eff_ps)
+    kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
+    KY, KX = np.meshgrid(ky, kx, indexing='ij')
+
+    # centroid phase: half-pixel correction uses COARSE grid centering
+    hx = 0.5 * ps * (1 - Ncol % 2)
+    hy = 0.5 * ps * (1 - Nrow % 2)
+    phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
+
+    # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
+    norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
+    kx_s = norm_s * ((1 + g1) * KX + g2 * KY)
+    ky_s = norm_s * (g2 * KX + (1 - g1) * KY)
+
+    # rotation by -theta_int
+    c, s = np.cos(-theta_int), np.sin(-theta_int)
+    kx_gal = c * kx_s - s * ky_s
+    ky_gal = s * kx_s + c * ky_s
+
+    # analytic FT
+    kx_sc = kx_gal * int_rscale
+    ky_sc = ky_gal * int_rscale
+    k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
+    ft_radial = radial_ft_fn(k_sq)
+
+    u = (np.pi / 2) * int_h_over_r * ky_sc * sini
+    u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
+    ft_vertical = np.where(np.abs(u) < 1e-4, 1.0 - u**2 / 6.0, u_safe / np.sinh(u_safe))
+
+    I_hat = flux * ft_radial * ft_vertical * phase
+
+    # pixel response: defer to PixelResponse.ft so any subclass works
+    # (BoxPixel sinc, future RomanPixel/IPC, custom test mocks, etc.)
+    if pixel_response is not None:
+        I_hat = I_hat * np.asarray(pixel_response.ft(KX, KY))
+
+    if psf is not None:
+        # fuse PSF on the profile's k-grid before IFFT
+        # real-space kernel (independent from model's drawKImage path)
+        kern_size = psf.getGoodImageSize(eff_ps)
+        kern_img = psf.drawImage(
+            nx=kern_size, ny=kern_size, scale=eff_ps, method='no_pixel'
+        )
+        kernel = kern_img.array.astype(np.float64)
+        kernel /= kernel.sum()
+
+        # pad to profile's FFT grid and multiply in k-space
+        kernel_padded = np.zeros((pr, pc))
+        kr, kc = kernel.shape
+        kernel_padded[:kr, :kc] = kernel
+        kernel_padded = np.roll(kernel_padded, (-(kr // 2), -(kc // 2)), axis=(0, 1))
+        I_hat = I_hat * np.fft.fft2(kernel_padded)
+
+    full = np.fft.ifft2(I_hat).real
+    roll_row = (Nrow // 2) * oversample
+    roll_col = (Ncol // 2) * oversample
+    full = np.roll(full, (roll_row, roll_col), axis=(0, 1))
+    intensity = full[:eff_Nrow, :eff_Ncol]
+
+    if oversample > 1:
+        intensity = intensity.reshape(Nrow, oversample, Ncol, oversample).sum(
+            axis=(1, 3)
+        )
+
+    return intensity
+
+
 def generate_sersic_intensity_2d(
     image_pars: ImagePars,
     flux: float,
@@ -221,6 +351,7 @@ def generate_sersic_intensity_2d(
     backend: str = 'scipy',
     psf=None,
     oversample: int = 1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> np.ndarray:
     """
     Generate Sersic intensity profile.
@@ -286,7 +417,66 @@ def generate_sersic_intensity_2d(
             int_h_over_r=int_h_over_r,
             psf=psf,
             oversample=oversample,
+            pixel_response=pixel_response,
         )
+
+
+def _build_sersic_ft_galsim(n_sersic, int_rscale):
+    """Build a Sersic radial FT function using GalSim's numerical kValue.
+
+    Uses GalSim's Ogata-based Hankel transform (precomputed + spline cache)
+    as the radial FT source. Independent of the Miller & Pasha emulator
+    used in the JAX model code.
+
+    The scipy synthetic path uses this to test the numpy k-space rendering
+    pipeline independently from the JAX rendering + emulator path.
+
+    Parameters
+    ----------
+    n_sersic : float
+        Sersic index.
+    int_rscale : float
+        Sersic scale radius r_s (arcsec), where I(r) = I_0 * exp(-(r/r_s)^{1/n}).
+        Related to half-light radius by R_e = b_n^n * r_s.
+
+    Returns
+    -------
+    callable
+        k_sq -> FT array (normalized: FT(0) = 1).
+        k_sq is dimensionless: (k_physical * int_rscale)^2.
+    """
+    # convert r_s to R_e for GalSim
+    n = n_sersic
+    bn = 2.0 * n - 1.0 / 3.0 + 4.0 / (405.0 * n) + 46.0 / (25515.0 * n**2)
+    Re = int_rscale * bn**n
+
+    # GalSim Sersic with this R_e (flux=1 gives normalized FT)
+    gs_prof = gs.Sersic(n=n_sersic, half_light_radius=Re, flux=1.0)
+
+    def radial_ft_fn(k_sq):
+        # k_sq = (k_physical * int_rscale)^2, so k_physical = sqrt(k_sq)/int_rscale
+        k_phys = np.sqrt(np.maximum(k_sq, 0.0)) / int_rscale
+        # the FT is radially symmetric — evaluate on unique |k| values
+        # and interpolate back to the full grid
+        k_flat = k_phys.ravel()
+        k_unique = np.unique(np.round(k_flat, decimals=10))
+        ft_unique = np.ones(len(k_unique))
+        for i, kv in enumerate(k_unique):
+            if kv > 1e-15:
+                ft_unique[i] = gs_prof.kValue(kv, 0.0).real
+        # map back via sorted lookup
+        from scipy.interpolate import interp1d
+
+        interp = interp1d(
+            k_unique,
+            ft_unique,
+            kind='linear',
+            fill_value=0.0,
+            bounds_error=False,
+        )
+        return interp(k_flat).reshape(k_sq.shape)
+
+    return radial_ft_fn
 
 
 def _generate_sersic_scipy(
@@ -303,6 +493,7 @@ def _generate_sersic_scipy(
     int_h_over_r: float = 0.0,
     psf=None,
     oversample: int = 1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy.
 
@@ -330,70 +521,31 @@ def _generate_sersic_scipy(
     X_gal = cos_pa * X_shear - sin_pa * Y_shear
     Y_gal = sin_pa * X_shear + cos_pa * Y_shear
 
-    # analytic k-space rendering (independent numpy implementation)
-    # matches GalSim SBInclinedExponential via Fourier-slice theorem:
-    #   FT_radial = 1 / (1 + k_r²)^{3/2}
-    #   FT_vertical = u / sinh(u),  u = (π/2) · h/r · ky_gal · r_s · sin(i)
-    if int_h_over_r > 0 and n_sersic == 1.0:
-        Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
-        ps = image_pars.pixel_scale
+    # 3D k-space rendering via shared core
+    if int_h_over_r > 0:
+        if n_sersic == 1.0:
+            # exact exponential FT
+            radial_ft = lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5
+        else:
+            # numerical Sersic FT via GalSim kValue (independent of emulator)
+            radial_ft = _build_sersic_ft_galsim(n_sersic, int_rscale)
 
-        # effective (fine) grid for anti-aliasing, matching JAX _render_kspace
-        eff_Nrow = Nrow * oversample
-        eff_Ncol = Ncol * oversample
-        eff_ps = ps / oversample
-
-        # padded k-grid: ky conjugate to rows (vertical), kx conjugate to cols (horizontal)
-        pad = 2
-        pr = int(np.ceil(pad * eff_Nrow / 2) * 2)  # even padded sizes
-        pc = int(np.ceil(pad * eff_Ncol / 2) * 2)
-        ky = 2 * np.pi * np.fft.fftfreq(pr, d=eff_ps)
-        kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
-        KY, KX = np.meshgrid(ky, kx, indexing='ij')
-
-        # centroid phase: half-pixel correction uses COARSE grid centering
-        hx = 0.5 * ps * (1 - Ncol % 2)
-        hy = 0.5 * ps * (1 - Nrow % 2)
-        phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
-
-        # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
-        norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
-        kx_s = norm_s * ((1 + g1) * KX + g2 * KY)
-        ky_s = norm_s * (g2 * KX + (1 - g1) * KY)
-
-        # rotation by -theta_int
-        c, s = np.cos(-theta_int), np.sin(-theta_int)
-        kx_gal = c * kx_s - s * ky_s
-        ky_gal = s * kx_s + c * ky_s
-
-        # analytic FT
-        kx_sc = kx_gal * int_rscale
-        ky_sc = ky_gal * int_rscale
-        k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
-        ft_radial = 1.0 / (1.0 + k_sq) ** 1.5
-
-        u = (np.pi / 2) * int_h_over_r * ky_sc * sini
-        # safe-where: substitute finite dummy to avoid 0/sinh(0) = 0/0 warning
-        u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
-        ft_vertical = np.where(
-            np.abs(u) < 1e-4, 1.0 - u**2 / 6.0, u_safe / np.sinh(u_safe)
+        return _generate_inclined_kspace_scipy(
+            radial_ft,
+            image_pars,
+            flux,
+            int_rscale,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
+            int_h_over_r,
+            psf=psf,
+            oversample=oversample,
+            pixel_response=pixel_response,
         )
-
-        I_hat = flux * ft_radial * ft_vertical * phase
-        full = np.fft.ifft2(I_hat).real
-        full = np.roll(full, (eff_Nrow // 2, eff_Ncol // 2), axis=(0, 1))
-        intensity_obs = full[:eff_Nrow, :eff_Ncol] / eff_ps**2
-
-        if oversample > 1:
-            intensity_obs = intensity_obs[::oversample, ::oversample]
-
-        if psf is not None:
-            from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
-
-            kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
-            intensity_obs = convolve_fft_numpy(intensity_obs, kernel, padded_shape)
-
-        return intensity_obs
 
     # thin-disk path (original)
     # Step 4: Deproject inclination (gal -> disk) - divide by cosi
@@ -468,7 +620,7 @@ def _generate_sersic_galsim(
     Returns
     -------
     ndarray
-        Surface brightness map matching image_pars shape.
+        Flux per pixel image matching image_pars shape.
     """
 
     inclination = gs.Angle(np.arccos(cosi), gs.radians)
@@ -524,140 +676,183 @@ def _generate_sersic_galsim(
 
 
 # ==============================================================================
-# Noise generation
+# Spergel intensity profile generators
 # ==============================================================================
 
 
-def add_noise(
-    image: np.ndarray,
-    target_snr: float,
-    seed: Optional[int] = None,
-    include_poisson: bool = True,
-    poisson_scale: float = 1.0,
-    return_variance: bool = True,
-) -> Tuple[np.ndarray, float] | np.ndarray:
-    """
-    Add realistic noise to achieve target total signal-to-noise ratio.
-
-    Can include both Poisson (shot) noise and Gaussian (read) noise.
-
-    The total S/N is defined as:
-        S/N = sqrt(sum(signal^2)) / sqrt(sum(noise^2))
+def generate_spergel_intensity_2d(
+    image_pars: ImagePars,
+    flux: float,
+    int_rscale: float,
+    nu: float,
+    cosi: float,
+    theta_int: float,
+    g1: float = 0.0,
+    g2: float = 0.0,
+    int_x0: float = 0.0,
+    int_y0: float = 0.0,
+    int_h_over_r: float = 0.1,
+    backend: str = 'scipy',
+    psf=None,
+    oversample: int = 1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
+) -> np.ndarray:
+    """Generate Spergel intensity profile.
 
     Parameters
     ----------
-    image : ndarray
-        Input noiseless image.
-    target_snr : float
-        Target total signal-to-noise ratio.
-    seed : int, optional
-        Random seed for reproducibility.
-    include_poisson : bool, optional
-        If True, include Poisson (shot) noise. If False, only Gaussian noise.
-        Default is True.
-    poisson_scale : float, optional
-        Scale factor to convert image values to photon counts for Poisson noise.
-        Higher values = more shot noise. Default is 1.0.
-    return_variance : bool, optional
-        If True, return both noisy image and variance used.
-        If False, return only noisy image. Default is True.
+    image_pars : ImagePars
+        Image parameters defining the coordinate grids.
+    flux : float
+        Total flux.
+    int_rscale : float
+        Spergel scale length c (arcsec).
+    nu : float
+        Spergel index. nu=0.5 is exponential, nu=-0.6 ~ de Vaucouleurs.
+    cosi : float
+        Cosine of inclination angle.
+    theta_int : float
+        Position angle in radians.
+    g1, g2 : float, optional
+        Shear components.
+    int_x0, int_y0 : float, optional
+        Centroid offsets.
+    int_h_over_r : float, optional
+        Scale height / scale radius. Default 0.1.
+    backend : str, optional
+        'scipy' (any inclination) or 'galsim' (face-on only).
+    psf : galsim.GSObject, optional
+        PSF to convolve with.
+    oversample : int, optional
+        Anti-aliasing oversampling factor. Default 1.
 
     Returns
     -------
-    noisy_image : ndarray
-        Image with noise added.
-    variance : float, optional
-        Effective variance of the noise (returned only if return_variance=True).
-
-    Notes
-    -----
-    When include_poisson=True:
-        - Poisson noise is added: sqrt(counts) per pixel
-        - Gaussian read noise is added to reach target SNR
-
-    When include_poisson=False:
-        - Only Gaussian noise with constant variance
-        - Matches the original add_gaussian_noise behavior
-
-    Examples
-    --------
-    >>> image = np.random.rand(64, 64) * 100  # counts
-    >>>
-    >>> # With Poisson + Gaussian noise (more realistic)
-    >>> noisy, var = add_noise(image, target_snr=50, include_poisson=True)
-    >>>
-    >>> # Only Gaussian noise (simpler, for testing)
-    >>> noisy, var = add_noise(image, target_snr=50, include_poisson=False)
+    ndarray
+        Intensity map.
     """
-
-    rng = np.random.default_rng(seed)
-
-    if include_poisson:
-        # Convert image to photon counts
-        counts = np.abs(image) * poisson_scale
-
-        # Add Poisson noise (shot noise)
-        # For negative values, we'll handle them as if they're background-subtracted
-        noisy_counts = np.where(
-            counts > 0,
-            rng.poisson(counts),
-            counts + rng.normal(0, np.sqrt(np.abs(counts)), counts.shape),
+    if backend == 'galsim':
+        return _generate_spergel_galsim(
+            image_pars,
+            flux,
+            int_rscale,
+            nu,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
+            psf=psf,
+        )
+    else:
+        return _generate_spergel_scipy(
+            image_pars,
+            flux,
+            int_rscale,
+            nu,
+            cosi,
+            theta_int,
+            g1,
+            g2,
+            int_x0,
+            int_y0,
+            int_h_over_r,
+            psf=psf,
+            oversample=oversample,
+            pixel_response=pixel_response,
         )
 
-        # Convert back to original units
-        noisy_image = noisy_counts / poisson_scale
 
-        # Compute variance from Poisson noise
-        poisson_var = np.mean(np.abs(image) / poisson_scale)
+def _generate_spergel_scipy(
+    image_pars,
+    flux,
+    int_rscale,
+    nu,
+    cosi,
+    theta_int,
+    g1,
+    g2,
+    int_x0,
+    int_y0,
+    int_h_over_r=0.1,
+    psf=None,
+    oversample=1,
+    pixel_response=_PIXEL_RESPONSE_UNSET,
+):
+    """Generate Spergel profile via shared numpy k-space core.
 
-        # Calculate how much Gaussian noise to add to reach target SNR
-        total_signal = np.sqrt(np.sum(image**2))
-        target_noise_power = total_signal / target_snr
-
-        # Current noise power from Poisson
-        current_noise_power = np.sqrt(np.sum((noisy_image - image) ** 2))
-
-        # Additional Gaussian noise needed
-        if target_noise_power > current_noise_power:
-            additional_noise_power = np.sqrt(
-                target_noise_power**2 - current_noise_power**2
-            )
-            n_pixels = image.size
-            sigma_gaussian = additional_noise_power / np.sqrt(n_pixels)
-
-            gaussian_noise = rng.normal(0, sigma_gaussian, image.shape)
-            noisy_image += gaussian_noise
-
-            # Effective variance (combination of Poisson and Gaussian)
-            variance = poisson_var + sigma_gaussian**2
-        else:
-            # Poisson noise alone is sufficient
-            variance = poisson_var
-
-    else:
-        total_signal = np.sqrt(np.sum(image**2))
-        target_noise_power = total_signal / target_snr
-
-        # Per-pixel noise stddev (constant variance)
-        n_pixels = image.size
-        sigma_per_pixel = target_noise_power / np.sqrt(n_pixels)
-
-        # Add Gaussian noise
-        noise = rng.normal(0, sigma_per_pixel, image.shape)
-        noisy_image = image + noise
-
-        variance = sigma_per_pixel**2
-
-    if return_variance:
-        return noisy_image, variance
-    else:
-        return noisy_image
+    Radial FT: ``(1 + k²)^{-(1+nu)}``. Works at all inclinations.
+    """
+    return _generate_inclined_kspace_scipy(
+        lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
+        image_pars,
+        flux,
+        int_rscale,
+        cosi,
+        theta_int,
+        g1,
+        g2,
+        int_x0,
+        int_y0,
+        int_h_over_r,
+        psf=psf,
+        oversample=oversample,
+        pixel_response=pixel_response,
+    )
 
 
-# Backward compatibility alias
-add_gaussian_noise = lambda *args, **kwargs: add_noise(
-    *args, include_poisson=False, **kwargs
-)
+def _generate_spergel_galsim(
+    image_pars,
+    flux,
+    int_rscale,
+    nu,
+    cosi,
+    theta_int,
+    g1,
+    g2,
+    int_x0,
+    int_y0,
+    gsparams=None,
+    psf=None,
+    method='no_pixel',
+):
+    """Generate face-on Spergel profile via galsim.Spergel.
+
+    GalSim has no InclinedSpergel, so this only supports face-on (cosi >= 0.99).
+    For inclined Spergel, use the scipy backend.
+
+    Raises
+    ------
+    ValueError
+        If cosi < 0.99 (inclined).
+    """
+    if cosi < 0.99:
+        raise ValueError(
+            f"GalSim Spergel backend only supports face-on (cosi >= 0.99), "
+            f"got cosi={cosi}. Use backend='scipy' for inclined profiles."
+        )
+
+    profile = gs.Spergel(
+        nu=nu,
+        scale_radius=int_rscale,
+        flux=flux,
+        gsparams=gsparams,
+    )
+
+    # apply position angle, area-preserving shear, centroid offset
+    profile = profile.rotate(theta_int * gs.radians)
+    mu = 1.0 / (1.0 - (g1**2 + g2**2))
+    profile = profile.lens(g1=g1, g2=g2, mu=mu)
+    profile = profile.shift(int_x0, int_y0)
+
+    if psf is not None:
+        profile = gs.Convolve(profile, psf)
+
+    nx, ny = image_pars.Nx, image_pars.Ny
+    image = profile.drawImage(nx=nx, ny=ny, scale=image_pars.pixel_scale, method=method)
+
+    return image.array
 
 
 # ==============================================================================
@@ -776,21 +971,24 @@ class SyntheticVelocity:
         image_pars: ImagePars,
         snr: float,
         seed: Optional[int] = None,
-        include_poisson: bool = True,
     ) -> np.ndarray:
         """
         Generate synthetic velocity data.
+
+        Velocity is a flux-weighted moment of the spectral cube, not a count
+        map; Poisson statistics live on photon counts in spectral channels and
+        do not enter at the 2D velocity-image layer. Noise is therefore
+        Gaussian by construction (via ``kl_pipe.noise.add_velocity_noise``).
 
         Parameters
         ----------
         image_pars : ImagePars
             Image parameters defining the coordinate grids.
         snr : float
-            Target signal-to-noise ratio (total S/N).
+            Target matched-filter SNR (``||v||_2 / noise_std``). See
+            ``kl_pipe.noise`` module docstring.
         seed : int, optional
             Random seed for noise generation. If None, uses self.seed.
-        include_poisson : bool, optional
-            Whether to include Poisson (shot) noise. Default is True.
 
         Returns
         -------
@@ -812,13 +1010,10 @@ class SyntheticVelocity:
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
-        # Add noise
-        self.data_noisy, self.variance = add_noise(
-            self.data_true,
-            snr,
-            seed=seed,
-            include_poisson=include_poisson,
-            return_variance=True,
+        from kl_pipe.noise import add_velocity_noise
+
+        self.data_noisy, self.variance = add_velocity_noise(
+            self.data_true, target_snr=snr, seed=seed
         )
 
         return self.data_noisy
@@ -871,8 +1066,9 @@ class SyntheticIntensity:
         image_pars: ImagePars,
         snr: float,
         seed: Optional[int] = None,
-        include_poisson: bool = True,
+        include_poisson: bool = False,
         sersic_backend: str = 'scipy',
+        oversample: int = 1,
     ) -> np.ndarray:
         """
         Generate synthetic intensity data.
@@ -886,10 +1082,16 @@ class SyntheticIntensity:
         seed : int, optional
             Random seed for noise generation. If None, uses self.seed.
         include_poisson : bool, optional
-            Whether to include Poisson (shot) noise. Default is True.
+            Whether to include Poisson (shot) noise. Default is False:
+            ``add_intensity_noise`` raises when Poisson alone overshoots the
+            matched-filter target (true for most realistic Roman stamps with
+            ``flux=1``, ``gain=1``). Set explicitly to ``True`` only when
+            Poisson is sub-dominant for the chosen ``target_snr``.
         sersic_backend : str, optional
             Backend for Sersic profile generation ('scipy' or 'galsim'). Default is
             'scipy'.
+        oversample : int, optional
+            Oversampling factor for pixel integration. Default 1.
 
         Returns
         -------
@@ -903,25 +1105,41 @@ class SyntheticIntensity:
         # Generate true intensity field
         if self.model_type == 'sersic':
             self.data_true = generate_sersic_intensity_2d(
-                image_pars, backend=sersic_backend, psf=self.psf, **self.true_params
+                image_pars,
+                backend=sersic_backend,
+                psf=self.psf,
+                oversample=oversample,
+                **self.true_params,
             )
         elif self.model_type == 'exponential':
             # Exponential is Sersic with n=1
             params = self.true_params.copy()
             params['n_sersic'] = 1.0
             self.data_true = generate_sersic_intensity_2d(
-                image_pars, backend=sersic_backend, psf=self.psf, **params
+                image_pars,
+                backend=sersic_backend,
+                psf=self.psf,
+                oversample=oversample,
+                **params,
+            )
+        elif self.model_type == 'spergel':
+            self.data_true = generate_spergel_intensity_2d(
+                image_pars,
+                backend=sersic_backend,
+                psf=self.psf,
+                oversample=oversample,
+                **self.true_params,
             )
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
-        # Add noise
-        self.data_noisy, self.variance = add_noise(
+        from kl_pipe.noise import add_intensity_noise
+
+        self.data_noisy, self.variance = add_intensity_noise(
             self.data_true,
-            snr,
-            seed=seed,
+            target_snr=snr,
             include_poisson=include_poisson,
-            return_variance=True,
+            seed=seed,
         )
 
         return self.data_noisy
@@ -944,13 +1162,25 @@ def generate_datacube_3d(
 ):
     """Independent numpy datacube generator for validation.
 
-    Uses generate_arctan_velocity_2d() and generate_sersic_intensity_2d()
-    internally. Completely independent from SpectralModel/JAX code paths.
+    The cube is the pre-pixel-response intermediate (PSF convolved per
+    channel only when ``psf`` is supplied; JAX ``SpectralModel.build_cube``
+    is pre-PSF by construction). Pixel response is a detector property
+    applied only at the 2D dispersed observable in ``generate_grism_2d``,
+    not per-channel on the cube.
+
+    When ``spatial_oversample > 1`` the cube is built at fine spatial
+    resolution ``(Nrow*N, Ncol*N, Nlambda)``. Each component (velocity
+    map, broadband intensity, per-line intensity) is rendered on the
+    fine grid via ``generate_*_2d(oversample=1)`` against a fine
+    ``image_pars`` (point-sampled at fine pixel centers, no sinc + bin).
+    PSF convolution is applied per-channel at fine resolution, no
+    sum-bin to coarse — the caller composes pixel response separately
+    once the dispersed 2D image is in hand.
 
     Parameters
     ----------
     image_pars : ImagePars
-        Spatial grid.
+        Coarse-detector spatial grid.
     vel_pars : dict
         {v0, vcirc, vel_rscale, cosi, theta_int, g1, g2}
     int_pars : dict
@@ -958,13 +1188,22 @@ def generate_datacube_3d(
     spectral_pars : dict
         {z, vel_dispersion, lines: [{lambda_rest, flux, cont}, ...]}
     lambda_grid : ndarray
-        Wavelength array nm, shape (Nlambda,)
+        Wavelength array nm, shape (Nlambda,).
     psf : galsim.GSObject, optional
         PSF to convolve each wavelength slice.
+    spatial_oversample : int, default 1
+        Spatial oversampling factor; the cube is rendered at
+        ``(Nrow*N, Ncol*N, Nlambda)``.
+    spectral_oversample : int, default 1
+        Sub-bin factor for the wavelength grid; spectral fine grid is
+        averaged back to coarse.
 
     Returns
     -------
-    ndarray, shape (Nrow, Ncol, Nlambda)
+    ndarray
+        Datacube. Shape ``(Nrow, Ncol, Nlambda)`` when
+        ``spatial_oversample == 1``; ``(Nrow*N, Ncol*N, Nlambda)`` when
+        ``spatial_oversample == N > 1``.
     """
     C_KMS = 299792.458
 
@@ -972,20 +1211,32 @@ def generate_datacube_3d(
     vel_disp = spectral_pars['vel_dispersion']
     lines = spectral_pars['lines']
 
-    # velocity map (LOS, includes v0)
-    v_map = generate_arctan_velocity_2d(image_pars, **vel_pars)
+    # spatial fine grid: when oversample > 1, render everything (vel,
+    # intensity) on a fine ImagePars with oversample=1 (no internal
+    # sinc + bin). This gives a point-sampled fine grid suitable as a
+    # cube intermediate.
+    N = max(spatial_oversample, 1)
+    if N > 1:
+        spatial_image_pars = image_pars.make_fine_scale(N)
+    else:
+        spatial_image_pars = image_pars
+
+    # velocity map (LOS, includes v0) at fine resolution
+    v_map = generate_arctan_velocity_2d(spatial_image_pars, **vel_pars)
     v0 = vel_pars['v0']
     v_rotation = v_map - v0
 
-    # broadband intensity (for continuum)
+    # broadband intensity (for continuum). Cube is the pre-pixel-response
+    # intermediate; pass pixel_response=None so the numpy backend does not
+    # apply the BoxPixel sinc (point-sampled, matching JAX render_unconvolved).
     int_pars_full = dict(int_pars)
     if 'n_sersic' not in int_pars_full:
         int_pars_full['n_sersic'] = 1.0
     I_broadband = generate_sersic_intensity_2d(
-        image_pars, **int_pars_full, oversample=spatial_oversample
+        spatial_image_pars, **int_pars_full, oversample=1, pixel_response=None
     )
 
-    Nrow, Ncol = image_pars.Nrow, image_pars.Ncol
+    Nrow_s, Ncol_s = spatial_image_pars.Nrow, spatial_image_pars.Ncol
     Nlam = len(lambda_grid)
     osf = spectral_oversample
 
@@ -1000,7 +1251,7 @@ def generate_datacube_3d(
         osf = 1
 
     n_fine = len(lambda_fine)
-    cube_fine = np.zeros((Nrow, Ncol, n_fine))
+    cube_fine = np.zeros((Nrow_s, Ncol_s, n_fine))
 
     R_func = spectral_pars.get('R_func', lambda lam: 461.0 * lam / 1000.0)
 
@@ -1009,14 +1260,13 @@ def generate_datacube_3d(
         line_flux = line_info['flux']
         cont = line_info.get('cont', 0.0)
 
-        # per-line intensity: scale broadband by line flux ratio
-        # (simplified: uses broadband morphology with different total flux)
+        # per-line intensity (point-sampled, no pixel response)
         line_int_pars = dict(int_pars_full)
         if 'line_int_pars' in line_info:
             line_int_pars.update(line_info['line_int_pars'])
         line_int_pars['flux'] = line_flux
         I_line = generate_sersic_intensity_2d(
-            image_pars, **line_int_pars, oversample=spatial_oversample
+            spatial_image_pars, **line_int_pars, oversample=1, pixel_response=None
         )
 
         # Doppler-shifted observed wavelength per pixel
@@ -1028,7 +1278,7 @@ def generate_datacube_3d(
         sigma_eff = np.sqrt(vel_disp**2 + sigma_inst**2)
         sigma_lambda = lam_obs * sigma_eff / C_KMS
 
-        # normalized Gaussian on fine grid
+        # normalized Gaussian on fine wavelength grid
         dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
         sig = sigma_lambda[:, :, None]
         gauss = (1.0 / (sig * np.sqrt(2.0 * np.pi))) * np.exp(-0.5 * (dlam / sig) ** 2)
@@ -1036,16 +1286,19 @@ def generate_datacube_3d(
         cube_fine += I_line[:, :, None] * gauss
         cube_fine += I_broadband[:, :, None] * cont
 
-    # bin fine -> coarse
+    # spectral mean-bin fine -> coarse (pure averaging in the wavelength
+    # direction; spatial dimension stays at fine resolution)
     if osf > 1:
-        cube = cube_fine.reshape(Nrow, Ncol, Nlam, osf).mean(axis=-1)
+        cube = cube_fine.reshape(Nrow_s, Ncol_s, Nlam, osf).mean(axis=-1)
     else:
         cube = cube_fine
 
+    # PSF per-channel at the cube's spatial resolution. No spatial
+    # binning here — pixel response applies at the 2D observable stage.
     if psf is not None:
         from kl_pipe.psf import gsobj_to_kernel, convolve_fft_numpy
 
-        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=image_pars)
+        kernel, padded_shape = gsobj_to_kernel(psf, image_pars=spatial_image_pars)
         for k in range(Nlam):
             cube[:, :, k] = convolve_fft_numpy(cube[:, :, k], kernel, padded_shape)
 

@@ -84,11 +84,11 @@ velocity, variance = gen.generate_velocity_map(config, snr=50, seed=42)
 ## Coordinate Systems
 
 ### TNG Native Frame
-- **Units**: Comoving kpc/h (must convert to physical)
+- **Units**: Comoving kpc (physical distance)
 - **Origin**: Subhalo position
 - **Inclination**: 0-180° (0°=face-on from above, 90°=edge-on, 180°=face-on from below)
 - **Position Angle**: 0-360° (East of North convention)
-- **Redshift**: z~0.011 (Distance ~50 Mpc)
+- **Redshift**: z~0.0 (Snapshot 99)
 - **Angular Size**: ~21 arcmin (~1300 arcsec) - **too large for sub-arcsec observations!**
 
 ### Observer Frame
@@ -143,6 +143,12 @@ Run `experiments/sweverett/tng/offset_exploration.ipynb` to visualize 3D structu
 - Vertical velocities (v_z) are negated to preserve physics
 
 This maintains full 0-180° parameter space coverage while avoiding coordinate explosion when cos(i) < 0.
+
+## Dust Attenuation scheme
+- Applying TNG's dust attenuation to stellar luminosities (if `use_dusted=True`) results in more realistic intensity maps, especially in edge-on views where dust lanes are prominent.
+- Dust attenuation is band-dependent and can significantly reduce flux in edge-on orientations, creating characteristic dust lanes and asymmetries in the intensity maps.
+- For testing or idealized cases, `use_dusted=False` can be used to render dust-free luminosities, which may be desirable for certain analyses or visualizations.
+- See more detail of the dust attenuation scheme in section 2.1 of https://arxiv.org/abs/1610.07605. 
 
 ## Gridding Algorithms
 

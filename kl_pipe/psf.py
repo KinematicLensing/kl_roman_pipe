@@ -333,13 +333,27 @@ def _convolve_fft_raw(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
     return result[:nrow, :ncol].real
 
 
-def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
+def convolve_fft(
+    image: jnp.ndarray,
+    psf_data: PSFData,
+    bin: bool = True,
+) -> jnp.ndarray:
     """
     2D FFT convolution with optional oversampled binning.
 
     When psf_data.oversample > 1, the input image must be at fine-scale
-    (shape == original_shape == coarse_shape * oversample). The result
-    is binned down to coarse_shape by averaging N×N blocks.
+    (shape == original_shape == coarse_shape * oversample). With ``bin=True``
+    (default), the result is sum-binned to coarse_shape (preserves total
+    flux per pixel and acts as an implicit BoxPixel pixel response on the
+    convolved image). With ``bin=False``, the fine-scale convolved image
+    is returned without binning — used by cube-rendering paths where
+    pixel response is applied once at the final 2D dispersed observable
+    rather than per-channel on the cube intermediate.
+
+    The ``bin=False`` mode is the discrete-image analog of
+    ``pixel_response=None`` on the analytic intensity-model k-space path
+    (`_kspace_render_core`): both produce a PSF-convolved image without
+    implicit pixel integration.
 
     Fully JAX JIT and autodiff compatible.
 
@@ -349,11 +363,15 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
         2D image to convolve, shape == psf_data.original_shape.
     psf_data : PSFData
         Pre-computed PSF from precompute_psf_fft.
+    bin : bool, default True
+        When True and oversample > 1, sum-bin to coarse_shape (implicit
+        pixel integration). When False, return fine-scale result.
 
     Returns
     -------
     jnp.ndarray
-        Convolved image, shape == psf_data.coarse_shape.
+        Convolved image. Shape == psf_data.coarse_shape when ``bin=True``;
+        shape == psf_data.original_shape when ``bin=False``.
     """
     if image.shape != psf_data.original_shape:
         raise ValueError(
@@ -363,10 +381,10 @@ def convolve_fft(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
 
     result = _convolve_fft_raw(image, psf_data)
 
-    if psf_data.oversample > 1:
+    if bin and psf_data.oversample > 1:
         N = psf_data.oversample
         Nrow_c, Ncol_c = psf_data.coarse_shape
-        result = result.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+        result = result.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
 
     return result
 
@@ -376,15 +394,21 @@ def convolve_flux_weighted(
     intensity: jnp.ndarray,
     psf_data: PSFData,
     epsilon: float = 1e-10,
+    bin: bool = True,
 ) -> jnp.ndarray:
     """
     Flux-weighted velocity PSF convolution.
 
     v_obs = Conv(I * v, PSF) / max(Conv(I, PSF), epsilon)
 
-    When oversampled, numerator and denominator are convolved at fine scale,
-    then binned by sum (not mean) before division. This correctly approximates
-    the pixel-integrated flux-weighted velocity.
+    When oversampled and ``bin=True`` (default), numerator and denominator
+    are convolved at fine scale, then binned by sum before division. This
+    correctly approximates the pixel-integrated flux-weighted velocity.
+
+    With ``bin=False``, the ratio is taken at fine scale without binning —
+    symmetric API with ``convolve_fft(bin=False)``. No current callers
+    require ``bin=False`` for velocity rendering; the kwarg is provided
+    for API symmetry and future cube-velocity paths.
 
     Parameters
     ----------
@@ -396,16 +420,27 @@ def convolve_flux_weighted(
         Pre-computed PSF.
     epsilon : float
         Floor to prevent division by zero / NaN gradients.
+    bin : bool, default True
+        When True and oversample > 1, sum-bin numerator and denominator to
+        coarse_shape before division. When False, take the ratio at fine
+        scale.
 
     Returns
     -------
     jnp.ndarray
-        Flux-weighted, PSF-convolved velocity map, shape == psf_data.coarse_shape.
+        Flux-weighted, PSF-convolved velocity map. Shape ==
+        psf_data.coarse_shape when ``bin=True``; shape ==
+        psf_data.original_shape when ``bin=False``.
     """
+    # normalize intensity to prevent FFT overflow with large flux values
+    # (e.g. TNG luminosities); cancels exactly in the ratio Conv(I*v)/Conv(I)
+    i_max = jnp.max(jnp.abs(intensity))
+    intensity = intensity / jnp.maximum(i_max, 1.0)
+
     conv_iv = _convolve_fft_raw(intensity * velocity, psf_data)
     conv_i = _convolve_fft_raw(intensity, psf_data)
 
-    if psf_data.oversample > 1:
+    if bin and psf_data.oversample > 1:
         N = psf_data.oversample
         Nrow_c, Ncol_c = psf_data.coarse_shape
         num = conv_iv.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
@@ -427,6 +462,12 @@ def convolve_fft_numpy(
 ) -> np.ndarray:
     """
     Numpy version of convolve_fft for synthetic data generation.
+
+    Operates at a **single spatial scale** — image and kernel must already
+    be on the same grid. No ``bin`` kwarg analog to the JAX variant; this
+    function does not know about oversampling. Callers wanting oversample-
+    aware sum-binning must either (a) use the JAX ``convolve_fft`` with a
+    ``PSFData`` object, or (b) sum-bin the output themselves.
 
     Parameters
     ----------
@@ -465,6 +506,12 @@ def convolve_flux_weighted_numpy(
     """
     Numpy version of convolve_flux_weighted for synthetic data generation.
 
+    Operates at a **single spatial scale** — see notes on
+    ``convolve_fft_numpy``. No ``bin`` kwarg analog to the JAX variant;
+    the numpy path does not handle oversampled rendering. Use the JAX
+    ``convolve_flux_weighted`` with a ``PSFData`` for oversample-aware
+    flux-weighted PSF convolution.
+
     Parameters
     ----------
     velocity : np.ndarray
@@ -483,6 +530,10 @@ def convolve_flux_weighted_numpy(
     np.ndarray
         Flux-weighted, PSF-convolved velocity map.
     """
+    # normalize intensity to prevent FFT overflow with large flux values
+    i_max = np.max(np.abs(intensity))
+    intensity = intensity / max(i_max, 1.0)
+
     conv_iv = convolve_fft_numpy(intensity * velocity, kernel, padded_shape)
     conv_i = convolve_fft_numpy(intensity, kernel, padded_shape)
 

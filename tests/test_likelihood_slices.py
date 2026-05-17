@@ -22,7 +22,11 @@ from typing import Dict, Tuple
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
-from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.intensity import (
+    InclinedExponentialModel,
+    InclinedSpergelModel,
+    BulgeDiskModel,
+)
 from kl_pipe.model import KLModel
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
 from kl_pipe.likelihood import (
@@ -31,6 +35,7 @@ from kl_pipe.likelihood import (
     create_jitted_likelihood_joint,
 )
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
+from kl_pipe.observation import build_image_obs, build_velocity_obs, build_joint_obs
 
 # Import our shared test utilities
 from test_utils import (
@@ -133,12 +138,7 @@ def generate_synthetic_velocity_data(
 
     # Use synthetic module for noise generation
     synth = SyntheticVelocity(vel_pars, model_type='arctan', seed=config.seed)
-    data_noisy = synth.generate(
-        image_pars,
-        snr=snr,
-        seed=config.seed,
-        include_poisson=config.include_poisson_noise,
-    )
+    data_noisy = synth.generate(image_pars, snr=snr, seed=config.seed)
     variance = synth.variance
     data_true = synth.data_true  # Use synthetic's version for consistency
 
@@ -151,6 +151,7 @@ def generate_synthetic_intensity_data(
     image_pars: ImagePars,
     snr: float,
     config: TestConfig,
+    model_type: str = 'exponential',
 ) -> Tuple[jnp.ndarray, jnp.ndarray, float]:
     """
     Generate synthetic intensity data with noise.
@@ -161,28 +162,23 @@ def generate_synthetic_intensity_data(
         Intensity model class (e.g., InclinedExponentialModel).
     true_pars : dict
         True parameter values (using model's parameter names).
-        Can contain extra parameters that will be filtered out (e.g. joint models).
     image_pars : ImagePars
         Image parameters defining the grid.
     snr : float
         Target signal-to-noise ratio.
     config : TestConfig
         Test configuration.
+    model_type : str, optional
+        Synthetic model type ('exponential' or 'spergel'). Default 'exponential'.
 
     Returns
     -------
-    data_true : jnp.ndarray
-        Noiseless synthetic data.
-    data_noisy : jnp.ndarray
-        Noisy synthetic data.
-    variance : float
-        Noise variance used.
+    data_true, data_noisy, variance
     """
 
     model = model_class()
 
     # filter parameters to only include those needed by intensity model
-    # this is relevant for joint models
     int_pars = {k: v for k, v in true_pars.items() if k in model.PARAMETER_NAMES}
 
     theta_true = model.pars2theta(int_pars)
@@ -190,7 +186,7 @@ def generate_synthetic_intensity_data(
     data_true = model(theta_true, 'obs', X, Y)
 
     # Use synthetic module for noise generation
-    synth = SyntheticIntensity(int_pars, model_type='exponential', seed=config.seed)
+    synth = SyntheticIntensity(int_pars, model_type=model_type, seed=config.seed)
     data_noisy = synth.generate(
         image_pars,
         snr=snr,
@@ -209,7 +205,7 @@ def generate_synthetic_intensity_data(
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     """
     Test parameter recovery for CenteredVelocityModel (arctan rotation curve).
@@ -267,9 +263,10 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
     )
 
     # Create JIT-compiled likelihood
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     # Slice all parameters
     slices = slice_all_parameters(
@@ -293,7 +290,7 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     """
     Test parameter recovery with non-zero shear.
@@ -343,9 +340,10 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
     )
 
     # Likelihood slicing
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     slices = slice_all_parameters(
         log_like,
@@ -367,7 +365,7 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_offset_velocity(snr, test_config, velocity_grids):
     """
     Test parameter recovery for OffsetVelocityModel.
@@ -420,9 +418,10 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
     )
 
     # Likelihood slicing
-    log_like = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_vel = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     slices = slice_all_parameters(
         log_like,
@@ -444,7 +443,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedExponentialModel."""
 
@@ -492,9 +491,12 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
     )
 
     # Likelihood slicing
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     slices = slice_all_parameters(
         log_like,
@@ -516,7 +518,7 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_grids):
     """Test parameter recovery for InclinedExponentialModel with shear."""
 
@@ -564,9 +566,12 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
     )
 
     # Likelihood slicing
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     slices = slice_all_parameters(
         log_like,
@@ -588,7 +593,7 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
     """
     Test parameter recovery for joint velocity + intensity model.
@@ -680,15 +685,16 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
     )
 
     # Create joint likelihood
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     # Slice all joint parameters
     # Note: for joint models, we can't easily determine which ImagePars to use
@@ -714,7 +720,7 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("snr", [1000, 50, 10])
+@pytest.mark.parametrize("snr", [10000, 1000, 500])
 def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_grids):
     """
     Test parameter recovery for joint model with non-zero shear.
@@ -805,15 +811,16 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
     )
 
     # Create joint likelihood
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     # Slice all joint parameters
     slices = slice_all_parameters(
@@ -874,20 +881,22 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
     variance = synth.variance
     data_true = synth.data_true
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_noisy = data_noisy / ps2
-    variance = variance / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
-    # configure model with same PSF
+    # create model and observation with PSF
     model = InclinedExponentialModel()
-    model.configure_psf(psf, test_config.image_pars_intensity)
     theta_true = model.pars2theta(true_pars)
 
-    # create likelihood
-    log_like = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        psf=psf,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
     )
+
+    # create likelihood
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     # slice all parameters
     slices = slice_all_parameters(
@@ -909,7 +918,6 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
         has_psf=True,
     )
 
-    model.clear_psf()
     assert_parameter_recovery(recovery_stats, snr, 'Inclined exponential (PSF)')
 
 
@@ -972,26 +980,25 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
         test_config.image_pars_velocity,
         snr=snr,
         seed=test_config.seed,
-        include_poisson=test_config.include_poisson_noise,
     )
     variance = synth.variance
 
-    # configure velocity model with same PSF + flux_model
+    # build velocity observation with PSF + flux_model
     vel_model = CenteredVelocityModel()
     int_model = InclinedExponentialModel()
     theta_int = int_model.pars2theta(true_pars_int)
+    theta_true = vel_model.pars2theta(true_pars_vel)
 
-    vel_model.configure_velocity_psf(
-        psf,
+    obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
+        psf=psf,
+        data=data_noisy,
+        variance=variance,
         flux_model=int_model,
         flux_theta=theta_int,
     )
-    theta_true = vel_model.pars2theta(true_pars_vel)
 
-    log_like = create_jitted_likelihood_velocity(
-        vel_model, test_config.image_pars_velocity, variance, data_noisy
-    )
+    log_like = create_jitted_likelihood_velocity(vel_model, obs_vel)
 
     slices = slice_all_parameters(
         log_like,
@@ -1012,7 +1019,6 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
         has_psf=True,
     )
 
-    vel_model.clear_psf()
     assert_parameter_recovery(recovery_stats, snr, 'Centered velocity (PSF)')
 
 
@@ -1074,10 +1080,7 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
     )
     variance_int = synth_int.variance
 
-    # convert GalSim flux/pixel → surface brightness to match model units
-    ps2 = test_config.image_pars_intensity.pixel_scale**2
-    data_int_noisy = data_int_noisy / ps2
-    variance_int = variance_int / ps2**2
+    # GalSim and model both produce flux/pixel; no conversion needed.
 
     # generate intensity on velocity grid for flux weighting
     vel_pars = {
@@ -1114,33 +1117,29 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
         test_config.image_pars_velocity,
         snr=snr,
         seed=test_config.seed + 1,
-        include_poisson=test_config.include_poisson_noise,
     )
     variance_vel = synth_vel.variance
 
-    # create joint model with PSF
+    # create joint model and observations with PSF
     vel_model = OffsetVelocityModel()
     int_model = InclinedExponentialModel()
     joint_model = KLModel(
         vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
     )
-    joint_model.configure_joint_psf(
-        psf_vel=psf,
-        psf_int=psf,
-        image_pars_vel=test_config.image_pars_velocity,
-        image_pars_int=test_config.image_pars_intensity,
-    )
     theta_true = joint_model.pars2theta(true_pars)
 
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        psf_vel=psf,
+        psf_int=psf,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     slices = slice_all_parameters(
         log_like,
@@ -1192,12 +1191,14 @@ def test_mask_none_matches_unmasked_velocity(test_config):
         test_config,
     )
 
-    log_like_no_mask = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_no_mask = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
-    log_like_none_mask = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy, mask_vel=None
+    obs_none_mask = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance, mask=None
     )
+    log_like_no_mask = create_jitted_likelihood_velocity(model, obs_no_mask)
+    log_like_none_mask = create_jitted_likelihood_velocity(model, obs_none_mask)
 
     val1 = float(log_like_no_mask(theta_true))
     val2 = float(log_like_none_mask(theta_true))
@@ -1229,12 +1230,17 @@ def test_all_true_mask_matches_unmasked_velocity(test_config):
 
     all_true = jnp.ones(data_noisy.shape, dtype=bool)
 
-    log_like_no_mask = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy
+    obs_no_mask = build_velocity_obs(
+        test_config.image_pars_velocity, data=data_noisy, variance=variance
     )
-    log_like_all_true = create_jitted_likelihood_velocity(
-        model, test_config.image_pars_velocity, variance, data_noisy, mask_vel=all_true
+    obs_all_true = build_velocity_obs(
+        test_config.image_pars_velocity,
+        data=data_noisy,
+        variance=variance,
+        mask=all_true,
     )
+    log_like_no_mask = create_jitted_likelihood_velocity(model, obs_no_mask)
+    log_like_all_true = create_jitted_likelihood_velocity(model, obs_all_true)
 
     val1 = float(log_like_no_mask(theta_true))
     val2 = float(log_like_all_true(theta_true))
@@ -1268,12 +1274,14 @@ def test_mask_none_matches_unmasked_intensity(test_config):
         test_config,
     )
 
-    log_like_no_mask = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_no_mask = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
     )
-    log_like_none_mask = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy, mask_int=None
+    obs_none_mask = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance, mask=None
     )
+    log_like_no_mask = create_jitted_likelihood_intensity(model, obs_no_mask)
+    log_like_none_mask = create_jitted_likelihood_intensity(model, obs_none_mask)
 
     val1 = float(log_like_no_mask(theta_true))
     val2 = float(log_like_none_mask(theta_true))
@@ -1307,16 +1315,17 @@ def test_all_true_mask_matches_unmasked_intensity(test_config):
 
     all_true = jnp.ones(data_noisy.shape, dtype=bool)
 
-    log_like_no_mask = create_jitted_likelihood_intensity(
-        model, test_config.image_pars_intensity, variance, data_noisy
+    obs_no_mask = build_image_obs(
+        test_config.image_pars_intensity, data=data_noisy, variance=variance
     )
-    log_like_all_true = create_jitted_likelihood_intensity(
-        model,
+    obs_all_true = build_image_obs(
         test_config.image_pars_intensity,
-        variance,
-        data_noisy,
-        mask_int=all_true,
+        data=data_noisy,
+        variance=variance,
+        mask=all_true,
     )
+    log_like_no_mask = create_jitted_likelihood_intensity(model, obs_no_mask)
+    log_like_all_true = create_jitted_likelihood_intensity(model, obs_all_true)
 
     val1 = float(log_like_no_mask(theta_true))
     val2 = float(log_like_all_true(theta_true))
@@ -1351,13 +1360,13 @@ def test_masked_likelihood_gradient_velocity(test_config):
     )
 
     mask = make_aperture_mask(data_noisy.shape)
-    log_like = create_jitted_likelihood_velocity(
-        model,
+    obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
-        variance,
-        data_noisy,
-        mask_vel=jnp.array(mask),
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     grad_fn = jax.grad(log_like)
     grad = grad_fn(theta_true)
@@ -1409,13 +1418,13 @@ def test_recover_centered_velocity_masked_aperture(test_config, velocity_grids):
         mask=mask,
     )
 
-    log_like = create_jitted_likelihood_velocity(
-        model,
+    obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
-        variance,
-        data_noisy,
-        mask_vel=jnp.array(mask),
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
     )
+    log_like = create_jitted_likelihood_velocity(model, obs_vel)
 
     slices = slice_all_parameters(
         log_like,
@@ -1486,13 +1495,13 @@ def test_recover_inclined_exponential_masked_aperture(test_config, intensity_gri
         mask=mask,
     )
 
-    log_like = create_jitted_likelihood_intensity(
-        model,
+    obs_int = build_image_obs(
         test_config.image_pars_intensity,
-        variance,
-        data_noisy,
-        mask_int=jnp.array(mask),
+        data=data_noisy,
+        variance=variance,
+        mask=jnp.array(mask),
     )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
 
     slices = slice_all_parameters(
         log_like,
@@ -1596,17 +1605,18 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
         mask=mask_int,
     )
 
-    log_like = create_jitted_likelihood_joint(
-        joint_model,
+    obs_vel, obs_int = build_joint_obs(
         test_config.image_pars_velocity,
         test_config.image_pars_intensity,
-        variance_vel,
-        variance_int,
-        data_vel_noisy,
-        data_int_noisy,
+        joint_model.intensity_model,
+        data_vel=data_vel_noisy,
+        variance_vel=variance_vel,
+        data_int=data_int_noisy,
+        variance_int=variance_int,
         mask_vel=jnp.array(mask_vel),
         mask_int=jnp.array(mask_int),
     )
+    log_like = create_jitted_likelihood_joint(joint_model, obs_vel, obs_int)
 
     slices = slice_all_parameters(
         log_like,
@@ -1626,6 +1636,315 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
     )
 
     assert_parameter_recovery(recovery_stats, snr, 'Joint model (masked)')
+
+
+# ==============================================================================
+# Spergel Intensity Model Recovery
+# ==============================================================================
+
+
+@pytest.mark.parametrize("snr", [10000, 1000])
+def test_recover_inclined_spergel(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedSpergelModel (nu=0.5)."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'nu': 0.5,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    test_name = f"inclined_spergel_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (base)')
+
+
+@pytest.mark.parametrize("snr", [10000, 1000])
+def test_recover_inclined_spergel_devac(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedSpergelModel (nu=-0.6, de Vaucouleurs)."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
+        'flux': 1.0,
+        'int_rscale': 1.5,  # more concentrated for de Vaucouleurs
+        'int_h_over_r': 0.1,
+        'nu': -0.6,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    test_name = f"inclined_spergel_devac_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (de Vauc)')
+
+
+@pytest.mark.parametrize("snr", [10000, 1000])
+def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
+    """Test parameter recovery for InclinedSpergelModel with shear."""
+
+    X, Y = intensity_grids
+
+    true_pars = {
+        'cosi': 0.7,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+        'flux': 1.0,
+        'int_rscale': 3.0,
+        'int_h_over_r': 0.1,
+        'nu': 0.5,
+        'int_x0': 0.0,
+        'int_y0': 0.0,
+    }
+
+    model = InclinedSpergelModel()
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = generate_synthetic_intensity_data(
+        InclinedSpergelModel,
+        true_pars,
+        test_config.image_pars_intensity,
+        snr,
+        test_config,
+        model_type='spergel',
+    )
+
+    model_eval = model(theta_true, 'obs', X, Y)
+
+    test_name = f"inclined_spergel_shear_snr{snr}"
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=np.asarray(model_eval),
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    obs_int = build_image_obs(
+        test_config.image_pars_intensity,
+        data=data_noisy,
+        variance=variance,
+    )
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=test_config.image_pars_intensity,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices, true_pars, test_name, test_config, snr, 'intensity'
+    )
+
+    assert_parameter_recovery(recovery_stats, snr, 'Inclined Spergel (w/ shear)')
+
+
+# ==============================================================================
+# Test: BulgeDisk Composite Likelihood Slice
+# ==============================================================================
+
+
+@pytest.mark.parametrize('snr', [10000])
+def test_recover_bulge_disk(snr, test_config):
+    """Likelihood slices for BulgeDiskModel composite recovery.
+
+    SNR=1000 only: at lower SNR, multi-component degeneracies (flux-B/T,
+    scale-inclination) cause 1D slice peaks to shift beyond single-component
+    tolerances. Lower-SNR validation requires full MCMC with priors.
+
+    Synthetic data is rendered through GalSim with PSF + pixel response on
+    (``_TEST_PSF`` from test_composite_intensity). Noise convention matches
+    other intensity slice tests via ``add_noise(include_poisson=False)``.
+    """
+    # Composite-specific helpers and constants live in test_composite_intensity.
+    from test_composite_intensity import (
+        _TRUE_PARS_SHARED,
+        _IMAGE_PARS,
+        _TEST_PSF,
+        _generate_composite_synthetic,
+    )
+
+    X, Y = build_map_grid_from_image_pars(_IMAGE_PARS, unit='arcsec', centered=True)
+    true_pars = dict(_TRUE_PARS_SHARED)
+
+    model = BulgeDiskModel(shared_centroids=True)
+    theta_true = model.pars2theta(true_pars)
+
+    data_true, data_noisy, variance = _generate_composite_synthetic(
+        true_pars, _IMAGE_PARS, snr, psf=_TEST_PSF
+    )
+
+    obs_int = build_image_obs(
+        _IMAGE_PARS,
+        psf=_TEST_PSF,
+        data=data_noisy,
+        variance=variance,
+        int_model=model,
+    )
+
+    # Render model through the same PSF + pixel-response path the likelihood
+    # uses, so the diagnostic panels compare like-with-like (flux/pixel,
+    # PSF-convolved). model(theta, 'obs', X, Y) returns un-convolved analytic
+    # surface brightness in flux/area units, which mismatches data_true and
+    # produces a misleading chi^2 in the diagnostic plot.
+    model_eval = np.array(model.render_image(theta_true, obs=obs_int))
+
+    test_name = f'bulge_disk_snr{snr}'
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_noisy),
+        data_true=np.asarray(data_true),
+        model_eval=model_eval,
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='intensity',
+        variance=variance,
+        n_params=len(model.PARAMETER_NAMES),
+        enable_plots=test_config.enable_plots,
+    )
+
+    log_like = create_jitted_likelihood_intensity(model, obs_int)
+
+    slices = slice_all_parameters(
+        log_like,
+        model,
+        theta_true,
+        test_config,
+        image_pars=_IMAGE_PARS,
+    )
+
+    recovery_stats = plot_likelihood_slices(
+        slices,
+        true_pars,
+        test_name,
+        test_config,
+        snr,
+        'intensity',
+        has_psf=True,
+        model_kind='composite',
+    )
+
+    # Excluded:
+    # - g1, g2, int_x0, int_y0: zero true value (need absolute floor)
+    # - disk_h_over_r: projected thickness sini*h_z ~ 0.14 arcsec is
+    #   comparable to the PSF FWHM (0.15 arcsec), so the disk thickness
+    #   signal is essentially absorbed into the PSF — fundamentally
+    #   unobservable at this geometry. The optimizer test also excludes
+    #   this parameter for the same reason.
+    exclude_params = ['g1', 'g2', 'int_x0', 'int_y0', 'disk_h_over_r']
+    assert_parameter_recovery(
+        recovery_stats,
+        snr,
+        'BulgeDisk likelihood slice',
+        exclude_params=exclude_params,
+    )
 
 
 if __name__ == "__main__":

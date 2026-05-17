@@ -164,9 +164,7 @@ def generate_joint_synthetic_data(
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
 
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=seed)
-    data_vel_noisy = synth_vel.generate(
-        image_pars_vel, snr=snr, seed=seed, include_poisson=False
-    )
+    data_vel_noisy = synth_vel.generate(image_pars_vel, snr=snr, seed=seed)
     data_vel_true = synth_vel.data_true
     var_vel = synth_vel.variance
 
@@ -417,7 +415,7 @@ class TestJointSamplingDiagnostics:
         progress=False,
     )
 
-    @pytest.mark.parametrize("snr", [100, 20])
+    @pytest.mark.parametrize("snr", [1000, 100])
     def test_joint_sampling_no_shear(self, snr, test_config):
         """Test joint sampling without shear (g1=g2=0)."""
         true_pars = {
@@ -438,7 +436,7 @@ class TestJointSamplingDiagnostics:
             true_pars, snr, test_config, "joint_no_shear", sample_shear=False
         )
 
-    @pytest.mark.parametrize("snr", [100, 20])
+    @pytest.mark.parametrize("snr", [1000, 100])
     def test_joint_sampling_with_shear(self, snr, test_config):
         """Test joint sampling with shear (g1=0.03, g2=-0.02)."""
         true_pars = {
@@ -626,7 +624,7 @@ class TestSamplerComparison:
     IMAGE_PARS_VEL = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     IMAGE_PARS_INT = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
 
-    @pytest.mark.parametrize('snr', [50, 1])
+    @pytest.mark.parametrize('snr', [1000, 100])
     def test_sampler_comparison(self, test_config, snr):
         """Run all samplers and compare results at different SNR values."""
         test_name = f"sampler_comparison_snr{snr}"

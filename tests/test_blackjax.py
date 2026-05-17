@@ -10,7 +10,15 @@ These tests verify that the BlackJAX sampler infrastructure is working correctly
 These diagnostics help catch issues early before running expensive comparison tests.
 """
 
+import galsim
 import pytest
+
+# All tests in this file run real HMC sampling and/or build inference tasks
+# with priors that imply large oversample factors (FFT grids 2752x2752+).
+# Mark the entire module as slow so CI's `make test-basic` (excludes slow)
+# doesn't time out. Run via `make test-sampling` or with `-m "not slow"` removed.
+pytestmark = pytest.mark.slow
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -68,7 +76,7 @@ def simple_velocity_task():
 
     # Generate synthetic data using correct API
     synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=1000)
     var_vel = synth_vel.variance
 
     # Use Gaussian priors for most parameters, but TruncatedNormal for
@@ -127,7 +135,7 @@ def bounded_velocity_task():
 
     # Generate synthetic data using correct API
     synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=1000)
     var_vel = synth_vel.variance
 
     # Use Uniform priors (bounded) - may have gradient issues at boundaries
@@ -579,6 +587,11 @@ def joint_model_task_bounded():
     image_pars_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     image_pars_int = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
 
+    # Roman-like PSF (F184 effective FWHM ~0.16 arcsec; 0.2 is conservative).
+    # PSF damping is essential for keeping the worst-case oversample tractable
+    # under the wide-rscale + edge-on priors below — see Issue #47.
+    psf = galsim.Gaussian(fwhm=0.2)
+
     # True parameters
     true_pars = {
         'v0': 10.0,
@@ -599,14 +612,14 @@ def joint_model_task_bounded():
     vel_model = CenteredVelocityModel()
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-    data_vel = synth_vel.generate(image_pars_vel, snr=100, include_poisson=False)
+    data_vel = synth_vel.generate(image_pars_vel, snr=1000)
     var_vel = synth_vel.variance
 
-    # Generate intensity data
+    # Generate intensity data — convolved with the same PSF the model assumes
     int_model = InclinedExponentialModel()
     int_pars = {k: v for k, v in true_pars.items() if k in int_model.PARAMETER_NAMES}
-    synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
-    data_int = synth_int.generate(image_pars_int, snr=100, include_poisson=False)
+    synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
+    data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance
 
     # Create joint model
@@ -643,6 +656,7 @@ def joint_model_task_bounded():
         variance_int=var_int,
         image_pars_vel=image_pars_vel,
         image_pars_int=image_pars_int,
+        psf_int=psf,
     )
 
     return task, true_pars
@@ -664,6 +678,9 @@ def joint_model_task_gaussian():
     image_pars_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     image_pars_int = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
 
+    # Roman-like PSF (see joint_model_task_bounded for rationale)
+    psf = galsim.Gaussian(fwhm=0.2)
+
     # True parameters
     true_pars = {
         'v0': 10.0,
@@ -684,14 +701,14 @@ def joint_model_task_gaussian():
     vel_model = CenteredVelocityModel()
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-    data_vel = synth_vel.generate(image_pars_vel, snr=100, include_poisson=False)
+    data_vel = synth_vel.generate(image_pars_vel, snr=1000)
     var_vel = synth_vel.variance
 
-    # Generate intensity data
+    # Generate intensity data — convolved with the same PSF the model assumes
     int_model = InclinedExponentialModel()
     int_pars = {k: v for k, v in true_pars.items() if k in int_model.PARAMETER_NAMES}
-    synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
-    data_int = synth_int.generate(image_pars_int, snr=100, include_poisson=False)
+    synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
+    data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance
 
     # Create joint model
@@ -728,6 +745,7 @@ def joint_model_task_gaussian():
         variance_int=var_int,
         image_pars_vel=image_pars_vel,
         image_pars_int=image_pars_int,
+        psf_int=psf,
     )
 
     return task, true_pars

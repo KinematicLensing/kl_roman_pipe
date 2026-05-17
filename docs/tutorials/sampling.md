@@ -76,11 +76,12 @@ true_pars = {
 image_pars = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
 synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
 snr = 20
-data_noisy = synth.generate(image_pars, snr=snr, include_poisson=False)
+data_noisy = synth.generate(image_pars, snr=snr)
 variance = synth.variance
 
 print(f"Data shape: {data_noisy.shape}")
-print(f"Variance: {variance:.2f} (km/s)^2")
+# variance is now a per-pixel array (matched-filter noise convention from base)
+print(f"Variance: shape={variance.shape}, mean={float(np.mean(variance)):.2f} (km/s)^2")
 
 # Plot the data
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
@@ -129,17 +130,17 @@ The `InferenceTask` bundles everything needed for sampling: model, likelihood fu
 
 ```{code-cell} python
 from kl_pipe.sampling import InferenceTask
+from kl_pipe.observation import build_velocity_obs
 
 # Create the velocity model
 model = CenteredVelocityModel()
 
-# Create the inference task
-task = InferenceTask.from_velocity_model(
+# Build observation and create the inference task
+obs_vel = build_velocity_obs(image_pars, data=jnp.array(data_noisy), variance=variance)
+task = InferenceTask.from_velocity_obs(
     model=model,
     priors=priors,
-    data_vel=jnp.array(data_noisy),
-    variance_vel=variance,
-    image_pars=image_pars,
+    obs=obs_vel,
 )
 
 print(f"Sampled parameters: {task.sampled_names}")
@@ -407,7 +408,7 @@ true_pars_joint = {
 image_pars_vel = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
 vel_pars = {k: v for k, v in true_pars_joint.items() if k in CenteredVelocityModel().PARAMETER_NAMES}
 synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-data_vel = synth_vel.generate(image_pars_vel, snr=30, include_poisson=False)
+data_vel = synth_vel.generate(image_pars_vel, snr=30)
 var_vel = synth_vel.variance
 
 # Generate intensity data
@@ -485,18 +486,36 @@ for name in priors_joint.sampled_names:
 ### 5.4 Create Joint InferenceTask
 
 ```{code-cell} python
-task_joint = InferenceTask.from_joint_model(
+from kl_pipe.observation import build_joint_obs
+from kl_pipe.pixel import BoxPixel
+from kl_pipe.render import RenderConfig
+
+# Compute the intensity render_config from priors so the FFT grid is sized
+# for the worst-case parameters in the prior bounds. obs.render_config is
+# the single source of truth for grid sizing — passing it here guarantees
+# InferenceTask doesn't need to recompute (which would risk a mismatch).
+rc_int = RenderConfig.for_priors(
+    joint_model.intensity_model,
+    priors_joint,
+    image_pars_int.pixel_scale,
+    pixel_response=BoxPixel(image_pars_int.pixel_scale),
+)
+
+obs_vel, obs_int = build_joint_obs(
+    image_pars_vel, image_pars_int, joint_model.intensity_model,
+    data_vel=jnp.array(data_vel), variance_vel=var_vel,
+    data_int=jnp.array(data_int), variance_int=var_int,
+    render_config_int=rc_int,
+)
+task_joint = InferenceTask.from_joint_obs(
     model=joint_model,
     priors=priors_joint,
-    data_vel=jnp.array(data_vel),
-    data_int=jnp.array(data_int),
-    variance_vel=var_vel,
-    variance_int=var_int,
-    image_pars_vel=image_pars_vel,
-    image_pars_int=image_pars_int,
+    obs_vel=obs_vel,
+    obs_int=obs_int,
 )
 
 print(f"Joint task has {task_joint.n_params} sampled parameters")
+print(f"Intensity rendering oversample: {obs_int.render_config.oversample}")
 ```
 
 ### 5.5 Run Joint Inference with NumPyro
@@ -671,15 +690,24 @@ if TNG_AVAILABLE:
         shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
     )
 
-    task_tng = InferenceTask.from_joint_model(
+    rc_int_tng = RenderConfig.for_priors(
+        int_model_tng,
+        priors_tng,
+        image_pars_tng.pixel_scale,
+        pixel_response=BoxPixel(image_pars_tng.pixel_scale),
+    )
+    obs_vel_tng, obs_int_tng = build_joint_obs(
+        image_pars_tng, image_pars_tng, int_model_tng,
+        data_vel=jnp.array(velocity_map), variance_vel=var_vel_tng,
+        data_int=jnp.array(intensity_normalized),
+        variance_int=var_int_tng / flux_estimate**2,
+        render_config_int=rc_int_tng,
+    )
+    task_tng = InferenceTask.from_joint_obs(
         model=joint_model_tng,
         priors=priors_tng,
-        data_vel=jnp.array(velocity_map),
-        data_int=jnp.array(intensity_normalized),
-        variance_vel=var_vel_tng,
-        variance_int=var_int_tng / flux_estimate**2,
-        image_pars_vel=image_pars_tng,
-        image_pars_int=image_pars_tng,
+        obs_vel=obs_vel_tng,
+        obs_int=obs_int_tng,
     )
 
     config_tng = NumpyroSamplerConfig(
