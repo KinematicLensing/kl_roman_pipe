@@ -1,0 +1,20 @@
+{
+  "project_name": "kl_roman_pipe",
+  "summary": "(derived by parallax sync; edit .parallax/config.json to set)",
+  "domain": "cosmology",
+  "languages": "",
+  "package_manager": "conda",
+  "test_framework": "pytest",
+  "uses_units": false,
+  "uses_jax": false,
+  "branch_prefix": "",
+  "generate_skills": true,
+  "generate_hooks": true,
+  "token_tier": "5x",
+  "editor": "",
+  "science_requirements": "",
+  "preferred_patterns": "",
+  "outlawed_patterns": "",
+  "key_libraries": "",
+  "custom_agent_description": ""
+}
