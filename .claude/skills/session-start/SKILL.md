@@ -14,7 +14,7 @@ Invoke `/session-start` at the beginning of a new session.
 
 ## Instructions
 
-1. **Read recent handoffs.** Find and read the 3 most recent files in `docs/sessions/` (by filename sort). Most recent is primary; older ones provide trajectory. If <3 exist, read all.
+1. **Read recent handoffs.** Find the 3 most recent handoffs in `docs/sessions/`. The project convention is `YYYY-MM-DD_<topic>.md` -- run `ls docs/sessions/ | sort -r | head -3` for the conformant case (descending alphabetical = chronological newest-first by date prefix). If files do not follow the convention, fall back to mtime (`ls -t docs/sessions/ | head -3`) and note the inconsistency in your synthesis at step 5 so the user can decide whether to rename. Do not block the session on it. Most recent is primary; older ones provide trajectory. If <3 exist, read all.
 2. **Check semantic memory.** MEMORY.md is auto-loaded but verify it matches codebase state. Flag contradictions.
 3. **Audit current state.** Run tests and linting. Review recent `git log --oneline -20`. Check README.md for currency.
 4. **Critically evaluate the handoffs.** Don't parrot their recommendations. Challenge priorities if the codebase state suggests different next steps. Note anything the handoffs missed or got wrong.

@@ -41,6 +41,12 @@ Generate the following sections:
 - [list with brief descriptions]
 ```
 
+## Write to File
+
+Write the completed handoff to `docs/sessions/YYYY-MM-DD_<topic>.md` per the filename rule in PARALLAX.md (`Agent Handoff Format > Filename and storage`). Use today's date as ISO prefix; pick a short distinct kebab- or snake-case topic. If the file already exists, prefer a more specific topic over `_2` suffixing.
+
+Do not `git add` or commit the handoff -- these are agent working notes, not project source-of-truth.
+
 ## Self-Review Pass
 
 After writing the initial draft, re-read it critically and check for:
@@ -59,3 +65,4 @@ Update the draft with findings, then present to the user.
 - Include file paths for all code that was touched or is relevant.
 - Flag any known issues or risks explicitly.
 - If a hypothesis was being tested, include its current status.
+- Always write the handoff to `docs/sessions/` per PARALLAX.md naming rule. Do not just display it in chat.

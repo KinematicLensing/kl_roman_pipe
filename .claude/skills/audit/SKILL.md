@@ -18,7 +18,7 @@ Perform each check and report findings:
 
 1. **Code review:** Bugs, concerns, anti-patterns, security issues.
 2. **Test gaps:** Untested features, weak assertions, missing edge cases.
-3. **Doc staleness:** Do docs match current code? Are references valid?
+3. **Doc staleness:** Do docs match current code? Are references valid? For deep doc auditing, run `/doc-sync`.
 4. **Dependency health:** Outdated or vulnerable dependencies.
 5. **Architecture:** Does code match intended design? Any drift?
 6. **Scientific rigor:** Are hypotheses documented? Results reproducible? Assumptions stated?

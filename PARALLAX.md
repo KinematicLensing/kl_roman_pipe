@@ -39,6 +39,12 @@ When ending a session or handing off to another agent:
 - Open questions
 - Relevant files/paths
 
+### Filename and storage
+
+- Write handoffs to `docs/sessions/YYYY-MM-DD_<topic>.md`. Use today's ISO date as prefix; pick a short distinct kebab- or snake-case topic.
+- If a handoff for that date+topic already exists, prefer a more specific topic over `_2` suffixing.
+- Do not `git add` or commit handoffs -- they are agent working notes, not project source-of-truth.
+
 ## Agentic Workflow
 
 - AI handles: mechanical, repetitive, and exploratory tasks

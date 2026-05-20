@@ -1,7 +1,6 @@
 ---
 name: grill-me
-description: Stress-test a plan or design through relentless questioning until reaching shared understanding.
-disable-model-invocation: true
+description: Interview the user relentlessly about a plan or design until reaching shared understanding, resolving each branch of the decision tree. Use when user wants to stress-test a plan, get grilled on their design, or mentions "grill me".
 ---
 
 # /grill-me -- Design Interrogation
