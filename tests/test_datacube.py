@@ -25,7 +25,6 @@ from kl_pipe.spectral import (
     halpha_line,
     halpha_nii_lines,
     make_spectral_config,
-    roman_grism_R,
     C_KMS,
     HALPHA,
     NII_6583,
@@ -325,28 +324,6 @@ class TestBuildCube:
             assert found == pytest.approx(
                 exp, abs=2.0
             ), f"Peak at {found:.1f}, expected near {exp:.1f}"
-
-    def test_sigma_eff_wavelength_dependent(self):
-        """sigma_eff differs between Ha and NII due to R(lambda)."""
-        z = 1.0
-        lam_ha = HALPHA.lambda_rest * (1 + z)
-        lam_nii = NII_6583.lambda_rest * (1 + z)
-
-        vel_disp = 50.0
-
-        R_ha = roman_grism_R(lam_ha)
-        R_nii = roman_grism_R(lam_nii)
-
-        sigma_inst_ha = C_KMS / (2.355 * R_ha)
-        sigma_inst_nii = C_KMS / (2.355 * R_nii)
-
-        sigma_eff_ha = np.sqrt(vel_disp**2 + sigma_inst_ha**2)
-        sigma_eff_nii = np.sqrt(vel_disp**2 + sigma_inst_nii**2)
-
-        # sigma_eff should differ due to different R
-        assert sigma_eff_ha != pytest.approx(sigma_eff_nii, rel=1e-3)
-        # both should be dominated by instrumental broadening for typical vel_disp
-        assert sigma_inst_ha > vel_disp
 
 
 # =============================================================================

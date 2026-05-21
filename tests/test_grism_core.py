@@ -30,7 +30,6 @@ from kl_pipe.spectral import (
     halpha_line,
     halpha_nii_lines,
     make_spectral_config,
-    roman_grism_R,
     C_KMS,
     HALPHA,
     NII_6583,
@@ -643,30 +642,38 @@ class TestCorrectness:
         assert jnp.isfinite(grism).all()
 
     def test_edge_on_galaxy(self, vel_model, int_model):
-        """cosi=0.1: large velocity gradient + spectral line broadening."""
+        """cosi=0.1: rotational broadening makes integrated spectrum wider than face-on."""
         config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
         sm = SpectralModel(config, int_model, vel_model)
 
         z = 1.0
         lam_center = HALPHA.lambda_rest * (1 + z)
         dlam = lam_center * 3000.0 / C_KMS
+        # 0.1 nm wavelength steps resolve the post-LSF-refactor vel_disp=50 km/s
+        # line (sigma_lam ~ 0.22 nm at lam ~ 1313 nm).
         cube_pars = CubePars.from_range(
-            _IMAGE_PARS, lam_center - dlam, lam_center + dlam, 0.5
+            _IMAGE_PARS, lam_center - dlam, lam_center + dlam, 0.1
         )
-
-        edge_on_pars = {**_VEL_PARS, 'cosi': 0.1}
-        theta_vel = vel_model.pars2theta(edge_on_pars)
-        theta_int = int_model.pars2theta({**_INT_PARS, 'cosi': 0.1})
         theta_spec = jnp.array([z, 50.0, 100.0, 0.0])
 
-        cube = sm.build_cube(theta_spec, theta_vel, theta_int, cube_pars)
+        def _fwhm_pix(cosi):
+            vel_pars = {**_VEL_PARS, 'cosi': cosi}
+            int_pars = {**_INT_PARS, 'cosi': cosi}
+            theta_vel = vel_model.pars2theta(vel_pars)
+            theta_int = int_model.pars2theta(int_pars)
+            cube = sm.build_cube(theta_spec, theta_vel, theta_int, cube_pars)
+            total_spec = jnp.sum(cube, axis=(0, 1))
+            above_half = total_spec > 0.5 * jnp.max(total_spec)
+            return int(jnp.sum(above_half))
 
-        # spatially integrated spectrum should be broader than face-on
-        total_spec = jnp.sum(cube, axis=(0, 1))
-        # verify it has significant width (velocity ~200 km/s * sin(84 deg))
-        above_half = total_spec > 0.5 * jnp.max(total_spec)
-        fwhm_pixels = int(jnp.sum(above_half))
-        assert fwhm_pixels > 3, f"FWHM = {fwhm_pixels} pixels, expected > 3 for edge-on"
+        fwhm_edge_on = _fwhm_pix(cosi=0.1)
+        fwhm_face_on = _fwhm_pix(cosi=1.0)
+        # rotational broadening (vcirc*sin(i) ~ 199 km/s at cosi=0.1) must
+        # widen the integrated spectrum relative to the face-on control.
+        assert fwhm_edge_on > fwhm_face_on, (
+            f"edge_on FWHM ({fwhm_edge_on} pix) should exceed face_on FWHM "
+            f"({fwhm_face_on} pix) due to rotation broadening"
+        )
 
     def test_velocity_signature_antisymmetry(self, vel_model, int_model):
         """grism(rotating) - grism(vcirc=0) is antisymmetric along kinematic axis."""
@@ -1175,11 +1182,8 @@ class TestAnalytical:
         flux = 100.0
         lam_obs = HALPHA.lambda_rest * (1 + z)
 
-        # CubePars
-        R_at_line = roman_grism_R(lam_obs)
-        sigma_inst_kms = C_KMS / (2.355 * R_at_line)
-        sigma_eff_kms = np.sqrt(vel_disp**2 + sigma_inst_kms**2)
-        sigma_lambda = lam_obs * sigma_eff_kms / C_KMS
+        # sigma_eff = vel_disp only (slitless LSF is PSF+dispersion; see issue #40)
+        sigma_lambda = lam_obs * vel_disp / C_KMS
 
         dlam = 1.0
         half_width = 5 * sigma_lambda
@@ -1881,12 +1885,12 @@ class TestAnalytical:
         lam_rest = HALPHA.lambda_rest
         lam_obs_center = lam_rest * (1 + z)
 
-        R_at_line = roman_grism_R(lam_obs_center)
-        sigma_inst_kms = C_KMS / (2.355 * R_at_line)
-        sigma_eff_kms = np.sqrt(vel_disp**2 + sigma_inst_kms**2)
-        sigma_lambda = lam_obs_center * sigma_eff_kms / C_KMS
+        # sigma_eff = vel_disp only (slitless LSF is PSF+dispersion; see issue #40)
+        sigma_lambda = lam_obs_center * vel_disp / C_KMS
 
-        dlam = 1.0
+        # dlam << sigma_lambda so the discretization error O(dlam^2/sigma) on
+        # the first moment stays well below 0.1 nm.
+        dlam = 0.1
         half_width = 5 * sigma_lambda
         cp = CubePars.from_range(
             _ANALYTICAL_IMAGE_PARS,
@@ -2220,8 +2224,8 @@ class TestAnalytical:
         """In the small-shift regime (vsini << sigma_eff), grism antisymmetric
         amplitude is linear in vcirc * sin(i) with near-zero intercept.
 
-        Uses low vsini values (max 130 km/s vs sigma_eff ~ 280 km/s) to stay
-        in the linear regime where Doppler shift << line width.
+        vel_dispersion=280 km/s keeps vsini/sigma_eff <= 0.46 across the
+        sampled combos (max vsini=130) — post-LSF-refactor sigma_eff = vel_disp.
         """
         import matplotlib.pyplot as plt
 
@@ -2243,7 +2247,7 @@ class TestAnalytical:
             'int_x0': 0.0,
             'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 50.0,
+            'vel_dispersion': 280.0,
             'Ha_flux': 100.0,
             'Ha_cont': 0.0,
         }
@@ -2346,7 +2350,7 @@ class TestAnalytical:
 
         z = 1.0
         lam_obs = HALPHA.lambda_rest * (1 + z)
-        dispersion = 1.0  # nm/pix
+        dispersion = 0.1  # nm/pix; fine enough that vel_disp=30 km/s lines are resolved
 
         base_pars = {
             'cosi': 1.0,  # face-on
@@ -2368,7 +2372,7 @@ class TestAnalytical:
 
         # use integer dlam = dispersion so bilinear is exact
         dlam = dispersion
-        Nlam_half = 15
+        Nlam_half = 150
         lam_grid = lam_obs + np.arange(-Nlam_half, Nlam_half + 1) * dlam
         cp = CubePars(
             image_pars=_ANALYTICAL_IMAGE_PARS, lambda_grid=jnp.array(lam_grid)
@@ -2433,11 +2437,8 @@ class TestAnalytical:
             fwhm_meas = x_right - x_left
             measured_fwhm.append(fwhm_meas)
 
-            # expected FWHM (spectral only)
-            R_at_line = roman_grism_R(lam_obs)
-            sigma_inst = C_KMS / (2.355 * R_at_line)
-            sigma_eff = np.sqrt(sigma_v**2 + sigma_inst**2)
-            fwhm_expected = 2.355 * lam_obs * sigma_eff / (C_KMS * dispersion)
+            # expected FWHM (intrinsic only; sigma_eff = vel_disp, see issue #40)
+            fwhm_expected = 2.355 * lam_obs * sigma_v / (C_KMS * dispersion)
             expected_fwhm.append(fwhm_expected)
 
         measured_fwhm = np.array(measured_fwhm)
@@ -2527,10 +2528,8 @@ class TestAnalytical:
         lam_center = (lam_ha + lam_nii) / 2.0
 
         # wide enough to capture both lines with margin
-        R_at_line = roman_grism_R(lam_center)
-        sigma_inst = C_KMS / (2.355 * R_at_line)
-        sigma_eff = np.sqrt(30.0**2 + sigma_inst**2)
-        sigma_lam = lam_center * sigma_eff / C_KMS
+        # sigma_eff = vel_disp only (slitless LSF is PSF+dispersion; see issue #40)
+        sigma_lam = lam_center * 30.0 / C_KMS
         half_width = max(5 * sigma_lam, (lam_nii - lam_ha) + 5 * sigma_lam)
         cp = CubePars.from_range(
             _ANALYTICAL_IMAGE_PARS,
