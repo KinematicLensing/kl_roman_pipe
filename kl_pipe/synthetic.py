@@ -1253,8 +1253,6 @@ def generate_datacube_3d(
     n_fine = len(lambda_fine)
     cube_fine = np.zeros((Nrow_s, Ncol_s, n_fine))
 
-    R_func = spectral_pars.get('R_func', lambda lam: 461.0 * lam / 1000.0)
-
     for line_info in lines:
         lam_rest = line_info['lambda_rest']
         line_flux = line_info['flux']
@@ -1272,11 +1270,9 @@ def generate_datacube_3d(
         # Doppler-shifted observed wavelength per pixel
         lam_obs = lam_rest * (1.0 + z) * (1.0 + v_rotation / C_KMS)
 
-        # effective sigma
-        R_at_line = R_func(lam_rest * (1.0 + z))
-        sigma_inst = C_KMS / (2.355 * R_at_line)
-        sigma_eff = np.sqrt(vel_disp**2 + sigma_inst**2)
-        sigma_lambda = lam_obs * sigma_eff / C_KMS
+        # intrinsic line broadening only; PSF+dispersion downstream is the
+        # slitless LSF (mirrors kl_pipe/spectral.py).
+        sigma_lambda = lam_obs * vel_disp / C_KMS
 
         # normalized Gaussian on fine wavelength grid
         dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]

@@ -15,9 +15,8 @@ Key classes:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Tuple, FrozenSet, Optional, Callable
+from typing import TYPE_CHECKING, Tuple, FrozenSet
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -29,11 +28,6 @@ from kl_pipe.utils import build_map_grid_from_image_pars
 
 # speed of light in km/s
 C_KMS = 299792.458
-
-
-def roman_grism_R(lambda_nm: float) -> float:
-    """Roman grism resolving power: R = 461 * lambda_um."""
-    return 461.0 * lambda_nm / 1000.0
 
 
 # =============================================================================
@@ -69,31 +63,25 @@ class EmissionLine:
 
 @dataclass(frozen=True)
 class SpectralConfig:
-    """Defines the spectral model: which lines, LSF mode, resolution.
+    """Defines the spectral model: which lines, spectral oversample.
 
     Created once at model setup. Same across all observations.
+
+    Line broadening is intrinsic only (sigma_eff = vel_disp). The instrumental
+    LSF for slitless grism is produced by the PSF-per-slice + dispersion
+    geometry downstream; no separate sigma_inst term.
     """
 
     lines: Tuple[EmissionLine, ...]
-    lsf_mode: str = 'absorbed'
-    R_func: Optional[Callable] = None  # R(lambda_nm) -> float; default: roman_grism_R
     spectral_oversample: int = 5
 
     def __post_init__(self):
         if not self.lines:
             raise ValueError("SpectralConfig requires at least one EmissionLine")
-        if self.lsf_mode not in ('absorbed', 'convolution'):
-            raise ValueError(
-                f"lsf_mode must be 'absorbed' or 'convolution', got '{self.lsf_mode}'"
-            )
         if self.spectral_oversample < 1:
             raise ValueError(
                 f"spectral_oversample must be >= 1, got {self.spectral_oversample}"
             )
-
-    @property
-    def effective_R_func(self) -> Callable:
-        return self.R_func if self.R_func is not None else roman_grism_R
 
 
 @dataclass(frozen=True)
@@ -275,8 +263,6 @@ class SpectralModel:
         Nrow, Ncol = cube_pars.spatial_shape
         cube_fine = jnp.zeros((Nrow, Ncol, n_fine))
 
-        R_func = self._config.effective_R_func
-
         for i, line in enumerate(self._config.lines):
             prefix = line.line_spec.param_prefix
 
@@ -293,13 +279,9 @@ class SpectralModel:
             lam_rest = line.line_spec.lambda_rest
             lam_obs = lam_rest * (1.0 + z) * (1.0 + v_rotation / C_KMS)  # (Nrow, Ncol)
 
-            # effective sigma: vel_disp + instrument
-            R_at_line = R_func(lam_rest * (1.0 + z))
-            sigma_inst_kms = C_KMS / (2.355 * R_at_line)
-            sigma_eff_kms = jnp.sqrt(vel_disp**2 + sigma_inst_kms**2)
-
-            # convert to wavelength units: sigma_lambda = lam_obs * sigma_eff / c
-            sigma_lambda = lam_obs * sigma_eff_kms / C_KMS  # (Nrow, Ncol)
+            # intrinsic line broadening only; the slitless LSF is reproduced by
+            # the PSF-per-slice + dispersion geometry downstream (see issue #40).
+            sigma_lambda = lam_obs * vel_disp / C_KMS  # (Nrow, Ncol)
 
             # normalized Gaussian: 1/(sigma*sqrt(2pi)) * exp(-0.5*((lam - mu)/sigma)^2)
             # shape: (Nrow, Ncol, n_fine)
@@ -320,12 +302,6 @@ class SpectralModel:
             cube = cube_fine.reshape(Nrow, Ncol, n_lam, osf).mean(axis=-1)
         else:
             cube = cube_fine
-
-        # 6. optional spectral convolution for 'convolution' LSF mode
-        if self._config.lsf_mode == 'convolution':
-            raise NotImplementedError(
-                "LSF convolution mode not yet implemented. Use lsf_mode='absorbed'."
-            )
 
         return cube
 
@@ -348,26 +324,6 @@ class SpectralModel:
             result = result.at[dst].set(override_values)
 
         return result
-
-    def convolve_spectral(
-        self,
-        cube: jnp.ndarray,
-        lsf_sigma_pixels: float,
-    ) -> jnp.ndarray:
-        """1D Gaussian convolution along lambda axis (for 'convolution' LSF mode)."""
-        # build 1D Gaussian kernel
-        half_width = int(4 * lsf_sigma_pixels) + 1
-        x = jnp.arange(-half_width, half_width + 1, dtype=jnp.float64)
-        kernel = jnp.exp(-0.5 * (x / lsf_sigma_pixels) ** 2)
-        kernel = kernel / kernel.sum()
-
-        # convolve along last axis
-        # use jnp.convolve per spatial pixel (vectorized via vmap)
-        def convolve_1d(spectrum):
-            return jnp.convolve(spectrum, kernel, mode='same')
-
-        # vmap over (Nrow, Ncol) -> apply convolve_1d to each pixel's spectrum
-        return jax.vmap(jax.vmap(convolve_1d))(cube)
 
 
 # =============================================================================
@@ -396,16 +352,12 @@ def halpha_nii_lines() -> Tuple[EmissionLine, ...]:
 
 def make_spectral_config(
     lines=None,
-    lsf_mode='absorbed',
     spectral_oversample=5,
-    R_func=None,
 ) -> SpectralConfig:
     """Convenience factory. Defaults to H-alpha + NII."""
     if lines is None:
         lines = halpha_nii_lines()
     return SpectralConfig(
         lines=lines,
-        lsf_mode=lsf_mode,
-        R_func=R_func,
         spectral_oversample=spectral_oversample,
     )
