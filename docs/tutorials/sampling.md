@@ -634,7 +634,7 @@ obs_grism = build_grism_obs(
 
 ### 6.2 Define Priors
 
-`Ha_flux`, `vcirc`, and `vel_rscale` are well-identified by the grism likelihood. Geometry (`cosi`, `theta_int`) and shear (`g1`, `g2`) are not separately well-constrained by a single grism cutout — they need either tight priors or the joint photometry term. **`vel_dispersion` is currently degenerate** with the absorbed instrumental sigma in `SpectralModel.build_cube` (see "Known limitations" in `docs/tutorials/grism.md`).
+`Ha_flux`, `vcirc`, `vel_rscale`, and `vel_dispersion` are well-identified by the grism likelihood. Geometry (`cosi`, `theta_int`) and shear (`g1`, `g2`) are not separately well-constrained by a single grism cutout — they need either tight priors or the joint photometry term.
 
 ```{code-cell} python
 priors_grism = PriorDict({
@@ -657,7 +657,7 @@ priors_grism = PriorDict({
     'g2': 0.0,
     # spectral
     'z': z,
-    'vel_dispersion': 50.0,     # held fixed: degenerate with the absorbed instrumental sigma — see "Known limitations" below
+    'vel_dispersion': Uniform(10.0, 200.0),
     'Ha_flux': Uniform(20.0, 200.0),
     'Ha_cont': 0.05,
 })
@@ -727,7 +727,7 @@ priors_joint = PriorDict({
     'g2':              Uniform(-0.1, 0.1),
     # spectral
     'z':               z,
-    'vel_dispersion':  50.0,             # held fixed: degenerate under the current line-broadening model (see below)
+    'vel_dispersion':  Uniform(10.0, 200.0),
     'Ha_flux':         Uniform(20.0, 200.0),
     'Ha_cont':         0.05,
 })
@@ -746,11 +746,10 @@ print(f"Max R-hat: {max(result_joint.get_rhat().values()):.4f}")
 
 ### 6.5 Known Limitations of the Current Grism Likelihood
 
-- **`vel_dispersion` is degenerate with the absorbed instrumental sigma.** `SpectralModel.build_cube` applies line broadening as `sqrt(vel_dispersion^2 + sigma_inst^2)`, where `sigma_inst ~ 213 km/s` at Roman R~600 from the quoted resolving power. The kinematic component is overwhelmed and cannot be inferred separately. A planned LSF refactor (drop the absorbed term, rely on PSF + dispersion geometry) makes `vel_dispersion` recoverable. See `docs/plans/phase2_lsf_refactor.md`.
 - **Photometric and emission centroids are shared.** Both broadband image rendering and grism cube assembly use `kl_model.intensity_model`'s `int_x0`/`int_y0`. If the two channels have independent astrometric solutions this is the wrong degree of freedom. The planned `SourceModel` refactor introduces per-component centroids. See `docs/plans/phase3_sourcemodel_refactor.md`.
 - **The intensity-channel grid-adequacy validation is not yet generalized to grism.** `from_joint_photometry_grism_obs` runs it on `obs_int`; `from_grism_obs` does not run it at all. Affects rare prior configurations with extreme cusp profiles + tight grids.
 
-For correctness-critical work that depends on `vel_dispersion`, hold it fixed at an externally-determined value (e.g. from an IFU or single-slit measurement) until the LSF refactor lands.
+`vel_dispersion` is now identifiable: line broadening in the cube is purely intrinsic (`sigma_eff = vel_disp`); the slitless instrumental LSF is produced by the PSF-per-slice + dispersion geometry downstream, and the empirical gate `tests/test_lsf_gate.py` verifies it matches the Roman spec `R = 461 * lambda_um` to within 5%.
 
 ---
 

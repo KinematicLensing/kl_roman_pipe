@@ -27,7 +27,7 @@ jupytext --to ipynb docs/tutorials/grism.md
 | Class | Purpose |
 |---|---|
 | `LineSpec`, `EmissionLine` | Per-line wavelength + parameter routing (`kl_pipe.spectral`) |
-| `SpectralConfig` | Bundle of lines + LSF mode + spectral oversampling |
+| `SpectralConfig` | Bundle of emission lines + spectral oversampling |
 | `SpectralModel` | Builds a 3D datacube `(Nrow, Ncol, Nλ)` from velocity + intensity + line list |
 | `CubePars` | Wavelength grid for cube assembly |
 | `GrismPars` | Instrument config: dispersion direction, magnitude, reference wavelength |
@@ -104,12 +104,11 @@ A `SpectralConfig` declares which emission lines to model, how to broaden them, 
 from kl_pipe.spectral import (
     SpectralConfig, SpectralModel,
     halpha_line, make_spectral_config,
-    roman_grism_R, C_KMS, HALPHA, NII_6583,
+    C_KMS, HALPHA, NII_6583,
 )
 
 config = SpectralConfig(
     lines=(halpha_line(),),
-    lsf_mode='absorbed',       # see "Known limitations" below
     spectral_oversample=5,
 )
 sm = SpectralModel(config, int_model, vel_model)
@@ -118,17 +117,7 @@ print(f"Spectral parameters: {sm.PARAMETER_NAMES}")
 
 The `halpha_line()` factory returns an `EmissionLine(LineSpec)` with `lambda_rest = 656.28 nm` and `param_prefix = 'Ha'`. Each line contributes a `<prefix>_flux` parameter (per-line) and a `<prefix>_cont` parameter (continuum normalization at the line). The shared `vel_dispersion` parameter controls the intrinsic line width in the cube.
 
-**Roman grism resolving power at the observed wavelength**:
-
-```{code-cell} python
-z = 1.0
-lam_obs = HALPHA.lambda_rest * (1 + z)             # 1312.56 nm at z=1
-R = roman_grism_R(lam_obs)                         # ~605
-sigma_inst = C_KMS / (2.355 * R)                   # ~213 km/s
-print(f"At z={z}: lam_obs = {lam_obs:.1f} nm, R = {R:.0f}, sigma_inst = {sigma_inst:.0f} km/s")
-```
-
-`sigma_inst` is the published spectral-resolution element converted to a velocity sigma; see Example 8 ("Known limitations") for how it is currently consumed.
+Line broadening in the cube uses `sigma_eff = vel_dispersion` only. The slitless instrumental LSF is produced downstream by the PSF-per-slice + dispersion geometry — no separate `sigma_inst` term. The empirical gate `tests/test_lsf_gate.py` verifies that the resulting spectral resolution matches the Roman spec `R = 461 * lambda_um` to within 5%.
 
 ---
 
@@ -485,11 +474,9 @@ plt.show()
 
 ## Known Limitations
 
-The grism subsystem is in a working but evolving state. Two specific caveats apply to the current rendering chain:
+The grism subsystem is in a working but evolving state. One specific caveat applies to the current rendering chain:
 
-1. **Line broadening absorbs the instrumental sigma.** `SpectralModel.build_cube` applies emission-line broadening as `sigma_eff = sqrt(vel_disp^2 + sigma_inst^2)`, where `sigma_inst` is derived from the quoted grism resolving power R. For slitless geometry the spectral resolution element is the PSF projected along the dispersion axis — so applying both the in-quadrature `sigma_inst` here and a PSF convolution per wavelength slice likely double-counts the same physical effect. In practice, **`vel_dispersion` is poorly identified by the grism likelihood under the current model**. A future refactor will drop the `sigma_inst` absorption entirely; see `docs/plans/phase2_lsf_refactor.md`.
-
-2. **Photometric and emission centroids are shared.** Both broadband image rendering (through `kl_model.intensity_model`) and grism cube assembly (through the emission spatial component of the same `intensity_model`) currently use a single `int_x0` / `int_y0`. If the photometric and grism observations have independent astrometric solutions, the shared centroid is the wrong degree of freedom — they should each carry their own. A planned `SourceModel` refactor decouples per-component intensity models and centroids; see `docs/plans/phase3_sourcemodel_refactor.md`.
+1. **Photometric and emission centroids are shared.** Both broadband image rendering (through `kl_model.intensity_model`) and grism cube assembly (through the emission spatial component of the same `intensity_model`) currently use a single `int_x0` / `int_y0`. If the photometric and grism observations have independent astrometric solutions, the shared centroid is the wrong degree of freedom — they should each carry their own. A planned `SourceModel` refactor decouples per-component intensity models and centroids; see `docs/plans/phase3_sourcemodel_refactor.md`.
 
 ---
 

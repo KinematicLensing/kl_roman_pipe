@@ -1,6 +1,6 @@
 # Grism Inference — Status & Deferred Work
 
-## Phase 1: shipped (this PR)
+## Phase 1: shipped
 
 ### Likelihood Functions
 
@@ -19,26 +19,25 @@
 
 ### Tests
 
-- ✓ `tests/test_grism_likelihood.py` — unit tests (eval / JIT / grad / factory) + likelihood slice tests for `Ha_flux` at SNR ∈ {100, 1000} + `vcirc` at SNR=1000 + one smoke optimizer-recovery test.
+- ✓ `tests/test_grism_likelihood.py` — unit tests (eval / JIT / grad / factory) + likelihood slice tests for `Ha_flux` at SNR ∈ {100, 1000} + `vcirc` + `vel_dispersion` at SNR=1000 + one smoke optimizer-recovery test (Ha_flux + vcirc + vel_dispersion).
 
-## Phase 1 known limitations (deferred to Phase 2 + Phase 3)
+## Phase 2: shipped — LSF refactor
 
-1. **σ_inst absorption is still active** — `spectral.py` line broadening uses `sigma_eff = sqrt(vel_disp² + σ_inst²)`. Literature consensus is this likely double-counts the PSF's spectral resolution contribution for slitless grism geometry. **`vel_dispersion` recovery is degenerate under Phase 1**; not in slice/recovery tests. See **`docs/plans/phase2_lsf_refactor.md`**.
+- ✓ Drop `σ_inst` absorption from `SpectralModel.build_cube`. `sigma_eff` is now `vel_disp` only.
+- ✓ Delete `roman_grism_R`, `SpectralConfig.lsf_mode`, `SpectralConfig.R_func`, `convolve_spectral` stub.
+- ✓ Mirror change in numpy reference `kl_pipe/synthetic.py:generate_datacube_3d`.
+- ✓ `vel_dispersion` recoverable in grism likelihood slice + smoke recovery tests.
+- ✓ `tests/test_lsf_gate.py` codifies the empirical gate: PSF+dispersion alone reproduces Roman `R = 461·λ_μm` within ±5%.
 
-2. **Photometric and emission centroids are shared** — both broadband image rendering and grism cube assembly use `kl_model.intensity_model`'s `int_x0`/`int_y0`. If the photometric and grism observations have independent astrometric solutions this is incorrect. See **`docs/plans/phase3_sourcemodel_refactor.md`**.
+Empirical evidence drove the refactor: see `experiments/sweverett/lsf_gate_test/`. PSF+dispersion alone gives `R_measured/R_spec = 1.035` at λ_obs ≈ 1.30 μm; σ_inst-active broadened the detector FWHM by 48% on top — classic double-counting signature.
 
-3. **Joint photometry+grism rendering shares `flux_theta_override` mechanism** — velocity PSF flux weighting uses the intensity model's params in the velocity grid's frame; latent bug if grids are not aligned. Phase 3 resolves via explicit `flux_weight_key` binding on VelocityObs.
+## Phase 1 known limitations still open (Phase 3)
 
-4. **`_check_priors_fit_obs_rc` skipped for GrismObs** — the grid-adequacy validation that broadband inference runs is not run for grism in Phase 1. Phase 3 generalizes the validation to obs-type-aware.
+1. **Photometric and emission centroids are shared** — both broadband image rendering and grism cube assembly use `kl_model.intensity_model`'s `int_x0`/`int_y0`. If the photometric and grism observations have independent astrometric solutions this is incorrect. See **`docs/plans/phase3_sourcemodel_refactor.md`**.
 
-## Deferred — Phase 2: LSF refactor
+2. **Joint photometry+grism rendering shares `flux_theta_override` mechanism** — velocity PSF flux weighting uses the intensity model's params in the velocity grid's frame; latent bug if grids are not aligned. Phase 3 resolves via explicit `flux_weight_key` binding on VelocityObs.
 
-See **`docs/plans/phase2_lsf_refactor.md`** for the full plan. Summary:
-
-- Drop `σ_inst` absorption entirely. `sigma_eff` becomes `vel_disp` only.
-- Delete `roman_grism_R`, `SpectralConfig.lsf_mode`, `convolve_spectral` stub, related dead code.
-- `vel_dispersion` becomes recoverable.
-- Add delta-function-source spectral-resolution validation test (PSF-per-slice + dispersion should produce R ≈ 461·λ_μm naturally).
+3. **`_check_priors_fit_obs_rc` skipped for GrismObs** — the grid-adequacy validation that broadband inference runs is not run for grism. Phase 3 generalizes the validation to obs-type-aware.
 
 ## Deferred — Phase 3: SourceModel refactor
 
@@ -59,15 +58,15 @@ PA-velocity degeneracy break design (Outini & Copin 2020, Eq. 1) — handled in 
 These were sketched in earlier planning but are not part of the current three-phase plan; revisit if science demands:
 
 - `log_likelihood_cube` (3D datacube likelihood, IFU-style) — kl_pipe targets dispersed-grism inference; an explicit cube likelihood is not needed for current pipeline scope.
-- `SyntheticGrism` class — Phase 1 tests use direct `kl_model.render_grism(theta_true) + noise`. A dedicated synthetic class can be added if/when test patterns demand reuse.
-- Sampling diagnostics (numpyro NUTS trace plots, corner plots) — Phase 1 ships optimizer-based smoke recovery only; full sampling infrastructure can be wired up when production runs begin.
+- `SyntheticGrism` class — current tests use direct `kl_model.render_grism(theta_true) + noise`. A dedicated synthetic class can be added if/when test patterns demand reuse.
+- Sampling diagnostics (numpyro NUTS trace plots, corner plots) for the grism channel — current tests ship optimizer-based smoke recovery only; full sampling infrastructure can be wired up when production runs begin.
 
 ## Comparison with geko
 
 geko's slitless-grism kinematics fitter (`astro-geko` v1.0.0) was audited during Phase 1 planning. Notes:
 
-- geko also absorbs σ_inst into the line profile (`grism.py:711-714`) — same likely-double-count as kl_pipe Phase 1. After Phase 2 drops σ_inst, kl_pipe and geko will systematically disagree in this regime.
+- geko also absorbs σ_inst into the line profile (`grism.py:711-714`) — same double-count kl_pipe just dropped. Post-Phase 2, kl_pipe and geko will systematically disagree on cube-level line widths; the detector-level images should still roughly agree if σ_inst was indeed double-counting (gate test confirms it was). Tracked in #50.
 - geko has dead `compute_lsf_new` and `full_kernel` paths (`grism.py:564-629, 670`) suggesting an abandoned refactor toward unified PSF·LSF kernel — neither approach is in production geko.
-- geko fits grism-only (priors from external PySersic fits on imaging); no joint phot+grism inference. kl_pipe Phase 1 ships joint phot+grism, Phase 3 expands it.
+- geko fits grism-only (priors from external PySersic fits on imaging); no joint phot+grism inference. kl_pipe Phase 1 ships joint phot+grism; Phase 3 expands it.
 
-Cross-validation `make render-validation-*` will need updating after Phase 2 to compare matched assumptions.
+Cross-validation `make render-validation-*` needs re-baselining post-Phase 2; tracked in #50.
