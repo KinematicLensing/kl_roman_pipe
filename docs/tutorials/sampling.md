@@ -569,11 +569,196 @@ print(f"\nTrue values: g1={true_pars_joint['g1']}, g2={true_pars_joint['g2']}")
 
 ---
 
-## Section 6: TNG Data Vector Integration
+## Section 6: Grism Inference (Single and Joint Photometry + Grism)
+
+Grism observations plug into the same `InferenceTask` infrastructure as velocity and intensity. Two factory methods cover the common cases:
+
+- `InferenceTask.from_grism_obs` — grism-only inference, e.g. a single Roman grism cutout of an emission-line galaxy.
+- `InferenceTask.from_joint_photometry_grism_obs` — joint broadband image + grism, the configuration the Roman kinematic-lensing pipeline targets for production.
+
+Both require a `KLModel` constructed with a `spectral_model`. See `docs/tutorials/grism.md` for the spectral model + `GrismObs` setup; this section focuses on the inference wrapper.
+
+### 6.1 Build a Grism Observation
+
+```{code-cell} python
+import galsim
+from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.velocity import OffsetVelocityModel
+from kl_pipe.spectral import (
+    SpectralConfig, SpectralModel, halpha_line, HALPHA,
+)
+from kl_pipe.dispersion import build_grism_pars_for_line
+from kl_pipe.observation import build_grism_obs
+from kl_pipe.model import KLModel
+from kl_pipe.parameters import ImagePars
+
+image_pars = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='ij')
+shared = {'cosi', 'theta_int', 'g1', 'g2'}
+
+vel_model = OffsetVelocityModel()
+int_model = InclinedExponentialModel()
+sm = SpectralModel(SpectralConfig(lines=(halpha_line(),), spectral_oversample=5),
+                   int_model, vel_model)
+kl = KLModel(vel_model, int_model, shared_pars=shared, spectral_model=sm)
+
+z = 1.0
+true_pars = {
+    # velocity
+    'v0': 0.0, 'vcirc': 200.0, 'vel_rscale': 0.4, 'vel_x0': 0.0, 'vel_y0': 0.0,
+    # intensity
+    'flux': 100.0, 'int_rscale': 0.3, 'int_h_over_r': 0.15, 'int_x0': 0.0, 'int_y0': 0.0,
+    # shared geometry
+    'cosi': 0.6, 'theta_int': 0.7, 'g1': 0.0, 'g2': 0.0,
+    # spectral
+    'z': z, 'vel_dispersion': 50.0, 'Ha_flux': 100.0, 'Ha_cont': 0.05,
+}
+theta_true = kl.pars2theta(true_pars)
+
+gp = build_grism_pars_for_line(HALPHA.lambda_rest, redshift=z,
+                                image_pars=image_pars, dispersion=1.1)
+psf = galsim.Gaussian(fwhm=0.18)
+
+# render a clean grism image and add Gaussian noise (matched-filter SNR=200)
+obs_clean = build_grism_obs(gp, z=z, psf=psf)
+clean = np.array(kl.render_grism(theta_true, obs_clean))
+snr = 200
+variance = float(np.sum(clean**2)) / snr**2
+rng = np.random.default_rng(0)
+data_grism = clean + rng.normal(0.0, np.sqrt(variance), size=clean.shape)
+
+obs_grism = build_grism_obs(
+    gp, z=z, psf=psf,
+    data=jnp.asarray(data_grism), variance=variance,
+)
+```
+
+### 6.2 Define Priors
+
+`Ha_flux`, `vcirc`, and `vel_rscale` are well-identified by the grism likelihood. Geometry (`cosi`, `theta_int`) and shear (`g1`, `g2`) are not separately well-constrained by a single grism cutout — they need either tight priors or the joint photometry term. **`vel_dispersion` is currently degenerate** with the absorbed instrumental sigma in `SpectralModel.build_cube` (see "Known limitations" in `docs/tutorials/grism.md`).
+
+```{code-cell} python
+priors_grism = PriorDict({
+    # velocity (sampled where the grism informs them)
+    'v0': 0.0,
+    'vcirc': Uniform(50.0, 400.0),
+    'vel_rscale': Uniform(0.1, 1.0),
+    'vel_x0': 0.0,
+    'vel_y0': 0.0,
+    # intensity (fixed for grism-only; the broadband image would constrain these in joint mode)
+    'flux': 100.0,
+    'int_rscale': 0.3,
+    'int_h_over_r': 0.15,
+    'int_x0': 0.0,
+    'int_y0': 0.0,
+    # shared geometry — tight priors for grism-only inference
+    'cosi': Gaussian(0.6, 0.1),
+    'theta_int': Gaussian(0.7, 0.2),
+    'g1': 0.0,
+    'g2': 0.0,
+    # spectral
+    'z': z,
+    'vel_dispersion': 50.0,     # held fixed: degenerate with the absorbed instrumental sigma — see "Known limitations" below
+    'Ha_flux': Uniform(20.0, 200.0),
+    'Ha_cont': 0.05,
+})
+```
+
+### 6.3 Grism-Only Inference with NumPyro
+
+```{code-cell} python
+task_grism = InferenceTask.from_grism_obs(
+    model=kl, priors=priors_grism, obs=obs_grism,
+)
+
+config = NumpyroSamplerConfig(
+    n_samples=200 if CI_MODE else 1000,
+    n_warmup=100 if CI_MODE else 500,
+    n_chains=1 if CI_MODE else 4,
+    dense_mass=True,
+    seed=42,
+    progress=not CI_MODE,
+)
+sampler = build_sampler('numpyro', task_grism, config)
+result_grism = sampler.run()
+
+print_summary(result_grism, true_values=true_pars)
+print(f"Max R-hat: {max(result_grism.get_rhat().values()):.4f}")
+```
+
+### 6.4 Joint Photometry + Grism
+
+Joint inference adds a broadband image term; the underlying log-posterior is the sum of the two independent Gaussian likelihoods. The intensity-channel grid-adequacy validation that `from_intensity_obs` runs is also applied here.
+
+```{code-cell} python
+from kl_pipe.observation import build_image_obs
+
+# synthetic broadband image at the same parameters
+obs_int_clean = build_image_obs(image_pars, int_model=kl.intensity_model, psf=psf)
+clean_int = np.array(kl.intensity_model.render_image(
+    kl.get_intensity_pars(theta_true), obs=obs_int_clean,
+    render_config=obs_int_clean.render_config,
+))
+var_int = float(np.sum(clean_int**2)) / snr**2
+data_int = clean_int + np.random.default_rng(1).normal(0.0, np.sqrt(var_int), size=clean_int.shape)
+obs_int = build_image_obs(
+    image_pars, int_model=kl.intensity_model, psf=psf,
+    data=jnp.asarray(data_int), variance=var_int,
+)
+
+# joint priors — let the broadband image constrain intensity morphology
+# and the geometry / shear that grism-only could not pin down
+priors_joint = PriorDict({
+    # velocity
+    'v0':              0.0,
+    'vcirc':           Uniform(50.0, 400.0),
+    'vel_rscale':      Uniform(0.1, 1.0),
+    'vel_x0':          0.0,
+    'vel_y0':          0.0,
+    # intensity — now sampled (broadband image constrains them)
+    'flux':            Uniform(10.0, 500.0),
+    'int_rscale':      Uniform(0.05, 1.0),
+    'int_h_over_r':    0.15,
+    'int_x0':          0.0,
+    'int_y0':          0.0,
+    # shared geometry — now sampled too
+    'cosi':            Uniform(0.1, 0.99),
+    'theta_int':       Uniform(0.0, np.pi),
+    'g1':              Uniform(-0.1, 0.1),
+    'g2':              Uniform(-0.1, 0.1),
+    # spectral
+    'z':               z,
+    'vel_dispersion':  50.0,             # held fixed: degenerate under the current line-broadening model (see below)
+    'Ha_flux':         Uniform(20.0, 200.0),
+    'Ha_cont':         0.05,
+})
+
+task_joint = InferenceTask.from_joint_photometry_grism_obs(
+    model=kl, priors=priors_joint,
+    obs_int=obs_int, obs_grism=obs_grism,
+)
+
+sampler_joint = build_sampler('numpyro', task_joint, config)
+result_joint = sampler_joint.run()
+
+print_summary(result_joint, true_values=true_pars)
+print(f"Max R-hat: {max(result_joint.get_rhat().values()):.4f}")
+```
+
+### 6.5 Known Limitations of the Current Grism Likelihood
+
+- **`vel_dispersion` is degenerate with the absorbed instrumental sigma.** `SpectralModel.build_cube` applies line broadening as `sqrt(vel_dispersion^2 + sigma_inst^2)`, where `sigma_inst ~ 213 km/s` at Roman R~600 from the quoted resolving power. The kinematic component is overwhelmed and cannot be inferred separately. A planned LSF refactor (drop the absorbed term, rely on PSF + dispersion geometry) makes `vel_dispersion` recoverable. See `docs/plans/phase2_lsf_refactor.md`.
+- **Photometric and emission centroids are shared.** Both broadband image rendering and grism cube assembly use `kl_model.intensity_model`'s `int_x0`/`int_y0`. If the two channels have independent astrometric solutions this is the wrong degree of freedom. The planned `SourceModel` refactor introduces per-component centroids. See `docs/plans/phase3_sourcemodel_refactor.md`.
+- **The intensity-channel grid-adequacy validation is not yet generalized to grism.** `from_joint_photometry_grism_obs` runs it on `obs_int`; `from_grism_obs` does not run it at all. Affects rare prior configurations with extreme cusp profiles + tight grids.
+
+For correctness-critical work that depends on `vel_dispersion`, hold it fixed at an externally-determined value (e.g. from an IFU or single-slit measurement) until the LSF refactor lands.
+
+---
+
+## Section 7: TNG Data Vector Integration
 
 The TNG50 simulation provides realistic galaxy morphologies and kinematics that introduce model mismatch -- the analytic models in `kl_pipe` (arctan rotation curves, exponential disks) can't perfectly describe the complex structure of simulated galaxies. This is a feature, not a bug: it lets us test how well the inference pipeline performs under realistic conditions.
 
-### 6.1 Load TNG Data
+### 7.1 Load TNG Data
 
 ```{code-cell} python
 try:
@@ -591,7 +776,7 @@ if TNG_AVAILABLE:
     galaxy = tng_data.get_galaxy(subhalo_id=8)
 ```
 
-### 6.2 Generate Data Vectors
+### 7.2 Generate Data Vectors
 
 ```{code-cell} python
 if TNG_AVAILABLE:
@@ -628,7 +813,7 @@ if TNG_AVAILABLE:
     plt.show()
 ```
 
-### 6.3 Normalize Intensity
+### 7.3 Normalize Intensity
 
 TNG luminosities are in physical units (erg/s). For sampling with `kl_pipe`'s normalized intensity model, we need to estimate the flux normalization.
 
@@ -641,7 +826,7 @@ if TNG_AVAILABLE:
     print(f"Normalized peak: {intensity_normalized.max():.4f}")
 ```
 
-### 6.4 Estimate Initial Parameters
+### 7.4 Estimate Initial Parameters
 
 Use the TNG catalog orientation as starting estimates:
 
@@ -658,7 +843,7 @@ if TNG_AVAILABLE:
     print(f"Initial theta_int: {initial_pars['theta_int']:.3f} rad")
 ```
 
-### 6.5 Build Joint Task and Run
+### 7.5 Build Joint Task and Run
 
 ```{code-cell} python
 if TNG_AVAILABLE:
@@ -727,7 +912,7 @@ if TNG_AVAILABLE:
     print(f"Divergences: {result_tng.diagnostics.get('n_divergences', 0)}")
 ```
 
-### 6.6 Interpreting TNG Results
+### 7.6 Interpreting TNG Results
 
 With TNG data there is no single "true" parameter set -- the analytic model is an approximation. Expect model mismatch: the posterior will be shifted from the TNG catalog values because the arctan rotation curve and exponential disk don't perfectly describe TNG morphology. The key question is whether shear constraints remain unbiased despite this mismatch.
 
@@ -751,9 +936,9 @@ if TNG_AVAILABLE:
 
 ---
 
-## Section 7: Diagnostic Analysis
+## Section 8: Diagnostic Analysis
 
-### 7.1 Trace Plots for Convergence
+### 8.1 Trace Plots for Convergence
 
 Trace plots show parameter values over the sampling iterations. Look for:
 - **Stationarity**: Chains should fluctuate around a stable mean
@@ -765,7 +950,7 @@ fig = plot_trace(result_joint)
 plt.show()
 ```
 
-### 7.2 Corner Plots
+### 8.2 Corner Plots
 
 Corner plots reveal parameter degeneracies and correlations. The `plot_corner` function includes:
 
@@ -779,7 +964,7 @@ fig = plot_corner(result_joint, true_values=true_pars_joint, sampler_info={'name
 plt.show()
 ```
 
-### 7.3 Parameter Recovery Assessment
+### 8.3 Parameter Recovery Assessment
 
 ```{code-cell} python
 from kl_pipe.sampling.diagnostics import plot_recovery
@@ -792,7 +977,7 @@ print(f"Joint Nsigma: {recovery_stats['joint_nsigma']:.2f}")
 print(f"P-value: {recovery_stats['joint_pvalue']:.4f}")
 ```
 
-### 7.4 Comparing Samplers
+### 8.4 Comparing Samplers
 
 Overlay results from different samplers to compare their posteriors using `plot_corner_comparison`. The baseline sampler (default: numpyro) is shown with filled contours; others with dashed contours clipped to the baseline region.
 
@@ -819,7 +1004,7 @@ plt.show()
 
 ---
 
-## Section 8: Running Tests
+## Section 9: Running Tests
 
 ### Makefile targets
 
@@ -855,7 +1040,7 @@ with redirect_sampler_output(log_path):
 
 ---
 
-## Section 9: Choosing a Sampler
+## Section 10: Choosing a Sampler
 
 ### Decision flowchart
 
@@ -876,7 +1061,7 @@ with redirect_sampler_output(log_path):
 
 ---
 
-## Section 10: Common Issues & Troubleshooting
+## Section 11: Common Issues & Troubleshooting
 
 | Problem | Likely Cause | Fix |
 |---------|-------------|-----|
@@ -892,7 +1077,7 @@ with redirect_sampler_output(log_path):
 
 ---
 
-## Section 11: Next Steps
+## Section 12: Next Steps
 
 - **Architecture reference**: `kl_pipe/sampling/README.md` -- full config reference, design patterns, adding backends
 - **Test examples**: `tests/test_sampling.py`, `tests/test_numpyro.py`, `tests/test_sampling_diagnostics.py`
