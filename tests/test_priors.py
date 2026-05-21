@@ -325,6 +325,20 @@ class TestPriorDict:
         assert bounds[0] == (0, 10)  # a: Uniform
         assert bounds[1] == (None, None)  # b: Gaussian
 
+    def test_get_param_bounds_tri_state(self):
+        """Sampled -> prior bounds; fixed -> (v, v); absent -> (None, None)."""
+        priors = PriorDict(
+            {
+                'a': Uniform(0.1, 9.9),
+                'b': Gaussian(0, 1),
+                'c': 5.0,
+            }
+        )
+        assert priors.get_param_bounds('a') == (0.1, 9.9)
+        assert priors.get_param_bounds('b') == (None, None)  # unbounded Gaussian
+        assert priors.get_param_bounds('c') == (5.0, 5.0)
+        assert priors.get_param_bounds('missing') == (None, None)
+
     def test_theta_to_full_pars(self):
         """Converts theta to full parameter dict."""
         priors = PriorDict(

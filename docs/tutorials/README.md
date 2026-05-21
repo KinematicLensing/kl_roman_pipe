@@ -6,6 +6,7 @@ Interactive tutorials for learning the kinematic lensing pipeline.
 
 - **`quickstart.md`** - Introduction to basic pipeline functionality: models, likelihoods, and optimization
 - **`sampling.md`** - Bayesian inference with MCMC sampling (emcee, nautilus, numpyro, blackjax)
+- **`grism.md`** - Grism spectroscopy: datacubes, dispersion, velocity signatures, and the KLModel spectral interface
 - **`tng50_data.md`** - Working with TNG50 mock observations downloaded from CyVerse
 
 ## Converting to Jupyter Notebooks

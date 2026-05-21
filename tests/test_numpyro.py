@@ -13,7 +13,14 @@ Many tests are adapted from test_blackjax.py to ensure NumPyro handles
 the same scenarios that caused BlackJAX to fail.
 """
 
+import galsim
 import pytest
+
+# All tests in this file run real NUTS/HMC sampling. Mark the entire module
+# as slow so CI's `make test-basic` (excludes slow) doesn't time out.
+# Run via `make test-sampling` or with `-m "not slow"` removed.
+pytestmark = pytest.mark.slow
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -73,7 +80,7 @@ def simple_velocity_task():
     vel_model = CenteredVelocityModel()
 
     synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-    data_vel_noisy = synth_vel.generate(image_pars, snr=100, include_poisson=False)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=1000)
     var_vel = synth_vel.variance
 
     priors = PriorDict(
@@ -112,6 +119,10 @@ def joint_model_task():
     image_pars_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     image_pars_int = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
 
+    # Roman-like PSF: damps the worst-case maxk so the wide rscale + edge-on
+    # priors don't blow up oversample (cf. Issue #47).
+    psf = galsim.Gaussian(fwhm=0.2)
+
     true_pars = {
         'v0': 10.0,
         'vcirc': 200.0,
@@ -130,13 +141,13 @@ def joint_model_task():
     vel_model = CenteredVelocityModel()
     vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-    data_vel = synth_vel.generate(image_pars_vel, snr=100, include_poisson=False)
+    data_vel = synth_vel.generate(image_pars_vel, snr=1000)
     var_vel = synth_vel.variance
 
     int_model = InclinedExponentialModel()
     int_pars = {k: v for k, v in true_pars.items() if k in int_model.PARAMETER_NAMES}
-    synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
-    data_int = synth_int.generate(image_pars_int, snr=100, include_poisson=False)
+    synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
+    data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance
 
     joint_model = KLModel(
@@ -171,6 +182,7 @@ def joint_model_task():
         variance_int=var_int,
         image_pars_vel=image_pars_vel,
         image_pars_int=image_pars_int,
+        psf_int=psf,
     )
 
     return task, true_pars

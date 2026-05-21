@@ -429,6 +429,25 @@ class PriorDict:
         """
         return [self._priors[name].bounds for name in self._sampled_names]
 
+    def get_param_bounds(self, name: str) -> Tuple[Optional[float], Optional[float]]:
+        """Return (low, high) for a parameter, sampled or fixed.
+
+        Tri-state:
+        - sampled parameter -> the prior's ``.bounds``
+        - fixed parameter   -> ``(value, value)``
+        - absent            -> ``(None, None)``
+
+        Useful for callers that need to reason about parameter ranges
+        without caring whether the parameter is being sampled or fixed
+        (e.g., model construction-time prior validation).
+        """
+        if name in self._sampled_names:
+            return self._priors[name].bounds
+        if name in self._fixed:
+            v = self._fixed[name]
+            return (v, v)
+        return (None, None)
+
     def log_prior(self, theta: jnp.ndarray) -> jnp.ndarray:
         """
         Compute joint log prior probability.

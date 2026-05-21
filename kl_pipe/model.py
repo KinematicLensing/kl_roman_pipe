@@ -29,107 +29,8 @@ class Model(ABC):
     def __init__(self, meta_pars=None) -> None:
         self.meta_pars = meta_pars or {}
         self._param_indices = {name: i for i, name in enumerate(self.PARAMETER_NAMES)}
-        self._psf_data = None
-        self._psf_frozen = False
-        self._psf_oversample = 1
-        self._psf_fine_X = None
-        self._psf_fine_Y = None
-        self._psf_kspace_fft = None
 
         return
-
-    def configure_psf(
-        self,
-        gsobj,
-        image_pars: 'ImagePars' = None,
-        *,
-        image_shape: tuple = None,
-        pixel_scale: float = None,
-        oversample: int = 5,
-        gsparams=None,
-        freeze: bool = False,
-    ):
-        """
-        Configure PSF for rendering. Call BEFORE creating likelihood.
-
-        Two calling conventions (image_pars is preferred):
-        - configure_psf(gsobj, image_pars=image_pars)
-        - configure_psf(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale)
-
-        Parameters
-        ----------
-        gsobj : galsim.GSObject
-            PSF profile.
-        image_pars : ImagePars, optional
-            Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
-        image_shape : tuple, optional
-            (Nrow, Ncol) of data images.
-        pixel_scale : float, optional
-            arcsec/pixel.
-        oversample : int
-            Oversampling factor for source evaluation. Must be a positive odd
-            integer. Default is 5. Set to 1 to disable oversampling.
-        gsparams : galsim.GSParams, optional
-            Override GSParams for PSF kernel rendering. Controls truncation
-            (folding_threshold) and accuracy.
-        freeze : bool
-            If True, prevent reconfiguration (set by factory methods).
-        """
-        if self._psf_frozen:
-            raise ValueError(
-                "PSF is frozen (bound to a likelihood). Call clear_psf() first."
-            )
-        from kl_pipe.psf import precompute_psf_fft
-
-        # extract coarse-scale image params
-        if image_pars is not None:
-            coarse_shape = (image_pars.Nrow, image_pars.Ncol)
-            ps = image_pars.pixel_scale
-        elif image_shape is not None and pixel_scale is not None:
-            coarse_shape = image_shape
-            ps = pixel_scale
-        else:
-            raise ValueError("Provide image_pars OR both image_shape and pixel_scale")
-
-        self._psf_data = precompute_psf_fft(
-            gsobj,
-            image_shape=coarse_shape,
-            pixel_scale=ps,
-            oversample=oversample,
-            gsparams=gsparams,
-        )
-        self._psf_oversample = oversample
-        self._psf_frozen = freeze
-
-        # pre-build fine-scale grids for oversampled evaluation
-        if oversample > 1:
-            if image_pars is not None:
-                fine_image_pars = image_pars.make_fine_scale(oversample)
-            else:
-                fine_image_pars = ImagePars(
-                    shape=(coarse_shape[0] * oversample, coarse_shape[1] * oversample),
-                    pixel_scale=ps / oversample,
-                    indexing='ij',
-                )
-            self._psf_fine_X, self._psf_fine_Y = build_map_grid_from_image_pars(
-                fine_image_pars
-            )
-        else:
-            self._psf_fine_X = None
-            self._psf_fine_Y = None
-
-    def clear_psf(self):
-        """Remove PSF config and unfreeze."""
-        self._psf_data = None
-        self._psf_frozen = False
-        self._psf_oversample = 1
-        self._psf_fine_X = None
-        self._psf_fine_Y = None
-        self._psf_kspace_fft = None
-
-    @property
-    def has_psf(self):
-        return self._psf_data is not None
 
     def get_param(self, name: str, theta: jnp.ndarray) -> float:
         idx = self._param_indices[name]
@@ -182,7 +83,14 @@ class Model(ABC):
         if data_type == 'image':
             if not isinstance(data_pars, ImagePars):
                 raise TypeError("data_pars must be ImagePars for data_type='image'")
-            return self.render_image(theta, data_pars, plane=plane, **kwargs)
+            from kl_pipe.observation import ImageObs
+
+            obs = ImageObs(
+                image_pars=data_pars,
+                X=build_map_grid_from_image_pars(data_pars)[0],
+                Y=build_map_grid_from_image_pars(data_pars)[1],
+            )
+            return self.render_image(theta, obs=obs, plane=plane, **kwargs)
 
         elif data_type == 'cube':
             raise NotImplementedError("Cube rendering not yet implemented")
@@ -206,18 +114,21 @@ class Model(ABC):
         plane: str = 'obs',
         X: jnp.ndarray = None,
         Y: jnp.ndarray = None,
+        *,
+        obs: Any = None,
         **kwargs,
     ) -> jnp.ndarray:
         """
         Render model as a 2D image, including observational effects (PSF).
 
-        Two calling conventions:
-        - render_image(theta, image_pars) -- builds grids (scripts, notebooks)
-        - render_image(theta, X=X, Y=Y) -- pre-computed grids (likelihood hot path)
+        When obs has oversample > 1, the model is evaluated on a fine-scale
+        grid and convolved at that resolution; convolve_fft bins the result
+        back to coarse scale automatically.
 
-        When PSF is configured with oversample > 1, the model is evaluated on
-        a fine-scale grid and convolved at that resolution; convolve_fft bins
-        the result back to coarse scale automatically.
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars) -- no PSF, builds grids
+        - render_image(theta, X=X, Y=Y) -- no PSF, pre-computed grids
 
         Parameters
         ----------
@@ -229,6 +140,8 @@ class Model(ABC):
             Coordinate plane for evaluation. Default is 'obs'.
         X, Y : jnp.ndarray, optional
             Pre-computed coordinate grids (coarse-scale).
+        obs : ImageObs, optional
+            Observation object with PSF, grids, and oversampling config.
         **kwargs
             Additional model-specific arguments.
 
@@ -237,27 +150,43 @@ class Model(ABC):
         jnp.ndarray
             2D image array (coarse-scale).
         """
-        if self._psf_data is not None and self._psf_oversample > 1:
-            # oversampled path: evaluate on fine grids
-            model_map = self(theta, plane, self._psf_fine_X, self._psf_fine_Y, **kwargs)
-            from kl_pipe.psf import convolve_fft
+        rc = kwargs.pop('render_config', None)
 
-            return convolve_fft(model_map, self._psf_data)
+        if obs is not None:
+            oversample = rc.oversample if rc is not None else obs.oversample
+            if oversample > 1 and obs.fine_X is not None:
+                # oversampled: evaluate on fine grid
+                model_map = self(theta, plane, obs.fine_X, obs.fine_Y, **kwargs)
+                if obs.psf_data is not None:
+                    from kl_pipe.psf import convolve_fft
 
-        # non-oversampled path
+                    return convolve_fft(model_map, obs.psf_data)
+                # no PSF but oversampled → mean-bin SB over fine cells, then
+                # multiply by coarse pixel area to convert SB-coarse → flux/pixel
+                # (sum-over-N² fine cells × fine area = mean × coarse area).
+                N = oversample
+                Nrow = obs.image_pars.Nrow
+                Ncol = obs.image_pars.Ncol
+                ps = obs.image_pars.pixel_scale
+                sb_coarse = model_map.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+                return sb_coarse * (ps * ps)
+
+            model_map = self(theta, plane, obs.X, obs.Y, **kwargs)
+
+            if obs.psf_data is not None:
+                from kl_pipe.psf import convolve_fft
+
+                model_map = convolve_fft(model_map, obs.psf_data)
+
+            return model_map
+
+        # legacy/convenience path (no obs)
         if X is None or Y is None:
             if image_pars is None:
-                raise ValueError("Provide image_pars or (X, Y)")
+                raise ValueError("Provide obs, image_pars, or (X, Y)")
             X, Y = build_map_grid_from_image_pars(image_pars)
 
-        model_map = self(theta, plane, X, Y, **kwargs)
-
-        if self._psf_data is not None:
-            from kl_pipe.psf import convolve_fft
-
-            model_map = convolve_fft(model_map, self._psf_data)
-
-        return model_map
+        return self(theta, plane, X, Y, **kwargs)
 
     @abstractmethod
     def __call__(
@@ -285,9 +214,6 @@ class VelocityModel(Model):
 
     def __init__(self, meta_pars=None) -> None:
         super().__init__(meta_pars)
-        self._psf_flux_model = None
-        self._psf_flux_theta = None
-        self._psf_flux_image = None
 
         return
 
@@ -391,124 +317,6 @@ class VelocityModel(Model):
             "Subclasses must implement evaluate_circular_velocity method."
         )
 
-    def configure_velocity_psf(
-        self,
-        gsobj,
-        image_pars: 'ImagePars' = None,
-        *,
-        image_shape: tuple = None,
-        pixel_scale: float = None,
-        oversample: int = 5,
-        gsparams=None,
-        flux_model=None,
-        flux_theta=None,
-        flux_image=None,
-        flux_image_pars=None,
-        freeze: bool = False,
-    ):
-        """
-        Configure velocity PSF with flux weighting.
-
-        Must provide ONE of:
-        - flux_model + flux_theta: IntensityModel + fixed params
-        - flux_image: pre-rendered intensity map
-        In joint mode (KLModel), neither needed -- uses fitted intensity.
-
-        Two calling conventions (image_pars is preferred):
-        - configure_velocity_psf(gsobj, image_pars=image_pars, ...)
-        - configure_velocity_psf(gsobj, image_shape=(Nrow, Ncol), pixel_scale=scale, ...)
-
-        Parameters
-        ----------
-        gsobj : galsim.GSObject
-            PSF profile.
-        image_pars : ImagePars, optional
-            Image parameters. Extracts (Nrow, Ncol) and pixel_scale internally.
-        image_shape : tuple, optional
-            (Nrow, Ncol) of velocity data images.
-        pixel_scale : float, optional
-            arcsec/pixel.
-        oversample : int
-            Oversampling factor. Default is 5.
-        gsparams : galsim.GSParams, optional
-            Override GSParams for PSF kernel rendering.
-        flux_model : IntensityModel, optional
-            Intensity model for rendering flux on velocity grid.
-        flux_theta : jnp.ndarray, optional
-            Fixed intensity params (used with flux_model).
-        flux_image : ndarray, optional
-            Pre-rendered intensity map for flux weighting.
-        flux_image_pars : ImagePars, optional
-            Image parameters of flux_image (for resampling if shape differs).
-        freeze : bool
-            If True, prevent reconfiguration.
-        """
-        self.configure_psf(
-            gsobj,
-            image_pars=image_pars,
-            image_shape=image_shape,
-            pixel_scale=pixel_scale,
-            oversample=oversample,
-            gsparams=gsparams,
-            freeze=freeze,
-        )
-        self._psf_flux_model = flux_model
-        self._psf_flux_theta = flux_theta
-
-        if flux_model is None and flux_image is None:
-            raise ValueError(
-                "Velocity PSF requires flux weighting. Provide flux_model + "
-                "flux_theta, or flux_image. For joint inference use KLModel."
-            )
-
-        # extract target shape/scale for resampling check
-        if image_pars is not None:
-            target_shape = (image_pars.Nrow, image_pars.Ncol)
-            target_pixel_scale = image_pars.pixel_scale
-        else:
-            target_shape = image_shape
-            target_pixel_scale = pixel_scale
-
-        if flux_image is not None:
-            # first resample to coarse-scale if shapes differ
-            if flux_image.shape != target_shape:
-                if flux_image_pars is None:
-                    raise ValueError(
-                        f"flux_image shape {flux_image.shape} != velocity grid "
-                        f"{target_shape}. Provide flux_image_pars for resampling."
-                    )
-                from kl_pipe.psf import _resample_to_grid
-
-                flux_image = _resample_to_grid(
-                    flux_image,
-                    flux_image_pars,
-                    target_shape=target_shape,
-                    target_pixel_scale=target_pixel_scale,
-                )
-
-            # upsample to fine-scale if oversampled
-            if oversample > 1:
-                from kl_pipe.psf import _resample_to_grid
-
-                coarse_pars = ImagePars(
-                    shape=target_shape, pixel_scale=target_pixel_scale, indexing='ij'
-                )
-                fine_shape = (
-                    target_shape[0] * oversample,
-                    target_shape[1] * oversample,
-                )
-                fine_ps = target_pixel_scale / oversample
-                flux_image = _resample_to_grid(
-                    flux_image,
-                    coarse_pars,
-                    target_shape=fine_shape,
-                    target_pixel_scale=fine_ps,
-                )
-
-            self._psf_flux_image = jnp.asarray(flux_image)
-        else:
-            self._psf_flux_image = None
-
     def render_image(
         self,
         theta: jnp.ndarray,
@@ -518,14 +326,21 @@ class VelocityModel(Model):
         Y: jnp.ndarray = None,
         return_speed: bool = False,
         flux_theta_override: jnp.ndarray = None,
+        *,
+        obs: Any = None,
         **kwargs,
     ) -> jnp.ndarray:
         """
         Render velocity model as a 2D image, with optional PSF convolution.
 
-        When PSF is configured with oversample > 1, velocity and flux are
-        evaluated on fine-scale grids; convolve_flux_weighted handles
-        sum-then-divide binning back to coarse scale.
+        When obs has oversample > 1, velocity and flux are evaluated on
+        fine-scale grids; convolve_flux_weighted handles sum-then-divide
+        binning back to coarse scale.
+
+        Calling conventions:
+        - render_image(theta, obs=obs) -- with PSF from obs
+        - render_image(theta, image_pars) -- no PSF, builds grids
+        - render_image(theta, X=X, Y=Y) -- no PSF, pre-computed grids
 
         Parameters
         ----------
@@ -541,58 +356,127 @@ class VelocityModel(Model):
             If True, return speed map. Default is False.
         flux_theta_override : jnp.ndarray, optional
             Intensity params for joint mode flux weighting.
+        obs : VelocityObs, optional
+            Observation object with PSF, grids, flux source, and oversampling.
+        **kwargs
+            Additional model-specific arguments.
 
         Returns
         -------
         jnp.ndarray
             2D velocity or speed map (coarse-scale).
         """
-        if self._psf_data is not None and self._psf_oversample > 1:
-            # oversampled path: evaluate on fine grids
-            fine_X, fine_Y = self._psf_fine_X, self._psf_fine_Y
-            model_vel = self(theta, plane, fine_X, fine_Y, return_speed=return_speed)
+        rc = kwargs.pop('render_config', None)
 
-            from kl_pipe.psf import convolve_flux_weighted
-
-            if flux_theta_override is not None and self._psf_flux_model is not None:
-                flux_map = self._psf_flux_model(
-                    flux_theta_override, plane, fine_X, fine_Y
+        if obs is not None:
+            oversample = rc.oversample if rc is not None else obs.oversample
+            if oversample > 1 and obs.fine_X is not None:
+                fine_X, fine_Y = obs.fine_X, obs.fine_Y
+                model_vel = self(
+                    theta, plane, fine_X, fine_Y, return_speed=return_speed
                 )
-            elif self._psf_flux_image is not None:
-                # already upsampled at configure time
-                flux_map = self._psf_flux_image
-            elif self._psf_flux_model is not None and self._psf_flux_theta is not None:
-                flux_map = self._psf_flux_model(
-                    self._psf_flux_theta, plane, fine_X, fine_Y
-                )
-            else:
-                raise ValueError("No flux source for velocity PSF weighting")
 
-            return convolve_flux_weighted(model_vel, flux_map, self._psf_data)
+                if obs.psf_data is not None:
+                    from kl_pipe.psf import convolve_flux_weighted
 
-        # non-oversampled path
+                    flux_map = _get_flux_map(
+                        obs, plane, fine_X, fine_Y, flux_theta_override
+                    )
+                    return convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
+
+                # no PSF but oversampled → bin for pixel integration.
+                # Unweighted mean is a documented approximation for the
+                # velocity-only setup (no flux source on obs); it is
+                # physically correct only when fine intensity is uniform
+                # within each coarse pixel. Real-data production uses the
+                # PSF branch above with convolve_flux_weighted, which
+                # applies proper sum(I*V)/sum(I) flux weighting. See
+                # follow-up issue for the velocity-only oversample-no-PSF
+                # path discussion.
+                N = oversample
+                Nrow = obs.image_pars.Nrow
+                Ncol = obs.image_pars.Ncol
+                return model_vel.reshape(Nrow, N, Ncol, N).mean(axis=(1, 3))
+
+            model_vel = self(theta, plane, obs.X, obs.Y, return_speed=return_speed)
+
+            if obs.psf_data is not None:
+                from kl_pipe.psf import convolve_flux_weighted
+
+                flux_map = _get_flux_map(obs, plane, obs.X, obs.Y, flux_theta_override)
+                model_vel = convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
+
+            return model_vel
+
+        # legacy/convenience path (no obs, no PSF)
         if X is None or Y is None:
             if image_pars is None:
-                raise ValueError("Provide image_pars or (X, Y)")
+                raise ValueError("Provide obs, image_pars, or (X, Y)")
             X, Y = build_map_grid_from_image_pars(image_pars)
 
-        model_vel = self(theta, plane, X, Y, return_speed=return_speed)
+        return self(theta, plane, X, Y, return_speed=return_speed)
 
-        if self._psf_data is not None:
-            from kl_pipe.psf import convolve_flux_weighted
 
-            if flux_theta_override is not None and self._psf_flux_model is not None:
-                flux_map = self._psf_flux_model(flux_theta_override, plane, X, Y)
-            elif self._psf_flux_image is not None:
-                flux_map = self._psf_flux_image
-            elif self._psf_flux_model is not None and self._psf_flux_theta is not None:
-                flux_map = self._psf_flux_model(self._psf_flux_theta, plane, X, Y)
-            else:
-                raise ValueError("No flux source for velocity PSF weighting")
+def _get_flux_map(obs, plane, X, Y, flux_theta_override):
+    """Extract flux map from VelocityObs for PSF weighting."""
+    if flux_theta_override is not None and obs.flux_model is not None:
+        return obs.flux_model(flux_theta_override, plane, X, Y)
+    elif obs.flux_image is not None:
+        return obs.flux_image
+    elif obs.flux_model is not None and obs.flux_theta is not None:
+        return obs.flux_model(obs.flux_theta, plane, X, Y)
+    else:
+        raise ValueError("No flux source for velocity PSF weighting")
 
-            model_vel = convolve_flux_weighted(model_vel, flux_map, self._psf_data)
 
-        return model_vel
+def _apply_post_dispersion_pixel_response(
+    dispersed: jnp.ndarray,
+    pixel_response_fft: jnp.ndarray,
+    coarse_shape: tuple,
+    oversample: int,
+) -> jnp.ndarray:
+    """Apply precomputed BoxPixel sinc + sum-bin to coarse on a fine 2D image.
+
+    Pixel response (square detector top-hat) is applied once at the 2D
+    observable readout stage rather than per-channel on the cube. After
+    grism dispersion produces a fine-resolution 2D image, this function
+    convolves with the BoxPixel sinc in k-space (precomputed at obs build
+    time, stored on ``GrismObs.pixel_response_fft``) and sum-bins to coarse
+    detector pixels.
+
+    For ``oversample == 1`` the input is already at coarse detector
+    resolution; no fine-grid sinc is required. Pass-through.
+
+    Parameters
+    ----------
+    dispersed : jnp.ndarray
+        2D dispersed image, shape ``(Nrow*N, Ncol*N)`` for ``oversample=N``,
+        or ``(Nrow, Ncol)`` for ``oversample=1``.
+    pixel_response_fft : jnp.ndarray
+        Precomputed BoxPixel sinc on the fine k-grid (from
+        ``GrismObs.pixel_response_fft``). Unused at ``oversample == 1``.
+    coarse_shape : tuple
+        ``(Nrow_c, Ncol_c)`` of the coarse detector grid.
+    oversample : int
+        Spatial oversampling factor of the input.
+
+    Returns
+    -------
+    jnp.ndarray
+        Coarse-pixel 2D image in flux per coarse pixel, shape == coarse_shape.
+    """
+    if oversample <= 1:
+        return dispersed
+
+    Nrow_c, Ncol_c = coarse_shape
+    N = oversample
+
+    # FFT -> sinc multiply -> IFFT at fine grid
+    img_fft = jnp.fft.fft2(dispersed)
+    pixel_integrated_fine = jnp.fft.ifft2(img_fft * pixel_response_fft).real
+
+    # sum-bin fine to coarse (flux/pixel preservation)
+    return pixel_integrated_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
 
 
 class IntensityModel(Model):
@@ -638,6 +522,120 @@ class IntensityModel(Model):
         else:
             # apply cos(i) brightening factor for projected intensity
             return I_disk / cosi
+
+    def render_unconvolved(self, theta, image_pars, oversample=5):
+        """Render intensity image WITHOUT PSF, using k-space FT.
+
+        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        Subclasses should override with their own k-space implementation.
+        """
+        raise NotImplementedError(
+            "Subclasses must implement render_unconvolved method."
+        )
+
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Wavenumber where the bare profile FT drops below threshold.
+
+        Used for adaptive grid sizing. The effective maxk of a rendering
+        chain is computed from the full product: profile × pixel × PSF.
+
+        Parameters
+        ----------
+        params : dict
+            Profile parameters (e.g., int_rscale, int_hlr, n_sersic).
+        threshold : float
+            Maximum acceptable FT amplitude. Default 1e-3.
+
+        Returns
+        -------
+        float
+            Wavenumber in rad/arcsec.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement maxk(). "
+            f"Required for adaptive grid sizing."
+        )
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Minimum k-spacing to contain (1 - folding_threshold) of flux.
+
+        Determines the real-space image extent needed to avoid periodic
+        boundary folding in the DFT. Following GalSim convention:
+        stepk = π / (stepk_min_hlr × hlr), where stepk_min_hlr ≈ 5.
+
+        Parameters
+        ----------
+        params : dict
+            Profile parameters.
+        folding_threshold : float
+            Maximum fraction of flux allowed to fold. Default 5e-3.
+
+        Returns
+        -------
+        float
+            k-spacing in rad/arcsec.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement stepk(). "
+            f"Required for adaptive grid sizing."
+        )
+
+    def _ft_image(
+        self,
+        theta: jnp.ndarray,
+        KX: jnp.ndarray,
+        KY: jnp.ndarray,
+        pixel_scale: float,
+        Nrow: int,
+        Ncol: int,
+    ) -> jnp.ndarray:
+        """Evaluate complex k-space FT at grid points (KX, KY).
+
+        Called by ``_render_kspace`` and by ``CompositeIntensityModel``
+        to sum component FTs before a single IFFT pass. Subclasses with
+        k-space rendering must override.
+
+        Parameters
+        ----------
+        theta : jnp.ndarray
+            Parameter array for this model.
+        KX, KY : jnp.ndarray
+            k-space grids (rad/arcsec).
+        pixel_scale : float
+            Coarse pixel scale (arcsec/pixel) for half-pixel phase.
+        Nrow, Ncol : int
+            Coarse grid dimensions for half-pixel phase.
+
+        Returns
+        -------
+        jnp.ndarray
+            Complex FT array, same shape as KX/KY.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement _ft_image")
+
+    def check_priors_safe(self, priors) -> None:
+        """Raise if priors permit unphysical regimes for this model.
+
+        Default: no-op. Override in subclasses with known prior-induced
+        failure modes (e.g. ``InclinedSpergelModel`` cusp at high
+        inclination with concentrated profiles). Called by
+        ``InferenceTask.from_*_obs`` factories at construction time so
+        misconfigured priors fail loudly before the first JIT trace.
+
+        Parameters
+        ----------
+        priors : PriorDict
+            Prior specification. Sampled parameters expose ``.bounds``;
+            fixed parameters carry their scalar value.
+
+        Raises
+        ------
+        ValueError
+            If priors permit a regime where the model produces unphysical
+            output. Error message must explain the regime and suggest
+            remediation.
+        """
+        return
 
     @abstractmethod
     def evaluate_in_disk_plane(
@@ -704,98 +702,25 @@ class KLModel(object):
         intensity_model: IntensityModel,
         shared_pars: Set[str] = None,
         meta_pars: dict = None,
+        spectral_model=None,
     ):
         self.velocity_model = velocity_model
         self.intensity_model = intensity_model
         self.shared_pars = shared_pars or set()
         self.meta_pars = meta_pars or {}
+        self.spectral_model = spectral_model
 
         self._build_parameter_structure()
 
         return
 
-    def configure_joint_psf(
-        self,
-        psf_vel=None,
-        psf_int=None,
-        image_pars_vel: 'ImagePars' = None,
-        image_pars_int: 'ImagePars' = None,
-        *,
-        image_shape_vel: tuple = None,
-        pixel_scale_vel: float = None,
-        image_shape_int: tuple = None,
-        pixel_scale_int: float = None,
-        oversample: int = 5,
-        freeze: bool = False,
-        gsparams=None,
-    ):
-        """
-        Configure PSF for joint model.
-
-        Velocity PSF: sets flux_model = self.intensity_model (rendered on
-        velocity grid via flux_theta_override in joint likelihood).
-
-        Two calling conventions (image_pars is preferred):
-        - configure_joint_psf(..., image_pars_vel=pars_vel, image_pars_int=pars_int)
-        - configure_joint_psf(..., image_shape_vel=(Nrow,Ncol), pixel_scale_vel=..., ...)
-
-        Parameters
-        ----------
-        psf_vel : galsim.GSObject, optional
-            PSF for velocity channel.
-        psf_int : galsim.GSObject, optional
-            PSF for intensity channel.
-        image_pars_vel : ImagePars, optional
-            Image parameters for velocity data.
-        image_pars_int : ImagePars, optional
-            Image parameters for intensity data.
-        image_shape_vel : tuple, optional
-            (Nrow, Ncol) of velocity data.
-        pixel_scale_vel : float, optional
-            arcsec/pixel for velocity grid.
-        image_shape_int : tuple, optional
-            (Nrow, Ncol) of intensity data.
-        pixel_scale_int : float, optional
-            arcsec/pixel for intensity grid.
-        oversample : int
-            Oversampling factor for source evaluation. Default is 5.
-        freeze : bool
-            If True, prevent reconfiguration.
-        gsparams : galsim.GSParams, optional
-            GalSim rendering parameters for PSF kernel accuracy.
-        """
-        if psf_vel is not None:
-            self.velocity_model.configure_psf(
-                psf_vel,
-                image_pars=image_pars_vel,
-                image_shape=image_shape_vel,
-                pixel_scale=pixel_scale_vel,
-                oversample=oversample,
-                freeze=freeze,
-                gsparams=gsparams,
-            )
-            # in joint mode, intensity model provides flux weighting
-            self.velocity_model._psf_flux_model = self.intensity_model
-            self.velocity_model._psf_flux_theta = None
-            self.velocity_model._psf_flux_image = None
-
-        if psf_int is not None:
-            self.intensity_model.configure_psf(
-                psf_int,
-                image_pars=image_pars_int,
-                image_shape=image_shape_int,
-                pixel_scale=pixel_scale_int,
-                oversample=oversample,
-                freeze=freeze,
-                gsparams=gsparams,
-            )
-
     def _build_parameter_structure(self):
         """
         Build the unified parameter space and component slicing indices.
 
-        Creates PARAMETER_NAMES with shared parameters appearing once, and builds
-        index mappings for extracting component-specific parameter arrays.
+        When spectral_model is present, uses 3-way ordered deduplication:
+        iterate vel_pars, int_pars, spectral_pars in order; first occurrence
+        of each param name wins position.
         """
 
         vel_pars = self.velocity_model.PARAMETER_NAMES
@@ -808,10 +733,28 @@ class KLModel(object):
             invalid = self.shared_pars - (vel_pars_set & int_pars_set)
             raise ValueError(f"Shared parameters {invalid} not present in both models")
 
-        param_list = list(vel_pars)
-        for param in int_pars:
-            if param not in self.shared_pars:
-                param_list.append(param)
+        # 3-way ordered deduplication
+        seen = set()
+        param_list = []
+
+        for name in vel_pars:
+            if name not in seen:
+                param_list.append(name)
+                seen.add(name)
+
+        for name in int_pars:
+            if name not in seen:
+                param_list.append(name)
+                seen.add(name)
+            elif name in self.shared_pars:
+                pass  # already added from vel_pars
+
+        if self.spectral_model is not None:
+            spec_pars = self.spectral_model.PARAMETER_NAMES
+            for name in spec_pars:
+                if name not in seen:
+                    param_list.append(name)
+                    seen.add(name)
 
         self.PARAMETER_NAMES = tuple(param_list)
 
@@ -823,6 +766,13 @@ class KLModel(object):
         self._intensity_indices = jnp.array(
             [composite_param_dict[name] for name in int_pars]
         )
+
+        if self.spectral_model is not None:
+            self._spectral_indices = jnp.array(
+                [composite_param_dict[name] for name in spec_pars]
+            )
+        else:
+            self._spectral_indices = None
 
         self._param_indices = composite_param_dict
 
@@ -879,6 +829,173 @@ class KLModel(object):
             Parameter array for intensity model.
         """
         return theta[self._intensity_indices]
+
+    def get_spectral_pars(self, theta: jnp.ndarray) -> jnp.ndarray:
+        """Extract spectral component parameters from composite theta."""
+        if self._spectral_indices is None:
+            raise ValueError("No spectral model configured")
+        return theta[self._spectral_indices]
+
+    def render_cube(
+        self,
+        theta: jnp.ndarray,
+        obs_or_cube_pars=None,
+        plane: str = 'obs',
+        cube_pars=None,
+    ) -> jnp.ndarray:
+        """Render PSF-convolved datacube.
+
+        1. Calls spectral_model.build_cube() -> intrinsic cube (no PSF).
+        2. Per-slice convolve_fft(cube[:,:,k], psf_data, bin=False) if PSF
+           is configured. The cube is the post-PSF, pre-pixel-response
+           intermediate; pixel response applies once at the 2D dispersed
+           observable in render_grism, not per-channel on the cube.
+
+        When ``obs.oversample > 1``, the cube is built at fine spatial
+        resolution and convolve_fft is called with ``bin=False`` so the
+        cube stays fine through PSF convolution. The fine cube flows into
+        ``disperse_cube(... oversample=N)`` and the post-dispersion BoxPixel
+        sinc + sum-bin lives in ``render_grism``.
+
+        Two calling conventions:
+        - render_cube(theta, obs=GrismObs) -- PSF from obs
+        - render_cube(theta, cube_pars) -- no PSF (legacy)
+
+        Returns
+        -------
+        jnp.ndarray
+            Datacube. Shape ``(Nrow, Ncol, Nlambda)`` when
+            ``obs.oversample == 1``; shape ``(Nrow*N, Ncol*N, Nlambda)``
+            when ``obs.oversample == N > 1``.
+        """
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured — use render_image for 2D")
+
+        from kl_pipe.observation import GrismObs
+
+        # resolve arguments: support both obs and legacy cube_pars
+        if isinstance(obs_or_cube_pars, GrismObs):
+            obs = obs_or_cube_pars
+            effective_cube_pars = obs.cube_pars
+            psf_data = obs.psf_data
+            grism_oversample = obs.oversample
+            fine_image_pars = obs.fine_image_pars
+        else:
+            # legacy: obs_or_cube_pars is cube_pars directly
+            effective_cube_pars = (
+                obs_or_cube_pars if obs_or_cube_pars is not None else cube_pars
+            )
+            if effective_cube_pars is None:
+                raise ValueError("Provide obs (GrismObs) or cube_pars")
+            psf_data = None
+            grism_oversample = 1
+            fine_image_pars = None
+
+        theta_vel = self.get_velocity_pars(theta)
+        theta_int = self.get_intensity_pars(theta)
+        theta_spec = self.get_spectral_pars(theta)
+
+        # when PSF oversampling is active, build cube at fine spatial scale
+        if psf_data is not None and grism_oversample > 1:
+            from kl_pipe.spectral import CubePars
+
+            fine_cube_pars = CubePars(
+                image_pars=fine_image_pars,
+                lambda_grid=effective_cube_pars.lambda_grid,
+            )
+            build_cube_pars = fine_cube_pars
+        else:
+            build_cube_pars = effective_cube_pars
+
+        cube = self.spectral_model.build_cube(
+            theta_spec, theta_vel, theta_int, build_cube_pars, plane=plane
+        )
+
+        # per-slice PSF convolution via vmap (JIT-friendly). The cube
+        # intermediate is post-PSF and pre-pixel-response, so we use
+        # bin=False to keep the cube at fine resolution; pixel response
+        # applies once at the 2D output in render_grism.
+        if psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            # vmap over wavelength axis: (Nrow, Ncol, Nlam) -> (Nlam, Nrow, Ncol)
+            cube_transposed = jnp.moveaxis(cube, -1, 0)
+            conv_slice = lambda s: convolve_fft(s, psf_data, bin=False)
+            cube_transposed = jax.vmap(conv_slice)(cube_transposed)
+            # back to (Nrow_fine, Ncol_fine, Nlam) when oversample > 1
+            cube = jnp.moveaxis(cube_transposed, 0, -1)
+
+        return cube
+
+    def render_grism(
+        self,
+        theta: jnp.ndarray,
+        obs_or_grism_pars=None,
+        plane: str = 'obs',
+        cube_pars=None,
+        grism_pars=None,
+    ) -> jnp.ndarray:
+        """Render dispersed grism image.
+
+        1. Calls render_cube -> PSF-convolved cube (fine when oversample > 1).
+        2. Calls disperse_cube(..., oversample=N) -> 2D dispersed image,
+           fine when oversample > 1.
+        3. Applies BoxPixel sinc in k-space + sum-bin to coarse detector
+           pixels at the 2D output. Pixel response is treated as a
+           detector property and applies only at the final readout stage.
+
+        Two calling conventions:
+        - render_grism(theta, obs=GrismObs) -- PSF from obs
+        - render_grism(theta, grism_pars, cube_pars=cube_pars) -- legacy
+
+        For JIT/grad, pre-compute cube_pars with a concrete z and pass it in:
+            cube_pars = gp.to_cube_pars(z=1.0)
+            obs = build_grism_obs(gp, z=1.0, psf=psf)
+            jit(partial(kl.render_grism, obs_or_grism_pars=obs))(theta)
+
+        Returns
+        -------
+        jnp.ndarray
+            Dispersed 2D grism image at coarse detector resolution,
+            shape ``(Nrow, Ncol)``, in flux per coarse pixel.
+        """
+        if self.spectral_model is None:
+            raise ValueError("No spectral model configured")
+
+        from kl_pipe.dispersion import disperse_cube
+        from kl_pipe.observation import GrismObs
+
+        if isinstance(obs_or_grism_pars, GrismObs):
+            obs = obs_or_grism_pars
+            cube = self.render_cube(theta, obs, plane=plane)
+            oversample = obs.oversample
+            dispersed = disperse_cube(
+                cube,
+                obs.grism_pars,
+                obs.cube_pars.lambda_grid,
+                oversample=oversample,
+            )
+            coarse_shape = (
+                obs.grism_pars.image_pars.Nrow,
+                obs.grism_pars.image_pars.Ncol,
+            )
+            return _apply_post_dispersion_pixel_response(
+                dispersed, obs.pixel_response_fft, coarse_shape, oversample
+            )
+        else:
+            # legacy path: no oversampling on this code path (cube_pars +
+            # grism_pars carry no oversample info)
+            gp = obs_or_grism_pars if obs_or_grism_pars is not None else grism_pars
+            if gp is None:
+                raise ValueError("Provide obs (GrismObs) or grism_pars")
+
+            if cube_pars is None:
+                theta_spec = self.get_spectral_pars(theta)
+                z = float(self.spectral_model.get_param('z', theta_spec))
+                cube_pars = gp.to_cube_pars(z)
+
+            cube = self.render_cube(theta, cube_pars, plane=plane)
+            return disperse_cube(cube, gp, cube_pars.lambda_grid)
 
     def evaluate_velocity(
         self,
@@ -966,16 +1083,31 @@ class KLModel(object):
 
         Returns
         -------
-        velocity_map : jnp.ndarray
-            Velocity map.
-        intensity_map : jnp.ndarray
-            Intensity map.
+        Tuple[jnp.ndarray, jnp.ndarray]
+            (velocity_map, intensity_map).
         """
-
         velocity_map = self.evaluate_velocity(theta, plane, X, Y, Z)
         intensity_map = self.evaluate_intensity(theta, plane, X, Y, Z)
 
         return velocity_map, intensity_map
+
+    def render(
+        self,
+        theta: jnp.ndarray,
+        data_type: str,
+        data_pars,
+        plane: str = 'obs',
+        **kwargs,
+    ) -> jnp.ndarray:
+        """High-level rendering interface for different data products."""
+        if data_type == 'cube':
+            return self.render_cube(theta, data_pars, plane=plane, **kwargs)
+        elif data_type == 'grism':
+            return self.render_grism(theta, data_pars, plane=plane, **kwargs)
+        else:
+            raise ValueError(
+                f"Unknown data_type '{data_type}'. " f"Must be one of: 'cube', 'grism'"
+            )
 
     def theta2pars(self, theta: jnp.ndarray) -> dict:
         """
@@ -991,7 +1123,6 @@ class KLModel(object):
         dict
             Dictionary mapping parameter names to values.
         """
-
         return {name: float(theta[i]) for i, name in enumerate(self.PARAMETER_NAMES)}
 
     def pars2theta(self, pars: dict) -> jnp.ndarray:
@@ -1008,5 +1139,4 @@ class KLModel(object):
         jnp.ndarray
             Composite parameter array ordered according to self.PARAMETER_NAMES.
         """
-
         return jnp.array([pars[name] for name in self.PARAMETER_NAMES])

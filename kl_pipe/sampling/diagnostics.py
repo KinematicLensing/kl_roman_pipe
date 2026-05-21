@@ -516,7 +516,7 @@ def plot_corner(
     # Plus joint Nσ as final row with aligned dot and sigma value
 
     # Import compute_joint_nsigma for joint statistic
-    from kl_pipe.diagnostics import compute_joint_nsigma
+    from kl_pipe.diagnostics.imaging import compute_joint_nsigma
 
     # Get sampler name and color for header
     sampler_display_name = (
@@ -1146,7 +1146,7 @@ def plot_corner_comparison(
 
     # === Per-sampler recovery info boxes ===
     # Import compute_joint_nsigma for joint statistic
-    from kl_pipe.diagnostics import compute_joint_nsigma
+    from kl_pipe.diagnostics.imaging import compute_joint_nsigma
 
     # Helper to get sigma color
     def get_sigma_color(nsigma):

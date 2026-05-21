@@ -228,24 +228,37 @@ offer_credential_update() {
     esac
 }
 
-# Function to build curl command with authentication
+# Function to build curl command with authentication.
+# Always passes -z $output_file (If-Modified-Since) so that an existing local
+# file is overwritten only when the remote is newer. When the file does not
+# exist, -z is a no-op and curl downloads unconditionally.
 build_curl_cmd() {
     local url="$1"
     local output_file="$2"
-    
+    local time_cond=""
+
+    if [ -f "$output_file" ]; then
+        time_cond="-z \"$output_file\""
+    fi
+
     if [[ "$url" == *"dav-anon"* ]]; then
         # Public anonymous access - no auth needed
-        echo "curl $CURL_OPTS -f -o \"$output_file\" \"$url\""
+        echo "curl $CURL_OPTS -f $time_cond -o \"$output_file\" \"$url\""
     else
         # Private data - curl will use ~/.netrc automatically with --netrc flag
         # Fall back to env vars if provided
         if [ -n "$CYVERSE_USER" ] && [ -n "$CYVERSE_PASS" ]; then
-            echo "curl $CURL_OPTS -f --user \"$CYVERSE_USER:$CYVERSE_PASS\" -o \"$output_file\" \"$url\""
+            echo "curl $CURL_OPTS -f $time_cond --user \"$CYVERSE_USER:$CYVERSE_PASS\" -o \"$output_file\" \"$url\""
         else
             # Let curl handle it via .netrc
-            echo "curl $CURL_OPTS -f -o \"$output_file\" \"$url\""
+            echo "curl $CURL_OPTS -f $time_cond -o \"$output_file\" \"$url\""
         fi
     fi
+}
+
+# Return file mtime as epoch seconds (macOS stat -f vs GNU stat -c).
+file_mtime() {
+    stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null
 }
 
 # Parse config file and download each file
@@ -268,19 +281,19 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
     
     # Create local directory if needed
     mkdir -p "$local_dir"
-    
-    # Check if file already exists
+
+    # Snapshot mtime if local file exists, so we can distinguish a 304
+    # (not modified) from a fresh download after curl exits.
+    pre_mtime=""
     if [ -f "$local_file" ]; then
-        echo -e "${YELLOW}Skipping (already exists): $local_path${NC}"
-        ((++skipped))
-        continue
+        pre_mtime=$(file_mtime "$local_file")
+        echo -e "${BLUE}Checking: $local_path${NC}"
+    else
+        echo -e "${GREEN}Downloading: $local_path${NC}"
+        echo "   From: $remote_url"
     fi
-    
-    # Download the file
-    echo -e "${GREEN}Downloading: $local_path${NC}"
-    echo "   From: $remote_url"
-    
-    # Build and execute curl command
+
+    # Build and execute curl command (with -z if local file exists)
     curl_cmd=$(build_curl_cmd "$remote_url" "$local_file")
     curl_output=""
     set +e
@@ -289,6 +302,14 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
     set -e
 
     if [ $curl_exit -eq 0 ]; then
+        # Distinguish "304 Not Modified" from a fresh download by comparing mtime.
+        # curl with -z leaves the local file untouched on 304.
+        if [ -n "$pre_mtime" ] && [ "$(file_mtime "$local_file")" = "$pre_mtime" ]; then
+            echo -e "${YELLOW}Up-to-date (local copy current): $local_path${NC}"
+            ((++skipped))
+            continue
+        fi
+
         # Guard against 0-byte files from 307 redirects (e.g. CyVerse IP block)
         if [ ! -s "$local_file" ]; then
             echo -e "${RED}Error: downloaded file is 0 bytes: $local_path${NC}"
@@ -297,7 +318,11 @@ while IFS='|' read -r remote_url local_path || [ -n "$remote_url" ]; do
             ((++failed))
             continue
         fi
-        echo -e "${GREEN}Downloaded successfully${NC}"
+        if [ -n "$pre_mtime" ]; then
+            echo -e "${GREEN}Refreshed (remote newer): $local_path${NC}"
+        else
+            echo -e "${GREEN}Downloaded successfully${NC}"
+        fi
         ((++downloaded))
     else
         rm -f "$local_file"  # Remove partial download
