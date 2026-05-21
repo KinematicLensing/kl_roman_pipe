@@ -4,26 +4,18 @@ Tests for the grism likelihood + ``InferenceTask`` factory hookup.
 Covers:
   - Unit tests: eval / JIT compile / grad / factory construction (grism-only
     and joint photometry+grism)
-  - Likelihood slice tests: ``Ha_flux`` at SNR in {100, 1000}; ``vcirc`` at
-    SNR=1000. ``vel_dispersion`` is intentionally NOT sliced here because
-    ``kl_pipe/spectral.py`` currently adds an instrumental sigma (derived
-    from the quoted grism resolving power R) in quadrature with the
-    kinematic velocity dispersion in ``σ_eff = sqrt(vel_disp² + σ_inst²)``;
-    at Roman R~600 the instrumental term is ~213 km/s and overwhelms the
-    kinematic contribution. See ``docs/plans/phase2_lsf_refactor.md`` for
-    the planned fix.
-  - One smoke optimizer-recovery test for ``Ha_flux`` + ``vcirc`` at SNR=1000.
+  - Likelihood slice tests: ``Ha_flux`` at SNR in {100, 1000}; ``vcirc``
+    and ``vel_dispersion`` at SNR=1000.
+  - One smoke optimizer-recovery test for ``Ha_flux`` + ``vcirc`` +
+    ``vel_dispersion`` at SNR=1000.
 
 The smoke recovery test fixes most parameters and optimizes over a small subset
 to confirm end-to-end inference works. It is not a tight tolerance gate;
-tighter parameter recovery awaits the spectral-resolution and centroid-
-decoupling refactors described in ``docs/plans/``.
+tighter parameter recovery awaits the centroid-decoupling refactor described
+in ``docs/plans/phase3_sourcemodel_refactor.md``.
 
 Known limitations of the current grism likelihood (see
 ``docs/plans/grism_inference_plan.md``):
-  - σ_inst is absorbed into the line profile in ``kl_pipe/spectral.py``;
-    likely double-counts the PSF spectral resolution contribution for
-    slitless geometry. Tracked in ``docs/plans/phase2_lsf_refactor.md``.
   - The photometric image and the emission cube inside ``render_grism``
     share ``kl_model.intensity_model``'s single ``int_x0``/``int_y0``
     centroid pair. Independent astrometric solutions across channels are
@@ -325,11 +317,10 @@ def _save_slice_plot(values, log_ls, true_val, peak_val, param_name, snr, out_di
         # because the projected velocity gradient onto the dispersion axis is
         # reduced by sin(i) * cos(theta_int_vs_dispersion).
         ('vcirc', (100.0, 300.0), 1000, 0.15),
-        # vel_dispersion is NOT tested here because kl_pipe/spectral.py adds
-        # an instrumental sigma (~213 km/s at Roman R~600) in quadrature with
-        # the kinematic dispersion in σ_eff = sqrt(vel_disp² + σ_inst²); the
-        # data cannot disentangle the two. The planned fix (drop the σ_inst
-        # absorption) lives in docs/plans/phase2_lsf_refactor.md.
+        # vel_dispersion is identifiable post-LSF-refactor (sigma_eff = vel_disp);
+        # the line width on the detector reflects the kinematic dispersion plus
+        # PSF+dispersion broadening (constant across the grid).
+        ('vel_dispersion', (20.0, 150.0), 1000, 0.15),
     ],
 )
 def test_grism_likelihood_slice_peaks_near_truth(
@@ -387,23 +378,20 @@ def test_grism_likelihood_slice_peaks_near_truth(
 
 
 def test_grism_optimizer_recovery_smoke(kl_model, theta_true, grism_obs_high_snr):
-    """Smoke test: recover Ha_flux + vcirc at SNR=1000.
+    """Smoke test: recover Ha_flux + vcirc + vel_dispersion at SNR=1000.
 
-    Fixes everything else at truth; optimizes the 2 free params from a
+    Fixes everything else at truth; optimizes the 3 free params from a
     perturbed initial guess. Confirms end-to-end JAX gradient + scipy
     optimizer path works for grism inference.
 
-    Tolerances are loose (±15% relative). ``vel_dispersion`` is deliberately
-    excluded from the free params because ``kl_pipe/spectral.py`` adds an
-    instrumental sigma (~213 km/s at Roman R~600) in quadrature with the
-    kinematic dispersion in ``σ_eff``, leaving the kinematic component
-    unidentifiable. See ``docs/plans/phase2_lsf_refactor.md``.
+    Tolerances are loose (±15% relative). vel_dispersion is recoverable
+    post-LSF-refactor (sigma_eff = vel_disp).
     """
     log_like_fn = create_jitted_likelihood_grism(kl_model, grism_obs_high_snr)
     grad_fn = jax.jit(jax.grad(log_like_fn))
 
     param_names = kl_model.PARAMETER_NAMES
-    free_names = ['Ha_flux', 'vcirc']
+    free_names = ['Ha_flux', 'vcirc', 'vel_dispersion']
     free_indices = [param_names.index(n) for n in free_names]
 
     theta_init = np.array(theta_true)
@@ -430,7 +418,7 @@ def test_grism_optimizer_recovery_smoke(kl_model, theta_true, grism_obs_high_snr
         return -np.asarray(g)[free_indices]
 
     x0 = np.array([theta_init[i] for i in free_indices])
-    bounds = [(20.0, 200.0), (50.0, 400.0)]
+    bounds = [(20.0, 200.0), (50.0, 400.0), (10.0, 200.0)]
 
     result = minimize(
         objective,
