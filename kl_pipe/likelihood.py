@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from kl_pipe.model import VelocityModel, IntensityModel, KLModel
-    from kl_pipe.observation import ImageObs, VelocityObs
+    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs
 
 
 def _log_likelihood_velocity(
@@ -213,6 +213,132 @@ def _log_likelihood_joint(
     )
 
     return log_prob_vel + log_prob_int
+
+
+def _log_likelihood_grism(
+    theta: jnp.ndarray,
+    obs: 'GrismObs',
+    kl_model: 'KLModel',
+) -> float:
+    """
+    Log-likelihood for grism observations.
+
+    Computes the Gaussian log-likelihood including normalization constants:
+        log L = -0.5 * [N*log(2pi) + log(det(Sigma)) + chi2]
+
+    Where N is the number of data points, Sigma is the covariance (diagonal),
+    and chi2 is the weighted sum of squared residuals.
+
+    Parameters
+    ----------
+    theta : jnp.ndarray
+        Composite KLModel parameter array.
+    obs : GrismObs
+        Grism observation with data, variance, mask, dispersion params, and PSF.
+    kl_model : KLModel
+        Combined kinematic-lensing model. Must have spectral_model configured.
+
+    Returns
+    -------
+    float
+        Log-likelihood value.
+
+    Notes
+    -----
+    This function is designed to be JIT-compiled. The variance can be either
+    a scalar (constant noise) or an array (spatially varying noise), and the
+    same formula handles both cases without conditionals.
+
+    The ``if obs.mask is not None`` check is a Python-level branch resolved at
+    JIT compile time (obs is frozen via ``partial()``), not a traced
+    conditional.
+
+    Known limitations
+    -----------------
+    - Spectral line broadening in ``kl_pipe/spectral.py`` adds an instrumental
+      sigma (derived from the quoted resolving power R) in quadrature with
+      the kinematic velocity dispersion BEFORE the PSF-per-slice + dispersion
+      stages run. For slitless grism geometry the spectral resolution element
+      IS the PSF projected along the dispersion axis, so this likely
+      double-counts. As a consequence, ``vel_dispersion`` is poorly identified
+      under this likelihood. Tracked in ``docs/plans/phase2_lsf_refactor.md``.
+    - ``kl_model.intensity_model`` provides a single ``int_x0``/``int_y0``
+      centroid used by both broadband image rendering and the emission cube
+      spatial distribution. If the photometric and grism observations have
+      independent astrometric solutions, the shared centroid is the wrong
+      degree of freedom. Tracked in ``docs/plans/phase3_sourcemodel_refactor.md``.
+    """
+    model_grism = kl_model.render_grism(theta, obs)
+
+    residuals = obs.data - model_grism
+    variance = jnp.broadcast_to(jnp.asarray(obs.variance), obs.data.shape)
+
+    if obs.mask is not None:
+        chi2 = jnp.sum(jnp.where(obs.mask, residuals**2 / variance, 0.0))
+        n_data = jnp.sum(obs.mask).astype(float)
+        log_det_term = jnp.sum(jnp.where(obs.mask, jnp.log(variance), 0.0))
+    else:
+        chi2 = jnp.sum(residuals**2 / variance)
+        n_data = obs.data.size
+        log_det_term = jnp.sum(jnp.log(variance))
+
+    normalization = -0.5 * n_data * jnp.log(2 * jnp.pi) - 0.5 * log_det_term
+    return normalization - 0.5 * chi2
+
+
+def _log_likelihood_joint_photometry_grism(
+    theta: jnp.ndarray,
+    obs_int: 'ImageObs',
+    obs_grism: 'GrismObs',
+    kl_model: 'KLModel',
+    render_config_int=None,
+) -> float:
+    """
+    Log-likelihood for combined photometric image + grism observations.
+
+    Evaluates intensity and grism models on their respective grids and returns
+    the combined log-likelihood. The two datasets are assumed to be
+    independent, so the joint likelihood is the sum of individual
+    log-likelihoods.
+
+    Parameters
+    ----------
+    theta : jnp.ndarray
+        Combined KLModel parameter array (kl_model.PARAMETER_NAMES order).
+    obs_int : ImageObs
+        Broadband photometric image observation.
+    obs_grism : GrismObs
+        Grism observation.
+    kl_model : KLModel
+        Combined kinematic-lensing model with spectral_model configured.
+    render_config_int : RenderConfig, optional
+        K-space grid parameters for intensity rendering.
+
+    Returns
+    -------
+    float
+        Combined log-likelihood value.
+
+    Notes
+    -----
+    Known limitation: the photometric image and the emission cube inside
+    ``render_grism`` both use ``kl_model.intensity_model``'s single centroid
+    parameter pair (``int_x0``/``int_y0``). If the photometric and grism
+    observations have independent astrometric solutions this shared centroid
+    is the wrong degree of freedom — the two channels need independent
+    centroid offsets. Tracked in ``docs/plans/phase3_sourcemodel_refactor.md``.
+    """
+    theta_int = kl_model.get_intensity_pars(theta)
+
+    log_prob_int = _log_likelihood_intensity(
+        theta_int,
+        obs_int,
+        kl_model.intensity_model,
+        render_config=render_config_int,
+    )
+    log_prob_grism = _log_likelihood_grism(theta, obs_grism, kl_model)
+
+    return log_prob_int + log_prob_grism
 
 
 # ==============================================================================
@@ -394,5 +520,113 @@ def create_jitted_likelihood_joint(
             kl_model=kl_model,
             render_config_int=render_config_int,
             render_config_vel=render_config_vel,
+        )
+    )
+
+
+def create_jitted_likelihood_grism(
+    kl_model: 'KLModel',
+    obs_grism: 'GrismObs',
+) -> Callable[[jnp.ndarray], float]:
+    """
+    Create a JIT-compiled grism-only likelihood function.
+
+    Creates a JIT-compiled likelihood that only requires the parameter array
+    theta as input. The observation (grism_pars, PSF, data, variance) and
+    kl_model are "frozen" using functools.partial.
+
+    Parameters
+    ----------
+    kl_model : KLModel
+        Combined kinematic-lensing model with spectral_model configured.
+    obs_grism : GrismObs
+        Grism observation.
+
+    Returns
+    -------
+    Callable[[jnp.ndarray], float]
+        JIT-compiled function that takes theta and returns log-likelihood.
+
+    Examples
+    --------
+    >>> from kl_pipe.model import KLModel
+    >>> from kl_pipe.observation import build_grism_obs
+    >>>
+    >>> obs_grism = build_grism_obs(grism_pars, z=1.0, data=data, variance=var,
+    ...                              psf=psf)
+    >>> log_like = create_jitted_likelihood_grism(kl_model, obs_grism)
+    >>> log_prob = log_like(theta)
+
+    Notes
+    -----
+    See create_jitted_likelihood_velocity for additional usage notes and
+    performance considerations.
+
+    Known limitation: ``kl_pipe/spectral.py`` adds an instrumental sigma
+    derived from the quoted grism resolving power in quadrature with the
+    kinematic velocity dispersion before the PSF + dispersion stages, which
+    likely double-counts the PSF's spectral resolution contribution for
+    slitless geometry. ``vel_dispersion`` is correspondingly poorly identified.
+    Tracked in ``docs/plans/phase2_lsf_refactor.md``.
+    """
+    return jax.jit(
+        partial(
+            _log_likelihood_grism,
+            obs=obs_grism,
+            kl_model=kl_model,
+        )
+    )
+
+
+def create_jitted_likelihood_joint_photometry_grism(
+    kl_model: 'KLModel',
+    obs_int: 'ImageObs',
+    obs_grism: 'GrismObs',
+    render_config_int=None,
+) -> Callable[[jnp.ndarray], float]:
+    """
+    Create a JIT-compiled joint photometry + grism likelihood function.
+
+    Creates a JIT-compiled likelihood for combined broadband image + grism
+    observations. The two datasets can have different shapes, pixel scales,
+    and noise properties.
+
+    Parameters
+    ----------
+    kl_model : KLModel
+        Combined kinematic-lensing model with spectral_model configured.
+    obs_int : ImageObs
+        Broadband photometric image observation.
+    obs_grism : GrismObs
+        Grism observation.
+    render_config_int : RenderConfig, optional
+        K-space grid parameters for intensity rendering. When provided,
+        frozen into the JIT closure for deterministic grid sizing.
+
+    Returns
+    -------
+    Callable[[jnp.ndarray], float]
+        JIT-compiled function that takes composite theta and returns
+        joint log-likelihood.
+
+    Notes
+    -----
+    The composite theta array should follow the order defined in
+    kl_model.PARAMETER_NAMES. Use kl_model.get_intensity_pars(theta) to
+    extract intensity-only params if needed for inspection.
+
+    Known limitation: the photometric image and the emission cube inside
+    ``render_grism`` both use ``kl_model.intensity_model``'s single centroid
+    parameter pair (``int_x0``/``int_y0``). If the two channels have
+    independent astrometric solutions the shared centroid is the wrong degree
+    of freedom. Tracked in ``docs/plans/phase3_sourcemodel_refactor.md``.
+    """
+    return jax.jit(
+        partial(
+            _log_likelihood_joint_photometry_grism,
+            obs_int=obs_int,
+            obs_grism=obs_grism,
+            kl_model=kl_model,
+            render_config_int=render_config_int,
         )
     )

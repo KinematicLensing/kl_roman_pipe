@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from kl_pipe.model import Model, VelocityModel, IntensityModel, KLModel
     from kl_pipe.parameters import ImagePars
     from kl_pipe.priors import PriorDict
-    from kl_pipe.observation import ImageObs, VelocityObs
+    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs
 
 
 def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
@@ -611,6 +611,169 @@ class InferenceTask:
             meta_pars=meta_pars or {},
         )
         task._render_configs = {'velocity': rc_vel, 'intensity': rc_int}
+        return task
+
+    @classmethod
+    def from_grism_obs(
+        cls,
+        model: 'KLModel',
+        priors: 'PriorDict',
+        obs: 'GrismObs',
+        meta_pars: Optional[Dict] = None,
+    ) -> 'InferenceTask':
+        """
+        Create inference task for grism-only inference.
+
+        Parameters
+        ----------
+        model : KLModel
+            Combined kinematic-lensing model. Must have spectral_model configured.
+        priors : PriorDict
+            Prior specifications.
+        obs : GrismObs
+            Grism observation (with grism_pars, cube_pars at concrete z, PSF,
+            data, variance, mask).
+        meta_pars : dict, optional
+            Additional metadata.
+
+        Returns
+        -------
+        InferenceTask
+            Configured task ready for sampling.
+
+        Notes
+        -----
+        Known limitations
+        -----------------
+        - The prior-grid adequacy validation (``_check_priors_fit_obs_rc``)
+          that ``from_intensity_obs`` runs is NOT run here. That function
+          assumes an ImageObs-shaped interface (``obs.image_pars``,
+          ``obs.oversample``, ``obs.pixel_response``); a GrismObs analogue is
+          not yet implemented. Tracked in
+          ``docs/plans/phase3_sourcemodel_refactor.md``.
+        - ``kl_pipe/spectral.py`` adds an instrumental sigma derived from the
+          quoted grism resolving power in quadrature with the kinematic
+          velocity dispersion before the PSF + dispersion stages, which
+          likely double-counts the PSF's spectral resolution contribution
+          for slitless geometry. ``vel_dispersion`` is correspondingly poorly
+          identified. Tracked in ``docs/plans/phase2_lsf_refactor.md``.
+        """
+        if obs.data is None:
+            raise ValueError("GrismObs has no data; cannot create inference task")
+
+        if obs.psf_data is None:
+            warnings.warn(
+                "\nNo PSF configured — grism model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
+
+        from kl_pipe.likelihood import create_jitted_likelihood_grism
+
+        likelihood_fn = create_jitted_likelihood_grism(model, obs)
+
+        return cls(
+            model=model,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={'grism': obs.data},
+            variance={'grism': obs.variance},
+            mask={'grism': obs.mask},
+            meta_pars=meta_pars or {},
+        )
+
+    @classmethod
+    def from_joint_photometry_grism_obs(
+        cls,
+        model: 'KLModel',
+        priors: 'PriorDict',
+        obs_int: 'ImageObs',
+        obs_grism: 'GrismObs',
+        meta_pars: Optional[Dict] = None,
+    ) -> 'InferenceTask':
+        """
+        Create inference task for joint broadband image + grism inference.
+
+        Parameters
+        ----------
+        model : KLModel
+            Combined kinematic-lensing model with spectral_model configured.
+        priors : PriorDict
+            Prior specifications.
+        obs_int : ImageObs
+            Broadband photometric image observation.
+        obs_grism : GrismObs
+            Grism observation.
+        meta_pars : dict, optional
+            Additional metadata.
+
+        Returns
+        -------
+        InferenceTask
+            Configured task ready for sampling.
+
+        Notes
+        -----
+        Runs the intensity-channel prior validation (``check_priors_safe`` +
+        ``_check_priors_fit_obs_rc``) on the ImageObs. The grism-channel
+        analogue is not yet implemented; see ``from_grism_obs`` notes.
+
+        Known limitation: the photometric image and the emission cube inside
+        ``render_grism`` share ``kl_model.intensity_model``'s single centroid
+        parameter pair (``int_x0``/``int_y0``). If the two channels have
+        independent astrometric solutions this shared centroid is the wrong
+        degree of freedom. Tracked in
+        ``docs/plans/phase3_sourcemodel_refactor.md``.
+        """
+        if obs_int.data is None:
+            raise ValueError("ImageObs has no data; cannot create inference task")
+        if obs_grism.data is None:
+            raise ValueError("GrismObs has no data; cannot create inference task")
+
+        missing = []
+        if obs_int.psf_data is None:
+            missing.append('intensity')
+        if obs_grism.psf_data is None:
+            missing.append('grism')
+        if missing:
+            channels = ' and '.join(missing)
+            warnings.warn(
+                f"\nNo PSF configured for {channels} channel(s) — model will be unconvolved. Intentional?\n",
+                NoPSFWarning,
+                stacklevel=2,
+            )
+
+        # intensity-channel prior validation (mirrors from_intensity_obs /
+        # from_joint_obs). Grism-channel analogue not yet implemented; see
+        # from_grism_obs notes and docs/plans/phase3_sourcemodel_refactor.md.
+        from kl_pipe.render import RenderConfig
+
+        int_model = model.intensity_model if hasattr(model, 'intensity_model') else None
+        rc_int = obs_int.render_config
+        if rc_int is None:
+            rc_int = RenderConfig()
+        if int_model is not None:
+            int_model.check_priors_safe(priors)
+            _check_priors_fit_obs_rc(int_model, priors, obs_int, rc_int)
+
+        from kl_pipe.likelihood import (
+            create_jitted_likelihood_joint_photometry_grism,
+        )
+
+        likelihood_fn = create_jitted_likelihood_joint_photometry_grism(
+            model, obs_int, obs_grism, render_config_int=rc_int
+        )
+
+        task = cls(
+            model=model,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={'intensity': obs_int.data, 'grism': obs_grism.data},
+            variance={'intensity': obs_int.variance, 'grism': obs_grism.variance},
+            mask={'intensity': obs_int.mask, 'grism': obs_grism.mask},
+            meta_pars=meta_pars or {},
+        )
+        task._render_configs = {'intensity': rc_int}
         return task
 
     # =========================================================================
