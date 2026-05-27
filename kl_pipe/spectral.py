@@ -45,15 +45,26 @@ class LineSpec:
 
 
 @dataclass(frozen=True)
-class EmissionLine:
-    """One emission line in the spectral model.
+class _LegacyEmissionLine:
+    """One emission line in the SpectralModel cube assembly.
 
     own_params: which IntensityModel params this line overrides from broadband.
     {prefix}_cont is ALWAYS included (local continuum level near this line).
+
+    Superseded by ``kl_pipe.source.EmissionLine``, which carries a different
+    field shape (intensity / intensity_key, continuum / continuum_key,
+    dispersion_key, lambda_rest). New code should use that class; this one
+    is retained for the SpectralModel cube-assembly path.
     """
 
     line_spec: LineSpec
     own_params: FrozenSet[str] = frozenset({'flux'})
+
+
+# Backward-compat alias: callers importing ``EmissionLine`` from this module
+# resolve to ``_LegacyEmissionLine`` (the SpectralModel-flavored class). New
+# code should import ``EmissionLine`` from ``kl_pipe.source`` instead.
+EmissionLine = _LegacyEmissionLine
 
 
 # =============================================================================

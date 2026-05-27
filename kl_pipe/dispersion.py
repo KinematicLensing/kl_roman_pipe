@@ -23,19 +23,50 @@ from kl_pipe.parameters import ImagePars
 class GrismPars:
     """Defines grism observation parameters for dispersing a datacube.
 
-    dispersion_angle is in the obs frame (same as theta_int).
-    throughput is optional; None = flat 100% (OK for narrow windows).
+    ``dispersion_angle_detector`` is in the detector pixel frame (the
+    direction the grism disperses light across detector pixels). For
+    Roman G150 / P127 the value is 0 (dispersion along detector +x).
+    Per-observation variation in the *celestial* dispersion direction
+    arises from the obs's WCS rotation, not this field.
+
+    ``dispersion_angle`` is a backward-compat alias accepted as a kwarg
+    on construction (and exposed as a read-only attribute) so existing
+    callsites keep working. New code should use ``dispersion_angle_detector``.
+
+    ``throughput`` is optional; None = flat 100% (OK for narrow windows).
     """
 
     image_pars: ImagePars  # spatial grid of source cutout
     dispersion: float  # nm/pixel (~1.1 for Roman)
     lambda_ref: float  # reference wavelength nm (zero-offset point)
-    dispersion_angle: float  # radians, grism direction in obs frame
+    # exactly one of dispersion_angle_detector / dispersion_angle must be set
+    dispersion_angle_detector: Optional[float] = None  # radians, detector frame
+    dispersion_angle: Optional[float] = None  # legacy alias (deprecated)
     throughput: Optional[jnp.ndarray] = None  # T(lambda), shape (Nlambda,)
 
     def __post_init__(self):
         if self.dispersion <= 0:
             raise ValueError(f"dispersion must be > 0, got {self.dispersion}")
+        # resolve dispersion_angle / dispersion_angle_detector alias
+        det = self.dispersion_angle_detector
+        legacy = self.dispersion_angle
+        if det is None and legacy is None:
+            raise ValueError(
+                "GrismPars requires dispersion_angle_detector (or legacy "
+                "dispersion_angle) to be set"
+            )
+        if det is not None and legacy is not None and det != legacy:
+            raise ValueError(
+                f"GrismPars: dispersion_angle_detector ({det}) and legacy "
+                f"dispersion_angle ({legacy}) disagree; pass only one"
+            )
+        canonical = det if det is not None else legacy
+        # frozen dataclass — use object.__setattr__ to populate both fields
+        # so reads of either name return the canonical value
+        if det is None:
+            object.__setattr__(self, 'dispersion_angle_detector', canonical)
+        if legacy is None:
+            object.__setattr__(self, 'dispersion_angle', canonical)
 
     def to_cube_pars(
         self,
@@ -133,7 +164,7 @@ def disperse_cube(
         ``cube`` (fine when ``oversample > 1``).
     """
     Nrow, Ncol, Nlam = cube.shape
-    angle = grism_pars.dispersion_angle
+    angle = grism_pars.dispersion_angle_detector
 
     # pixel offsets for each wavelength slice relative to reference. The
     # dispersion is in nm per *coarse* detector pixel; if the input cube

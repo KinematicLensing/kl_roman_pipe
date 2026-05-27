@@ -24,6 +24,7 @@ from scipy.fft import next_fast_len
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel
 
+from kl_pipe.coordinates import image_rotation_from_wcs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.pixel import BoxPixel, PixelResponse, _PIXEL_RESPONSE_UNSET
 from kl_pipe.psf import PSFData
@@ -92,6 +93,13 @@ class ImageObs:
     kspace_psf_fft: Optional[jnp.ndarray] = None
     pixel_response: Optional[PixelResponse] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # broadband_key: key into source.broadband_models that this obs renders
+    # (used by SourceModel-based inference; None for legacy KLModel-based use).
+    broadband_key: Optional[str] = None
+    # image_rotation: celestial-to-detector rotation (radians), precomputed
+    # from image_pars.wcs at build_image_obs time. Default 0.0 corresponds to
+    # the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
+    image_rotation: float = 0.0
 
     @property
     def oversample(self) -> int:
@@ -114,6 +122,10 @@ class VelocityObs(ImageObs):
     flux_model: Optional['IntensityModel'] = None
     flux_theta: Optional[jnp.ndarray] = None
     flux_image: Optional[jnp.ndarray] = None
+    # flux_weight_key: key into source.emission_lines whose intensity profile
+    # weights the PSF for velocity rendering. None means no flux weighting
+    # (velocity-only inference; mirrors flux_image=None semantics).
+    flux_weight_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,10 @@ class GrismObs:
     variance: Optional[jnp.ndarray] = None
     mask: Optional[jnp.ndarray] = None
     pixel_response_fft: Optional[jnp.ndarray] = None
+    # image_rotation: celestial-to-detector rotation (radians), precomputed
+    # from grism_pars.image_pars.wcs at build_grism_obs time. Default 0.0
+    # for the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
+    image_rotation: float = 0.0
 
 
 # ============================================================================
@@ -174,7 +190,13 @@ def _image_obs_flatten(obs):
         obs.kspace_psf_fft,
         obs.pixel_response,
     )
-    aux = (obs.image_pars, obs.render_config, obs.psf)
+    aux = (
+        obs.image_pars,
+        obs.render_config,
+        obs.psf,
+        obs.broadband_key,
+        obs.image_rotation,
+    )
     return children, aux
 
 
@@ -193,6 +215,8 @@ def _image_obs_unflatten(aux, children):
         kspace_psf_fft=children[8],
         pixel_response=children[9],
         psf=aux[2],
+        broadband_key=aux[3],
+        image_rotation=aux[4],
     )
 
 
@@ -213,7 +237,15 @@ def _velocity_obs_flatten(obs):
         obs.flux_theta,
         obs.flux_image,
     )
-    aux = (obs.image_pars, obs.render_config, obs.flux_model, obs.psf)
+    aux = (
+        obs.image_pars,
+        obs.render_config,
+        obs.flux_model,
+        obs.psf,
+        obs.broadband_key,
+        obs.image_rotation,
+        obs.flux_weight_key,
+    )
     return children, aux
 
 
@@ -234,6 +266,9 @@ def _velocity_obs_unflatten(aux, children):
         flux_theta=children[9],
         flux_image=children[10],
         psf=aux[3],
+        broadband_key=aux[4],
+        image_rotation=aux[5],
+        flux_weight_key=aux[6],
     )
 
 
@@ -250,7 +285,13 @@ def _grism_obs_flatten(obs):
         obs.mask,
         obs.pixel_response_fft,
     )
-    aux = (obs.grism_pars, obs.cube_pars, obs.oversample, obs.fine_image_pars)
+    aux = (
+        obs.grism_pars,
+        obs.cube_pars,
+        obs.oversample,
+        obs.fine_image_pars,
+        obs.image_rotation,
+    )
     return children, aux
 
 
@@ -265,6 +306,7 @@ def _grism_obs_unflatten(aux, children):
         variance=children[2],
         mask=children[3],
         pixel_response_fft=children[4],
+        image_rotation=aux[4],
     )
 
 
@@ -288,6 +330,7 @@ def build_image_obs(
     int_model=None,
     pixel_response=_PIXEL_RESPONSE_UNSET,
     render_config=None,
+    broadband_key: Optional[str] = None,
 ) -> ImageObs:
     """Build imaging observation. Replaces Model.configure_psf().
 
@@ -399,6 +442,8 @@ def build_image_obs(
         kspace_psf_fft=kspace_psf_fft,
         pixel_response=pixel_response,
         psf=psf,
+        broadband_key=broadband_key,
+        image_rotation=image_rotation_from_wcs(image_pars.wcs),
     )
 
 
@@ -416,6 +461,7 @@ def build_velocity_obs(
     flux_image=None,
     flux_image_pars=None,
     render_config=None,
+    flux_weight_key: Optional[str] = None,
 ) -> VelocityObs:
     """Build velocity observation. Replaces VelocityModel.configure_velocity_psf().
 
@@ -544,6 +590,8 @@ def build_velocity_obs(
         flux_theta=flux_theta,
         flux_image=processed_flux_image,
         psf=psf,
+        image_rotation=image_rotation_from_wcs(image_pars.wcs),
+        flux_weight_key=flux_weight_key,
     )
 
 
@@ -674,6 +722,7 @@ def _build_velocity_obs_joint(
         flux_theta=None,
         flux_image=None,
         psf=psf,
+        image_rotation=image_rotation_from_wcs(image_pars.wcs),
     )
 
 
@@ -756,4 +805,5 @@ def build_grism_obs(
         variance=variance,
         mask=mask,
         pixel_response_fft=pixel_response_fft,
+        image_rotation=image_rotation_from_wcs(grism_pars.image_pars.wcs),
     )
