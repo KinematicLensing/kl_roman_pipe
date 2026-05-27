@@ -34,8 +34,9 @@ import numpy as np
 import jax.numpy as jnp
 from astropy.wcs import WCS
 
+from kl_pipe.lines import EmissionLine
 from kl_pipe.priors import PriorDict, Uniform, Gaussian
-from kl_pipe.source import SourceModel, EmissionLine
+from kl_pipe.source import SourceModel
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
 from kl_pipe.intensity import (
     InclinedExponentialModel,

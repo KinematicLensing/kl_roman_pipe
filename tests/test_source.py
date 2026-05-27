@@ -6,7 +6,8 @@ import jax
 import pytest
 
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.source import LINE_LAMBDAS, EmissionLine, SourceModel
+from kl_pipe.lines import LINE_LAMBDAS, EmissionLine
+from kl_pipe.source import SourceModel
 from kl_pipe.velocity import CenteredVelocityModel, OffsetVelocityModel
 
 
