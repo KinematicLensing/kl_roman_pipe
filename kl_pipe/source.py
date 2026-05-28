@@ -120,8 +120,8 @@ class SourceModel:
     """Unified source description: velocity + broadband + emission line components.
 
     A SourceModel may populate any subset of {velocity_model,
-    broadband_models, emission_lines}. All-empty is a loud error.
-    Otherwise each slot is independently optional.
+    broadband_models, emission_lines}. ``__post_init__`` raises if all
+    three are empty. Otherwise each slot is independently optional.
 
     Parameters
     ----------

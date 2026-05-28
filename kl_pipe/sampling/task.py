@@ -157,7 +157,17 @@ class InferenceTask:
     )
 
     def __post_init__(self):
-        """Pre-compute index mapping for JIT-compatible theta construction."""
+        """Pre-compute index mapping for JIT-compatible theta construction.
+
+        SourceModel-based tasks (via ``from_obs``) skip the mapping --
+        their ``likelihood_fn`` consumes ``theta_sampled`` directly using
+        the priors' sorted-sample-name ordering, with no flat
+        ``model.PARAMETER_NAMES`` to align against.
+        """
+        from kl_pipe.source import SourceModel
+
+        if isinstance(self.model, SourceModel):
+            return
         self._setup_theta_mapping()
 
     def _setup_theta_mapping(self):
@@ -192,7 +202,16 @@ class InferenceTask:
 
     @property
     def parameter_names(self) -> Tuple[str, ...]:
-        """Full parameter names from the model."""
+        """Full parameter names from the model.
+
+        For SourceModel-based tasks there is no flat model PARAMETER_NAMES;
+        the dotted-key namespace lives in the priors. The sampled-name
+        ordering is returned as the canonical parameter list.
+        """
+        from kl_pipe.source import SourceModel
+
+        if isinstance(self.model, SourceModel):
+            return tuple(self.priors.sampled_names)
         return self.model.PARAMETER_NAMES
 
     @property
@@ -217,6 +236,11 @@ class InferenceTask:
         Maps from sampled parameter space to model parameter space.
         This method is JIT-compatible.
 
+        For SourceModel-based tasks the likelihood_fn takes the sampled
+        theta directly (it builds the dotted-key pars dict internally
+        using the priors' sampled-name tuple closed over via partial),
+        so this method is an identity in that path.
+
         Parameters
         ----------
         theta_sampled : jnp.ndarray
@@ -225,8 +249,14 @@ class InferenceTask:
         Returns
         -------
         jnp.ndarray
-            Full theta array in model's PARAMETER_NAMES order.
+            Full theta array in model's PARAMETER_NAMES order (legacy)
+            or ``theta_sampled`` unchanged (SourceModel).
         """
+        from kl_pipe.source import SourceModel
+
+        if isinstance(self.model, SourceModel):
+            return theta_sampled
+
         # Get indices
         full_indices = self._sampled_to_full_indices[:, 0].astype(int)
         sampled_indices = self._sampled_to_full_indices[:, 1].astype(int)
@@ -415,6 +445,149 @@ class InferenceTask:
     # =========================================================================
     # Factory Methods
     # =========================================================================
+
+    @classmethod
+    def from_obs(
+        cls,
+        source: 'SourceModel',
+        priors: 'PriorDict',
+        *,
+        image_obs: Optional[Dict[str, 'ImageObs']] = None,
+        grism_obs: Optional[Dict[str, 'GrismObs']] = None,
+        velocity_obs: Optional['VelocityObs'] = None,
+        meta_pars: Optional[Dict] = None,
+        spectral_oversample: int = 5,
+    ) -> 'InferenceTask':
+        """Unified SourceModel inference factory.
+
+        Builds an InferenceTask whose likelihood sums Gaussian
+        log-likelihoods over any combination of:
+
+        - per-band broadband images (``image_obs[band_key]``),
+        - per-roll grism observations (``grism_obs[grism_key]``),
+        - a single velocity observation (``velocity_obs``).
+
+        Source-to-obs validation:
+
+        - At least one obs must be provided.
+        - Each ``image_obs`` key must reference an entry in
+          ``source.broadband_models``; the obs's ``broadband_key`` (if
+          set) must match its dict key.
+        - ``grism_obs`` (when non-empty) requires non-empty
+          ``source.emission_lines`` AND ``source.velocity_model`` set.
+        - ``velocity_obs`` requires ``source.velocity_model`` set. If
+          ``velocity_obs.flux_weight_key`` is not None, it must
+          reference a key in ``source.emission_lines``;
+          ``flux_weight_key=None`` is allowed for unweighted (no PSF)
+          velocity rendering.
+
+        Parameters
+        ----------
+        source : SourceModel
+            The source description -- velocity / broadband / emission
+            components plus their cross-references.
+        priors : PriorDict
+            Prior specifications keyed by the dotted-key namespace.
+        image_obs : dict[str, ImageObs], optional
+            Per-band imaging observations.
+        grism_obs : dict[str, GrismObs], optional
+            Per-roll grism observations (or any user-chosen string key).
+        velocity_obs : VelocityObs, optional
+            Single velocity-map observation.
+        meta_pars : dict, optional
+            User metadata.
+        spectral_oversample : int, default 5
+            Wavelength sub-bin count passed through to
+            ``SourceModel.render_grism`` / ``build_cube``.
+        """
+        from kl_pipe.likelihood import create_jitted_likelihood_from_obs
+        from kl_pipe.source import SourceModel
+
+        # ---- validate source-to-obs binding -----------------------------
+
+        # at least one obs
+        if not image_obs and not grism_obs and velocity_obs is None:
+            raise ValueError(
+                "InferenceTask.from_obs requires at least one of "
+                "image_obs, grism_obs, or velocity_obs"
+            )
+
+        # image_obs: every key must be in source.broadband_models
+        if image_obs:
+            for band_key, obs in image_obs.items():
+                if band_key not in source.broadband_models:
+                    raise ValueError(
+                        f"image_obs key '{band_key}' has no entry in "
+                        f"source.broadband_models "
+                        f"(have: {sorted(source.broadband_models)})"
+                    )
+                if obs.broadband_key is not None and obs.broadband_key != band_key:
+                    raise ValueError(
+                        f"image_obs['{band_key}'].broadband_key="
+                        f"'{obs.broadband_key}' disagrees with its dict key"
+                    )
+                if obs.data is None:
+                    raise ValueError(
+                        f"image_obs['{band_key}'] has no data; cannot "
+                        f"build a likelihood"
+                    )
+
+        # grism_obs: non-empty requires velocity + emission lines
+        if grism_obs:
+            if source.velocity_model is None:
+                raise ValueError(
+                    "grism_obs requires source.velocity_model to be set "
+                    "(Doppler shifts need it)"
+                )
+            if not source.emission_lines:
+                raise ValueError("grism_obs requires non-empty source.emission_lines")
+            for grism_key, obs in grism_obs.items():
+                if obs.data is None:
+                    raise ValueError(
+                        f"grism_obs['{grism_key}'] has no data; cannot "
+                        f"build a likelihood"
+                    )
+
+        # velocity_obs: requires velocity_model; optional flux_weight_key
+        if velocity_obs is not None:
+            if source.velocity_model is None:
+                raise ValueError(
+                    "velocity_obs requires source.velocity_model to be set"
+                )
+            if velocity_obs.data is None:
+                raise ValueError("velocity_obs has no data; cannot build a likelihood")
+            fwk = velocity_obs.flux_weight_key
+            if fwk is not None and fwk not in source.emission_lines:
+                raise ValueError(
+                    f"velocity_obs.flux_weight_key='{fwk}' has no entry in "
+                    f"source.emission_lines "
+                    f"(have: {sorted(source.emission_lines)})"
+                )
+
+        # ---- build the likelihood closure --------------------------------
+
+        sampled_names = tuple(priors.sampled_names)
+        fixed_pars = dict(priors.fixed_values)
+
+        likelihood_fn = create_jitted_likelihood_from_obs(
+            source,
+            sampled_names,
+            fixed_pars,
+            image_obs=image_obs,
+            grism_obs=grism_obs,
+            velocity_obs=velocity_obs,
+            spectral_oversample=spectral_oversample,
+        )
+
+        return cls(
+            model=source,
+            likelihood_fn=likelihood_fn,
+            priors=priors,
+            data={},
+            variance={},
+            mask={},
+            meta_pars=meta_pars or {},
+        )
 
     @classmethod
     def from_velocity_obs(
