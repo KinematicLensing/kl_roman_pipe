@@ -25,8 +25,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Tuple
 
-import jax.numpy as jnp
-import numpy as np
+import jax
+
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp  # noqa: E402
+import numpy as np  # noqa: E402
 
 if TYPE_CHECKING:
     from astropy.wcs import WCS

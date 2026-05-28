@@ -513,10 +513,12 @@ def build_velocity_obs(
             gsparams=gsparams,
         )
 
-        if flux_model is None and flux_image is None:
+        if flux_model is None and flux_image is None and flux_weight_key is None:
             raise ValueError(
-                "Velocity PSF requires flux weighting. Provide flux_model + "
-                "flux_theta, or flux_image. For joint inference use build_joint_obs."
+                "Velocity PSF requires a flux source. Provide flux_model + "
+                "flux_theta (legacy joint inference), flux_image (pre-rendered), "
+                "or flux_weight_key (SourceModel emission line reference). "
+                "For legacy joint inference use build_joint_obs."
             )
 
         # process flux_image: resample + upsample if needed
