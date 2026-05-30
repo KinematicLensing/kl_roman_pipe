@@ -42,7 +42,7 @@ from kl_pipe.dispersion import GrismPars, disperse_cube, build_grism_pars_for_li
 from kl_pipe.psf import precompute_psf_fft, convolve_fft
 from kl_pipe.observation import GrismObs, build_image_obs, build_grism_obs
 from kl_pipe.pixel import BoxPixel
-from kl_pipe.model import _apply_post_dispersion_pixel_response
+from kl_pipe.grism import _apply_post_dispersion_pixel_response
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # =============================================================================

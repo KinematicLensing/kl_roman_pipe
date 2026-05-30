@@ -344,7 +344,7 @@ class SourceModel:
              detector pixels at the 2D output.
         """
         from kl_pipe.dispersion import disperse_cube
-        from kl_pipe.model import _apply_post_dispersion_pixel_response
+        from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.spectral import CubePars
 
         # build_cube spatial grid: fine when oversampling is active
