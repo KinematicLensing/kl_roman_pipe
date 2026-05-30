@@ -49,7 +49,7 @@ class _LegacyEmissionLine:
     """One emission line in the SpectralModel cube assembly.
 
     own_params: which IntensityModel params this line overrides from broadband.
-    {prefix}_cont is ALWAYS included (local continuum level near this line).
+    {prefix}_cont is always included (local continuum level near this line).
 
     Superseded by ``kl_pipe.source.EmissionLine``, which carries a different
     field shape (intensity / intensity_key, continuum / continuum_key,

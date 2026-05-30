@@ -18,12 +18,13 @@ Branch: `se/source-model` (from `se/grism-core` HEAD `ccfb219`).
 | done | 1.5. refactor: move EmissionLine + LINE_LAMBDAS to `kl_pipe/lines.py` | `879415f` | Not in original plan -- pulled out to avoid name collision with the back-compat `EmissionLine = _LegacyEmissionLine` alias in `kl_pipe/spectral.py`. |
 | done | 2. SourceModel rendering methods + per-obs rotation | `9704e43` | `render_broadband` / `render_velocity` / `build_cube` / `render_grism` all on SourceModel. Theta routing helpers `_strip_param_prefix` / `_lookup_param` / `_build_component_theta` / `_apply_obs_rotation` are module-level in `source.py`. |
 | done | 3. `InferenceTask.from_obs` + per-channel `_log_likelihood_*` primitives | `9e3bb42` | SourceModel branch added to `InferenceTask.__post_init__` / `_build_full_theta` / `parameter_names`; legacy KLModel path unchanged. |
-| pending | 4. generalize `_check_priors_fit_obs_rc` to obs-type-aware (cleanup A) | -- | |
-| pending | 5. move `_apply_post_dispersion_pixel_response` to `kl_pipe/grism.py` (cleanup B) | -- | |
-| pending | 6. centralize `RenderConfig.for_priors` callsites in `from_obs` (cleanup E) | -- | |
-| **likely skip** | 7. `Pars/SampledPars/MetaPars` dotted-key support (cleanup D, conditional) | -- | Audit established `PriorDict` absorbs dotted keys with no changes; commits 1-3 confirm. Default expectation is to skip. |
-| pending | 8. migrate tests + tutorials to SourceModel API + drop `int_`/`vel_` from class tuples | -- | Bulk of remaining work (~46 KLModel sites, ~29 factory calls, ~500 hardcoded parameter strings across ~25 test files, 3 tutorials). |
-| pending | 9. delete `KLModel` + `SpectralModel` + legacy factories + `flux_theta_override` + `shared_pars` | -- | Mechanical deletion (~500 LOC across many files). |
+| pending | 4. obs-type-aware `_check_priors_fit_obs_rc` + GrismObs→ImageObs `RenderConfig` parity (cleanup A, expanded) | -- | Originally scoped to just the check; expanded mid-session after audit revealed GrismObs lacked `render_config` infrastructure (no field, no `build_grism_obs(render_config=...)` parameter, no `for_priors` callsite anywhere). Now includes adding `render_config` field + `psf` field to GrismObs, threading through `build_grism_obs`, and uniform check path keyed off `obs.render_config` for both ImageObs and GrismObs. VelocityObs flux-weight `for_priors` auto-derivation and a single-call `build_obs(model, priors)` helper deferred -- 2-step user pattern (call `for_priors`, pass `render_config=rc` to `build_*_obs`) is the canonical workflow. |
+| pending | 5. grism cube-slice bandwidth-aware `for_grism_priors` + velocity-gradient bandwidth helper + convergence/regression/diagnostic tests + LaTeX derivation note (NEW) | -- | Inserted after audit identified that `build_cube` uses point-sampled spatial intensity multiplied by a per-pixel Gaussian wavelength kernel; the spatial bandwidth of the cube slice exceeds what intensity-profile + PSF alone imply, because the velocity-modulated Gaussian factor amplifies spatial bandwidth by `\|grad v\|_max / sigma_v`. Adds `velocity_model.grad_bandwidth(params)` returning rotating-disk envelope `v_circ × sin(i) / r_v`; adds `RenderConfig.for_grism_priors(intensity_model, velocity_model, line, priors, coarse_ps, psf)` that walks the product `profile_FT × G_envelope × PSF_FT` (no pixel response factor — that is post-dispersion only); adds source-level worst-case-across-emission-lines helper. Verification: `tests/test_grism_bandwidth.py` with convergence sweep (oversample 1..15 → L2 stabilization vs predicted), default-accuracy regression, and PNG visual diagnostics (cube slices, residual maps, FT amplitude plots with predicted maxk marked, dispersed images). Math derivation in `docs/notes/grism_cube_bandwidth.tex` (gitignored). |
+| pending | 6. move `_apply_post_dispersion_pixel_response` to `kl_pipe/grism.py` (cleanup B) | -- | (renumbered from prev. 5) |
+| pending | 7. centralize `RenderConfig.for_priors` callsites in `from_obs` (cleanup E) | -- | (renumbered from prev. 6) Likely a no-op or near-no-op after commit 4's expansion: the GrismObs parity work landed there, and the original target (2 legacy sites in `from_intensity_model` / `from_joint_model`) are about to be deleted in commit 10. Re-evaluate scope before executing. |
+| **likely skip** | 8. `Pars/SampledPars/MetaPars` dotted-key support (cleanup D, conditional) | -- | (renumbered from prev. 7) Audit established `PriorDict` absorbs dotted keys with no changes; commits 1-3 confirm. Default expectation is to skip. |
+| pending | 9. migrate tests + tutorials to SourceModel API + drop `int_`/`vel_` from class tuples | -- | (renumbered from prev. 8) Bulk of remaining work (~46 KLModel sites, ~29 factory calls, ~500 hardcoded parameter strings across ~25 test files, 3 tutorials). |
+| pending | 10. delete `KLModel` + `SpectralModel` + legacy factories + `flux_theta_override` + `shared_pars` | -- | (renumbered from prev. 9) Mechanical deletion (~500 LOC across many files). |
 
 **Already-shipped capabilities (commits 1-3):**
 
@@ -52,6 +53,13 @@ Branch: `se/source-model` (from `se/grism-core` HEAD `ccfb219`).
 - `EmissionLine` and `LINE_LAMBDAS` live in **`kl_pipe/lines.py`**, not in `kl_pipe/source.py`. See commit `879415f`. `source.py` imports them.
 - `VelocityModel.PARAMETER_NAMES` did NOT add `dispersion`. Per emission line dispersion design: `<line>.dispersion` lives in priors; `EmissionLine.dispersion_key` provides cross-line sharing analogous to `intensity_key` / `continuum_key`. `vel.` namespace stays reserved for params that `VelocityModel.__call__` actually reads.
 - Plan's `_build_full_theta` for SourceModel is identity (theta_sampled passed directly to likelihood_fn); `InferenceTask.parameter_names` returns `tuple(priors.sampled_names)` for SourceModel.
+- Commit 4 expanded to bring GrismObs to ImageObs `RenderConfig` parity (originally scoped as cleanup E / commit 6 work). Triggered by audit during execution: GrismObs had no `render_config` field, `build_grism_obs` had no `render_config` parameter, and no callsite anywhere computed `RenderConfig.for_priors` for grism. Commit 6's "centralize 2 production sites" scope is now likely near-empty; re-evaluate before executing.
+
+**Deferred items surfaced during commit 4 execution:**
+
+- VelocityObs flux-weight `RenderConfig.for_priors` auto-derivation (when `flux_weight_key` references an emission line's intensity model). Out of commit 4 scope; track for follow-up.
+- Single-call `build_obs(model, priors, ...)` helper that bundles `RenderConfig.for_priors` + `build_*_obs` into one user-facing call. Decision: 2-step pattern (user calls `for_priors`, passes `render_config=rc` to `build_*_obs`) is sufficient with proper documentation + tutorial. Track as ergonomic improvement if friction becomes apparent later.
+- Hook + memory implementation for the "stop on unexpected event requiring judgment" guardrail discussed in this session. Trigger: output-pattern matching `(FAILED|Traceback|Error:|AssertionError)`. Action: inject structured reminder ("Stop. Was this trivial-mechanical? If yes proceed. If no, present options to user and halt.") plus a redundant memory entry codifying the rule. Track for follow-up.
 
 ## Architecture (locked)
 
@@ -470,9 +478,13 @@ task = InferenceTask.from_obs(
 )
 ```
 
-## Commit chain (one PR, 9 atomic commits, dual-API through commit 8)
+## Commit chain (one PR, 10 atomic commits, dual-API through commit 9)
 
-Each commit 1–8 compiles and `make test-basic` passes (bisectable). Commit 9 is the hard delete.
+Each commit 1–9 compiles and `make test-basic` passes (bisectable). Commit 10 is the hard delete.
+
+**Note: chain renumbered mid-execution to insert commit 5 (grism cube-slice bandwidth-aware
+`for_grism_priors`). See Progress table at top for current numbering. Original text below
+left intact for audit context; numbers shift by +1 starting at commit 5.**
 
 ```
 1. feat: LINE_LAMBDAS + new EmissionLine + SourceModel + WCS-derived rotation infrastructure

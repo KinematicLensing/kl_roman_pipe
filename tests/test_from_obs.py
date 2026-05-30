@@ -50,6 +50,13 @@ def image_pars():
 
 
 @pytest.fixture
+def gauss_psf():
+    # roughly Roman F087-ish FWHM; sharp enough to tighten worst-case maxk
+    # but cheap to FFT in test fixtures.
+    return galsim.Gaussian(fwhm=0.18)
+
+
+@pytest.fixture
 def rng():
     return np.random.RandomState(0)
 
@@ -115,15 +122,15 @@ def _midpoint_theta(priors):
 
 class TestIntensityOnlySingleBand:
 
-    def test_finite_likelihood_and_gradient(self, image_pars, rng):
+    def test_finite_likelihood_and_gradient(self, image_pars, gauss_psf, rng):
         src = SourceModel(broadband_models={'F087': InclinedExponentialModel()})
         priors = PriorDict({**_shared_geo_priors(), 'z': 1.0, **_broadband_priors()})
         obs = build_image_obs(
             image_pars,
+            psf=gauss_psf,
             data=_toy_image_data(rng),
             variance=0.25,
             broadband_key='F087',
-            pixel_response=None,
         )
 
         task = InferenceTask.from_obs(src, priors, image_obs={'F087': obs})
@@ -144,7 +151,7 @@ class TestIntensityOnlySingleBand:
 
 class TestIntensityOnlyMultiBand:
 
-    def test_finite_likelihood_and_gradient(self, image_pars, rng):
+    def test_finite_likelihood_and_gradient(self, image_pars, gauss_psf, rng):
         src = SourceModel(
             broadband_models={
                 'F087': InclinedExponentialModel(),
@@ -160,17 +167,17 @@ class TestIntensityOnlyMultiBand:
         )
         obs_f087 = build_image_obs(
             image_pars,
+            psf=gauss_psf,
             data=_toy_image_data(rng),
             variance=0.25,
             broadband_key='F087',
-            pixel_response=None,
         )
         obs_f184 = build_image_obs(
             image_pars,
+            psf=gauss_psf,
             data=_toy_image_data(rng),
             variance=0.25,
             broadband_key='F184',
-            pixel_response=None,
         )
         task = InferenceTask.from_obs(
             src, priors, image_obs={'F087': obs_f087, 'F184': obs_f184}
@@ -260,7 +267,7 @@ class TestGrismOnly:
 
 class TestJointPhotometryGrism:
 
-    def test_finite_likelihood_and_gradient(self, image_pars, rng):
+    def test_finite_likelihood_and_gradient(self, image_pars, gauss_psf, rng):
         src = SourceModel(
             velocity_model=CenteredVelocityModel(),
             broadband_models={'F087': InclinedExponentialModel()},
@@ -279,10 +286,10 @@ class TestJointPhotometryGrism:
         )
         obs_f087 = build_image_obs(
             image_pars,
+            psf=gauss_psf,
             data=_toy_image_data(rng),
             variance=0.25,
             broadband_key='F087',
-            pixel_response=None,
         )
         gp = GrismPars(
             image_pars=image_pars,
@@ -290,7 +297,6 @@ class TestJointPhotometryGrism:
             lambda_ref=1300.0,
             dispersion_angle_detector=0.0,
         )
-        gauss_psf = galsim.Gaussian(fwhm=0.18)
         obs_grism = build_grism_obs(
             gp,
             z=1.0,

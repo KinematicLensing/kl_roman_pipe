@@ -49,7 +49,7 @@ class ImageObs:
         Pre-computed coarse-scale coordinate grids.
     render_config : RenderConfig
         Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
-        SINGLE SOURCE OF TRUTH for grid sizing -- ``obs.oversample`` is a
+        Canonical source for grid sizing -- ``obs.oversample`` is a
         property that reads from this. Bare ``RenderConfig()`` defaults to
         ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
         for inference, pass ``RenderConfig.for_priors(...)`` to size the
@@ -140,8 +140,13 @@ class GrismObs:
         Pre-computed wavelength grid at concrete redshift.
     psf_data : PSFData, optional
         Pre-computed PSF FFT for per-slice convolution.
-    oversample : int
-        Spatial oversampling factor.
+    render_config : RenderConfig
+        Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
+        Canonical source for grid sizing -- ``obs.oversample`` is a
+        property that reads from this. Bare ``RenderConfig()`` defaults to
+        ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
+        for inference, pass ``RenderConfig.for_priors(...)`` to size the
+        grid against worst-case priors.
     fine_image_pars : ImagePars, optional
         Fine spatial grid (oversample > 1).
     data : jnp.ndarray, optional
@@ -155,12 +160,18 @@ class GrismObs:
         post-dispersion 2D pixel-response step in ``KLModel.render_grism``.
         Set by ``build_grism_obs`` when ``oversample > 1``; None at
         ``oversample == 1`` (no fine-grid sinc needed).
+    psf : galsim.GSObject, optional
+        Original galsim PSF retained for prior-grid validation so the
+        worst-case maxk scan can include PSF damping (mirrors
+        ``ImageObs.psf``). The rendered/precomputed PSF lives in
+        ``psf_data``; this field is the source-of-truth galsim object
+        used for off-grid evaluation.
     """
 
     grism_pars: object  # GrismPars — avoid circular import
     cube_pars: object  # CubePars — avoid circular import
     psf_data: Optional[PSFData] = None
-    oversample: int = 1
+    render_config: RenderConfig = None  # set by build_grism_obs; never None at runtime
     fine_image_pars: Optional[ImagePars] = None
     data: Optional[jnp.ndarray] = None
     variance: Optional[jnp.ndarray] = None
@@ -170,6 +181,12 @@ class GrismObs:
     # from grism_pars.image_pars.wcs at build_grism_obs time. Default 0.0
     # for the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
     image_rotation: float = 0.0
+    psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+
+    @property
+    def oversample(self) -> int:
+        """Oversample factor; canonical source is render_config.oversample."""
+        return self.render_config.oversample if self.render_config is not None else 1
 
 
 # ============================================================================
@@ -288,9 +305,10 @@ def _grism_obs_flatten(obs):
     aux = (
         obs.grism_pars,
         obs.cube_pars,
-        obs.oversample,
+        obs.render_config,
         obs.fine_image_pars,
         obs.image_rotation,
+        obs.psf,
     )
     return children, aux
 
@@ -299,7 +317,7 @@ def _grism_obs_unflatten(aux, children):
     return GrismObs(
         grism_pars=aux[0],
         cube_pars=aux[1],
-        oversample=aux[2],
+        render_config=aux[2],
         fine_image_pars=aux[3],
         psf_data=children[0],
         data=children[1],
@@ -307,6 +325,7 @@ def _grism_obs_unflatten(aux, children):
         mask=children[3],
         pixel_response_fft=children[4],
         image_rotation=aux[4],
+        psf=aux[5],
     )
 
 
@@ -738,6 +757,7 @@ def build_grism_obs(
     data=None,
     variance=None,
     mask=None,
+    render_config: Optional[RenderConfig] = None,
 ) -> GrismObs:
     """Build grism observation. Replaces KLModel.configure_grism_psf().
 
@@ -750,7 +770,8 @@ def build_grism_obs(
     psf : galsim.GSObject, optional
         PSF profile for per-slice convolution.
     oversample : int
-        Spatial oversampling factor. Default 5.
+        Spatial oversampling factor. Default 5. Ignored when
+        ``render_config`` is provided.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -759,7 +780,17 @@ def build_grism_obs(
         Noise variance.
     mask : jnp.ndarray, optional
         Boolean mask.
+    render_config : RenderConfig, optional
+        Rendering recipe; default constructs from ``oversample``. Mirrors
+        ``build_image_obs``: for inference, pass
+        ``RenderConfig.for_priors(intensity_model, sub_priors, coarse_ps,
+        pixel_response=BoxPixel(coarse_ps), psf=psf)`` to size the grid
+        against worst-case emission-line priors.
     """
+    if render_config is None:
+        render_config = RenderConfig(oversample=oversample)
+    oversample = render_config.oversample  # canonical
+
     cube_pars = grism_pars.to_cube_pars(z)
 
     psf_data = None
@@ -801,11 +832,12 @@ def build_grism_obs(
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
-        oversample=oversample,
+        render_config=render_config,
         fine_image_pars=fine_image_pars,
         data=data,
         variance=variance,
         mask=mask,
         pixel_response_fft=pixel_response_fft,
         image_rotation=image_rotation_from_wcs(grism_pars.image_pars.wcs),
+        psf=psf,
     )

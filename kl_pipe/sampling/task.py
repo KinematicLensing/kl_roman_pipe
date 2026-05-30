@@ -76,6 +76,159 @@ def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
         )
 
 
+def _component_priors_for_intensity(
+    priors: 'PriorDict', prefix: str, model_param_names: Tuple[str, ...]
+) -> 'PriorDict':
+    """Build a per-component ``PriorDict`` view keyed by ``model.PARAMETER_NAMES``.
+
+    Translates dotted-key SourceModel priors into a flat-keyed PriorDict so
+    that ``RenderConfig.for_priors`` and ``check_priors_safe`` (which both
+    query by ``model.PARAMETER_NAMES``) see the right specs. Resolution
+    mirrors ``kl_pipe.source._lookup_param``:
+
+    1. ``<prefix>.<bare>`` -- per-component value (e.g. ``F087.rscale``).
+    2. ``<bare>``          -- top-level shared value (e.g. ``cosi``).
+    3. ``<param_name>``    -- verbatim.
+
+    where ``<bare>`` strips ``int_`` / ``vel_`` from ``param_name``. Skips
+    params absent from all three lookups; ``_extract_worst_case_params``
+    tolerates missing names.
+    """
+    from kl_pipe.priors import PriorDict
+    from kl_pipe.source import _strip_param_prefix
+
+    spec = {}
+    for name in model_param_names:
+        bare = _strip_param_prefix(name)
+        for key in (f'{prefix}.{bare}', bare, name):
+            if key in priors._param_spec:
+                spec[name] = priors._param_spec[key]
+                break
+    return PriorDict(spec)
+
+
+def _check_source_priors_fit_obs(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    obs,
+    *,
+    component_key: Optional[str] = None,
+) -> None:
+    """Obs-type-aware grid adequacy validation for SourceModel inference.
+
+    Dispatches on ``type(obs)``:
+
+    - ``VelocityObs``: no-op. Velocity rendering uses spatial oversampling
+      rather than a k-space FFT product scan, so the prior-grid adequacy
+      question doesn't apply directly at this layer.
+    - ``ImageObs``: validate ``source.broadband_models[component_key]``
+      against ``obs.render_config``.
+    - ``GrismObs``: validate each spatial-owner emission line's intensity
+      model against ``obs.render_config``. ``component_key`` is ignored.
+
+    All paths route through ``_check_priors_fit_obs_rc`` using
+    ``obs.render_config`` as the canonical grid. GrismObs and ImageObs
+    differ only in (a) which component model is being validated and
+    (b) where the pixel_scale + pixel_response come from on the obs.
+
+    Parameters
+    ----------
+    source : SourceModel
+        Source description with the component models being validated.
+    priors : PriorDict
+        Dotted-key priors as consumed by ``InferenceTask.from_obs``.
+    obs : ImageObs | VelocityObs | GrismObs
+    component_key : str, optional
+        Band key for ``ImageObs``; ignored for other obs types.
+    """
+    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs
+
+    if isinstance(obs, VelocityObs):
+        return  # k-space grid sizing N/A for spatial-oversampling rendering
+
+    if isinstance(obs, GrismObs):
+        for line_key, line in source.emission_lines.items():
+            if line.intensity is None:
+                continue  # spatial profile borrowed; checked via the owner
+            model = line.intensity
+            sub_priors = _component_priors_for_intensity(
+                priors, line_key, model.PARAMETER_NAMES
+            )
+            if hasattr(model, 'check_priors_safe'):
+                model.check_priors_safe(sub_priors)
+            _check_grism_priors_fit_obs_rc(model, sub_priors, obs, line_key)
+        return
+
+    if isinstance(obs, ImageObs):
+        if component_key is None:
+            raise ValueError(
+                "_check_source_priors_fit_obs(ImageObs) requires component_key"
+            )
+        if component_key not in source.broadband_models:
+            raise ValueError(
+                f"component_key '{component_key}' not in source.broadband_models "
+                f"(have: {sorted(source.broadband_models)})"
+            )
+        model = source.broadband_models[component_key]
+        sub_priors = _component_priors_for_intensity(
+            priors, component_key, model.PARAMETER_NAMES
+        )
+        if hasattr(model, 'check_priors_safe'):
+            model.check_priors_safe(sub_priors)
+        rc_obs = obs.render_config
+        if rc_obs is None:
+            from kl_pipe.render import RenderConfig
+
+            rc_obs = RenderConfig()
+        _check_priors_fit_obs_rc(model, sub_priors, obs, rc_obs)
+        return
+
+    raise TypeError(
+        f"_check_source_priors_fit_obs: unrecognized obs type " f"{type(obs).__name__}"
+    )
+
+
+def _check_grism_priors_fit_obs_rc(model, priors, obs, line_key: str) -> None:
+    """GrismObs variant of ``_check_priors_fit_obs_rc``.
+
+    Mirrors the ImageObs version but draws pixel_scale from
+    ``obs.cube_pars.image_pars`` and constructs the coarse-detector
+    BoxPixel sinc inline (GrismObs has no ``pixel_response`` field --
+    its post-dispersion pixel response is precomputed as
+    ``pixel_response_fft`` on the fine k-grid). Validates against
+    ``obs.render_config``.
+    """
+    from kl_pipe.pixel import BoxPixel
+    from kl_pipe.render import RenderConfig
+
+    coarse_ps = obs.cube_pars.image_pars.pixel_scale
+    try:
+        priors_rc = RenderConfig.for_priors(
+            model,
+            priors,
+            coarse_ps,
+            pixel_response=BoxPixel(coarse_ps),
+            psf=obs.psf,
+        )
+    except (KeyError, NotImplementedError, AttributeError):
+        return
+
+    rc_obs = obs.render_config
+    if rc_obs is None:
+        rc_obs = RenderConfig()
+    if priors_rc.oversample > rc_obs.oversample:
+        raise ValueError(
+            f"Priors for emission line '{line_key}' imply "
+            f"oversample={priors_rc.oversample} but grism obs was built "
+            f"with oversample={rc_obs.oversample}. Rebuild grism obs with "
+            f"explicit render_config:\n"
+            f"    rc = RenderConfig.for_priors(intensity_model, priors, "
+            f"coarse_pixel_scale, pixel_response=BoxPixel(coarse_pixel_scale), "
+            f"psf=psf)\n"
+            f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
+        )
+
+
 @dataclass
 class InferenceTask:
     """
@@ -564,6 +717,19 @@ class InferenceTask:
                     f"(have: {sorted(source.emission_lines)})"
                 )
 
+        # ---- per-channel prior-grid adequacy validation -----------------
+
+        if image_obs:
+            for band_key, obs in image_obs.items():
+                _check_source_priors_fit_obs(
+                    source, priors, obs, component_key=band_key
+                )
+        if grism_obs:
+            for _grism_key, obs in grism_obs.items():
+                _check_source_priors_fit_obs(source, priors, obs)
+        if velocity_obs is not None:
+            _check_source_priors_fit_obs(source, priors, velocity_obs)
+
         # ---- build the likelihood closure --------------------------------
 
         sampled_names = tuple(priors.sampled_names)
@@ -818,12 +984,11 @@ class InferenceTask:
         -----
         Known limitations
         -----------------
-        - The prior-grid adequacy validation (``_check_priors_fit_obs_rc``)
-          that ``from_intensity_obs`` runs is NOT run here. That function
-          assumes an ImageObs-shaped interface (``obs.image_pars``,
-          ``obs.oversample``, ``obs.pixel_response``); a GrismObs analogue is
-          not yet implemented. Tracked in
-          ``docs/plans/phase3_sourcemodel_refactor.md``.
+        - The prior-grid adequacy validation that ``from_intensity_obs`` runs
+          on ImageObs is NOT run here for this legacy factory. The
+          SourceModel-era ``from_obs`` factory dispatches an obs-type-aware
+          analogue (``_check_source_priors_fit_obs`` → fine-grid Nyquist
+          comparison for grism) and is the preferred entry point.
         - ``kl_pipe/spectral.py`` adds an instrumental sigma derived from the
           quoted grism resolving power in quadrature with the kinematic
           velocity dispersion before the PSF + dispersion stages, which

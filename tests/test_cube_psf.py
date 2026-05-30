@@ -118,6 +118,8 @@ def _merged_pars():
 
 def _make_grism_obs(cube_pars, psf, oversample, grism_pars=None):
     """Build GrismObs for testing."""
+    from kl_pipe.render import RenderConfig
+
     psf_data = precompute_psf_fft(
         psf, image_pars=cube_pars.image_pars, oversample=oversample
     )
@@ -128,7 +130,7 @@ def _make_grism_obs(cube_pars, psf, oversample, grism_pars=None):
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
-        oversample=oversample,
+        render_config=RenderConfig(oversample=oversample),
         fine_image_pars=fine_ip,
     )
 

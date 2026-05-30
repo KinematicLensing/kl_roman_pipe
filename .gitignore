@@ -29,6 +29,9 @@ docs/plans/*
 # Agent session handoffs -- working notes per PARALLAX.md, not source-of-truth
 docs/sessions/
 
+# Mathematical derivations + working notes; not source-of-truth
+docs/notes/
+
 # Personal experiment sandbox
 experiments/sweverett/
 
