@@ -122,14 +122,14 @@ def _check_source_priors_fit_obs(
         return  # k-space grid sizing N/A for spatial-oversampling rendering
 
     if isinstance(obs, GrismObs):
-        from kl_pipe.render import RenderConfig
-        from kl_pipe.source import for_grism_priors as _for_grism_priors
+        from kl_pipe.render import RenderConfig, build_grism_render_config
 
-        coarse_ps = obs.cube_pars.image_pars.pixel_scale
         # Minkowski-sum bound on cube-slice bandwidth (intensity FT support +
         # velocity-modulation Gaussian FT support, damped by PSF). See
         # docs/notes/grism_cube_bandwidth.tex.
-        priors_rc = _for_grism_priors(source, priors, coarse_ps, psf=obs.psf)
+        priors_rc = build_grism_render_config(
+            source, priors, obs.grism_pars, psf=obs.psf
+        )
         rc_obs = obs.render_config
         if rc_obs is None:
             rc_obs = RenderConfig()
@@ -138,8 +138,8 @@ def _check_source_priors_fit_obs(
                 f"Grism priors imply oversample={priors_rc.oversample} but "
                 f"grism obs was built with oversample={rc_obs.oversample}. "
                 f"Rebuild grism obs with explicit render_config:\n"
-                f"    from kl_pipe.source import for_grism_priors\n"
-                f"    rc = for_grism_priors(source, priors, coarse_pixel_scale, "
+                f"    from kl_pipe.render import build_grism_render_config\n"
+                f"    rc = build_grism_render_config(source, priors, grism_pars, "
                 f"psf=psf)\n"
                 f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
             )

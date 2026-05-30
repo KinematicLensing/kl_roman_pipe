@@ -24,9 +24,12 @@ import jax
 import numpy as np
 
 if TYPE_CHECKING:
+    from kl_pipe.dispersion import GrismPars
     from kl_pipe.model import IntensityModel
+    from kl_pipe.parameters import ImagePars
     from kl_pipe.pixel import PixelResponse
     from kl_pipe.priors import PriorDict
+    from kl_pipe.source import SourceModel
 
 
 @dataclass(frozen=True)
@@ -571,3 +574,227 @@ def _extract_worst_case_params(model, priors) -> tuple:
                 worst_stepk_params[name] = prior.mean
 
     return worst_maxk_params, worst_stepk_params
+
+
+# ============================================================================
+# Top-level builders for obs-aware RenderConfig sizing
+# ============================================================================
+#
+# The classmethods ``RenderConfig.for_priors`` / ``RenderConfig.for_grism_priors``
+# are the underlying primitives; they operate on a flat ``model.PARAMETER_NAMES``
+# namespace and bare priors. The builders below are the user-facing entry points
+# for the SourceModel API: they accept dotted-key ``PriorDict`` and the same
+# primitives the ``build_*_obs`` factories take (image_pars / grism_pars, psf,
+# pixel_response, broadband_key), so users construct an rc and an obs with the
+# same arguments and thread the rc into the obs.
+#
+#   rc  = build_image_render_config(source, priors, image_pars, broadband_key='F087', psf=psf)
+#   obs = build_image_obs(image_pars, psf=psf, broadband_key='F087', render_config=rc, data=..., variance=...)
+#
+# Skipping the builder yields ``build_image_obs``'s safe-default rc
+# (``RenderConfig()`` -- point-sampled, oversample=1); appropriate for tutorials
+# and quick renders, but undersized for inference with tight priors.
+
+
+def build_image_render_config(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    image_pars: 'ImagePars',
+    broadband_key: str,
+    *,
+    psf=None,
+    pixel_response: 'PixelResponse' = None,
+    folding_threshold: float = 5e-3,
+    maxk_threshold: float = 1e-3,
+) -> RenderConfig:
+    """Worst-case ``RenderConfig`` for an ``ImageObs`` channel.
+
+    Looks up ``source.broadband_models[broadband_key]``, extracts the
+    band-specific subset of the dotted-key ``priors`` (resolution
+    ``<broadband_key>.<bare>`` → ``<bare>`` → verbatim), runs model-specific
+    prior safety (e.g. Spergel cusp regime), and delegates to
+    ``RenderConfig.for_priors``.
+
+    Parameters
+    ----------
+    source : SourceModel
+        Must have ``broadband_key`` in ``source.broadband_models``.
+    priors : PriorDict
+        Dotted-key SourceModel priors.
+    image_pars : ImagePars
+        Coarse pixel grid; ``pixel_scale`` is read from here.
+    broadband_key : str
+        Band name to size the rc for. Must exist in
+        ``source.broadband_models``.
+    psf : galsim.GSObject, optional
+        PSF for the worst-case maxk product walk; matches what gets
+        passed to ``build_image_obs``.
+    pixel_response : PixelResponse, optional
+        Defaults to ``BoxPixel(image_pars.pixel_scale)`` to match
+        ``build_image_obs``'s default. Pass ``None`` to skip pixel
+        damping in the worst-case scan (rarely what you want for
+        inference).
+    folding_threshold, maxk_threshold : float
+        Passed through to ``RenderConfig.for_priors``.
+
+    Returns
+    -------
+    RenderConfig
+        Sized for the worst-case maxk and stepk in the prior bounds.
+
+    Raises
+    ------
+    ValueError
+        If ``broadband_key`` is not in ``source.broadband_models``.
+    """
+    from kl_pipe.pixel import BoxPixel
+    from kl_pipe.source import _component_priors_for_intensity
+
+    if broadband_key not in source.broadband_models:
+        raise ValueError(
+            f"broadband_key '{broadband_key}' not in source.broadband_models "
+            f"(have: {sorted(source.broadband_models)})"
+        )
+
+    model = source.broadband_models[broadband_key]
+    sub_priors = _component_priors_for_intensity(
+        priors, broadband_key, model.PARAMETER_NAMES
+    )
+
+    # model-specific prior validation (loud failure before the worst-case scan)
+    if hasattr(model, 'check_priors_safe'):
+        model.check_priors_safe(sub_priors)
+
+    if pixel_response is None:
+        pixel_response = BoxPixel(image_pars.pixel_scale)
+
+    return RenderConfig.for_priors(
+        model,
+        sub_priors,
+        image_pars.pixel_scale,
+        pixel_response=pixel_response,
+        psf=psf,
+        folding_threshold=folding_threshold,
+        maxk_threshold=maxk_threshold,
+    )
+
+
+def build_grism_render_config(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    grism_pars: 'GrismPars',
+    *,
+    psf=None,
+    folding_threshold: float = 5e-3,
+    maxk_threshold: float = 1e-3,
+) -> RenderConfig:
+    """Worst-case ``RenderConfig`` for a ``GrismObs`` cube.
+
+    Iterates ``source.emission_lines``; for each line that owns a spatial
+    profile (lines borrowing via ``intensity_key`` are validated through
+    their owner), computes the per-line cube-slice rc via
+    ``RenderConfig.for_grism_priors`` (Minkowski-sum bandwidth bound,
+    intensity-FT support ⊕ velocity-modulation Gaussian support, damped
+    by PSF). Returns the line with the largest required oversample
+    (single shared spatial grid -> the most demanding line dictates).
+
+    Math: see ``docs/notes/grism_cube_bandwidth.tex``.
+
+    Parameters
+    ----------
+    source : SourceModel
+        Must have ``velocity_model`` set and ``emission_lines`` non-empty.
+    priors : PriorDict
+        Dotted-key SourceModel priors. Required keys:
+        ``<line>.<int_param>`` for each spatial-owner line,
+        ``vel.<vel_param>`` for the velocity model,
+        ``<disp_owner>.dispersion`` for each line's sigma_v (``disp_owner``
+        is ``line.dispersion_key`` if set else the line key itself),
+        plus shared ``cosi``, ``theta_int``, ``g1``, ``g2``.
+    grism_pars : GrismPars
+        Coarse pixel scale is read from ``grism_pars.image_pars.pixel_scale``.
+    psf : galsim.GSObject, optional
+        Per-slice PSF; passed through to
+        ``compute_effective_maxk_grism``.
+    folding_threshold, maxk_threshold : float
+        Passed through to ``RenderConfig.for_grism_priors``.
+
+    Returns
+    -------
+    RenderConfig
+        Worst-case across spatial-owner emission lines.
+
+    Raises
+    ------
+    ValueError
+        If ``source.velocity_model`` is None or ``source.emission_lines``
+        is empty or no line owns a spatial profile.
+    KeyError
+        If a required ``<line>.dispersion`` prior key is missing.
+    """
+    from kl_pipe.source import _component_priors_for_intensity
+
+    if source.velocity_model is None:
+        raise ValueError(
+            "build_grism_render_config requires source.velocity_model to be set"
+        )
+    if not source.emission_lines:
+        raise ValueError(
+            "build_grism_render_config requires non-empty source.emission_lines"
+        )
+
+    coarse_pixel_scale = grism_pars.image_pars.pixel_scale
+    velocity_priors = _component_priors_for_intensity(
+        priors, 'vel', source.velocity_model.PARAMETER_NAMES
+    )
+
+    worst_rc = None
+    for line_key, line in source.emission_lines.items():
+        if line.intensity is None:
+            # spatial profile borrowed via intensity_key; validated via owner
+            continue
+        intensity_model = line.intensity
+        intensity_priors = _component_priors_for_intensity(
+            priors, line_key, intensity_model.PARAMETER_NAMES
+        )
+
+        # model-specific prior safety (e.g. Spergel cusp regime)
+        if hasattr(intensity_model, 'check_priors_safe'):
+            intensity_model.check_priors_safe(intensity_priors)
+
+        # sigma_v lookup: per-line dispersion (or shared via dispersion_key)
+        disp_owner = (
+            line.dispersion_key if line.dispersion_key is not None else line_key
+        )
+        disp_key = f'{disp_owner}.dispersion'
+        if disp_key not in priors._param_spec:
+            raise KeyError(
+                f"emission line '{line_key}' requires prior key '{disp_key}'; "
+                f"available: {sorted(priors._param_spec)}"
+            )
+        spec = priors._param_spec[disp_key]
+        if hasattr(spec, 'low'):
+            sigma_v_min = float(spec.low)
+        else:
+            sigma_v_min = float(spec)
+
+        rc = RenderConfig.for_grism_priors(
+            intensity_model=intensity_model,
+            velocity_model=source.velocity_model,
+            intensity_priors=intensity_priors,
+            velocity_priors=velocity_priors,
+            sigma_v_min=sigma_v_min,
+            coarse_pixel_scale=coarse_pixel_scale,
+            psf=psf,
+            folding_threshold=folding_threshold,
+            maxk_threshold=maxk_threshold,
+        )
+        if worst_rc is None or rc.oversample > worst_rc.oversample:
+            worst_rc = rc
+
+    if worst_rc is None:
+        raise ValueError(
+            "no emission line owns a spatial profile (all use intensity_key); "
+            "cannot derive grism RenderConfig"
+        )
+    return worst_rc

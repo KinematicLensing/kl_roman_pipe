@@ -26,7 +26,11 @@ from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.pixel import BoxPixel
 from kl_pipe.priors import LogUniform, PriorDict, Uniform
-from kl_pipe.render import RenderConfig
+from kl_pipe.render import (
+    RenderConfig,
+    build_grism_render_config,
+    build_image_render_config,
+)
 from kl_pipe.sampling import InferenceTask
 
 
@@ -402,3 +406,193 @@ class TestPSFEffectiveMaxk:
             f"oversample(fwhm={fwhms[0]}) == oversample(fwhm={fwhms[-1]}); "
             f"PSF factor probably stuck at unity"
         )
+
+
+# ============================================================================
+# build_image_render_config / build_grism_render_config
+# ============================================================================
+#
+# Top-level builders that consume dotted-key SourceModel priors + obs-shape
+# primitives and produce a worst-case RenderConfig. Thin wrappers over the
+# RenderConfig.for_priors / for_grism_priors classmethods that handle the
+# dotted-key → flat namespace translation + per-line iteration for grism.
+
+
+@pytest.fixture
+def source_image_setup():
+    """SourceModel with a single broadband band + dotted-key priors."""
+    from kl_pipe.source import SourceModel
+
+    image_pars = ImagePars(shape=(64, 64), pixel_scale=0.1, indexing='ij')
+    psf = galsim.Gaussian(fwhm=0.5)
+    model = InclinedExponentialModel()
+    source = SourceModel(broadband_models={'F087': model})
+    priors = PriorDict(
+        {
+            'cosi': Uniform(0.1, 0.99),
+            'theta_int': Uniform(0, np.pi),
+            'g1': 0.0,
+            'g2': 0.0,
+            'F087.flux': LogUniform(0.01, 1000.0),
+            'F087.rscale': Uniform(0.05, 1.0),
+            'F087.h_over_r': 0.15,
+            'F087.x0': 0.0,
+            'F087.y0': 0.0,
+        }
+    )
+    return source, priors, image_pars, psf
+
+
+def test_build_image_render_config_matches_classmethod(source_image_setup):
+    """build_image_render_config(source, priors, ...) == RenderConfig.for_priors(model, sub_priors, ...).
+
+    Verifies the wrapper is a pure dotted-key→flat-namespace translation
+    on top of the classmethod, with the BoxPixel(pixel_scale) default.
+    """
+    source, priors, image_pars, psf = source_image_setup
+
+    rc = build_image_render_config(
+        source, priors, image_pars, broadband_key='F087', psf=psf
+    )
+
+    # equivalent classmethod call with hand-extracted sub-priors
+    from kl_pipe.source import _component_priors_for_intensity
+
+    model = source.broadband_models['F087']
+    sub_priors = _component_priors_for_intensity(priors, 'F087', model.PARAMETER_NAMES)
+    rc_ref = RenderConfig.for_priors(
+        model,
+        sub_priors,
+        image_pars.pixel_scale,
+        pixel_response=BoxPixel(image_pars.pixel_scale),
+        psf=psf,
+    )
+
+    assert rc.oversample == rc_ref.oversample
+    assert rc.effective_maxk == pytest.approx(rc_ref.effective_maxk)
+    assert rc.stepk == pytest.approx(rc_ref.stepk)
+
+
+def test_build_image_render_config_missing_band_raises(source_image_setup):
+    """Loud failure when broadband_key is not in source.broadband_models."""
+    source, priors, image_pars, psf = source_image_setup
+    with pytest.raises(ValueError, match="not in source.broadband_models"):
+        build_image_render_config(
+            source, priors, image_pars, broadband_key='F184', psf=psf
+        )
+
+
+def test_build_image_render_config_threads_into_build_image_obs(source_image_setup):
+    """End-to-end: rc from builder makes from_obs validation pass."""
+    from kl_pipe.observation import build_image_obs
+    from kl_pipe.sampling import InferenceTask
+
+    source, priors, image_pars, psf = source_image_setup
+    rng = np.random.default_rng(0)
+    data = jnp.asarray(rng.normal(size=image_pars.shape))
+    variance = jnp.ones_like(data)
+
+    rc = build_image_render_config(
+        source, priors, image_pars, broadband_key='F087', psf=psf
+    )
+    obs = build_image_obs(
+        image_pars,
+        psf=psf,
+        broadband_key='F087',
+        render_config=rc,
+        data=data,
+        variance=variance,
+    )
+
+    # the from_obs validator runs _check_source_priors_fit_obs(ImageObs)
+    # which would raise GridAdequacyWarning if rc were undersized.
+    task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
+    assert task.model is source
+
+
+@pytest.fixture
+def source_grism_setup():
+    """SourceModel with velocity + single emission line + dotted-key priors."""
+    from kl_pipe.dispersion import GrismPars
+    from kl_pipe.lines import EmissionLine
+    from kl_pipe.source import SourceModel
+    from kl_pipe.velocity import CenteredVelocityModel
+
+    image_pars = ImagePars(shape=(48, 48), pixel_scale=0.11, indexing='ij')
+    grism_pars = GrismPars(
+        image_pars=image_pars,
+        dispersion=1.1,
+        lambda_ref=656.28 * 2.0,
+        dispersion_angle_detector=0.0,
+    )
+    psf = galsim.Gaussian(fwhm=0.18)
+
+    source = SourceModel(
+        velocity_model=CenteredVelocityModel(),
+        emission_lines={'Halpha': EmissionLine(intensity=InclinedExponentialModel())},
+    )
+    priors = PriorDict(
+        {
+            'cosi': Uniform(0.1, 0.99),
+            'theta_int': Uniform(0, np.pi),
+            'g1': 0.0,
+            'g2': 0.0,
+            'vel.vcirc': Uniform(80, 300),
+            'vel.rscale': Uniform(0.1, 1.0),
+            'vel.x0': 0.0,
+            'vel.y0': 0.0,
+            'Halpha.flux': LogUniform(0.01, 100.0),
+            'Halpha.rscale': Uniform(0.05, 1.0),
+            'Halpha.h_over_r': 0.15,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': Uniform(20, 100),
+        }
+    )
+    return source, priors, grism_pars, psf
+
+
+def test_build_grism_render_config_happy_path(source_grism_setup):
+    """Single-line grism: builder returns a sized rc with positive oversample."""
+    source, priors, grism_pars, psf = source_grism_setup
+    rc = build_grism_render_config(source, priors, grism_pars, psf=psf)
+    assert rc.oversample >= 1
+    assert rc.effective_maxk is not None and rc.effective_maxk > 0
+    assert rc.stepk is not None and rc.stepk > 0
+
+
+def test_build_grism_render_config_no_velocity_raises(source_grism_setup):
+    """Loud failure when source.velocity_model is None."""
+    from kl_pipe.lines import EmissionLine
+    from kl_pipe.source import SourceModel
+
+    _, priors, grism_pars, psf = source_grism_setup
+    # construct a source with broadband + emission lines but no velocity
+    # (use broadband to satisfy SourceModel's "at least one component" check)
+    source = SourceModel(
+        broadband_models={'F087': InclinedExponentialModel()},
+        emission_lines={'Halpha': EmissionLine(intensity=InclinedExponentialModel())},
+    )
+    with pytest.raises(ValueError, match="velocity_model"):
+        build_grism_render_config(source, priors, grism_pars, psf=psf)
+
+
+def test_build_grism_render_config_no_emission_raises(source_grism_setup):
+    """Loud failure when source.emission_lines is empty."""
+    from kl_pipe.source import SourceModel
+    from kl_pipe.velocity import CenteredVelocityModel
+
+    _, priors, grism_pars, psf = source_grism_setup
+    source = SourceModel(velocity_model=CenteredVelocityModel())
+    with pytest.raises(ValueError, match="emission_lines"):
+        build_grism_render_config(source, priors, grism_pars, psf=psf)
+
+
+def test_build_grism_render_config_missing_dispersion_raises(source_grism_setup):
+    """Loud failure when a required <line>.dispersion prior key is missing."""
+    source, priors, grism_pars, psf = source_grism_setup
+    # drop the Halpha.dispersion key
+    bad_spec = {k: v for k, v in priors._param_spec.items() if k != 'Halpha.dispersion'}
+    bad_priors = PriorDict(bad_spec)
+    with pytest.raises(KeyError, match="Halpha.dispersion"):
+        build_grism_render_config(source, bad_priors, grism_pars, psf=psf)

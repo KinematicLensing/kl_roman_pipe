@@ -1,4 +1,4 @@
-"""Verification of ``for_grism_priors`` against numerically converged renders.
+"""Verification of ``build_grism_render_config`` against numerically converged renders.
 
 Validates that the Minkowski-sum + PSF bandwidth bound derived in
 ``docs/notes/grism_cube_bandwidth.tex`` correctly predicts the spatial
@@ -10,9 +10,9 @@ Four classes:
 - ``TestConvergence``: at worst-case priors, sweep oversample upward on the
   full ``render_grism`` pipeline and show that the relative L2 error vs. a
   high-oversample reference drops below tolerance at the oversample
-  predicted by ``for_grism_priors``.
+  predicted by ``build_grism_render_config``.
 - ``TestDefaultAccuracy``: at typical (mid-prior) parameters, confirm that
-  the for_grism_priors-derived oversample produces a dispersed grism image
+  the build_grism_render_config-derived oversample produces a dispersed grism image
   matching the high-oversample reference within tolerance.
 - ``TestCubeSliceConvergence``: isolates the cube-slice rendering
   (``build_cube`` + per-slice PSF + bin-to-coarse) from the full dispersion
@@ -49,7 +49,8 @@ from kl_pipe.observation import build_grism_obs  # noqa: E402
 from kl_pipe.parameters import ImagePars  # noqa: E402
 from kl_pipe.priors import PriorDict, Uniform  # noqa: E402
 from kl_pipe.render import RenderConfig  # noqa: E402
-from kl_pipe.source import SourceModel, for_grism_priors  # noqa: E402
+from kl_pipe.render import build_grism_render_config  # noqa: E402
+from kl_pipe.source import SourceModel  # noqa: E402
 from kl_pipe.velocity import CenteredVelocityModel  # noqa: E402
 
 
@@ -168,7 +169,7 @@ def _midpoint_pars_from_priors(priors):
 
 def _worst_case_pars_from_priors(priors):
     """Pick worst-case values: smallest cosi, largest vcirc, smallest vel_rscale,
-    smallest sigma_v -- matches what for_grism_priors validates against."""
+    smallest sigma_v -- matches what build_grism_render_config validates against."""
     pars = {}
     for name, spec in priors._param_spec.items():
         if hasattr(spec, 'low'):
@@ -205,9 +206,8 @@ class TestConvergence:
         gauss_psf,
         coarse_image_pars,
     ):
-        coarse_ps = coarse_image_pars.pixel_scale
-        rc_predicted = for_grism_priors(
-            source, worst_case_priors, coarse_ps, psf=gauss_psf
+        rc_predicted = build_grism_render_config(
+            source, worst_case_priors, grism_pars, psf=gauss_psf
         )
         n_predicted = rc_predicted.oversample
         print(
@@ -216,7 +216,7 @@ class TestConvergence:
         )
 
         # use worst-case theta values (so the test exercises the regime
-        # for_grism_priors was sized for)
+        # build_grism_render_config was sized for)
         theta_pars = _worst_case_pars_from_priors(worst_case_priors)
 
         # sweep oversamples; include the predicted N and several above
@@ -243,12 +243,12 @@ class TestConvergence:
             print(f'  oversample={N:2d}  rel L2 = {rel_l2[N]:.4e}')
 
         # at predicted oversample, error should be below the maxk threshold
-        threshold = 5e-2  # 5% — loose; for_grism_priors targets 1e-3 in
+        threshold = 5e-2  # 5% — loose; build_grism_render_config targets 1e-3 in
         # amplitude, but L2 sum-of-squared-errors aggregates
         assert rel_l2[n_predicted] < threshold, (
             f'rel L2 at predicted oversample {n_predicted} '
             f'({rel_l2[n_predicted]:.4e}) exceeds threshold {threshold}; '
-            f'for_grism_priors under-sized the grid'
+            f'build_grism_render_config under-sized the grid'
         )
 
         # and converging: error decreases monotonically (or at worst stays
@@ -263,7 +263,7 @@ class TestConvergence:
 
 
 class TestDefaultAccuracy:
-    """Default for_grism_priors-derived oversample meets accuracy at typical
+    """Default build_grism_render_config-derived oversample meets accuracy at typical
     parameters."""
 
     def test_typical_priors_accuracy(
@@ -274,9 +274,8 @@ class TestDefaultAccuracy:
         gauss_psf,
         coarse_image_pars,
     ):
-        coarse_ps = coarse_image_pars.pixel_scale
-        rc_predicted = for_grism_priors(
-            source, typical_priors, coarse_ps, psf=gauss_psf
+        rc_predicted = build_grism_render_config(
+            source, typical_priors, grism_pars, psf=gauss_psf
         )
         n_predicted = rc_predicted.oversample
 
@@ -309,7 +308,7 @@ class TestDefaultAccuracy:
         # tighter: typical priors should give well-converged renders
         assert rel_l2 < 5e-2, (
             f'rel L2 at predicted oversample {n_predicted} = {rel_l2:.4e} > 5e-2; '
-            f'for_grism_priors under-sized for typical priors'
+            f'build_grism_render_config under-sized for typical priors'
         )
 
 
@@ -388,10 +387,10 @@ class TestCubeSliceConvergence:
     ):
         coarse_ps = coarse_image_pars.pixel_scale
         coarse_shape = (coarse_image_pars.Nrow, coarse_image_pars.Ncol)
-        rc_predicted = for_grism_priors(
+        rc_predicted = build_grism_render_config(
             source,
             worst_case_priors,
-            coarse_ps,
+            grism_pars,
             psf=gauss_psf,
         )
         n_predicted = rc_predicted.oversample
@@ -416,7 +415,7 @@ class TestCubeSliceConvergence:
         for N in oversamples:
             print(f'  oversample={N:2d}  cube-slice rel L2 = {rel_l2[N]:.4e}')
 
-        # cube slice is the thing for_grism_priors directly predicts;
+        # cube slice is the thing build_grism_render_config directly predicts;
         # convergence should hit the maxk_threshold of 1e-3 at the predicted N
         threshold = 1e-2
         assert rel_l2[n_predicted] < threshold, (
@@ -439,8 +438,8 @@ class TestDiagnostics:
         os.makedirs(OUT_DIR, exist_ok=True)
 
         coarse_ps = coarse_image_pars.pixel_scale
-        rc_predicted = for_grism_priors(
-            source, worst_case_priors, coarse_ps, psf=gauss_psf
+        rc_predicted = build_grism_render_config(
+            source, worst_case_priors, grism_pars, psf=gauss_psf
         )
         n_predicted = rc_predicted.oversample
 

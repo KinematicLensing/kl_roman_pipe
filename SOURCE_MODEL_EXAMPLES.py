@@ -48,6 +48,11 @@ from kl_pipe.observation import (
     build_grism_obs,
     build_velocity_obs,
 )
+from kl_pipe.render import (
+    RenderConfig,
+    build_grism_render_config,
+    build_image_render_config,
+)
 from kl_pipe.sampling.task import InferenceTask
 
 
@@ -281,12 +286,45 @@ priors_C = PriorDict(
 
 
 # ===========================================================================
+# RenderConfig setup — deriving an inference-sized rc from priors
+# ===========================================================================
+#
+# build_*_obs(...) without a `render_config` kwarg gets a bare default
+# (RenderConfig() — oversample=1, point-sampled). Fine for tutorials and
+# quick renders; UNDERSIZED for inference with tight priors (likelihood
+# bias / NaN / "GridAdequacyWarning"). For inference, derive an rc from
+# the worst-case priors and thread it into build_*_obs:
+#
+#   rc  = build_image_render_config(source, priors, image_pars,
+#                                   broadband_key='F087', psf=psf)
+#   obs = build_image_obs(image_pars, psf=psf, broadband_key='F087',
+#                         render_config=rc, data=..., variance=...)
+#
+# Same shape for grism:
+#
+#   rc  = build_grism_render_config(source, priors, grism_pars, psf=psf)
+#   obs = build_grism_obs(grism_pars, z=1.0, psf=psf,
+#                         render_config=rc, data=..., variance=...)
+#
+# VelocityObs has no obs-aware rc helper; pass RenderConfig(oversample=N)
+# directly if you need k-space oversample > 1 for the flux-weight kernel.
+#
+# Advanced users may hand-roll RenderConfig(oversample=N, pad_factor=M, ...)
+# and pass it directly. from_obs will refuse to silently undersize: if the
+# obs's rc is smaller than what the priors imply, you'll get a loud
+# ValueError pointing at the relevant builder.
+#
+# The simple Workflows A-G below elide the rc step for brevity; for actual
+# inference, insert the build_*_render_config call before each build_*_obs.
+
+
+# ===========================================================================
 # Workflow A — grism-only, single roll
 # ===========================================================================
 #
-# obs_grism = build_grism_obs(
-#     grism_pars, z=1.0, data=..., variance=..., psf=...,
-# )
+# rc_grism  = build_grism_render_config(source_A, priors_A, grism_pars, psf=...)
+# obs_grism = build_grism_obs(grism_pars, z=1.0, data=..., variance=..., psf=...,
+#                             render_config=rc_grism)
 # task = InferenceTask.from_obs(source_A, priors_A, grism_obs={'roll0': obs_grism})
 
 

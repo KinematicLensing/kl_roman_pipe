@@ -52,8 +52,9 @@ class ImageObs:
         Canonical source for grid sizing -- ``obs.oversample`` is a
         property that reads from this. Bare ``RenderConfig()`` defaults to
         ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
-        for inference, pass ``RenderConfig.for_priors(...)`` to size the
-        grid against prior bounds.
+        for inference, pass ``build_image_render_config(source, priors,
+        image_pars, broadband_key, psf=psf)`` (from ``kl_pipe.render``) to
+        size the grid against prior bounds.
     psf_data : PSFData, optional
         Pre-computed PSF FFT for convolve_fft.
     fine_X, fine_Y : jnp.ndarray, optional
@@ -76,8 +77,7 @@ class ImageObs:
         can include PSF damping in the worst-case maxk product scan. The
         rendered/precomputed PSF lives in ``psf_data``/``kspace_psf_fft``;
         this field is the source-of-truth galsim object kept for off-grid
-        evaluation (e.g., ``RenderConfig.for_priors(..., psf=obs.psf)``).
-        Stored as static pytree aux.
+        evaluation. Stored as static pytree aux.
     """
 
     image_pars: ImagePars
@@ -145,8 +145,9 @@ class GrismObs:
         Canonical source for grid sizing -- ``obs.oversample`` is a
         property that reads from this. Bare ``RenderConfig()`` defaults to
         ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
-        for inference, pass ``RenderConfig.for_priors(...)`` to size the
-        grid against worst-case priors.
+        for inference, pass ``build_grism_render_config(source, priors,
+        grism_pars, psf=psf)`` (from ``kl_pipe.render``) to size the cube
+        fine-grid against worst-case priors.
     fine_image_pars : ImagePars, optional
         Fine spatial grid (oversample > 1).
     data : jnp.ndarray, optional
@@ -781,11 +782,11 @@ def build_grism_obs(
     mask : jnp.ndarray, optional
         Boolean mask.
     render_config : RenderConfig, optional
-        Rendering recipe; default constructs from ``oversample``. Mirrors
-        ``build_image_obs``: for inference, pass
-        ``RenderConfig.for_priors(intensity_model, sub_priors, coarse_ps,
-        pixel_response=BoxPixel(coarse_ps), psf=psf)`` to size the grid
-        against worst-case emission-line priors.
+        Rendering recipe; default constructs from ``oversample``. For
+        inference, pass
+        ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
+        (in ``kl_pipe.render``) to size the cube fine-grid against the
+        worst-case emission-line + velocity-modulation bandwidth.
     """
     if render_config is None:
         render_config = RenderConfig(oversample=oversample)
