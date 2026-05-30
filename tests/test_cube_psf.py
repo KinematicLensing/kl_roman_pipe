@@ -922,19 +922,20 @@ class TestPostDispersionPixelResponsePrecompute:
 
     @staticmethod
     def _inline_apply_post_dispersion(dispersed, coarse_image_pars, oversample):
-        """Reference: rebuild fine k-grid + BoxPixel sinc inline, apply, sum-bin.
+        """Reference: rebuild fine k-grid + BoxPixel sinc inline, mean-bin, SB->flux.
 
-        Mimics the pre-3301d3a path with no precompute. Any divergence from
-        ``_apply_post_dispersion_pixel_response(..., obs.pixel_response_fft, ...)``
-        means the precompute and the rebuild don't agree.
+        Mimics the pre-3301d3a path with no precompute. Mirrors the production
+        function's convention: mean-bin SB then multiply by coarse_area to
+        convert to flux per coarse pixel.
         """
+        coarse_ps = coarse_image_pars.pixel_scale
+        coarse_area = coarse_ps * coarse_ps
         if oversample <= 1:
-            return dispersed
+            return dispersed * coarse_area
         fine_ip = coarse_image_pars.make_fine_scale(oversample)
         Nrow_c, Ncol_c = coarse_image_pars.Nrow, coarse_image_pars.Ncol
         Nrow_f, Ncol_f = fine_ip.Nrow, fine_ip.Ncol
         fine_ps = fine_ip.pixel_scale
-        coarse_ps = coarse_image_pars.pixel_scale
         kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
         ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
         KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
@@ -942,7 +943,8 @@ class TestPostDispersionPixelResponsePrecompute:
         img_fft = jnp.fft.fft2(dispersed)
         fine_integrated = jnp.fft.ifft2(img_fft * sinc_ft).real
         N = oversample
-        return fine_integrated.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+        sb_coarse = fine_integrated.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+        return sb_coarse * coarse_area
 
     def _build_grism_obs_via_factory(self, cube_pars, oversample):
         """Build a GrismObs via the production factory (precomputes pixel_response_fft)."""
@@ -970,6 +972,7 @@ class TestPostDispersionPixelResponsePrecompute:
             obs.pixel_response_fft,
             (coarse_ip.Nrow, coarse_ip.Ncol),
             oversample,
+            coarse_ip.pixel_scale,
         )
         coarse_via_inline = self._inline_apply_post_dispersion(
             dispersed, coarse_ip, oversample
@@ -983,8 +986,8 @@ class TestPostDispersionPixelResponsePrecompute:
             atol=1e-15,
         )
 
-    def test_oversample_one_is_passthrough(self, cube_pars):
-        """At oversample=1 the function returns the input unchanged."""
+    def test_oversample_one_applies_sb_to_flux_conversion(self, cube_pars):
+        """At oversample=1 the function multiplies by coarse_area (SB->flux/pixel)."""
         coarse_ip = cube_pars.image_pars
         dispersed = jnp.ones((coarse_ip.Nrow, coarse_ip.Ncol))
         out = _apply_post_dispersion_pixel_response(
@@ -992,8 +995,12 @@ class TestPostDispersionPixelResponsePrecompute:
             None,  # pixel_response_fft unused at oversample=1
             (coarse_ip.Nrow, coarse_ip.Ncol),
             1,
+            coarse_ip.pixel_scale,
         )
-        np.testing.assert_array_equal(np.asarray(out), np.asarray(dispersed))
+        np.testing.assert_array_equal(
+            np.asarray(out),
+            np.asarray(dispersed) * coarse_ip.pixel_scale**2,
+        )
 
     def test_grid_alignment_uses_coarse_pixel_scale(self, cube_pars):
         """Sinc must use the COARSE pixel_scale (detector), not the fine one.
@@ -1019,6 +1026,7 @@ class TestPostDispersionPixelResponsePrecompute:
             obs.pixel_response_fft,
             (coarse_ip.Nrow, coarse_ip.Ncol),
             oversample,
+            coarse_ip.pixel_scale,
         )
 
         # wrong convention: fine-pixel sinc (much narrower)
@@ -1031,9 +1039,10 @@ class TestPostDispersionPixelResponsePrecompute:
         img_fft = jnp.fft.fft2(dispersed)
         wrong_fine = jnp.fft.ifft2(img_fft * wrong_sinc).real
         N = oversample
-        coarse_wrong = wrong_fine.reshape(coarse_ip.Nrow, N, coarse_ip.Ncol, N).sum(
+        coarse_wrong_sb = wrong_fine.reshape(coarse_ip.Nrow, N, coarse_ip.Ncol, N).mean(
             axis=(1, 3)
         )
+        coarse_wrong = coarse_wrong_sb * coarse_ip.pixel_scale**2
 
         # the two must disagree non-trivially — pins the convention
         diff = np.max(np.abs(np.asarray(coarse_correct) - np.asarray(coarse_wrong)))

@@ -182,6 +182,100 @@ class RenderConfig:
             stepk=stepk,
         )
 
+    @classmethod
+    def for_grism_priors(
+        cls,
+        intensity_model: 'IntensityModel',
+        velocity_model: 'VelocityModel',
+        intensity_priors: 'PriorDict',
+        velocity_priors: 'PriorDict',
+        sigma_v_min: float,
+        coarse_pixel_scale: float,
+        psf=None,
+        folding_threshold: float = 5e-3,
+        maxk_threshold: float = 1e-3,
+    ) -> 'RenderConfig':
+        """Compute worst-case ``RenderConfig`` for one emission line's grism
+        cube fine-grid sizing.
+
+        Uses the Minkowski-sum bandwidth bound derived in
+        ``docs/notes/grism_cube_bandwidth.tex``: the cube-slice
+        ``M = I * G`` has support up to ``maxk(I) + maxk(G)`` (Minkowski sum
+        of supports of the convolved FTs), bounded above by the PSF cutoff
+        when PSF is present. No pixel-response factor (post-dispersion only).
+
+        Parameters
+        ----------
+        intensity_model : IntensityModel
+            Emission line's spatial intensity model.
+        velocity_model : VelocityModel
+            Velocity model providing ``grad_bandwidth(params)``.
+        intensity_priors : PriorDict
+            Prior specifications keyed by ``intensity_model.PARAMETER_NAMES``.
+        velocity_priors : PriorDict
+            Prior specifications keyed by ``velocity_model.PARAMETER_NAMES``.
+        sigma_v_min : float
+            Lower prior bound on intrinsic kinematic dispersion (km/s). The
+            worst-case (narrowest line) value.
+        coarse_pixel_scale : float
+            Coarse detector pixel scale (arcsec).
+        psf : galsim.GSObject, optional
+            PSF profile for per-slice damping. Passed through to
+            ``compute_effective_maxk_grism``.
+        folding_threshold : float
+            Max flux folding for ``stepk`` (default 5e-3); same convention as
+            ``for_priors``.
+        maxk_threshold : float
+            FT amplitude threshold for the maxk product walk (default 1e-3).
+
+        Returns
+        -------
+        RenderConfig
+            With ``oversample``, ``effective_maxk``, ``stepk`` derived from
+            the worst-case bandwidth.
+        """
+        int_worst_maxk, int_worst_stepk = _extract_worst_case_params(
+            intensity_model, intensity_priors
+        )
+        vel_worst, _ = _extract_worst_case_params(velocity_model, velocity_priors)
+
+        try:
+            grad_v_max = velocity_model.grad_bandwidth(vel_worst)
+        except KeyError:
+            # velocity priors missing one of (vcirc, vel_rscale, cosi) -- assume
+            # no velocity-modulation bandwidth contribution
+            grad_v_max = 0.0
+
+        try:
+            eff_maxk = compute_effective_maxk_grism(
+                intensity_model,
+                int_worst_maxk,
+                sigma_v_min,
+                grad_v_max,
+                psf=psf,
+                threshold=maxk_threshold,
+            )
+        except (KeyError, NotImplementedError):
+            eff_maxk = np.pi / coarse_pixel_scale  # fallback: coarse Nyquist
+
+        try:
+            stepk = intensity_model.stepk(
+                int_worst_stepk, folding_threshold=folding_threshold
+            )
+        except (KeyError, NotImplementedError):
+            stepk = np.pi / (5.0 * coarse_pixel_scale)  # fallback
+
+        oversample = _oversample_from_maxk(eff_maxk, coarse_pixel_scale)
+
+        return cls(
+            oversample=oversample,
+            pad_factor=2,
+            folding_threshold=folding_threshold,
+            maxk_threshold=maxk_threshold,
+            effective_maxk=eff_maxk,
+            stepk=stepk,
+        )
+
     def __repr__(self) -> str:
         parts = [f'oversample={self.oversample}', f'pad_factor={self.pad_factor}']
         if self.effective_maxk is not None:
@@ -309,6 +403,94 @@ def compute_effective_maxk(
     return float(above[-1])
 
 
+def compute_effective_maxk_grism(
+    intensity_model,
+    intensity_params: dict,
+    sigma_v: float,
+    grad_v_max: float,
+    psf=None,
+    threshold: float = 1e-3,
+) -> float:
+    """Effective maxk for one emission line's grism cube fine-grid sizing.
+
+    The cube-slice intensity at fixed wavelength is
+    ``M(x, y) = I(x, y) * G(x, y)`` (pointwise product). By the FT
+    convolution theorem, ``FT[M] = FT[I] (*) FT[G]`` (convolution in
+    k-space), and the support of the convolution is the Minkowski sum of
+    supports: ``maxk(M) = maxk(I) + maxk(G)``. The cube slice is then
+    convolved with the PSF in real space, so ``FT[Conv[M, PSF]] = FT[M] *
+    FT[PSF]`` (multiplication). The effective post-PSF bandwidth is bounded
+    by the smaller of:
+
+    - the cube-slice bandwidth ``maxk(I) + maxk(G)``, and
+    - the largest k below which the PSF FT remains above threshold.
+
+    No pixel-response factor is included: the grism rendering chain applies
+    the detector BoxPixel sinc post-dispersion (on the dispersed 2D
+    observable), not per cube-slice cell. See
+    ``docs/notes/grism_cube_bandwidth.tex`` for the derivation.
+
+    Parameters
+    ----------
+    intensity_model : IntensityModel
+        The emission line's spatial intensity model. Must expose
+        ``maxk(params, threshold)``.
+    intensity_params : dict
+        Worst-case intensity parameters (typically the output of
+        ``_extract_worst_case_params(intensity_model, priors)[0]``).
+    sigma_v : float
+        Worst-case (minimum) intrinsic kinematic dispersion sigma_v in km/s.
+    grad_v_max : float
+        Worst-case maximum ``|grad v_LOS|`` in km/s/arcsec across the
+        spatial domain. From ``velocity_model.grad_bandwidth(params)``
+        at worst-case velocity parameters.
+    psf : galsim.GSObject, optional
+        PSF profile. Damps the post-cube product at high k via ``psf.kValue``.
+    threshold : float
+        FT amplitude threshold. Default 1e-3.
+
+    Returns
+    -------
+    float
+        Effective maxk in rad/arcsec. ``0.0`` if PSF crosses threshold
+        at k=0 (defensive guard).
+    """
+    if sigma_v <= 0:
+        raise ValueError(
+            f"sigma_v must be positive (got {sigma_v}); the velocity-modulated "
+            f"Gaussian factor is ill-defined at sigma_v = 0"
+        )
+
+    # cube-slice bandwidth bound (Minkowski sum of supports of FT[I] and FT[G])
+    k_I = intensity_model.maxk(intensity_params, threshold=threshold)
+    if grad_v_max > 0:
+        k_G = np.sqrt(-2.0 * np.log(threshold)) * grad_v_max / sigma_v
+    else:
+        # uniform velocity field -> G has no spatial dependence -> no bandwidth
+        # contribution from the modulation factor
+        k_G = 0.0
+    k_cube_bare = k_I + k_G
+
+    if psf is None:
+        return float(k_cube_bare)
+
+    # PSF damping: post-PSF amplitude at k is bounded by FT[PSF](k). Find the
+    # largest k <= k_cube_bare at which FT[PSF] remains above threshold.
+    n_scan = 500
+    k_scan = np.linspace(0.0, k_cube_bare, n_scan)
+
+    import galsim
+
+    psf_ft = np.array(
+        [abs(psf.kValue(galsim.PositionD(0.0, float(k)))) for k in k_scan]
+    )
+
+    above = k_scan[psf_ft > threshold]
+    if len(above) == 0:
+        return 0.0
+    return float(above[-1])
+
+
 def _oversample_from_maxk(effective_maxk: float, pixel_scale: float) -> int:
     """Derive oversample factor from effective maxk and pixel scale.
 
@@ -358,7 +540,8 @@ def _extract_worst_case_params(model, priors) -> tuple:
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.high
             elif name == 'cosi':
-                # smallest cosi (most edge-on) → highest maxk
+                # smallest cosi (most edge-on) → highest maxk for intensity
+                # AND highest sin(i) for velocity-gradient bandwidth
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.low
             elif name == 'n_sersic':
@@ -369,6 +552,14 @@ def _extract_worst_case_params(model, priors) -> tuple:
                 # most negative nu → slowest FT decay → highest maxk
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.low
+            elif name == 'vcirc':
+                # largest vcirc → steepest velocity gradient → highest k_G
+                worst_maxk_params[name] = prior.high
+                worst_stepk_params[name] = prior.high
+            elif name == 'vel_rscale':
+                # smallest vel_rscale → steepest velocity gradient → highest k_G
+                worst_maxk_params[name] = prior.low
+                worst_stepk_params[name] = prior.high
             else:
                 mid = 0.5 * (prior.low + prior.high)
                 worst_maxk_params[name] = mid

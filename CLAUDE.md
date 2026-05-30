@@ -148,11 +148,15 @@ All raise `ValueError` on unknown names.
 | Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)` |
 | Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 | `folding_threshold` | dimensionless | fraction of flux allowed to alias (default 5e-3) |
-| Render output | flux/pixel | `render_image`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |
+| Render output | flux/pixel | `render_image`, `render_grism`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |
 | Analytic profile eval | surface brightness | `__call__`, `evaluate_in_disk_plane` — continuous-coord eval; multiply by `pixel_scale**2` for flux/pixel |
+| Cube assembly intermediate | SB per arcsec² per nm | `build_cube` — intermediate; observable wrappers convert to flux/pixel before output |
+| Dispersed image intermediate | SB per arcsec² | `disperse_cube` output; final `render_grism` multiplies by `coarse_ps²` to convert to flux/pixel |
 | Noise gain | photons-per-(flux/pixel) | `noise.py:add_intensity_noise` Poisson scaling |
 
 **Always perform dimensional sanity checks** on numerical quantities before finalizing code.
+
+**Full render-method contract:** see `docs/units_and_conventions.md` for the tracked source-of-truth covering every `render_*` method's units, intermediate representations, and the SB↔flux/pixel conversion shorthand.
 
 ---
 

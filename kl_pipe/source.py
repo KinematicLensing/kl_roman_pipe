@@ -87,6 +87,146 @@ def _build_component_theta(
     return jnp.asarray([_lookup_param(pars, prefix, p) for p in param_names])
 
 
+def _component_priors_for_intensity(
+    priors, prefix: str, model_param_names: Tuple[str, ...]
+):
+    """Build a per-component ``PriorDict`` view keyed by ``model.PARAMETER_NAMES``.
+
+    Translates dotted-key SourceModel priors into a flat-keyed PriorDict so
+    that ``RenderConfig.for_priors`` and ``check_priors_safe`` (which both
+    query by ``model.PARAMETER_NAMES``) see the right specs. Resolution
+    mirrors ``_lookup_param``:
+
+    1. ``<prefix>.<bare>`` -- per-component value (e.g. ``F087.rscale``).
+    2. ``<bare>``          -- top-level shared value (e.g. ``cosi``).
+    3. ``<param_name>``    -- verbatim.
+
+    where ``<bare>`` strips ``int_`` / ``vel_`` from ``param_name``. Skips
+    params absent from all three lookups; ``_extract_worst_case_params``
+    tolerates missing names.
+    """
+    from kl_pipe.priors import PriorDict
+
+    spec = {}
+    for name in model_param_names:
+        bare = _strip_param_prefix(name)
+        for key in (f'{prefix}.{bare}', bare, name):
+            if key in priors._param_spec:
+                spec[name] = priors._param_spec[key]
+                break
+    return PriorDict(spec)
+
+
+def for_grism_priors(
+    source: 'SourceModel',
+    priors,
+    coarse_pixel_scale: float,
+    psf=None,
+    folding_threshold: float = 5e-3,
+    maxk_threshold: float = 1e-3,
+):
+    """Worst-case ``RenderConfig`` for a grism cube across all emission lines.
+
+    For each emission line in ``source.emission_lines`` (only those that own
+    a spatial profile; lines borrowing via ``intensity_key`` are checked
+    through the owner), computes the per-line cube fine-grid sizing via
+    ``RenderConfig.for_grism_priors`` and returns the line with the largest
+    required oversample. The cube is a single shared spatial grid, so the
+    most demanding line dictates the grid for all.
+
+    Math: see ``docs/notes/grism_cube_bandwidth.tex``.
+
+    Parameters
+    ----------
+    source : SourceModel
+        Must have ``velocity_model`` set and ``emission_lines`` non-empty.
+    priors : PriorDict
+        Dotted-key SourceModel priors. Required keys:
+        ``<line>.<int_param>`` for each spatial-owner line,
+        ``vel.<vel_param>`` for the velocity model,
+        ``<disp_owner>.dispersion`` for each line's sigma_v
+        (``disp_owner`` is ``line.dispersion_key`` if set else the line key),
+        plus shared ``cosi``, ``theta_int``, ``g1``, ``g2``.
+    coarse_pixel_scale : float
+        Coarse detector pixel scale (arcsec).
+    psf : galsim.GSObject, optional
+        Per-slice PSF.
+    folding_threshold, maxk_threshold : float
+        Passed through to ``RenderConfig.for_grism_priors``.
+
+    Returns
+    -------
+    RenderConfig
+        The most demanding (max oversample) RenderConfig across spatial-owner
+        emission lines.
+    """
+    from kl_pipe.render import RenderConfig
+
+    if source.velocity_model is None:
+        raise ValueError(
+            "SourceModel.for_grism_priors requires source.velocity_model to be set"
+        )
+    if not source.emission_lines:
+        raise ValueError(
+            "SourceModel.for_grism_priors requires non-empty source.emission_lines"
+        )
+
+    velocity_priors = _component_priors_for_intensity(
+        priors, 'vel', source.velocity_model.PARAMETER_NAMES
+    )
+
+    worst_rc = None
+    for line_key, line in source.emission_lines.items():
+        if line.intensity is None:
+            # spatial profile borrowed via intensity_key; validated via the owner
+            continue
+        intensity_model = line.intensity
+        intensity_priors = _component_priors_for_intensity(
+            priors, line_key, intensity_model.PARAMETER_NAMES
+        )
+
+        # model-specific prior safety (e.g. Spergel cusp regime)
+        if hasattr(intensity_model, 'check_priors_safe'):
+            intensity_model.check_priors_safe(intensity_priors)
+
+        # sigma_v lookup: per-line dispersion (or shared via dispersion_key)
+        disp_owner = (
+            line.dispersion_key if line.dispersion_key is not None else line_key
+        )
+        disp_key = f'{disp_owner}.dispersion'
+        if disp_key not in priors._param_spec:
+            raise KeyError(
+                f"emission line '{line_key}' requires prior key '{disp_key}'; "
+                f"available: {sorted(priors._param_spec)}"
+            )
+        spec = priors._param_spec[disp_key]
+        if hasattr(spec, 'low'):
+            sigma_v_min = float(spec.low)
+        else:
+            sigma_v_min = float(spec)
+
+        rc = RenderConfig.for_grism_priors(
+            intensity_model=intensity_model,
+            velocity_model=source.velocity_model,
+            intensity_priors=intensity_priors,
+            velocity_priors=velocity_priors,
+            sigma_v_min=sigma_v_min,
+            coarse_pixel_scale=coarse_pixel_scale,
+            psf=psf,
+            folding_threshold=folding_threshold,
+            maxk_threshold=maxk_threshold,
+        )
+        if worst_rc is None or rc.oversample > worst_rc.oversample:
+            worst_rc = rc
+
+    if worst_rc is None:
+        raise ValueError(
+            "no emission line owns a spatial profile (all use intensity_key); "
+            "cannot derive grism RenderConfig"
+        )
+    return worst_rc
+
+
 def _apply_obs_rotation(
     theta: jnp.ndarray,
     param_names: Tuple[str, ...],
@@ -242,13 +382,17 @@ class SourceModel:
             oversample=obs.oversample,
         )
 
-        # post-dispersion BoxPixel sinc + sum-bin to coarse detector
+        # post-dispersion BoxPixel sinc + SB→flux/pixel conversion
         coarse_shape = (
             obs.grism_pars.image_pars.Nrow,
             obs.grism_pars.image_pars.Ncol,
         )
         return _apply_post_dispersion_pixel_response(
-            dispersed, obs.pixel_response_fft, coarse_shape, obs.oversample
+            dispersed,
+            obs.pixel_response_fft,
+            coarse_shape,
+            obs.oversample,
+            obs.grism_pars.image_pars.pixel_scale,
         )
 
     def render_velocity(

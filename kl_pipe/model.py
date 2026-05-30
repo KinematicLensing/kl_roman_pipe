@@ -1,6 +1,7 @@
 import inspect
 import jax.numpy as jnp
 import jax
+import numpy as np
 
 from abc import abstractmethod, ABC
 from typing import Tuple, Set, Any
@@ -317,6 +318,27 @@ class VelocityModel(Model):
             "Subclasses must implement evaluate_circular_velocity method."
         )
 
+    def grad_bandwidth(self, params: dict) -> float:
+        """Maximum spatial gradient |grad v_LOS| (km/s per arcsec) at ``params``.
+
+        Used by the grism cube fine-grid sizing in
+        ``RenderConfig.for_grism_priors`` to bound the spatial bandwidth
+        contributed by the velocity-modulated wavelength Gaussian factor in
+        ``SourceModel.build_cube``. See ``docs/notes/grism_cube_bandwidth.tex``
+        for the derivation.
+
+        Default implementation assumes the arctan rotation curve
+        ``v_c(R) = (2/pi) * v_circ * arctan(R / r_v)``, for which
+        ``max |dv_c/dR| = (2/pi) * v_circ / r_v`` (achieved at the center).
+        The line-of-sight projection multiplies by ``sin(i)``. Subclasses
+        with non-arctan rotation curves should override.
+        """
+        vcirc = float(params['vcirc'])
+        r_v = float(params['vel_rscale'])
+        cosi = float(params['cosi'])
+        sini = (1.0 - cosi**2) ** 0.5
+        return (2.0 / np.pi) * vcirc * sini / r_v
+
     def render_image(
         self,
         theta: jnp.ndarray,
@@ -434,24 +456,28 @@ def _apply_post_dispersion_pixel_response(
     pixel_response_fft: jnp.ndarray,
     coarse_shape: tuple,
     oversample: int,
+    coarse_pixel_scale: float,
 ) -> jnp.ndarray:
-    """Apply precomputed BoxPixel sinc + sum-bin to coarse on a fine 2D image.
+    """Apply BoxPixel sinc + convert SB to flux per coarse pixel.
 
     Pixel response (square detector top-hat) is applied once at the 2D
     observable readout stage rather than per-channel on the cube. After
-    grism dispersion produces a fine-resolution 2D image, this function
-    convolves with the BoxPixel sinc in k-space (precomputed at obs build
-    time, stored on ``GrismObs.pixel_response_fft``) and sum-bins to coarse
-    detector pixels.
+    grism dispersion produces a fine-resolution 2D image in SB units
+    (flux / arcsec²), this function:
 
-    For ``oversample == 1`` the input is already at coarse detector
-    resolution; no fine-grid sinc is required. Pass-through.
+    1. Multiplies by the precomputed BoxPixel sinc on the fine k-grid
+       (``GrismObs.pixel_response_fft``) -- only when ``oversample > 1``;
+       at ``oversample == 1`` the input is already at coarse detector
+       resolution and no fine-grid sinc is required.
+    2. Bins fine cells to coarse pixels (mean over each N×N block).
+    3. Multiplies by ``coarse_pixel_scale**2`` to convert SB (per arcsec²)
+       to flux per coarse pixel. See ``docs/units_and_conventions.md``.
 
     Parameters
     ----------
     dispersed : jnp.ndarray
-        2D dispersed image, shape ``(Nrow*N, Ncol*N)`` for ``oversample=N``,
-        or ``(Nrow, Ncol)`` for ``oversample=1``.
+        2D dispersed image in SB units, shape ``(Nrow*N, Ncol*N)`` for
+        ``oversample=N``, or ``(Nrow, Ncol)`` for ``oversample=1``.
     pixel_response_fft : jnp.ndarray
         Precomputed BoxPixel sinc on the fine k-grid (from
         ``GrismObs.pixel_response_fft``). Unused at ``oversample == 1``.
@@ -459,24 +485,33 @@ def _apply_post_dispersion_pixel_response(
         ``(Nrow_c, Ncol_c)`` of the coarse detector grid.
     oversample : int
         Spatial oversampling factor of the input.
+    coarse_pixel_scale : float
+        Coarse detector pixel scale (arcsec); used for the SB→flux/pixel
+        conversion.
 
     Returns
     -------
     jnp.ndarray
-        Coarse-pixel 2D image in flux per coarse pixel, shape == coarse_shape.
+        Coarse-pixel 2D image in flux per coarse pixel, shape ``coarse_shape``.
     """
+    coarse_area = coarse_pixel_scale * coarse_pixel_scale
+
     if oversample <= 1:
-        return dispersed
+        # input already at coarse resolution; just convert SB -> flux/pixel
+        return dispersed * coarse_area
 
     Nrow_c, Ncol_c = coarse_shape
     N = oversample
 
-    # FFT -> sinc multiply -> IFFT at fine grid
+    # FFT -> sinc multiply -> IFFT at fine grid (still in SB units)
     img_fft = jnp.fft.fft2(dispersed)
     pixel_integrated_fine = jnp.fft.ifft2(img_fft * pixel_response_fft).real
 
-    # sum-bin fine to coarse (flux/pixel preservation)
-    return pixel_integrated_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+    # mean-bin SB to coarse, then multiply by coarse area to get flux/pixel.
+    # Equivalent to sum-bin × fine_pixel_area = sum × (coarse/N)² , i.e.
+    # mean × coarse_area.
+    sb_coarse = pixel_integrated_fine.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+    return sb_coarse * coarse_area
 
 
 class IntensityModel(Model):
@@ -980,11 +1015,19 @@ class KLModel(object):
                 obs.grism_pars.image_pars.Ncol,
             )
             return _apply_post_dispersion_pixel_response(
-                dispersed, obs.pixel_response_fft, coarse_shape, oversample
+                dispersed,
+                obs.pixel_response_fft,
+                coarse_shape,
+                oversample,
+                obs.grism_pars.image_pars.pixel_scale,
             )
         else:
             # legacy path: no oversampling on this code path (cube_pars +
-            # grism_pars carry no oversample info)
+            # grism_pars carry no oversample info). Returns the dispersed
+            # image in SB units (per arcsec^2); does NOT apply pixel response
+            # or convert to flux/pixel. Pre-existing divergence from the
+            # obs path's flux/pixel convention; tracked for cleanup in the
+            # KLModel deletion commit.
             gp = obs_or_grism_pars if obs_or_grism_pars is not None else grism_pars
             if gp is None:
                 raise ValueError("Provide obs (GrismObs) or grism_pars")

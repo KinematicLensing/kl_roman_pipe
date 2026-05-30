@@ -76,35 +76,10 @@ def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
         )
 
 
-def _component_priors_for_intensity(
-    priors: 'PriorDict', prefix: str, model_param_names: Tuple[str, ...]
-) -> 'PriorDict':
-    """Build a per-component ``PriorDict`` view keyed by ``model.PARAMETER_NAMES``.
-
-    Translates dotted-key SourceModel priors into a flat-keyed PriorDict so
-    that ``RenderConfig.for_priors`` and ``check_priors_safe`` (which both
-    query by ``model.PARAMETER_NAMES``) see the right specs. Resolution
-    mirrors ``kl_pipe.source._lookup_param``:
-
-    1. ``<prefix>.<bare>`` -- per-component value (e.g. ``F087.rscale``).
-    2. ``<bare>``          -- top-level shared value (e.g. ``cosi``).
-    3. ``<param_name>``    -- verbatim.
-
-    where ``<bare>`` strips ``int_`` / ``vel_`` from ``param_name``. Skips
-    params absent from all three lookups; ``_extract_worst_case_params``
-    tolerates missing names.
-    """
-    from kl_pipe.priors import PriorDict
-    from kl_pipe.source import _strip_param_prefix
-
-    spec = {}
-    for name in model_param_names:
-        bare = _strip_param_prefix(name)
-        for key in (f'{prefix}.{bare}', bare, name):
-            if key in priors._param_spec:
-                spec[name] = priors._param_spec[key]
-                break
-    return PriorDict(spec)
+# _component_priors_for_intensity moved to kl_pipe.source -- its dotted-key
+# resolution belongs with the SourceModel namespace it serves. Re-exported
+# here for backward compatibility with this module's existing callers.
+from kl_pipe.source import _component_priors_for_intensity  # noqa: E402, F401
 
 
 def _check_source_priors_fit_obs(
@@ -147,16 +122,27 @@ def _check_source_priors_fit_obs(
         return  # k-space grid sizing N/A for spatial-oversampling rendering
 
     if isinstance(obs, GrismObs):
-        for line_key, line in source.emission_lines.items():
-            if line.intensity is None:
-                continue  # spatial profile borrowed; checked via the owner
-            model = line.intensity
-            sub_priors = _component_priors_for_intensity(
-                priors, line_key, model.PARAMETER_NAMES
+        from kl_pipe.render import RenderConfig
+        from kl_pipe.source import for_grism_priors as _for_grism_priors
+
+        coarse_ps = obs.cube_pars.image_pars.pixel_scale
+        # Minkowski-sum bound on cube-slice bandwidth (intensity FT support +
+        # velocity-modulation Gaussian FT support, damped by PSF). See
+        # docs/notes/grism_cube_bandwidth.tex.
+        priors_rc = _for_grism_priors(source, priors, coarse_ps, psf=obs.psf)
+        rc_obs = obs.render_config
+        if rc_obs is None:
+            rc_obs = RenderConfig()
+        if priors_rc.oversample > rc_obs.oversample:
+            raise ValueError(
+                f"Grism priors imply oversample={priors_rc.oversample} but "
+                f"grism obs was built with oversample={rc_obs.oversample}. "
+                f"Rebuild grism obs with explicit render_config:\n"
+                f"    from kl_pipe.source import for_grism_priors\n"
+                f"    rc = for_grism_priors(source, priors, coarse_pixel_scale, "
+                f"psf=psf)\n"
+                f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
             )
-            if hasattr(model, 'check_priors_safe'):
-                model.check_priors_safe(sub_priors)
-            _check_grism_priors_fit_obs_rc(model, sub_priors, obs, line_key)
         return
 
     if isinstance(obs, ImageObs):
@@ -186,47 +172,6 @@ def _check_source_priors_fit_obs(
     raise TypeError(
         f"_check_source_priors_fit_obs: unrecognized obs type " f"{type(obs).__name__}"
     )
-
-
-def _check_grism_priors_fit_obs_rc(model, priors, obs, line_key: str) -> None:
-    """GrismObs variant of ``_check_priors_fit_obs_rc``.
-
-    Mirrors the ImageObs version but draws pixel_scale from
-    ``obs.cube_pars.image_pars`` and constructs the coarse-detector
-    BoxPixel sinc inline (GrismObs has no ``pixel_response`` field --
-    its post-dispersion pixel response is precomputed as
-    ``pixel_response_fft`` on the fine k-grid). Validates against
-    ``obs.render_config``.
-    """
-    from kl_pipe.pixel import BoxPixel
-    from kl_pipe.render import RenderConfig
-
-    coarse_ps = obs.cube_pars.image_pars.pixel_scale
-    try:
-        priors_rc = RenderConfig.for_priors(
-            model,
-            priors,
-            coarse_ps,
-            pixel_response=BoxPixel(coarse_ps),
-            psf=obs.psf,
-        )
-    except (KeyError, NotImplementedError, AttributeError):
-        return
-
-    rc_obs = obs.render_config
-    if rc_obs is None:
-        rc_obs = RenderConfig()
-    if priors_rc.oversample > rc_obs.oversample:
-        raise ValueError(
-            f"Priors for emission line '{line_key}' imply "
-            f"oversample={priors_rc.oversample} but grism obs was built "
-            f"with oversample={rc_obs.oversample}. Rebuild grism obs with "
-            f"explicit render_config:\n"
-            f"    rc = RenderConfig.for_priors(intensity_model, priors, "
-            f"coarse_pixel_scale, pixel_response=BoxPixel(coarse_pixel_scale), "
-            f"psf=psf)\n"
-            f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
-        )
 
 
 @dataclass
