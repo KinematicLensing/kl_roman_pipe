@@ -14,7 +14,7 @@ Factory functions replace the old Model.configure_psf() family.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import jax
@@ -50,11 +50,15 @@ class ImageObs:
     render_config : RenderConfig
         Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
         Canonical source for grid sizing -- ``obs.oversample`` is a
-        property that reads from this. Bare ``RenderConfig()`` defaults to
-        ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
-        for inference, pass ``build_image_render_config(source, priors,
-        image_pars, broadband_key, psf=psf)`` (from ``kl_pipe.render``) to
-        size the grid against prior bounds.
+        property that reads from this. When ``build_image_obs`` is called
+        without ``render_config``, the obs carries a builder-default rc
+        marked ``_unset_default=True``: ``InferenceTask.from_obs`` detects
+        this and rebuilds the obs internally with a priors-sized rc via
+        ``obs.with_render_config(...)``. For bespoke rendering outside
+        ``from_obs``, either accept the builder default or pass an
+        explicit ``RenderConfig`` (e.g.
+        ``build_image_render_config(source, priors, image_pars,
+        broadband_key, psf=psf)``).
     psf_data : PSFData, optional
         Pre-computed PSF FFT for convolve_fft.
     fine_X, fine_Y : jnp.ndarray, optional
@@ -100,11 +104,95 @@ class ImageObs:
     # from image_pars.wcs at build_image_obs time. Default 0.0 corresponds to
     # the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
     image_rotation: float = 0.0
+    # _rc_was_default: internal flag — True when build_image_obs supplied the
+    # default render_config (caller passed render_config=None), False when the
+    # caller passed an explicit one. Read by InferenceTask.from_obs to decide
+    # whether to auto-derive a priors-sized rc + rebuild via with_render_config.
+    # init=False keeps it out of the constructor kwargs; build_image_obs sets
+    # it via object.__setattr__ (the standard escape hatch for frozen
+    # dataclasses), and pytree unflatten restores it the same way.
+    _rc_was_default: bool = field(default=False, init=False, repr=False)
 
     @property
     def oversample(self) -> int:
         """Oversample factor; canonical source is render_config.oversample."""
         return self.render_config.oversample if self.render_config is not None else 1
+
+    def with_render_config(
+        self, new_rc: 'RenderConfig', *, int_model=None
+    ) -> 'ImageObs':
+        """Return a new ImageObs with ``new_rc`` and freshly-recomputed grids.
+
+        Used by ``InferenceTask.from_obs`` when the obs was constructed with
+        a builder-default ``render_config`` (``_unset_default=True``) and the
+        priors imply a different oversample. The returned obs has fresh
+        ``psf_data`` (PSF FFT at ``new_rc.oversample``), fresh ``fine_X`` /
+        ``fine_Y``, and fresh ``kspace_psf_fft`` (when ``int_model`` is
+        supplied and supports k-space rendering). All other fields
+        (``image_pars``, ``X``, ``Y``, ``data``, ``variance``, ``mask``,
+        ``pixel_response``, ``psf``, ``broadband_key``, ``image_rotation``)
+        are preserved.
+
+        Parameters
+        ----------
+        new_rc : RenderConfig
+            The replacement rendering recipe. Determines the new
+            ``oversample`` for grid sizing.
+        int_model : IntensityModel, optional
+            When supplied and the model has ``_kspace_pad_factor``, the
+            fused k-space PSF kernel is recomputed for the band's rendering
+            pipeline. Mirrors the ``int_model`` arg on ``build_image_obs``.
+
+        Returns
+        -------
+        ImageObs
+            A new instance (same dataclass type) with ``new_rc`` and
+            recomputed precomputed grids.
+        """
+        import dataclasses
+
+        oversample = new_rc.oversample
+
+        new_psf_data = None
+        new_fine_X = None
+        new_fine_Y = None
+        new_kspace_psf_fft = None
+
+        if self.psf is not None:
+            from kl_pipe.psf import precompute_psf_fft
+
+            new_psf_data = precompute_psf_fft(
+                self.psf,
+                image_pars=self.image_pars,
+                oversample=oversample,
+            )
+
+            if int_model is not None and hasattr(int_model, '_kspace_pad_factor'):
+                from kl_pipe.psf import precompute_psf_kspace_fft
+
+                N = max(oversample, 1)
+                fine_ps = self.image_pars.pixel_scale / N
+                base_pad_sq = next_fast_len(
+                    int_model._kspace_pad_factor
+                    * max(self.image_pars.Nrow, self.image_pars.Ncol)
+                )
+                pad_sq = base_pad_sq * N
+                new_kspace_psf_fft = precompute_psf_kspace_fft(
+                    self.psf, (pad_sq, pad_sq), fine_ps
+                )
+
+        if oversample > 1:
+            new_fine_image_pars = self.image_pars.make_fine_scale(oversample)
+            new_fine_X, new_fine_Y = build_map_grid_from_image_pars(new_fine_image_pars)
+
+        return dataclasses.replace(
+            self,
+            render_config=new_rc,
+            psf_data=new_psf_data,
+            fine_X=new_fine_X,
+            fine_Y=new_fine_Y,
+            kspace_psf_fft=new_kspace_psf_fft,
+        )
 
 
 @dataclass(frozen=True)
@@ -132,6 +220,17 @@ class VelocityObs(ImageObs):
 class GrismObs:
     """Grism observation — dispersed spectroscopy.
 
+    .. note::
+       The current implementation uses one shared PSF (``psf_data`` /
+       ``psf``) and one shared spatial+spectral cube across **all** emission
+       lines on the source. Real instruments have wavelength-dependent PSFs
+       and may benefit from per-line sub-cubes (to avoid wasted slices
+       between widely-separated lines). Both are tracked as an open
+       architectural item — see issue #51 — and require substantive
+       changes to ``GrismObs`` (e.g. ``psf_data: Dict[line_key, PSFData]``),
+       ``SourceModel.build_cube``, and ``SourceModel.render_grism``.
+       Deferred past Phase 3.
+
     Parameters
     ----------
     grism_pars : GrismPars
@@ -143,11 +242,14 @@ class GrismObs:
     render_config : RenderConfig
         Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
         Canonical source for grid sizing -- ``obs.oversample`` is a
-        property that reads from this. Bare ``RenderConfig()`` defaults to
-        ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
-        for inference, pass ``build_grism_render_config(source, priors,
-        grism_pars, psf=psf)`` (from ``kl_pipe.render``) to size the cube
-        fine-grid against worst-case priors.
+        property that reads from this. When ``build_grism_obs`` is called
+        without ``render_config``, the obs carries a builder-default rc
+        marked ``_unset_default=True``: ``InferenceTask.from_obs`` detects
+        this and rebuilds the obs internally with a priors-sized rc via
+        ``obs.with_render_config(...)``. For bespoke rendering outside
+        ``from_obs``, either accept the builder default or pass an
+        explicit ``RenderConfig`` (e.g.
+        ``build_grism_render_config(source, priors, grism_pars, psf=psf)``).
     fine_image_pars : ImagePars, optional
         Fine spatial grid (oversample > 1).
     data : jnp.ndarray, optional
@@ -183,11 +285,76 @@ class GrismObs:
     # for the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
     image_rotation: float = 0.0
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # _rc_was_default: internal flag — True when build_grism_obs supplied the
+    # default render_config (caller passed render_config=None), False when the
+    # caller passed an explicit one. Read by InferenceTask.from_obs to decide
+    # whether to auto-derive a priors-sized rc + rebuild via with_render_config.
+    # init=False keeps it out of the constructor kwargs; build_grism_obs sets
+    # it via object.__setattr__ (the standard escape hatch for frozen
+    # dataclasses), and pytree unflatten restores it the same way.
+    _rc_was_default: bool = field(default=False, init=False, repr=False)
 
     @property
     def oversample(self) -> int:
         """Oversample factor; canonical source is render_config.oversample."""
         return self.render_config.oversample if self.render_config is not None else 1
+
+    def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
+        """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
+
+        Used by ``InferenceTask.from_obs`` when the obs was constructed with
+        a builder-default ``render_config`` (``_unset_default=True``) and the
+        priors imply a different oversample. The returned obs has fresh
+        ``psf_data`` (PSF FFT at ``new_rc.oversample``), fresh
+        ``fine_image_pars``, and fresh ``pixel_response_fft``. All other
+        fields (``grism_pars``, ``cube_pars``, ``data``, ``variance``,
+        ``mask``, ``psf``, ``image_rotation``) are preserved.
+
+        Parameters
+        ----------
+        new_rc : RenderConfig
+            The replacement rendering recipe. Determines the new
+            ``oversample`` for grid sizing.
+
+        Returns
+        -------
+        GrismObs
+            A new instance with ``new_rc`` and recomputed precomputed grids.
+        """
+        import dataclasses
+
+        oversample = new_rc.oversample
+
+        new_psf_data = None
+        new_fine_image_pars = None
+        new_pixel_response_fft = None
+
+        if self.psf is not None:
+            from kl_pipe.psf import precompute_psf_fft
+
+            new_psf_data = precompute_psf_fft(
+                self.psf,
+                image_pars=self.cube_pars.image_pars,
+                oversample=oversample,
+            )
+
+        if oversample > 1:
+            new_fine_image_pars = self.cube_pars.image_pars.make_fine_scale(oversample)
+            coarse_ps = self.cube_pars.image_pars.pixel_scale
+            fine_ps = new_fine_image_pars.pixel_scale
+            Nrow_f, Ncol_f = new_fine_image_pars.Nrow, new_fine_image_pars.Ncol
+            kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+            ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+            KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+            new_pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
+
+        return dataclasses.replace(
+            self,
+            render_config=new_rc,
+            psf_data=new_psf_data,
+            fine_image_pars=new_fine_image_pars,
+            pixel_response_fft=new_pixel_response_fft,
+        )
 
 
 # ============================================================================
@@ -214,12 +381,13 @@ def _image_obs_flatten(obs):
         obs.psf,
         obs.broadband_key,
         obs.image_rotation,
+        obs._rc_was_default,
     )
     return children, aux
 
 
 def _image_obs_unflatten(aux, children):
-    return ImageObs(
+    obs = ImageObs(
         image_pars=aux[0],
         render_config=aux[1],
         X=children[0],
@@ -236,6 +404,9 @@ def _image_obs_unflatten(aux, children):
         broadband_key=aux[3],
         image_rotation=aux[4],
     )
+    # _rc_was_default is field(init=False); restore via frozen-dataclass bypass.
+    object.__setattr__(obs, '_rc_was_default', aux[5])
+    return obs
 
 
 jax.tree_util.register_pytree_node(ImageObs, _image_obs_flatten, _image_obs_unflatten)
@@ -263,12 +434,13 @@ def _velocity_obs_flatten(obs):
         obs.broadband_key,
         obs.image_rotation,
         obs.flux_weight_key,
+        obs._rc_was_default,
     )
     return children, aux
 
 
 def _velocity_obs_unflatten(aux, children):
-    return VelocityObs(
+    obs = VelocityObs(
         image_pars=aux[0],
         render_config=aux[1],
         X=children[0],
@@ -288,6 +460,8 @@ def _velocity_obs_unflatten(aux, children):
         image_rotation=aux[5],
         flux_weight_key=aux[6],
     )
+    object.__setattr__(obs, '_rc_was_default', aux[7])
+    return obs
 
 
 jax.tree_util.register_pytree_node(
@@ -310,12 +484,13 @@ def _grism_obs_flatten(obs):
         obs.fine_image_pars,
         obs.image_rotation,
         obs.psf,
+        obs._rc_was_default,
     )
     return children, aux
 
 
 def _grism_obs_unflatten(aux, children):
-    return GrismObs(
+    obs = GrismObs(
         grism_pars=aux[0],
         cube_pars=aux[1],
         render_config=aux[2],
@@ -328,6 +503,8 @@ def _grism_obs_unflatten(aux, children):
         image_rotation=aux[4],
         psf=aux[5],
     )
+    object.__setattr__(obs, '_rc_was_default', aux[6])
+    return obs
 
 
 jax.tree_util.register_pytree_node(GrismObs, _grism_obs_flatten, _grism_obs_unflatten)
@@ -387,13 +564,17 @@ def build_image_obs(
     render_config : RenderConfig, optional
         When provided, ``render_config.oversample`` takes precedence over
         the bare ``oversample`` parameter for PSF FFT sizing and fine-grid
-        construction.
+        construction. When omitted, the obs is marked
+        ``_rc_was_default=True``: ``InferenceTask.from_obs`` will derive a
+        priors-sized rc and rebuild the obs internally. For bespoke
+        (non-inference) rendering with tight priors, pass an explicit
+        ``build_image_render_config(...)`` result.
     """
     # render_config is the canonical source of truth; if both render_config
     # and bare oversample are provided, render_config wins (and oversample
-    # arg is effectively ignored). Default: construct from oversample for
-    # backward-compatible API.
-    if render_config is None:
+    # arg is effectively ignored).
+    rc_was_default = render_config is None
+    if rc_was_default:
         render_config = RenderConfig(oversample=oversample)
     oversample = render_config.oversample
 
@@ -448,7 +629,7 @@ def build_image_obs(
     if mask is not None:
         mask = jnp.asarray(mask, dtype=bool)
 
-    return ImageObs(
+    obs = ImageObs(
         image_pars=image_pars,
         X=X,
         Y=Y,
@@ -465,6 +646,11 @@ def build_image_obs(
         broadband_key=broadband_key,
         image_rotation=image_rotation_from_wcs(image_pars.wcs),
     )
+    # _rc_was_default is field(init=False) so it stays out of the constructor
+    # kwargs; set it here via the standard frozen-dataclass escape hatch.
+    if rc_was_default:
+        object.__setattr__(obs, '_rc_was_default', True)
+    return obs
 
 
 def build_velocity_obs(
@@ -782,13 +968,16 @@ def build_grism_obs(
     mask : jnp.ndarray, optional
         Boolean mask.
     render_config : RenderConfig, optional
-        Rendering recipe; default constructs from ``oversample``. For
-        inference, pass
+        Rendering recipe; default constructs from ``oversample``. When
+        omitted, the obs is marked ``_rc_was_default=True``:
+        ``InferenceTask.from_obs`` will derive a priors-sized rc and
+        rebuild the obs internally. For bespoke (non-inference) rendering
+        with tight priors, pass an explicit
         ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
-        (in ``kl_pipe.render``) to size the cube fine-grid against the
-        worst-case emission-line + velocity-modulation bandwidth.
+        result (from ``kl_pipe.render``).
     """
-    if render_config is None:
+    rc_was_default = render_config is None
+    if rc_was_default:
         render_config = RenderConfig(oversample=oversample)
     oversample = render_config.oversample  # canonical
 
@@ -829,7 +1018,7 @@ def build_grism_obs(
     if mask is not None:
         mask = jnp.asarray(mask, dtype=bool)
 
-    return GrismObs(
+    obs = GrismObs(
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
@@ -842,3 +1031,8 @@ def build_grism_obs(
         image_rotation=image_rotation_from_wcs(grism_pars.image_pars.wcs),
         psf=psf,
     )
+    # _rc_was_default is field(init=False) so it stays out of the constructor
+    # kwargs; set it here via the standard frozen-dataclass escape hatch.
+    if rc_was_default:
+        object.__setattr__(obs, '_rc_was_default', True)
+    return obs

@@ -596,3 +596,132 @@ def test_build_grism_render_config_missing_dispersion_raises(source_grism_setup)
     bad_priors = PriorDict(bad_spec)
     with pytest.raises(KeyError, match="Halpha.dispersion"):
         build_grism_render_config(source, bad_priors, grism_pars, psf=psf)
+
+
+# ============================================================================
+# from_obs auto-derive + with_render_config
+# ============================================================================
+#
+# When an obs is built without an explicit render_config, build_*_obs marks
+# it _rc_was_default=True. InferenceTask.from_obs detects the flag, derives
+# a priors-sized rc, and rebuilds the obs internally via with_render_config.
+# When the obs has an explicit user-supplied rc, from_obs honors it and
+# runs validation against the priors. Tests below cover both branches and
+# the rebuild mechanics directly.
+
+
+def test_from_obs_auto_derives_when_default(source_image_setup):
+    """from_obs auto-derives rc when build_image_obs got no render_config."""
+    from kl_pipe.observation import build_image_obs
+    from kl_pipe.sampling import InferenceTask
+
+    source, priors, image_pars, psf = source_image_setup
+    rng = np.random.default_rng(0)
+    data = jnp.asarray(rng.normal(size=image_pars.shape))
+    variance = jnp.ones_like(data)
+    obs = build_image_obs(
+        image_pars, psf=psf, broadband_key='F087', data=data, variance=variance
+    )
+    assert obs._rc_was_default is True
+
+    # Compute the expected rc directly to compare:
+    expected_rc = build_image_render_config(
+        source, priors, image_pars, broadband_key='F087', psf=psf
+    )
+
+    task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
+    # task constructs cleanly — auto-derive + rebuild path exercised.
+    # The task uses the rebuilt obs internally; from outside, the
+    # behavior we can directly assert is "no exception, task is valid".
+    assert task is not None
+    # Validate the expected oversample is what we'd derive ourselves.
+    assert expected_rc.oversample >= 1
+
+
+def test_from_obs_honors_explicit_rc(source_image_setup):
+    """from_obs respects an explicit render_config (no auto-derive)."""
+    from kl_pipe.observation import build_image_obs
+    from kl_pipe.sampling import InferenceTask
+
+    source, priors, image_pars, psf = source_image_setup
+    rng = np.random.default_rng(0)
+    data = jnp.asarray(rng.normal(size=image_pars.shape))
+    variance = jnp.ones_like(data)
+    rc_explicit = build_image_render_config(
+        source, priors, image_pars, broadband_key='F087', psf=psf
+    )
+    obs = build_image_obs(
+        image_pars,
+        psf=psf,
+        broadband_key='F087',
+        render_config=rc_explicit,
+        data=data,
+        variance=variance,
+    )
+    assert obs._rc_was_default is False
+
+    # No auto-derive; explicit rc honored. Validation passes because the
+    # explicit rc was derived from the same priors.
+    task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
+    assert task is not None
+
+
+def test_from_obs_grism_auto_derives(source_grism_setup):
+    """Same auto-derive behavior on the GrismObs channel."""
+    from kl_pipe.observation import build_grism_obs
+    from kl_pipe.sampling import InferenceTask
+
+    source, priors, grism_pars, psf = source_grism_setup
+    rng = np.random.default_rng(0)
+    Nrow, Ncol = grism_pars.image_pars.Nrow, grism_pars.image_pars.Ncol
+    data = jnp.asarray(rng.normal(size=(Nrow, Ncol)))
+    variance = jnp.ones_like(data)
+    obs = build_grism_obs(grism_pars, z=1.0, psf=psf, data=data, variance=variance)
+    assert obs._rc_was_default is True
+
+    task = InferenceTask.from_obs(source, priors, grism_obs={'roll0': obs})
+    assert task is not None
+
+
+def test_with_render_config_rebuilds_grids(source_image_setup):
+    """obs.with_render_config produces fresh psf_data, fine_X/Y, kspace_psf_fft."""
+    from kl_pipe.observation import build_image_obs
+
+    source, _, image_pars, psf = source_image_setup
+    obs = build_image_obs(image_pars, psf=psf, broadband_key='F087')
+
+    new_rc = RenderConfig(oversample=9)
+    new_obs = obs.with_render_config(new_rc, int_model=source.broadband_models['F087'])
+
+    assert new_obs.render_config.oversample == 9
+    assert new_obs._rc_was_default is False
+    # PSF FFT resized to new oversample
+    assert new_obs.psf_data is not None
+    assert new_obs.psf_data.oversample == 9
+    # fine grids resized
+    assert new_obs.fine_X is not None
+    assert new_obs.fine_X.shape == (
+        image_pars.Nrow * 9,
+        image_pars.Ncol * 9,
+    )
+    # kspace_psf_fft built (int_model has _kspace_pad_factor)
+    assert new_obs.kspace_psf_fft is not None
+    # data fields preserved (None in this fixture; the point is they
+    # pass through dataclasses.replace unchanged)
+    assert new_obs.data is obs.data
+    assert new_obs.variance is obs.variance
+    assert new_obs.mask is obs.mask
+    assert new_obs.broadband_key == obs.broadband_key
+
+
+def test_with_render_config_preserves_obs_type(source_image_setup):
+    """obs.with_render_config returns the same subtype, not the parent dataclass."""
+    from kl_pipe.observation import ImageObs, build_image_obs
+
+    source, _, image_pars, psf = source_image_setup
+    obs = build_image_obs(image_pars, psf=psf, broadband_key='F087')
+    new_obs = obs.with_render_config(
+        RenderConfig(oversample=3), int_model=source.broadband_models['F087']
+    )
+    assert isinstance(new_obs, ImageObs)
+    assert type(new_obs) is ImageObs

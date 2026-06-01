@@ -88,23 +88,23 @@ def _check_source_priors_fit_obs(
     obs,
     *,
     component_key: Optional[str] = None,
-) -> None:
-    """Obs-type-aware grid adequacy validation for SourceModel inference.
+):
+    """Obs-type-aware rc handling for SourceModel inference.
 
     Dispatches on ``type(obs)``:
 
     - ``VelocityObs``: no-op. Velocity rendering uses spatial oversampling
       rather than a k-space FFT product scan, so the prior-grid adequacy
-      question doesn't apply directly at this layer.
-    - ``ImageObs``: validate ``source.broadband_models[component_key]``
-      against ``obs.render_config``.
-    - ``GrismObs``: validate each spatial-owner emission line's intensity
-      model against ``obs.render_config``. ``component_key`` is ignored.
-
-    All paths route through ``_check_priors_fit_obs_rc`` using
-    ``obs.render_config`` as the canonical grid. GrismObs and ImageObs
-    differ only in (a) which component model is being validated and
-    (b) where the pixel_scale + pixel_response come from on the obs.
+      question doesn't apply directly at this layer. Returns the obs
+      unchanged.
+    - ``ImageObs``: if ``obs.render_config._unset_default`` is True, derive
+      the priors-sized rc via ``build_image_render_config`` and rebuild the
+      obs with freshly-recomputed precomputed grids; return the rebuilt obs.
+      Otherwise, validate the user-supplied rc against the priors (raise
+      loudly on mismatch) and return the obs unchanged.
+    - ``GrismObs``: analogous to ImageObs, using
+      ``build_grism_render_config`` (iterates emission lines for worst-case
+      cube-slice bandwidth).
 
     Parameters
     ----------
@@ -115,35 +115,50 @@ def _check_source_priors_fit_obs(
     obs : ImageObs | VelocityObs | GrismObs
     component_key : str, optional
         Band key for ``ImageObs``; ignored for other obs types.
+
+    Returns
+    -------
+    ImageObs | VelocityObs | GrismObs
+        The (possibly rebuilt) obs. Callers in ``InferenceTask.from_obs``
+        replace each channel's input obs with the returned one before
+        constructing the likelihood.
     """
     from kl_pipe.observation import GrismObs, ImageObs, VelocityObs
 
     if isinstance(obs, VelocityObs):
-        return  # k-space grid sizing N/A for spatial-oversampling rendering
+        return obs  # k-space grid sizing N/A for spatial-oversampling rendering
 
     if isinstance(obs, GrismObs):
         from kl_pipe.render import RenderConfig, build_grism_render_config
 
-        # Minkowski-sum bound on cube-slice bandwidth (intensity FT support +
-        # velocity-modulation Gaussian FT support, damped by PSF). See
-        # docs/notes/grism_cube_bandwidth.tex.
+        rc_obs = obs.render_config if obs.render_config is not None else RenderConfig()
+
+        # auto-derive + rebuild when the obs carries a builder-default rc;
+        # the priors-sized rc bounds cube-slice bandwidth via the Minkowski
+        # sum (intensity FT support + velocity-modulation Gaussian FT,
+        # damped by PSF). See docs/notes/grism_cube_bandwidth.tex.
+        if obs._rc_was_default:
+            derived_rc = build_grism_render_config(
+                source, priors, obs.grism_pars, psf=obs.psf
+            )
+            return obs.with_render_config(derived_rc)
+
+        # explicit user rc: validate against priors, raise on mismatch
         priors_rc = build_grism_render_config(
             source, priors, obs.grism_pars, psf=obs.psf
         )
-        rc_obs = obs.render_config
-        if rc_obs is None:
-            rc_obs = RenderConfig()
         if priors_rc.oversample > rc_obs.oversample:
             raise ValueError(
                 f"Grism priors imply oversample={priors_rc.oversample} but "
                 f"grism obs was built with oversample={rc_obs.oversample}. "
-                f"Rebuild grism obs with explicit render_config:\n"
+                f"Either drop the explicit render_config to let from_obs "
+                f"auto-derive, or pass a properly-sized one:\n"
                 f"    from kl_pipe.render import build_grism_render_config\n"
                 f"    rc = build_grism_render_config(source, priors, grism_pars, "
                 f"psf=psf)\n"
                 f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
             )
-        return
+        return obs
 
     if isinstance(obs, ImageObs):
         if component_key is None:
@@ -161,13 +176,21 @@ def _check_source_priors_fit_obs(
         )
         if hasattr(model, 'check_priors_safe'):
             model.check_priors_safe(sub_priors)
-        rc_obs = obs.render_config
-        if rc_obs is None:
-            from kl_pipe.render import RenderConfig
 
-            rc_obs = RenderConfig()
+        from kl_pipe.render import RenderConfig, build_image_render_config
+
+        rc_obs = obs.render_config if obs.render_config is not None else RenderConfig()
+
+        # auto-derive + rebuild when the obs carries a builder-default rc.
+        if obs._rc_was_default:
+            derived_rc = build_image_render_config(
+                source, priors, obs.image_pars, component_key, psf=obs.psf
+            )
+            return obs.with_render_config(derived_rc, int_model=model)
+
+        # explicit user rc: validate against priors, raise on mismatch
         _check_priors_fit_obs_rc(model, sub_priors, obs, rc_obs)
-        return
+        return obs
 
     raise TypeError(
         f"_check_source_priors_fit_obs: unrecognized obs type " f"{type(obs).__name__}"
@@ -662,18 +685,27 @@ class InferenceTask:
                     f"(have: {sorted(source.emission_lines)})"
                 )
 
-        # ---- per-channel prior-grid adequacy validation -----------------
+        # ---- per-channel rc handling (auto-derive or validate) -----------
+        # _check_source_priors_fit_obs returns the (possibly rebuilt) obs:
+        #   - builder-default rc → derive priors-sized rc + rebuild obs
+        #   - explicit user rc   → validate against priors (raise on mismatch)
+        # The (possibly rebuilt) obs replaces the input one in each channel
+        # dict so the likelihood closure operates on it.
 
         if image_obs:
-            for band_key, obs in image_obs.items():
-                _check_source_priors_fit_obs(
+            image_obs = {
+                band_key: _check_source_priors_fit_obs(
                     source, priors, obs, component_key=band_key
                 )
+                for band_key, obs in image_obs.items()
+            }
         if grism_obs:
-            for _grism_key, obs in grism_obs.items():
-                _check_source_priors_fit_obs(source, priors, obs)
+            grism_obs = {
+                grism_key: _check_source_priors_fit_obs(source, priors, obs)
+                for grism_key, obs in grism_obs.items()
+            }
         if velocity_obs is not None:
-            _check_source_priors_fit_obs(source, priors, velocity_obs)
+            velocity_obs = _check_source_priors_fit_obs(source, priors, velocity_obs)
 
         # ---- build the likelihood closure --------------------------------
 

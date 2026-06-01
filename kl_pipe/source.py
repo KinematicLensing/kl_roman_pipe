@@ -232,6 +232,12 @@ class SourceModel:
           3. Disperse via ``disperse_cube`` (existing kl_pipe.dispersion).
           4. Apply the precomputed BoxPixel sinc + sum-bin to coarse
              detector pixels at the 2D output.
+
+        .. note::
+           Step 2 applies a **single shared** PSF (``obs.psf_data``) to
+           every wavelength slice. Per-line / wavelength-dependent PSFs
+           and per-line sub-cubes are tracked as an open architectural
+           item — see issue #51. Deferred past Phase 3.
         """
         from kl_pipe.dispersion import disperse_cube
         from kl_pipe.grism import _apply_post_dispersion_pixel_response

@@ -608,6 +608,151 @@ print("disk_frac = 1 - bulge_frac - bar_frac (derived)")
 
 ---
 
+## RenderConfig and inference setup
+
+`RenderConfig` controls k-space FFT grid sizing for intensity-model
+rendering (oversample, pad_factor, maxk thresholds). It lives on each
+observation (`ImageObs.render_config`, `GrismObs.render_config`); the
+precomputed PSF FFT and fine grids on the obs are sized to match
+`render_config.oversample`. For full-rendering unit conventions and the
+SB↔flux/pixel contract, see `docs/units_and_conventions.md`.
+
+For **inference**, you almost never need to touch `RenderConfig`
+yourself. `InferenceTask.from_obs(source, priors, ...)` derives a
+worst-case rc from the priors and rebuilds each obs internally with the
+properly-sized grids. The production setup is one step from the user's
+perspective:
+
+```python
+from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.lines import EmissionLine
+from kl_pipe.observation import build_image_obs, build_grism_obs
+from kl_pipe.priors import LogUniform, PriorDict, Uniform
+from kl_pipe.sampling.task import InferenceTask
+from kl_pipe.source import SourceModel
+from kl_pipe.velocity import CenteredVelocityModel
+
+source = SourceModel(
+    velocity_model=CenteredVelocityModel(),
+    broadband_models={'F087': InclinedExponentialModel()},
+    emission_lines={'Halpha': EmissionLine(intensity=InclinedExponentialModel())},
+)
+
+priors = PriorDict({
+    'cosi': Uniform(0.1, 0.99), 'theta_int': Uniform(0, jnp.pi),
+    'g1': 0.0, 'g2': 0.0,
+    'vel.vcirc': Uniform(80, 300), 'vel.rscale': Uniform(0.1, 1.0),
+    'vel.x0': 0.0, 'vel.y0': 0.0,
+    'F087.flux': LogUniform(1, 1000), 'F087.rscale': Uniform(0.05, 1.0),
+    'F087.h_over_r': 0.15, 'F087.x0': 0.0, 'F087.y0': 0.0,
+    'Halpha.flux': LogUniform(1, 100), 'Halpha.rscale': Uniform(0.05, 1.0),
+    'Halpha.h_over_r': 0.15, 'Halpha.x0': 0.0, 'Halpha.y0': 0.0,
+    'Halpha.dispersion': Uniform(20, 100),
+})
+
+# Build per-channel obs WITHOUT passing render_config:
+obs_F087  = build_image_obs(image_pars_F087, psf=psf_phot, broadband_key='F087',
+                            data=d_phot, variance=v_phot)
+obs_grism = build_grism_obs(grism_pars, z=1.0, psf=psf_grism,
+                            data=d_grism, variance=v_grism)
+
+# from_obs detects "no rc supplied" on each channel and auto-derives:
+task = InferenceTask.from_obs(
+    source, priors,
+    image_obs={'F087': obs_F087},
+    grism_obs={'roll0': obs_grism},
+)
+```
+
+### What `from_obs` does under the hood
+
+For each channel, `from_obs` checks an internal flag on the obs that
+records whether the caller passed an explicit `render_config` to
+`build_*_obs`. When the flag is set (the user passed nothing), it:
+
+1. Calls `build_image_render_config(source, priors, ...)` or
+   `build_grism_render_config(source, priors, ...)` to compute the
+   worst-case rc across the prior bounds for that channel.
+2. Calls `obs.with_render_config(new_rc, int_model=...)` to produce a
+   new obs of the same type with the new rc and freshly-recomputed
+   PSF FFT, fine grids, and pixel-response FFT.
+3. Uses the rebuilt obs (not the user's input obs) when constructing
+   the likelihood.
+
+You can walk through this manually to see what the factory is doing:
+
+```python
+from kl_pipe.render import RenderConfig, build_image_render_config
+
+# Build the obs without rc — same as before:
+obs = build_image_obs(image_pars, psf=psf, broadband_key='F087',
+                      data=data, variance=variance)
+print(obs.oversample)              # 5  (the builder default)
+print(obs._rc_was_default)         # True
+
+# Derive the priors-sized rc explicitly:
+rc = build_image_render_config(source, priors, image_pars,
+                               broadband_key='F087', psf=psf)
+print(rc.oversample)               # e.g. 9 — sized for worst-case priors
+
+# Rebuild the obs with the proper rc — what from_obs does internally:
+obs_sized = obs.with_render_config(rc,
+                                   int_model=source.broadband_models['F087'])
+print(obs_sized.oversample)        # 9
+print(obs_sized._rc_was_default)   # False — explicit rc now
+
+# Passing obs_sized to from_obs skips auto-derive (the flag is False);
+# passing the original obs lets from_obs do the rebuild. Both produce a
+# task with the same final state.
+task = InferenceTask.from_obs(source, priors,
+                              image_obs={'F087': obs_sized})
+```
+
+`with_render_config` is a public method on both `ImageObs` and `GrismObs`
+and is the only sanctioned way to upgrade an obs's rc after construction
+(it correctly rebuilds the precomputed grids).
+
+### Bespoke / non-inference rendering
+
+For one-off renders outside `InferenceTask.from_obs` (e.g., a quick
+visualization of a specific theta), there are two patterns:
+
+- **Accept the builder default.** Skip the helper and use the rc that
+  `build_image_obs` constructs internally (`oversample=5`,
+  point-sampled pixel response). Fine for typical visualization;
+  may be undersized for tight priors:
+  ```python
+  obs = build_image_obs(image_pars, psf=psf, broadband_key='F087')
+  image = source.render_broadband(theta_pars, obs)
+  ```
+
+- **Two-step: derive an rc, then build the obs with it.** Use when
+  fidelity matters and you're not going through `from_obs`:
+  ```python
+  rc  = build_image_render_config(source, priors, image_pars,
+                                  broadband_key='F087', psf=psf)
+  obs = build_image_obs(image_pars, psf=psf, broadband_key='F087',
+                        render_config=rc)
+  image = source.render_broadband(theta_pars, obs)
+  ```
+
+### Advanced override
+
+If you want to hand-roll a specific rc (e.g., to lock down oversample
+for reproducibility), pass it explicitly:
+
+```python
+rc  = RenderConfig(oversample=11)
+obs = build_image_obs(image_pars, psf=psf, broadband_key='F087',
+                      render_config=rc, data=data, variance=variance)
+task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
+# from_obs honors the explicit rc and validates it against the priors.
+# If priors imply a tighter rc, you'll get a loud ValueError pointing
+# at build_image_render_config(...) as the fix.
+```
+
+---
+
 ## TODOs:
 
 - Add example for MCMC inference
