@@ -97,7 +97,7 @@ def _check_source_priors_fit_obs(
       rather than a k-space FFT product scan, so the prior-grid adequacy
       question doesn't apply directly at this layer. Returns the obs
       unchanged.
-    - ``ImageObs``: if ``obs.render_config._unset_default`` is True, derive
+    - ``ImageObs``: if ``obs._rc_was_default`` is True, derive
       the priors-sized rc via ``build_image_render_config`` and rebuild the
       obs with freshly-recomputed precomputed grids; return the rebuilt obs.
       Otherwise, validate the user-supplied rc against the priors (raise

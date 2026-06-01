@@ -24,7 +24,6 @@ from scipy.fft import next_fast_len
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel
 
-from kl_pipe.coordinates import image_rotation_from_wcs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.pixel import BoxPixel, PixelResponse, _PIXEL_RESPONSE_UNSET
 from kl_pipe.psf import PSFData
@@ -52,7 +51,7 @@ class ImageObs:
         Canonical source for grid sizing -- ``obs.oversample`` is a
         property that reads from this. When ``build_image_obs`` is called
         without ``render_config``, the obs carries a builder-default rc
-        marked ``_unset_default=True``: ``InferenceTask.from_obs`` detects
+        marked ``_rc_was_default=True`` on the obs: ``InferenceTask.from_obs`` detects
         this and rebuilds the obs internally with a priors-sized rc via
         ``obs.with_render_config(...)``. For bespoke rendering outside
         ``from_obs``, either accept the builder default or pass an
@@ -100,10 +99,6 @@ class ImageObs:
     # broadband_key: key into source.broadband_models that this obs renders
     # (used by SourceModel-based inference; None for legacy KLModel-based use).
     broadband_key: Optional[str] = None
-    # image_rotation: celestial-to-detector rotation (radians), precomputed
-    # from image_pars.wcs at build_image_obs time. Default 0.0 corresponds to
-    # the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
-    image_rotation: float = 0.0
     # _rc_was_default: internal flag — True when build_image_obs supplied the
     # default render_config (caller passed render_config=None), False when the
     # caller passed an explicit one. Read by InferenceTask.from_obs to decide
@@ -124,14 +119,13 @@ class ImageObs:
         """Return a new ImageObs with ``new_rc`` and freshly-recomputed grids.
 
         Used by ``InferenceTask.from_obs`` when the obs was constructed with
-        a builder-default ``render_config`` (``_unset_default=True``) and the
+        a builder-default ``render_config`` (``obs._rc_was_default=True``) and the
         priors imply a different oversample. The returned obs has fresh
         ``psf_data`` (PSF FFT at ``new_rc.oversample``), fresh ``fine_X`` /
         ``fine_Y``, and fresh ``kspace_psf_fft`` (when ``int_model`` is
         supplied and supports k-space rendering). All other fields
         (``image_pars``, ``X``, ``Y``, ``data``, ``variance``, ``mask``,
-        ``pixel_response``, ``psf``, ``broadband_key``, ``image_rotation``)
-        are preserved.
+        ``pixel_response``, ``psf``, ``broadband_key``) are preserved.
 
         Parameters
         ----------
@@ -244,7 +238,7 @@ class GrismObs:
         Canonical source for grid sizing -- ``obs.oversample`` is a
         property that reads from this. When ``build_grism_obs`` is called
         without ``render_config``, the obs carries a builder-default rc
-        marked ``_unset_default=True``: ``InferenceTask.from_obs`` detects
+        marked ``_rc_was_default=True`` on the obs: ``InferenceTask.from_obs`` detects
         this and rebuilds the obs internally with a priors-sized rc via
         ``obs.with_render_config(...)``. For bespoke rendering outside
         ``from_obs``, either accept the builder default or pass an
@@ -280,10 +274,6 @@ class GrismObs:
     variance: Optional[jnp.ndarray] = None
     mask: Optional[jnp.ndarray] = None
     pixel_response_fft: Optional[jnp.ndarray] = None
-    # image_rotation: celestial-to-detector rotation (radians), precomputed
-    # from grism_pars.image_pars.wcs at build_grism_obs time. Default 0.0
-    # for the identity WCS produced by ImagePars(shape, pixel_scale, indexing).
-    image_rotation: float = 0.0
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
     # _rc_was_default: internal flag — True when build_grism_obs supplied the
     # default render_config (caller passed render_config=None), False when the
@@ -303,12 +293,12 @@ class GrismObs:
         """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
 
         Used by ``InferenceTask.from_obs`` when the obs was constructed with
-        a builder-default ``render_config`` (``_unset_default=True``) and the
+        a builder-default ``render_config`` (``obs._rc_was_default=True``) and the
         priors imply a different oversample. The returned obs has fresh
         ``psf_data`` (PSF FFT at ``new_rc.oversample``), fresh
         ``fine_image_pars``, and fresh ``pixel_response_fft``. All other
         fields (``grism_pars``, ``cube_pars``, ``data``, ``variance``,
-        ``mask``, ``psf``, ``image_rotation``) are preserved.
+        ``mask``, ``psf``) are preserved.
 
         Parameters
         ----------
@@ -380,7 +370,6 @@ def _image_obs_flatten(obs):
         obs.render_config,
         obs.psf,
         obs.broadband_key,
-        obs.image_rotation,
         obs._rc_was_default,
     )
     return children, aux
@@ -402,10 +391,9 @@ def _image_obs_unflatten(aux, children):
         pixel_response=children[9],
         psf=aux[2],
         broadband_key=aux[3],
-        image_rotation=aux[4],
     )
     # _rc_was_default is field(init=False); restore via frozen-dataclass bypass.
-    object.__setattr__(obs, '_rc_was_default', aux[5])
+    object.__setattr__(obs, '_rc_was_default', aux[4])
     return obs
 
 
@@ -432,7 +420,6 @@ def _velocity_obs_flatten(obs):
         obs.flux_model,
         obs.psf,
         obs.broadband_key,
-        obs.image_rotation,
         obs.flux_weight_key,
         obs._rc_was_default,
     )
@@ -457,10 +444,9 @@ def _velocity_obs_unflatten(aux, children):
         flux_image=children[10],
         psf=aux[3],
         broadband_key=aux[4],
-        image_rotation=aux[5],
-        flux_weight_key=aux[6],
+        flux_weight_key=aux[5],
     )
-    object.__setattr__(obs, '_rc_was_default', aux[7])
+    object.__setattr__(obs, '_rc_was_default', aux[6])
     return obs
 
 
@@ -482,7 +468,6 @@ def _grism_obs_flatten(obs):
         obs.cube_pars,
         obs.render_config,
         obs.fine_image_pars,
-        obs.image_rotation,
         obs.psf,
         obs._rc_was_default,
     )
@@ -500,10 +485,9 @@ def _grism_obs_unflatten(aux, children):
         variance=children[2],
         mask=children[3],
         pixel_response_fft=children[4],
-        image_rotation=aux[4],
-        psf=aux[5],
+        psf=aux[4],
     )
-    object.__setattr__(obs, '_rc_was_default', aux[6])
+    object.__setattr__(obs, '_rc_was_default', aux[5])
     return obs
 
 
@@ -644,7 +628,6 @@ def build_image_obs(
         pixel_response=pixel_response,
         psf=psf,
         broadband_key=broadband_key,
-        image_rotation=image_rotation_from_wcs(image_pars.wcs),
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor
     # kwargs; set it here via the standard frozen-dataclass escape hatch.
@@ -798,7 +781,6 @@ def build_velocity_obs(
         flux_theta=flux_theta,
         flux_image=processed_flux_image,
         psf=psf,
-        image_rotation=image_rotation_from_wcs(image_pars.wcs),
         flux_weight_key=flux_weight_key,
     )
 
@@ -930,7 +912,6 @@ def _build_velocity_obs_joint(
         flux_theta=None,
         flux_image=None,
         psf=psf,
-        image_rotation=image_rotation_from_wcs(image_pars.wcs),
     )
 
 
@@ -1028,7 +1009,6 @@ def build_grism_obs(
         variance=variance,
         mask=mask,
         pixel_response_fft=pixel_response_fft,
-        image_rotation=image_rotation_from_wcs(grism_pars.image_pars.wcs),
         psf=psf,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor

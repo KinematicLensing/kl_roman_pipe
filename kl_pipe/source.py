@@ -30,7 +30,7 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp  # noqa: E402
 
-from kl_pipe.coordinates import rotate_shear  # noqa: E402
+from kl_pipe.coordinates import image_rotation_from_wcs, rotate_shear  # noqa: E402
 from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
 
 if TYPE_CHECKING:
@@ -201,8 +201,8 @@ class SourceModel:
         by the caller, typically via ``PriorDict.theta_to_full_pars``).
         SourceModel routes ``pars`` into a flat theta for
         ``broadband_models[band_key]``, applies the celestial-to-detector
-        rotation from ``obs.image_rotation``, and dispatches to the
-        intensity model's ``render_image``.
+        rotation derived from ``obs.image_pars.wcs``, and dispatches to
+        the intensity model's ``render_image``.
         """
         if band_key not in self.broadband_models:
             raise KeyError(
@@ -211,7 +211,8 @@ class SourceModel:
             )
         model = self.broadband_models[band_key]
         theta = _build_component_theta(pars, band_key, model.PARAMETER_NAMES)
-        theta = _apply_obs_rotation(theta, model.PARAMETER_NAMES, obs.image_rotation)
+        image_rotation = image_rotation_from_wcs(obs.image_pars.wcs)
+        theta = _apply_obs_rotation(theta, model.PARAMETER_NAMES, image_rotation)
         return model.render_image(theta, obs=obs)
 
     def render_grism(
@@ -225,7 +226,8 @@ class SourceModel:
 
         Pipeline:
           1. Build the intrinsic cube via ``build_cube`` (at fine spatial
-             scale when ``obs.oversample > 1``), using ``obs.image_rotation``
+             scale when ``obs.oversample > 1``), deriving the celestial-
+             to-detector rotation from ``obs.grism_pars.image_pars.wcs``
              to thread celestial-frame priors into detector-frame thetas.
           2. Per-slice PSF convolution via ``vmap`` over wavelength, with
              ``bin=False`` so the cube stays at fine resolution.
@@ -252,12 +254,13 @@ class SourceModel:
         else:
             build_cube_pars = obs.cube_pars
 
+        image_rotation = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
         cube = self.build_cube(
             pars,
             build_cube_pars,
             spectral_oversample=spectral_oversample,
             plane=plane,
-            image_rotation=obs.image_rotation,
+            image_rotation=image_rotation,
         )
 
         # per-slice PSF convolution (vmap over wavelength), bin=False keeps fine
@@ -321,9 +324,8 @@ class SourceModel:
 
         vm = self.velocity_model
         theta_vel = _build_component_theta(pars, 'vel', vm.PARAMETER_NAMES)
-        theta_vel = _apply_obs_rotation(
-            theta_vel, vm.PARAMETER_NAMES, obs.image_rotation
-        )
+        image_rotation = image_rotation_from_wcs(obs.image_pars.wcs)
+        theta_vel = _apply_obs_rotation(theta_vel, vm.PARAMETER_NAMES, image_rotation)
 
         # Flux weighting only matters when PSF is on. If no PSF, just
         # render the velocity map (or unweighted oversample bin) directly.
@@ -373,8 +375,9 @@ class SourceModel:
         image_rotation : float, default 0.0
             Celestial-to-detector rotation (radians) for this obs. Used to
             convert celestial-frame ``theta_int`` / ``(g1, g2)`` priors
-            into the detector-frame thetas the model classes expect. Pass
-            ``obs.image_rotation`` when called from ``render_grism``.
+            into the detector-frame thetas the model classes expect.
+            ``render_grism`` derives this from ``obs.grism_pars.image_pars.wcs``
+            via ``image_rotation_from_wcs`` before passing it through.
 
         Returns
         -------
@@ -567,8 +570,9 @@ class SourceModel:
         theta_int, intensity_model = self._build_emission_intensity_theta(
             pars, obs.flux_weight_key
         )
+        image_rotation = image_rotation_from_wcs(obs.image_pars.wcs)
         theta_int = _apply_obs_rotation(
-            theta_int, intensity_model.PARAMETER_NAMES, obs.image_rotation
+            theta_int, intensity_model.PARAMETER_NAMES, image_rotation
         )
         if obs.fine_X is not None and obs.fine_Y is not None:
             X, Y = obs.fine_X, obs.fine_Y

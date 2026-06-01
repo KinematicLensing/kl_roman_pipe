@@ -42,6 +42,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 
+from kl_pipe.coordinates import image_rotation_from_wcs  # noqa: E402
 from kl_pipe.dispersion import GrismPars  # noqa: E402
 from kl_pipe.intensity import InclinedExponentialModel  # noqa: E402
 from kl_pipe.lines import EmissionLine, LINE_LAMBDAS  # noqa: E402
@@ -348,7 +349,7 @@ def _render_cube_slice_at_oversample(
         pars,
         cube_pars,
         spectral_oversample=5,
-        image_rotation=obs.image_rotation,
+        image_rotation=image_rotation_from_wcs(obs.grism_pars.image_pars.wcs),
     )
     # line center slice
     idx_center = len(obs.cube_pars.lambda_grid) // 2
