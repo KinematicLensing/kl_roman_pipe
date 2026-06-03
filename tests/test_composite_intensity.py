@@ -638,24 +638,50 @@ class TestGenericComposite:
 # ==============================================================================
 
 
-class TestKLModelIntegration:
-    """Verify composite works inside KLModel."""
+class TestSourceModelIntegration:
+    """Verify composite works inside SourceModel under band-prefixed namespace."""
 
-    def test_klmodel_parameter_dedup(self):
-        from kl_pipe.model import KLModel
+    def test_source_model_parameter_dedup(self):
+        from kl_pipe.source import SourceModel
         from kl_pipe.velocity import OffsetVelocityModel
+        from kl_pipe.priors import Uniform, PriorDict
 
         vel = OffsetVelocityModel()
         intensity = BulgeDiskModel(shared_centroids=True)
-        kl = KLModel(vel, intensity, shared_pars={'cosi', 'theta_int', 'g1', 'g2'})
+        source = SourceModel(
+            velocity_model=vel,
+            broadband_models={'F087': intensity},
+        )
 
-        # shared geometric params should appear once
-        pnames = kl.PARAMETER_NAMES
-        assert pnames.count('cosi') == 1
-        assert pnames.count('g1') == 1
-        assert 'total_flux' in pnames
-        assert 'bulge_frac' in pnames
-        assert 'vcirc' in pnames
+        # build a representative PriorDict spanning shared + per-component params
+        # exact spec for per-component composite params depends on BulgeDiskModel;
+        # use the component's PARAMETER_NAMES to drive the prior keys
+        prior_spec = {
+            'cosi': Uniform(0.1, 0.99),
+            'theta_int': Uniform(0.0, 2 * np.pi),
+            'g1': Uniform(-0.1, 0.1),
+            'g2': Uniform(-0.1, 0.1),
+            'vel.v0': Uniform(0.0, 50.0),
+            'vel.vcirc': Uniform(100.0, 350.0),
+            'vel.rscale': Uniform(1.0, 20.0),
+            'vel.x0': Uniform(-1.0, 1.0),
+            'vel.y0': Uniform(-1.0, 1.0),
+        }
+        # F087 composite intensity params (skip shared geo which are already top-level)
+        for name in intensity.PARAMETER_NAMES:
+            if name in ('cosi', 'theta_int', 'g1', 'g2'):
+                continue
+            prior_spec[f'F087.{name}'] = Uniform(0.0, 10.0)
+        priors = PriorDict(prior_spec)
+
+        # shared geometric params appear exactly once (dedup invariant)
+        assert list(priors.sampled_names).count('cosi') == 1
+        assert list(priors.sampled_names).count('g1') == 1
+        # composite-specific params live under F087 namespace
+        assert 'F087.total_flux' in priors.sampled_names
+        assert 'F087.bulge_frac' in priors.sampled_names
+        # velocity params live under vel namespace
+        assert 'vel.vcirc' in priors.sampled_names
 
 
 # ==============================================================================

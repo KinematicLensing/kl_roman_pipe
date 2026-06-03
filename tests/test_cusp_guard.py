@@ -23,6 +23,7 @@ from kl_pipe.parameters import ImagePars
 from kl_pipe.priors import PriorDict, Uniform
 from kl_pipe.render import RenderConfig
 from kl_pipe.sampling import InferenceTask
+from kl_pipe.source import SourceModel
 
 
 @pytest.fixture
@@ -44,7 +45,7 @@ def imaging_setup():
 class TestSpergelCuspGuard:
     """Construction-time validation for InclinedSpergelModel."""
 
-    def _priors(self, nu_low, nu_high, cosi_low, cosi_high):
+    def _flat_priors(self, nu_low, nu_high, cosi_low, cosi_high):
         return PriorDict(
             {
                 'cosi': Uniform(cosi_low, cosi_high),
@@ -60,21 +61,41 @@ class TestSpergelCuspGuard:
             }
         )
 
+    def _source_priors(self, nu_low, nu_high, cosi_low, cosi_high):
+        return PriorDict(
+            {
+                'cosi': Uniform(cosi_low, cosi_high),
+                'theta_int': Uniform(0, np.pi),
+                'F087.flux': Uniform(0.5, 2.0),
+                'F087.rscale': Uniform(0.3, 1.5),
+                'F087.h_over_r': 0.1,
+                'F087.nu': Uniform(nu_low, nu_high),
+                'g1': 0.0,
+                'g2': 0.0,
+                'F087.x0': 0.0,
+                'F087.y0': 0.0,
+            }
+        )
+
     def test_raises_for_unsafe_priors(self, imaging_setup):
         # nu lower bound -0.7 (below -0.5) + cosi lower bound 0.1 (below 0.9)
         # = unsafe cusp regime
         image_pars, psf, data, variance = imaging_setup
         model = InclinedSpergelModel()
-        priors = self._priors(nu_low=-0.7, nu_high=0.5, cosi_low=0.1, cosi_high=0.99)
+        priors = self._source_priors(
+            nu_low=-0.7, nu_high=0.5, cosi_low=0.1, cosi_high=0.99
+        )
         obs = build_image_obs(
             image_pars=image_pars,
             psf=psf,
             data=data,
             variance=variance,
             int_model=model,
+            broadband_key='F087',
         )
+        source = SourceModel(broadband_models={'F087': model})
         with pytest.raises(ValueError, match='cusp regime'):
-            InferenceTask.from_intensity_obs(model, priors, obs)
+            InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
 
     def test_check_priors_safe_no_raise_face_on(self):
         # nu lower bound -0.7 (cusp regime), but cosi bounded > 0.9 (face-on)
@@ -82,7 +103,9 @@ class TestSpergelCuspGuard:
         # also succeeds: PSF damping caps the worst-case maxk so the cusp
         # profile's slow FT decay no longer blows up the grid.
         model = InclinedSpergelModel()
-        priors = self._priors(nu_low=-0.7, nu_high=0.5, cosi_low=0.95, cosi_high=0.99)
+        priors = self._flat_priors(
+            nu_low=-0.7, nu_high=0.5, cosi_low=0.95, cosi_high=0.99
+        )
         # direct method does not raise
         model.check_priors_safe(priors)
 
@@ -90,16 +113,20 @@ class TestSpergelCuspGuard:
         """Spergel cusp profile face-on: full from_intensity_obs succeeds."""
         image_pars, psf, data, variance = imaging_setup
         model = InclinedSpergelModel()
-        priors = self._priors(nu_low=-0.7, nu_high=0.5, cosi_low=0.95, cosi_high=0.99)
+        priors = self._source_priors(
+            nu_low=-0.7, nu_high=0.5, cosi_low=0.95, cosi_high=0.99
+        )
         obs = build_image_obs(
             image_pars=image_pars,
             psf=psf,
             data=data,
             variance=variance,
             int_model=model,
+            broadband_key='F087',
         )
+        source = SourceModel(broadband_models={'F087': model})
         # should not raise; PSF damping makes the worst-case grid tractable
-        task = InferenceTask.from_intensity_obs(model, priors, obs)
+        task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
         assert task is not None
         assert (
             obs.oversample <= 7
@@ -108,7 +135,9 @@ class TestSpergelCuspGuard:
     def test_check_priors_safe_no_raise_safe_nu(self):
         # nu lower bound 0.0 (above -0.5), cosi can range freely = safe
         model = InclinedSpergelModel()
-        priors = self._priors(nu_low=0.0, nu_high=1.0, cosi_low=0.1, cosi_high=0.99)
+        priors = self._flat_priors(
+            nu_low=0.0, nu_high=1.0, cosi_low=0.1, cosi_high=0.99
+        )
         # should not raise
         model.check_priors_safe(priors)
 
@@ -121,7 +150,7 @@ class TestSpergelCuspGuard:
 class TestDeVaucouleursCuspGuard:
     """Construction-time validation for InclinedDeVaucouleursModel."""
 
-    def _priors(self, cosi_low, cosi_high):
+    def _flat_priors(self, cosi_low, cosi_high):
         return PriorDict(
             {
                 'cosi': Uniform(cosi_low, cosi_high),
@@ -136,20 +165,37 @@ class TestDeVaucouleursCuspGuard:
             }
         )
 
+    def _source_priors(self, cosi_low, cosi_high):
+        return PriorDict(
+            {
+                'cosi': Uniform(cosi_low, cosi_high),
+                'theta_int': Uniform(0, np.pi),
+                'F087.flux': Uniform(0.5, 2.0),
+                'F087.rscale': Uniform(0.3, 1.5),
+                'F087.h_over_r': 0.1,
+                'g1': 0.0,
+                'g2': 0.0,
+                'F087.x0': 0.0,
+                'F087.y0': 0.0,
+            }
+        )
+
     def test_raises_for_inclined_priors(self, imaging_setup):
         # cosi lower bound 0.1 with hardwired nu=-0.6 → cusp regime
         image_pars, psf, data, variance = imaging_setup
         model = InclinedDeVaucouleursModel()
-        priors = self._priors(cosi_low=0.1, cosi_high=0.99)
+        priors = self._source_priors(cosi_low=0.1, cosi_high=0.99)
         obs = build_image_obs(
             image_pars=image_pars,
             psf=psf,
             data=data,
             variance=variance,
             int_model=model,
+            broadband_key='F087',
         )
+        source = SourceModel(broadband_models={'F087': model})
         with pytest.raises(ValueError, match='cusp regime'):
-            InferenceTask.from_intensity_obs(model, priors, obs)
+            InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
 
     def test_check_priors_safe_no_raise_face_on(self):
         # cosi bounded > 0.9 -> safe regime; method returns without raising.
@@ -158,7 +204,7 @@ class TestDeVaucouleursCuspGuard:
         # face-on grid is tractable (~oversample=5 vs the formerly spurious
         # ~17 reported when PSF was dropped from the worst-case scan).
         model = InclinedDeVaucouleursModel()
-        priors = self._priors(cosi_low=0.95, cosi_high=0.99)
+        priors = self._flat_priors(cosi_low=0.95, cosi_high=0.99)
         # direct method does not raise
         model.check_priors_safe(priors)
 
@@ -166,16 +212,18 @@ class TestDeVaucouleursCuspGuard:
         """DeVauc face-on: full from_intensity_obs succeeds with PSF damping."""
         image_pars, psf, data, variance = imaging_setup
         model = InclinedDeVaucouleursModel()
-        priors = self._priors(cosi_low=0.95, cosi_high=0.99)
+        priors = self._source_priors(cosi_low=0.95, cosi_high=0.99)
         obs = build_image_obs(
             image_pars=image_pars,
             psf=psf,
             data=data,
             variance=variance,
             int_model=model,
+            broadband_key='F087',
         )
+        source = SourceModel(broadband_models={'F087': model})
         # should not raise; PSF caps the slow nu=-0.6 FT decay
-        task = InferenceTask.from_intensity_obs(model, priors, obs)
+        task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
         assert task is not None
         assert obs.oversample <= 7, (
             f"face-on DeVauc with PSF should be tractable: "

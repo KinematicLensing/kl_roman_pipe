@@ -408,27 +408,54 @@ def test_spergel_psf_path_consistency(galsim_image_pars):
     assert max_frac < 1e-3, f"PSF path consistency: max|resid|/peak = {max_frac:.2e}"
 
 
-def test_spergel_klmodel_composition():
-    """Spergel + CenteredVelocityModel in KLModel: param slicing correct."""
-    from kl_pipe.model import KLModel
+def test_spergel_source_composition():
+    """Spergel + CenteredVelocityModel in SourceModel: dotted-key namespace + per-component theta extraction."""
+    from kl_pipe.source import SourceModel, _build_component_theta
     from kl_pipe.velocity import CenteredVelocityModel
+    from kl_pipe.priors import Uniform, PriorDict
 
     vel = CenteredVelocityModel()
     int_model = InclinedSpergelModel()
 
-    kl = KLModel(vel, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'})
+    source = SourceModel(
+        velocity_model=vel,
+        broadband_models={'F087': int_model},
+    )
 
-    # vel(7) + int(10) - shared(4) = 13 composite params
+    # 4 shared geo + 3 vel-only + 6 F087-only = 13 sampled params
+    # (matches legacy KLModel(vel, int, shared_pars={'cosi','theta_int','g1','g2'})
+    #  which gave vel(7) + int(10) - shared(4) = 13)
+    priors = PriorDict(
+        {
+            'cosi': Uniform(0.1, 0.99),
+            'theta_int': Uniform(0.0, 2 * np.pi),
+            'g1': Uniform(-0.1, 0.1),
+            'g2': Uniform(-0.1, 0.1),
+            'vel.v0': Uniform(0.0, 50.0),
+            'vel.vcirc': Uniform(100.0, 350.0),
+            'vel.rscale': Uniform(1.0, 20.0),
+            'F087.flux': Uniform(0.1, 10.0),
+            'F087.rscale': Uniform(0.5, 10.0),
+            'F087.h_over_r': Uniform(0.05, 0.5),
+            'F087.nu': Uniform(-0.5, 0.5),
+            'F087.x0': Uniform(-1.0, 1.0),
+            'F087.y0': Uniform(-1.0, 1.0),
+        }
+    )
+
     assert (
-        len(kl.PARAMETER_NAMES) == 13
-    ), f"Expected 13, got {len(kl.PARAMETER_NAMES)}: {kl.PARAMETER_NAMES}"
-    assert kl.PARAMETER_NAMES.count('cosi') == 1
-    assert kl.PARAMETER_NAMES.count('theta_int') == 1
-    assert 'nu' in kl.PARAMETER_NAMES
+        len(priors.sampled_names) == 13
+    ), f"Expected 13 sampled, got {len(priors.sampled_names)}: {priors.sampled_names}"
+    # shared geometry appears exactly once (dedup invariant)
+    assert list(priors.sampled_names).count('cosi') == 1
+    assert list(priors.sampled_names).count('theta_int') == 1
+    # spergel nu lives under the F087 namespace
+    assert 'F087.nu' in priors.sampled_names
 
-    theta_kl = jnp.arange(13, dtype=float)
-    theta_vel = kl.get_velocity_pars(theta_kl)
-    theta_int = kl.get_intensity_pars(theta_kl)
+    # per-component theta extraction (analog of legacy get_velocity_pars/get_intensity_pars)
+    pars_dotted = {name: 1.0 for name in priors.sampled_names}
+    theta_vel = _build_component_theta(pars_dotted, 'vel', vel.PARAMETER_NAMES)
+    theta_int = _build_component_theta(pars_dotted, 'F087', int_model.PARAMETER_NAMES)
     assert len(theta_vel) == 7
     assert len(theta_int) == 10
 

@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 from kl_pipe.velocity import OffsetVelocityModel, CenteredVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
+from kl_pipe.source import SourceModel, _build_component_theta
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import build_map_grid_from_image_pars
 
@@ -61,38 +61,41 @@ def test_image_pars():
 
 
 @pytest.fixture
-def kl_model_setup():
-    """Setup a basic KLModel for testing."""
+def source_setup():
+    """SourceModel with OffsetVelocity + InclinedExponential broadband (F087)."""
     vel_model = OffsetVelocityModel()
     int_model = InclinedExponentialModel()
-    kl_model = KLModel(
-        vel_model, int_model, shared_pars={'g1', 'g2', 'theta_int', 'cosi'}
-    )
-    return kl_model
+    source = SourceModel(velocity_model=vel_model, broadband_models={'F087': int_model})
+    return source
 
 
 @pytest.fixture
-def kl_theta():
-    """Composite theta for KLModel with shared transformation params."""
-    # Order based on KLModel.PARAMETER_NAMES after construction
-    # This will depend on your specific KLModel setup
-    return jnp.array(
-        [
-            0.6,  # cosi (shared)
-            0.785,  # theta_int (shared)
-            0.05,  # g1 (shared)
-            -0.03,  # g2 (shared
-            10.0,  # v0
-            200.0,  # vcirc
-            5.0,  # vel_rscale
-            1.0,  # vel_x0
-            -0.5,  # vel_y0
-            1.0,  # flux
-            3.0,  # int_rscale
-            1.0,  # int_x0
-            -0.5,  # int_y0
-        ]
-    )
+def kl_pars():
+    """Dotted-key pars dict for the joint vel + broadband model.
+
+    The 13 sampled-equivalents mirror the legacy 13-entry kl_theta:
+    4 shared geometry (cosi, theta_int, g1, g2) + 5 vel + 4 broadband-only
+    (broadband and vel share cosi/theta_int/g1/g2 at the top level).
+    """
+    return {
+        # shared geometry (top-level, unprefixed)
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.05,
+        'g2': -0.03,
+        # velocity
+        'vel.v0': 10.0,
+        'vel.vcirc': 200.0,
+        'vel.rscale': 5.0,
+        'vel.x0': 1.0,
+        'vel.y0': -0.5,
+        # F087 broadband intensity
+        'F087.flux': 1.0,
+        'F087.rscale': 3.0,
+        'F087.h_over_r': 0.1,
+        'F087.x0': 1.0,
+        'F087.y0': -0.5,
+    }
 
 
 # ----------------------------------------------------------------------
@@ -360,15 +363,22 @@ def test_recompilation_with_same_shapes(
 # KLModel JIT compilation tests
 
 
-def test_kl_model_jit_compilation(kl_model_setup, kl_theta, test_grid):
-    """Test that KLModel evaluation can be JIT compiled."""
-    kl_model = kl_model_setup
+def test_source_model_jit_compilation(source_setup, kl_pars, test_grid):
+    """Test that SourceModel velocity + broadband evaluation can be JIT compiled."""
+    source = source_setup
     X, Y = test_grid
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    # JIT compile the full model evaluation
-    jitted_eval = jax.jit(lambda theta: kl_model(theta, 'obs', X, Y))
+    def eval_both(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        vel_map = vel_m(theta_vel, 'obs', X, Y)
+        int_map = int_m(theta_int, 'obs', X, Y)
+        return vel_map, int_map
 
-    vel_map, int_map = jitted_eval(kl_theta)
+    jitted_eval = jax.jit(eval_both)
+    vel_map, int_map = jitted_eval(kl_pars)
 
     assert vel_map.shape == X.shape
     assert int_map.shape == X.shape
@@ -376,23 +386,21 @@ def test_kl_model_jit_compilation(kl_model_setup, kl_theta, test_grid):
     assert jnp.isfinite(int_map).all()
 
 
-def test_kl_model_render_image_jit(kl_model_setup, kl_theta, test_image_pars):
-    """Test that KLModel render methods can be JIT compiled."""
-    kl_model = kl_model_setup
+def test_source_model_render_image_jit(source_setup, kl_pars, test_image_pars):
+    """Test that bare velocity_model / broadband_model render methods JIT compile."""
+    source = source_setup
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    # JIT compile velocity render
     jitted_vel_render = jax.jit(
-        lambda theta: kl_model.velocity_model.render_image(theta, test_image_pars)
+        lambda theta: vel_m.render_image(theta, test_image_pars)
     )
-
-    # JIT compile intensity render
     jitted_int_render = jax.jit(
-        lambda theta: kl_model.intensity_model.render_image(theta, test_image_pars)
+        lambda theta: int_m.render_image(theta, test_image_pars)
     )
 
-    # Extract sub-thetas
-    theta_vel = kl_model.get_velocity_pars(kl_theta)
-    theta_int = kl_model.get_intensity_pars(kl_theta)
+    theta_vel = _build_component_theta(kl_pars, 'vel', vel_m.PARAMETER_NAMES)
+    theta_int = _build_component_theta(kl_pars, 'F087', int_m.PARAMETER_NAMES)
 
     vel_image = jitted_vel_render(theta_vel)
     int_image = jitted_int_render(theta_int)
@@ -401,151 +409,162 @@ def test_kl_model_render_image_jit(kl_model_setup, kl_theta, test_image_pars):
     assert int_image.shape == test_image_pars.shape
 
 
-def test_kl_model_parameter_extraction_jit(kl_model_setup, kl_theta):
-    """Test that parameter extraction is JIT compatible."""
-    kl_model = kl_model_setup
+def test_source_model_parameter_extraction_jit(source_setup, kl_pars):
+    """Test that per-component theta extraction is JIT compatible."""
+    source = source_setup
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    # These should work in JIT context
     @jax.jit
-    def extract_params(theta):
-        theta_vel = kl_model.get_velocity_pars(theta)
-        theta_int = kl_model.get_intensity_pars(theta)
+    def extract_params(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
         return theta_vel, theta_int
 
-    theta_vel, theta_int = extract_params(kl_theta)
+    theta_vel, theta_int = extract_params(kl_pars)
 
-    assert theta_vel.shape[0] == len(kl_model.velocity_model.PARAMETER_NAMES)
-    assert theta_int.shape[0] == len(kl_model.intensity_model.PARAMETER_NAMES)
+    assert theta_vel.shape[0] == len(vel_m.PARAMETER_NAMES)
+    assert theta_int.shape[0] == len(int_m.PARAMETER_NAMES)
 
 
 # ----------------------------------------------------------------------
 # KLModel gradient tests
 
 
-def test_kl_model_velocity_gradient(kl_model_setup, kl_theta, test_grid):
-    """Test gradients through velocity component of KLModel."""
-    kl_model = kl_model_setup
+def test_source_model_velocity_gradient(source_setup, kl_pars, test_grid):
+    """Test gradients through velocity component of SourceModel."""
+    source = source_setup
     X, Y = test_grid
+    vel_m = source.velocity_model
 
-    def velocity_loss(theta):
-        theta_vel = kl_model.get_velocity_pars(theta)
-        vel_map = kl_model.velocity_model(theta_vel, 'obs', X, Y)
+    def velocity_loss(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        vel_map = vel_m(theta_vel, 'obs', X, Y)
         return jnp.sum(vel_map**2)
 
-    gradient = jax.grad(velocity_loss)(kl_theta)
+    gradient = jax.grad(velocity_loss)(kl_pars)
 
-    assert gradient.shape == kl_theta.shape
-    assert jnp.isfinite(gradient).all()
-    # Check that velocity parameters have non-zero gradients
-    assert not jnp.all(gradient[:9] == 0)
+    assert set(gradient.keys()) == set(kl_pars.keys())
+    assert all(jnp.isfinite(jnp.asarray(v)).all() for v in gradient.values())
+    # velocity-named keys should have non-zero gradients
+    assert any(
+        float(jnp.asarray(gradient[k])) != 0 for k in gradient if k.startswith('vel.')
+    )
 
 
-def test_kl_model_intensity_gradient(kl_model_setup, kl_theta, test_grid):
-    """Test gradients through intensity component of KLModel."""
-    kl_model = kl_model_setup
+def test_source_model_intensity_gradient(source_setup, kl_pars, test_grid):
+    """Test gradients through broadband intensity component of SourceModel."""
+    source = source_setup
     X, Y = test_grid
+    int_m = source.broadband_models['F087']
 
-    def intensity_loss(theta):
-        theta_int = kl_model.get_intensity_pars(theta)
-        int_map = kl_model.intensity_model(theta_int, 'obs', X, Y)
+    def intensity_loss(pars):
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        int_map = int_m(theta_int, 'obs', X, Y)
         return jnp.sum(int_map**2)
 
-    gradient = jax.grad(intensity_loss)(kl_theta)
+    gradient = jax.grad(intensity_loss)(kl_pars)
 
-    assert gradient.shape == kl_theta.shape
-    assert jnp.isfinite(gradient).all()
-    # Check that intensity parameters have non-zero gradients
-    assert not jnp.all(gradient[9:] == 0)
+    assert set(gradient.keys()) == set(kl_pars.keys())
+    assert all(jnp.isfinite(jnp.asarray(v)).all() for v in gradient.values())
+    assert any(
+        float(jnp.asarray(gradient[k])) != 0 for k in gradient if k.startswith('F087.')
+    )
 
 
-def test_kl_model_combined_gradient(kl_model_setup, kl_theta, test_grid):
+def test_source_model_combined_gradient(source_setup, kl_pars, test_grid):
     """Test gradients through combined velocity * intensity."""
-    kl_model = kl_model_setup
+    source = source_setup
     X, Y = test_grid
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    def combined_loss(theta):
-        vel_map, int_map = kl_model(theta, 'obs', X, Y)
+    def combined_loss(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        vel_map = vel_m(theta_vel, 'obs', X, Y)
+        int_map = int_m(theta_int, 'obs', X, Y)
         combined = vel_map * int_map
         return jnp.sum(combined**2)
 
-    gradient = jax.grad(combined_loss)(kl_theta)
+    gradient = jax.grad(combined_loss)(kl_pars)
 
-    assert gradient.shape == kl_theta.shape
-    assert jnp.isfinite(gradient).all()
-    # Both velocity and intensity params should have gradients
-    assert not jnp.all(gradient[:9] == 0)  # velocity params
-    assert not jnp.all(gradient[9:] == 0)  # intensity params
+    assert set(gradient.keys()) == set(kl_pars.keys())
+    assert all(jnp.isfinite(jnp.asarray(v)).all() for v in gradient.values())
+    assert any(
+        float(jnp.asarray(gradient[k])) != 0 for k in gradient if k.startswith('vel.')
+    )
+    assert any(
+        float(jnp.asarray(gradient[k])) != 0 for k in gradient if k.startswith('F087.')
+    )
 
 
-def test_kl_model_shared_parameter_gradient(kl_model_setup, kl_theta, test_grid):
-    """Test that shared parameters get gradients from both models."""
-    kl_model = kl_model_setup
+def test_source_model_shared_parameter_gradient(source_setup, kl_pars, test_grid):
+    """Test that shared parameters (cosi) get gradients from both models."""
+    source = source_setup
     X, Y = test_grid
-
-    # Find index of a shared parameter (e.g., 'cosi')
-    cosi_idx = list(kl_model.PARAMETER_NAMES).index('cosi')
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
     def loss_wrt_cosi(cosi_val):
-        theta_local = kl_theta.at[cosi_idx].set(cosi_val)
-        vel_map, int_map = kl_model(theta_local, 'obs', X, Y)
-        # Loss depends on both velocity and intensity
+        pars_local = {**kl_pars, 'cosi': cosi_val}
+        theta_vel = _build_component_theta(pars_local, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars_local, 'F087', int_m.PARAMETER_NAMES)
+        vel_map = vel_m(theta_vel, 'obs', X, Y)
+        int_map = int_m(theta_int, 'obs', X, Y)
         return jnp.sum(vel_map**2) + jnp.sum(int_map**2)
 
     grad_cosi = jax.grad(loss_wrt_cosi)(0.6)
 
     assert jnp.isfinite(grad_cosi)
-    assert grad_cosi != 0  # Shared param affects both models
+    assert grad_cosi != 0  # shared param affects both models
 
 
-def test_kl_model_render_gradient(kl_model_setup, kl_theta, test_image_pars):
-    """Test gradients through render_image for composite model."""
-    kl_model = kl_model_setup
+def test_source_model_render_gradient(source_setup, kl_pars, test_image_pars):
+    """Test gradients through render_image for SourceModel components."""
+    source = source_setup
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    def render_loss(theta):
-        # Get component parameters
-        theta_vel = kl_model.get_velocity_pars(theta)
-        theta_int = kl_model.get_intensity_pars(theta)
-
-        # Render both
-        vel_img = kl_model.velocity_model.render_image(theta_vel, test_image_pars)
-        int_img = kl_model.intensity_model.render_image(theta_int, test_image_pars)
-
-        # Combined loss
+    def render_loss(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        vel_img = vel_m.render_image(theta_vel, test_image_pars)
+        int_img = int_m.render_image(theta_int, test_image_pars)
         combined = vel_img * int_img
         return jnp.mean(combined**2)
 
-    value, gradient = jax.value_and_grad(render_loss)(kl_theta)
+    value, gradient = jax.value_and_grad(render_loss)(kl_pars)
 
     assert jnp.isfinite(value)
-    assert gradient.shape == kl_theta.shape
-    assert jnp.isfinite(gradient).all()
+    assert set(gradient.keys()) == set(kl_pars.keys())
+    assert all(jnp.isfinite(jnp.asarray(v)).all() for v in gradient.values())
 
 
 # ----------------------------------------------------------------------
 # KLModel vmap tests
 
 
-def test_kl_model_vmap_over_samples(kl_model_setup, test_grid):
-    """Test vmapping over multiple parameter samples."""
-    kl_model = kl_model_setup
+def test_source_model_vmap_over_samples(source_setup, kl_pars, test_grid):
+    """Test vmapping over multiple parameter samples (varying vel.vcirc)."""
+    source = source_setup
     X, Y = test_grid
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    # Multiple theta samples (vary vcirc)
-    base_theta = jnp.array(
-        [0.6, 0.785, 0.05, -0.03, 10.0, 200.0, 5.0, 1.0, -0.5, 1.0, 3.0, 1.0, -0.5]
-    )
-    theta_samples = jnp.stack(
-        [
-            base_theta.at[5].set(180.0),
-            base_theta.at[5].set(200.0),
-            base_theta.at[5].set(220.0),
-        ]
-    )
+    # build a stacked array of vcirc values + broadcast the rest of pars
+    vcircs = jnp.array([180.0, 200.0, 220.0])
 
-    # Vmap over theta samples
-    vmapped_eval = jax.vmap(lambda theta: kl_model(theta, 'obs', X, Y))
+    def eval_for_vcirc(vcirc):
+        pars_local = {**kl_pars, 'vel.vcirc': vcirc}
+        theta_vel = _build_component_theta(pars_local, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars_local, 'F087', int_m.PARAMETER_NAMES)
+        vel_map = vel_m(theta_vel, 'obs', X, Y)
+        int_map = int_m(theta_int, 'obs', X, Y)
+        return vel_map, int_map
 
-    vel_maps, int_maps = vmapped_eval(theta_samples)
+    vmapped_eval = jax.vmap(eval_for_vcirc)
+    vel_maps, int_maps = vmapped_eval(vcircs)
 
     assert vel_maps.shape == (3,) + X.shape
     assert int_maps.shape == (3,) + X.shape
@@ -553,30 +572,25 @@ def test_kl_model_vmap_over_samples(kl_model_setup, test_grid):
     assert jnp.isfinite(int_maps).all()
 
 
-def test_kl_model_vmap_render(kl_model_setup):
-    """Test vmapping render_image over parameter samples."""
-    kl_model = kl_model_setup
+def test_source_model_vmap_render(source_setup, kl_pars):
+    """Test vmapping render_image over parameter samples (varying vel.vcirc)."""
+    source = source_setup
     image_pars = ImagePars(shape=(16, 16), pixel_scale=0.5, indexing='ij')
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    base_theta = jnp.array(
-        [10.0, 200.0, 5.0, 0.6, 0.785, 0.0, 0.0, 1.0, -0.5, 1.0, 3.0, 1.0, -0.5]
-    )
-    theta_samples = jnp.stack(
-        [
-            base_theta.at[1].set(180.0),
-            base_theta.at[1].set(220.0),
-        ]
-    )
+    vcircs = jnp.array([180.0, 220.0])
 
-    def render_both(theta):
-        theta_vel = kl_model.get_velocity_pars(theta)
-        theta_int = kl_model.get_intensity_pars(theta)
-        vel_img = kl_model.velocity_model.render_image(theta_vel, image_pars)
-        int_img = kl_model.intensity_model.render_image(theta_int, image_pars)
+    def render_both(vcirc):
+        pars_local = {**kl_pars, 'vel.vcirc': vcirc}
+        theta_vel = _build_component_theta(pars_local, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars_local, 'F087', int_m.PARAMETER_NAMES)
+        vel_img = vel_m.render_image(theta_vel, image_pars)
+        int_img = int_m.render_image(theta_int, image_pars)
         return vel_img, int_img
 
     vmapped_render = jax.vmap(render_both)
-    vel_images, int_images = vmapped_render(theta_samples)
+    vel_images, int_images = vmapped_render(vcircs)
 
     assert vel_images.shape == (2, 16, 16)
     assert int_images.shape == (2, 16, 16)
@@ -586,49 +600,48 @@ def test_kl_model_vmap_render(kl_model_setup):
 # Combined JAX transformation tests for KLModel
 
 
-def test_kl_model_jit_grad_composition(kl_model_setup, kl_theta, test_grid):
-    """Test JIT(grad) composition for KLModel."""
-    kl_model = kl_model_setup
+def test_source_model_jit_grad_composition(source_setup, kl_pars, test_grid):
+    """Test JIT(grad) composition for SourceModel."""
+    source = source_setup
     X, Y = test_grid
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    def loss_fn(theta):
-        vel_map, int_map = kl_model(theta, 'obs', X, Y)
+    def loss_fn(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        vel_map = vel_m(theta_vel, 'obs', X, Y)
+        int_map = int_m(theta_int, 'obs', X, Y)
         return jnp.sum((vel_map * int_map) ** 2)
 
     jitted_grad = jax.jit(jax.grad(loss_fn))
-    gradient = jitted_grad(kl_theta)
+    gradient = jitted_grad(kl_pars)
 
-    assert gradient.shape == kl_theta.shape
-    assert jnp.isfinite(gradient).all()
+    assert set(gradient.keys()) == set(kl_pars.keys())
+    assert all(jnp.isfinite(jnp.asarray(v)).all() for v in gradient.values())
 
 
-def test_kl_model_jit_vmap_grad(kl_model_setup):
-    """Test JIT(vmap(grad)) composition for KLModel."""
-    kl_model = kl_model_setup
+def test_source_model_jit_vmap_grad(source_setup, kl_pars):
+    """Test JIT(vmap(grad)) composition for SourceModel (vary vel.vcirc)."""
+    source = source_setup
     image_pars = ImagePars(shape=(16, 16), pixel_scale=0.5, indexing='ij')
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
-    base_theta = jnp.array(
-        [0.6, 0.785, 0.05, -0.03, 10.0, 200.0, 5.0, 1.0, -0.5, 1.0, 3.0, 1.0, -0.5]
-    )
-    theta_samples = jnp.stack(
-        [
-            base_theta,
-            base_theta.at[1].set(180.0),
-        ]
-    )
+    vcircs = jnp.array([200.0, 180.0])
 
-    def loss_fn(theta):
-        theta_vel = kl_model.get_velocity_pars(theta)
-        theta_int = kl_model.get_intensity_pars(theta)
-        vel_img = kl_model.velocity_model.render_image(theta_vel, image_pars)
-        int_img = kl_model.intensity_model.render_image(theta_int, image_pars)
+    def loss_fn(vcirc):
+        pars_local = {**kl_pars, 'vel.vcirc': vcirc}
+        theta_vel = _build_component_theta(pars_local, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars_local, 'F087', int_m.PARAMETER_NAMES)
+        vel_img = vel_m.render_image(theta_vel, image_pars)
+        int_img = int_m.render_image(theta_int, image_pars)
         return jnp.mean((vel_img * int_img) ** 2)
 
-    # Compose transformations
     jitted_vmapped_grad = jax.jit(jax.vmap(jax.grad(loss_fn)))
-    gradients = jitted_vmapped_grad(theta_samples)
+    gradients = jitted_vmapped_grad(vcircs)
 
-    assert gradients.shape == theta_samples.shape
+    assert gradients.shape == vcircs.shape
     assert jnp.isfinite(gradients).all()
 
 
@@ -636,57 +649,65 @@ def test_kl_model_jit_vmap_grad(kl_model_setup):
 # Likelihood-style tests (realistic MCMC use case)
 
 
-def test_kl_model_likelihood_gradient(kl_model_setup, kl_theta):
+def test_source_model_likelihood_gradient(source_setup, kl_pars):
     """Test gradient computation for a likelihood-style objective (MCMC use case)."""
-    kl_model = kl_model_setup
+    source = source_setup
     image_pars = ImagePars(shape=(32, 32), pixel_scale=0.5, indexing='ij')
-
-    # Simulate observed data
-    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
-
-    # Get "true" data
-    vel_true, int_true = kl_model(kl_theta, 'obs', X, Y)
-    data = vel_true * int_true
-
-    # Define log-likelihood
-    def log_likelihood(theta):
-        vel_map, int_map = kl_model(theta, 'obs', X, Y)
-        model_pred = vel_map * int_map
-        residuals = data - model_pred
-        chi2 = jnp.sum(residuals**2)
-        return -0.5 * chi2
-
-    # Compute gradient (as MCMC would)
-    log_prob, gradient = jax.value_and_grad(log_likelihood)(kl_theta)
-
-    assert jnp.isfinite(log_prob)
-    assert gradient.shape == kl_theta.shape
-    assert jnp.isfinite(gradient).all()
-    # Gradient at true parameters should be small (we're at maximum)
-    assert jnp.linalg.norm(gradient) < 1e3
-
-
-def test_kl_model_jitted_likelihood(kl_model_setup, kl_theta):
-    """Test JIT-compiled likelihood for MCMC."""
-    kl_model = kl_model_setup
-    image_pars = ImagePars(shape=(32, 32), pixel_scale=0.5, indexing='ij')
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
 
     X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
 
-    vel_true, int_true = kl_model(kl_theta, 'obs', X, Y)
-    data = vel_true * int_true
+    def eval_combined(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        return vel_m(theta_vel, 'obs', X, Y) * int_m(theta_int, 'obs', X, Y)
 
-    # JIT-compiled likelihood
-    @jax.jit
-    def log_likelihood(theta):
-        vel_map, int_map = kl_model(theta, 'obs', X, Y)
-        model_pred = vel_map * int_map
+    # "true" data
+    data = eval_combined(kl_pars)
+
+    def log_likelihood(pars):
+        model_pred = eval_combined(pars)
         residuals = data - model_pred
         return -0.5 * jnp.sum(residuals**2)
 
-    # Should compile once and run fast
-    log_prob1 = log_likelihood(kl_theta)
-    log_prob2 = log_likelihood(kl_theta * 1.01)
+    log_prob, gradient = jax.value_and_grad(log_likelihood)(kl_pars)
+
+    assert jnp.isfinite(log_prob)
+    assert set(gradient.keys()) == set(kl_pars.keys())
+    assert all(jnp.isfinite(jnp.asarray(v)).all() for v in gradient.values())
+    # gradient at true parameters should be small (we're at maximum)
+    grad_norm = float(
+        jnp.sqrt(sum(jnp.sum(jnp.asarray(v) ** 2) for v in gradient.values()))
+    )
+    assert grad_norm < 1e3
+
+
+def test_source_model_jitted_likelihood(source_setup, kl_pars):
+    """Test JIT-compiled likelihood for MCMC."""
+    source = source_setup
+    image_pars = ImagePars(shape=(32, 32), pixel_scale=0.5, indexing='ij')
+    vel_m = source.velocity_model
+    int_m = source.broadband_models['F087']
+
+    X, Y = build_map_grid_from_image_pars(image_pars, unit='arcsec', centered=True)
+
+    def eval_combined(pars):
+        theta_vel = _build_component_theta(pars, 'vel', vel_m.PARAMETER_NAMES)
+        theta_int = _build_component_theta(pars, 'F087', int_m.PARAMETER_NAMES)
+        return vel_m(theta_vel, 'obs', X, Y) * int_m(theta_int, 'obs', X, Y)
+
+    data = eval_combined(kl_pars)
+
+    @jax.jit
+    def log_likelihood(pars):
+        model_pred = eval_combined(pars)
+        residuals = data - model_pred
+        return -0.5 * jnp.sum(residuals**2)
+
+    perturbed_pars = {k: v * 1.01 for k, v in kl_pars.items()}
+    log_prob1 = log_likelihood(kl_pars)
+    log_prob2 = log_likelihood(perturbed_pars)
 
     assert jnp.isfinite(log_prob1)
     assert jnp.isfinite(log_prob2)

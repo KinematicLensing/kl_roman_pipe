@@ -32,6 +32,7 @@ from kl_pipe.render import (
     build_image_render_config,
 )
 from kl_pipe.sampling import InferenceTask
+from kl_pipe.source import SourceModel
 
 
 @pytest.fixture
@@ -55,13 +56,13 @@ def tight_priors():
         {
             'cosi': Uniform(0.01, 0.99),
             'theta_int': Uniform(0, np.pi),
-            'flux': LogUniform(0.01, 1000.0),
-            'int_rscale': Uniform(1.0, 2.0),
-            'int_h_over_r': 0.2,
+            'F087.flux': LogUniform(0.01, 1000.0),
+            'F087.rscale': Uniform(1.0, 2.0),
+            'F087.h_over_r': 0.2,
             'g1': 0.0,
             'g2': 0.0,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'F087.x0': 0.0,
+            'F087.y0': 0.0,
         }
     )
 
@@ -73,13 +74,13 @@ def loose_priors():
         {
             'cosi': Uniform(0.5, 0.99),
             'theta_int': Uniform(0, np.pi),
-            'flux': LogUniform(0.01, 1000.0),
-            'int_rscale': Uniform(2.0, 4.0),
-            'int_h_over_r': 0.2,
+            'F087.flux': LogUniform(0.01, 1000.0),
+            'F087.rscale': Uniform(2.0, 4.0),
+            'F087.h_over_r': 0.2,
             'g1': 0.0,
             'g2': 0.0,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'F087.x0': 0.0,
+            'F087.y0': 0.0,
         }
     )
 
@@ -148,45 +149,56 @@ def test_issue_42_does_not_crash(setup, tight_priors):
     path is exercised here in the bare-profile + pixel-sinc regime.
     """
     image_pars, _, model, data, variance = setup
+    # explicit RenderConfig() (oversample=1) forces the priors-vs-obs-rc
+    # validation path; builder-default rc would auto-derive + rebuild instead.
     obs = build_image_obs(
         image_pars,
         psf=None,
         data=jnp.array(data),
         variance=jnp.array(variance),
         int_model=model,
+        render_config=RenderConfig(),
+        broadband_key='F087',
     )
+    source = SourceModel(broadband_models={'F087': model})
 
     # tight priors imply oversample > 5; expect loud raise, not crash mid-JIT
     with pytest.raises(ValueError, match='Priors imply oversample'):
-        InferenceTask.from_intensity_obs(model, tight_priors, obs)
+        InferenceTask.from_obs(source, tight_priors, image_obs={'F087': obs})
 
 
 def test_priors_tighter_than_obs_rc_ok(setup, loose_priors):
     """Priors that fit within obs's pre-built rc — task constructs cleanly."""
     image_pars, psf, model, data, variance = setup
+    # explicit oversample=5 rc on obs; loose priors imply smaller oversample
+    # → validation path accepts and uses obs's rc unchanged.
     obs = build_image_obs(
         image_pars,
         psf=psf,
         data=jnp.array(data),
         variance=jnp.array(variance),
         int_model=model,
+        render_config=RenderConfig(oversample=5),
+        broadband_key='F087',
     )
-    # priors imply small oversample; obs was built with default 5 -> fine
-    task = InferenceTask.from_intensity_obs(model, loose_priors, obs)
+    source = SourceModel(broadband_models={'F087': model})
+    # priors imply small oversample; obs explicit rc is 5 -> fine (no raise)
+    task = InferenceTask.from_obs(source, loose_priors, image_obs={'F087': obs})
     assert task is not None
-    # task uses the obs's rc (not a recomputed one)
-    assert task._render_configs['intensity'].oversample == obs.render_config.oversample
+    # explicit-rc branch returns obs unchanged; task's likelihood uses this rc.
+    assert obs.render_config.oversample == 5
 
 
 def test_priors_wider_than_obs_rc_raises(setup, tight_priors):
     """Priors that demand larger rc than obs was built for — loud failure.
 
-    Built without PSF (psf=None). With PSF in the worst-case scan, the
-    Gaussian damping caps maxk far below the bare profile FT's reach, so
-    realistic inference setups with real PSF + tight priors almost never
+    Built without PSF (psf=None) and with explicit ``RenderConfig()`` so the
+    priors-vs-obs-rc validation path is exercised (builder-default rc would
+    take the auto-derive + rebuild path instead). With PSF in the worst-case
+    scan, Gaussian damping caps maxk far below the bare profile FT's reach,
+    so realistic inference setups with real PSF + tight priors almost never
     trip this validation — the loud-failure path is mainly a safety net
-    for the no-PSF case (or extreme priors). That's the intended behavior
-    after the PSF-on-obs fix.
+    for the no-PSF case (or extreme priors).
     """
     image_pars, _, model, data, variance = setup
     obs = build_image_obs(
@@ -195,9 +207,12 @@ def test_priors_wider_than_obs_rc_raises(setup, tight_priors):
         data=jnp.array(data),
         variance=jnp.array(variance),
         int_model=model,
+        render_config=RenderConfig(),
+        broadband_key='F087',
     )
+    source = SourceModel(broadband_models={'F087': model})
     with pytest.raises(ValueError) as excinfo:
-        InferenceTask.from_intensity_obs(model, tight_priors, obs)
+        InferenceTask.from_obs(source, tight_priors, image_obs={'F087': obs})
     msg = str(excinfo.value)
     assert 'oversample' in msg
     # message must point at the fix (for_priors)
@@ -207,11 +222,13 @@ def test_priors_wider_than_obs_rc_raises(setup, tight_priors):
 def test_for_priors_obs_construction_works(setup, tight_priors):
     """Recommended fix from Issue #42 raise message — verify it actually works."""
     image_pars, psf, model, data, variance = setup
-    rc = RenderConfig.for_priors(
-        model,
+    source = SourceModel(broadband_models={'F087': model})
+    rc = build_image_render_config(
+        source,
         tight_priors,
-        image_pars.pixel_scale,
-        pixel_response=BoxPixel(image_pars.pixel_scale),
+        image_pars,
+        broadband_key='F087',
+        psf=psf,
     )
     obs = build_image_obs(
         image_pars,
@@ -220,9 +237,10 @@ def test_for_priors_obs_construction_works(setup, tight_priors):
         variance=jnp.array(variance),
         int_model=model,
         render_config=rc,
+        broadband_key='F087',
     )
     # task construction succeeds
-    task = InferenceTask.from_intensity_obs(model, tight_priors, obs)
+    task = InferenceTask.from_obs(source, tight_priors, image_obs={'F087': obs})
     # likelihood evaluates without crashing
     theta_test = jnp.array([0.3, 0.0, 0.0, 0.0, 12.0, 1.5, 0.2, 0.0, 0.0])
     log_prob = task.likelihood_fn(theta_test)
