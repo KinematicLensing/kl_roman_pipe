@@ -2493,6 +2493,40 @@ def test_recover_joint_phot_grism_base(snr, test_config):
         variance=float(variance_grism),
     )
 
+    # --- Data-vector diagnostics: one panel per channel ---
+    test_name = f"joint_phot_grism_base_snr{snr}"
+    # Broadband F087: clean signal via the noise-free obs (matches the
+    # rendering path the likelihood uses internally).
+    obs_int_noPSF = build_image_obs(
+        image_pars, psf=psf, int_model=f087_int, broadband_key='F087'
+    )
+    clean_int = np.asarray(
+        source.render_broadband(pars_dotted, obs_int_noPSF, band_key='F087')
+    )
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_int_noisy),
+        data_true=clean_int,
+        model_eval=clean_int,  # model at truth == clean signal
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='F087_broadband',
+        variance=np.asarray(variance_int),
+        n_params=17,  # nominal sampled count for chi^2 dof; informational only
+        enable_plots=test_config.enable_plots,
+    )
+    # Grism dispersed image
+    plot_data_comparison_panels(
+        data_noisy=np.asarray(data_grism_noisy),
+        data_true=clean_grism,
+        model_eval=clean_grism,
+        test_name=test_name,
+        output_dir=test_config.output_dir / test_name,
+        data_type='grism',
+        variance=float(variance_grism),
+        n_params=17,
+        enable_plots=test_config.enable_plots,
+    )
+
     extent = image_pars.shape[0] * image_pars.pixel_scale / 2
     # v0's slitless Fisher precision is set by the line FWHM in the
     # dispersed image, NOT by the detector pixel width. PSF (0.18") +
@@ -2543,7 +2577,6 @@ def test_recover_joint_phot_grism_base(snr, test_config):
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
-    test_name = f"joint_phot_grism_base_snr{snr}"
     slices = slice_all_parameters(
         log_like,
         sampled_names,

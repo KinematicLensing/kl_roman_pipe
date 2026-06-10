@@ -4,10 +4,13 @@ Tests for the SourceModel grism likelihood via ``InferenceTask.from_obs``.
 Covers:
   - Unit tests: likelihood eval + JIT + grad + factory construction for
     grism-only and joint photometry+grism patterns.
-  - Likelihood slice tests: ``Halpha.flux`` at SNR in {100, 1000}; ``vel.vcirc``
-    and ``Halpha.dispersion`` at SNR=1000.
   - One smoke optimizer-recovery test for ``Halpha.flux`` + ``vel.vcirc`` +
     ``Halpha.dispersion`` at SNR=1000.
+
+The full joint phot+grism likelihood slice lives in
+``test_likelihood_slices.py::test_recover_joint_phot_grism_base`` (B.4b),
+which carries the standard slice-grid + per-channel data comparison
+panels (broadband + grism) for the joint case.
 
 The smoke recovery test fixes most parameters and optimizes over a small subset
 to confirm end-to-end inference works. It is not a tight tolerance gate.
@@ -19,6 +22,8 @@ share a single spatial profile in this test).
 """
 
 import os
+from pathlib import Path
+
 import matplotlib
 
 matplotlib.use('Agg')
@@ -41,6 +46,7 @@ from kl_pipe.dispersion import build_grism_pars_for_line
 from kl_pipe.observation import build_image_obs, build_grism_obs
 from kl_pipe.priors import PriorDict, Uniform
 from kl_pipe.sampling.task import InferenceTask
+from test_utils import TestConfig
 
 # output directory for diagnostic plots
 OUT_DIR = os.path.join(os.path.dirname(__file__), 'out', 'grism_likelihood')
@@ -106,6 +112,15 @@ def _make_priors():
 def _theta_sampled_truth(priors):
     """Pack the sampled-truth vector in priors.sampled_names order."""
     return jnp.array([_TRUE_PARS[n] for n in priors.sampled_names])
+
+
+@pytest.fixture(scope='module')
+def test_config():
+    """Test configuration matching the convention in test_likelihood_slices."""
+    out_dir = Path(__file__).parent / 'out' / 'grism_likelihood'
+    config = TestConfig(out_dir, include_poisson_noise=False)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    return config
 
 
 @pytest.fixture(scope='module')
@@ -297,100 +312,10 @@ class TestGrismLikelihoodUnits:
 # =============================================================================
 
 
-def _slice_log_likelihood(log_like_fn, theta_sampled, param_idx, values):
-    """Evaluate log_like along a single-parameter slice (others fixed at truth)."""
-    log_ls = []
-    for v in values:
-        theta = theta_sampled.at[param_idx].set(v)
-        log_ls.append(float(log_like_fn(theta)))
-    return np.asarray(log_ls)
-
-
-def _save_slice_plot(values, log_ls, true_val, peak_val, param_name, snr, out_dir):
-    """Save a slice diagnostic plot."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(values, log_ls, 'k-', linewidth=1.0)
-    ax.axvline(true_val, color='green', linestyle='--', label=f'truth = {true_val}')
-    ax.axvline(peak_val, color='red', linestyle=':', label=f'peak = {peak_val:.3f}')
-    ax.set_xlabel(param_name)
-    ax.set_ylabel('log likelihood')
-    ax.set_title(f'{param_name} slice @ SNR={snr}')
-    ax.legend()
-    fig.tight_layout()
-    fname = f'slice_{param_name.replace(".", "_")}_snr{snr}.png'
-    fig.savefig(os.path.join(out_dir, fname), dpi=120)
-    plt.close(fig)
-
-
-@pytest.mark.parametrize(
-    "param_name,prior_range,snr,tol_frac",
-    [
-        # Halpha.flux is well-constrained by the integrated line signal at both SNRs.
-        ('Halpha.flux', (20.0, 200.0), 100, 0.15),
-        ('Halpha.flux', (20.0, 200.0), 1000, 0.15),
-        # vel.vcirc shifts the line wavelength across the disk; needs high SNR
-        # because the projected velocity gradient onto the dispersion axis is
-        # reduced by sin(i) * cos(theta_int_vs_dispersion).
-        ('vel.vcirc', (100.0, 300.0), 1000, 0.15),
-        # Halpha.dispersion is identifiable post-LSF-refactor (sigma_eff = vel_disp);
-        # the line width on the detector reflects the kinematic dispersion plus
-        # PSF+dispersion broadening (constant across the grid).
-        ('Halpha.dispersion', (20.0, 150.0), 1000, 0.15),
-    ],
-)
-def test_grism_likelihood_slice_peaks_near_truth(
-    snr,
-    param_name,
-    prior_range,
-    tol_frac,
-    source,
-    grism_pars,
-    roman_psf,
-):
-    """Likelihood slice along one parameter peaks near the truth.
-
-    Tolerance is fractional (peak within ±tol_frac * |truth|). Loose by design
-    — the slice is a sanity check that the likelihood is unimodal and peaked,
-    not a tight gating tolerance.
-    """
-    # build fresh synthetic data at this SNR
-    _, _, obs = _build_grism_synthetic(
-        source, _TRUE_PARS, grism_pars, roman_psf, snr=snr, seed=snr * 10
-    )
-
-    priors = _make_priors()
-    task = InferenceTask.from_obs(source, priors, grism_obs={'roll0': obs})
-    log_like_fn = task.likelihood_fn
-
-    # locate the param index in the sampled-name vector
-    sampled_names = list(priors.sampled_names)
-    assert (
-        param_name in sampled_names
-    ), f"{param_name} not in priors.sampled_names = {sampled_names}"
-    param_idx = sampled_names.index(param_name)
-    true_val = float(_TRUE_PARS[param_name])
-
-    theta_sampled = _theta_sampled_truth(priors)
-
-    # 25-point slice over the prior range
-    values = np.linspace(prior_range[0], prior_range[1], 25)
-    log_ls = _slice_log_likelihood(log_like_fn, theta_sampled, param_idx, values)
-
-    # peak should be near truth
-    peak_idx = int(np.argmax(log_ls))
-    peak_val = float(values[peak_idx])
-
-    _save_slice_plot(values, log_ls, true_val, peak_val, param_name, snr, OUT_DIR)
-
-    abs_err = abs(peak_val - true_val)
-    rel_err = abs_err / abs(true_val) if abs(true_val) > 0 else abs_err
-    assert rel_err < tol_frac, (
-        f"{param_name} slice peak {peak_val:.3f} differs from truth "
-        f"{true_val:.3f} by {rel_err:.2%}; tolerance {tol_frac:.0%} "
-        f"(SNR={snr}). See {OUT_DIR}/slice_{param_name.replace('.', '_')}_snr{snr}.png"
-    )
+# Note: the joint phot+grism slice test that used to live here was merged
+# into test_likelihood_slices.py::test_recover_joint_phot_grism_base, which
+# carries the standard slice-grid + data-comparison-panel diagnostic for
+# the joint F087 broadband + Halpha grism case.
 
 
 # =============================================================================

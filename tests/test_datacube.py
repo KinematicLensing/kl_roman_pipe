@@ -573,10 +573,12 @@ class TestCorrectness:
         # truth at oversample=25
         cube_truth = source_ha.build_cube(pars, cube_pars, spectral_oversample=25)
 
-        sweep = [3, 5, 9, 15]
+        sweep = list(range(3, 22, 2))  # odd osfs 3..21 (10 points)
         errors = {}
+        cubes = {}
         for osf in sweep:
             cube_test = source_ha.build_cube(pars, cube_pars, spectral_oversample=osf)
+            cubes[osf] = cube_test
 
             max_err = float(
                 jnp.max(jnp.abs(cube_test - cube_truth)) / jnp.max(jnp.abs(cube_truth))
@@ -598,19 +600,118 @@ class TestCorrectness:
             errors[15] < 1e-3
         ), f"oversample=15 error = {errors[15]:.4e}, expected < 1e-3"
 
-        # save diagnostic plot
+        # diagnostic plot: 4-panel layout
+        #   (a) convergence line with thresholds + default marker
+        #   (b) spectral profile at peak-flux spatial pixel for each osf vs truth
+        #   (c) residual cube heatmap at line-peak wavelength slice, osf=5 (entry)
+        #   (d) residual cube heatmap at line-peak wavelength slice, osf=15 (default)
         try:
             import matplotlib
 
             matplotlib.use('Agg')
             import matplotlib.pyplot as plt
 
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.semilogy(list(errors.keys()), list(errors.values()), 'bo-')
+            cube_truth_np = np.asarray(cube_truth)
+            lam_grid = np.asarray(cube_pars.lambda_grid)
+            # peak-flux spatial pixel + line-peak wavelength on the truth cube
+            spatial_sum = cube_truth_np.sum(axis=-1)
+            iy, ix = np.unravel_index(np.argmax(spatial_sum), spatial_sum.shape)
+            il = int(np.argmax(cube_truth_np[iy, ix, :]))
+            peak_amp = float(np.max(np.abs(cube_truth_np)))
+
+            fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+
+            # (a) convergence line, log scale
+            ax = axes[0, 0]
+            ax.semilogy(
+                list(errors.keys()), list(errors.values()), 'bo-', label='measured'
+            )
+            ax.axhline(
+                1e-3,
+                color='red',
+                linestyle=':',
+                alpha=0.7,
+                label='asserted bound (1e-3)',
+            )
+            ax.axhline(
+                1e-2,
+                color='orange',
+                linestyle=':',
+                alpha=0.5,
+                label='legacy threshold (1e-2)',
+            )
+            ax.axvline(
+                15, color='green', linestyle='--', alpha=0.7, label='production default'
+            )
             ax.set_xlabel('Spectral oversample factor')
-            ax.set_ylabel('Max relative error vs truth (osf=25)')
-            ax.set_title('Spectral oversample convergence')
+            ax.set_ylabel('Max relative error vs osf=25 truth')
+            ax.set_title('Convergence: max |cube_osf - cube_25| / max(cube_25)')
+            ax.grid(True, which='both', alpha=0.3)
+            ax.legend(fontsize=8)
+
+            # (b) 1D spectral residual vs wavelength at the line-peak spatial
+            # pixel. The deterministic comparison has no statistical
+            # uncertainty; the asserted +/-1e-3 bound is shown as a shaded
+            # band for scale reference.
+            ax = axes[0, 1]
+            truth_spec = cube_truth_np[iy, ix, :]
+            ax.axhspan(
+                -1e-3, 1e-3, color='red', alpha=0.10, label='+/-1e-3 (asserted bound)'
+            )
+            ax.axhline(0.0, color='k', linewidth=0.7, alpha=0.6)
+            cmap = plt.get_cmap('viridis')
+            for k, osf in enumerate(sweep):
+                if osf in (3, 5, 9, 15, 21):
+                    color = cmap(k / max(1, len(sweep) - 1))
+                    resid_spec = (
+                        np.asarray(cubes[osf])[iy, ix, :] - truth_spec
+                    ) / peak_amp
+                    ax.plot(
+                        lam_grid,
+                        resid_spec,
+                        '-',
+                        color=color,
+                        alpha=0.85,
+                        linewidth=1.2,
+                        label=f'osf={osf}',
+                    )
+            ax.set_xlabel('Wavelength [nm]')
+            ax.set_ylabel(f'(cube_osf - cube_25) / max(cube_25)   @ ({iy},{ix})')
+            ax.set_title('1D spectral residual at line-peak spatial pixel')
+            ax.legend(fontsize=8, loc='upper right')
             ax.grid(True, alpha=0.3)
+
+            # (c, d) residual heatmaps at line-peak wavelength slice,
+            # shared color scale (set by osf=5 — the worst of the two) so
+            # the relative improvement at osf=15 is visually obvious.
+            resid_5 = (
+                np.asarray(cubes[5])[:, :, il] - cube_truth_np[:, :, il]
+            ) / peak_amp
+            shared_vmax = max(abs(resid_5.min()), abs(resid_5.max()))
+            for ax, osf in [(axes[1, 0], 5), (axes[1, 1], 15)]:
+                resid = (
+                    np.asarray(cubes[osf])[:, :, il] - cube_truth_np[:, :, il]
+                ) / peak_amp
+                im = ax.imshow(
+                    resid,
+                    origin='lower',
+                    cmap='RdBu_r',
+                    vmin=-shared_vmax,
+                    vmax=shared_vmax,
+                )
+                ax.set_title(
+                    f'osf={osf} residual at lam[{il}]={lam_grid[il]:.1f} nm '
+                    f'(max rel err = {errors[osf]:.2e})'
+                )
+                ax.set_xlabel('x [pix]')
+                ax.set_ylabel('y [pix]')
+                plt.colorbar(im, ax=ax, fraction=0.046)
+
+            fig.suptitle(
+                'Spectral oversample convergence diagnostic '
+                f'(Halpha @ z={z}, sigma=50 km/s, dlam=1 nm)',
+                fontsize=13,
+            )
             fig.tight_layout()
             fig.savefig(
                 os.path.join(OUT_DIR, 'spectral_oversample_convergence.png'), dpi=150
