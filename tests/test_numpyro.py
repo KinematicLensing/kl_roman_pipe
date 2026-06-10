@@ -31,6 +31,8 @@ from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
 from kl_pipe.priors import Uniform, Gaussian, TruncatedNormal, PriorDict
+from kl_pipe.source import SourceModel
+from kl_pipe.observation import build_image_obs, build_velocity_obs
 from kl_pipe.sampling import (
     InferenceTask,
     NumpyroSamplerConfig,
@@ -64,10 +66,14 @@ def simple_velocity_task():
     Create a simple velocity-only inference task for basic tests.
 
     Uses Gaussian/TruncatedNormal priors with reasonable scales.
+
+    Returns (task, true_pars_dotted) — true_pars uses dotted-key SourceModel
+    convention; consumers indexing by ``task.sampled_names`` match directly.
     """
     image_pars = ImagePars(shape=(20, 20), pixel_scale=0.4, indexing='ij')
 
-    true_pars = {
+    # Flat-key form for SyntheticVelocity
+    true_pars_flat = {
         'v0': 10.0,
         'vcirc': 200.0,
         'vel_rscale': 5.0,
@@ -76,18 +82,27 @@ def simple_velocity_task():
         'g1': 0.02,
         'g2': -0.01,
     }
+    # Dotted-key form for SourceModel priors and downstream consumers
+    true_pars = {
+        'vel.v0': 10.0,
+        'vel.vcirc': 200.0,
+        'vel.rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.02,
+        'g2': -0.01,
+    }
 
-    vel_model = CenteredVelocityModel()
-
-    synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
+    synth_vel = SyntheticVelocity(true_pars_flat, model_type='arctan', seed=42)
     data_vel_noisy = synth_vel.generate(image_pars, snr=1000)
     var_vel = synth_vel.variance
 
+    source = SourceModel(velocity_model=CenteredVelocityModel())
     priors = PriorDict(
         {
-            'v0': Gaussian(10.0, 5.0),
-            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-            'vel_rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
+            'vel.v0': Gaussian(10.0, 5.0),
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel.rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
             'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
             'theta_int': TruncatedNormal(0.785, 0.3, 0, np.pi),
             'g1': 0.02,  # Fixed
@@ -95,13 +110,10 @@ def simple_velocity_task():
         }
     )
 
-    task = InferenceTask.from_velocity_model(
-        model=vel_model,
-        priors=priors,
-        data_vel=data_vel_noisy,
-        variance_vel=var_vel,
-        image_pars=image_pars,
+    vel_obs = build_velocity_obs(
+        image_pars, data=jnp.array(data_vel_noisy), variance=var_vel
     )
+    task = InferenceTask.from_obs(source, priors, velocity_obs=vel_obs)
 
     return task, true_pars
 
@@ -112,9 +124,11 @@ def joint_model_task():
     Create joint velocity+intensity task - the critical test case.
 
     This is where BlackJAX failed due to gradient scale mismatch.
+
+    Returns (task, true_pars_dotted) so consumers can index by
+    ``task.sampled_names`` directly.
     """
     from kl_pipe.intensity import InclinedExponentialModel
-    from kl_pipe.model import KLModel
 
     image_pars_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     image_pars_int = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
@@ -123,7 +137,8 @@ def joint_model_task():
     # priors don't blow up oversample (cf. Issue #47).
     psf = galsim.Gaussian(fwhm=0.2)
 
-    true_pars = {
+    # Flat-key form for Synthetic* generators
+    true_pars_flat = {
         'v0': 10.0,
         'vcirc': 200.0,
         'vel_rscale': 5.0,
@@ -137,35 +152,53 @@ def joint_model_task():
         'int_x0': 0.0,
         'int_y0': 0.0,
     }
+    # Dotted-key form for SourceModel priors and downstream consumers
+    true_pars = {
+        'vel.v0': 10.0,
+        'vel.vcirc': 200.0,
+        'vel.rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+        'F087.flux': 1.0,
+        'F087.rscale': 3.0,
+        'F087.h_over_r': 0.1,
+        'F087.x0': 0.0,
+        'F087.y0': 0.0,
+    }
 
     vel_model = CenteredVelocityModel()
-    vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
+    vel_pars = {
+        k: v for k, v in true_pars_flat.items() if k in vel_model.PARAMETER_NAMES
+    }
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
     data_vel = synth_vel.generate(image_pars_vel, snr=1000)
     var_vel = synth_vel.variance
 
     int_model = InclinedExponentialModel()
-    int_pars = {k: v for k, v in true_pars.items() if k in int_model.PARAMETER_NAMES}
+    int_pars = {
+        k: v for k, v in true_pars_flat.items() if k in int_model.PARAMETER_NAMES
+    }
     synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
     data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance
 
-    joint_model = KLModel(
+    source = SourceModel(
         velocity_model=vel_model,
-        intensity_model=int_model,
-        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
+        broadband_models={'F087': int_model},
     )
 
     priors = PriorDict(
         {
-            'v0': Gaussian(true_pars['v0'], 5.0),
-            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-            'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
-            'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
-            'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
-            'int_h_over_r': 0.1,  # Fixed
-            'int_x0': 0.0,  # Fixed
-            'int_y0': 0.0,  # Fixed
+            'vel.v0': Gaussian(true_pars['vel.v0'], 5.0),
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel.rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
+            'F087.flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
+            'F087.rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
+            'F087.h_over_r': 0.1,  # Fixed
+            'F087.x0': 0.0,  # Fixed
+            'F087.y0': 0.0,  # Fixed
             'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),
             'theta_int': TruncatedNormal(np.pi / 2, 1.0, 0, np.pi),
             'g1': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
@@ -173,16 +206,21 @@ def joint_model_task():
         }
     )
 
-    task = InferenceTask.from_joint_model(
-        model=joint_model,
-        priors=priors,
-        data_vel=jnp.array(data_vel),
-        data_int=jnp.array(data_int),
-        variance_vel=var_vel,
-        variance_int=var_int,
-        image_pars_vel=image_pars_vel,
-        image_pars_int=image_pars_int,
-        psf_int=psf,
+    img_obs = build_image_obs(
+        image_pars_int,
+        psf=psf,
+        data=jnp.array(data_int),
+        variance=var_int,
+        broadband_key='F087',
+    )
+    vel_obs = build_velocity_obs(
+        image_pars_vel, data=jnp.array(data_vel), variance=var_vel
+    )
+    task = InferenceTask.from_obs(
+        source,
+        priors,
+        velocity_obs=vel_obs,
+        image_obs={'F087': img_obs},
     )
 
     return task, true_pars
@@ -254,8 +292,8 @@ class TestReparameterization:
         sampler = NumpyroSampler(task, config)
         scales = sampler._compute_reparam_scales(random.PRNGKey(0))
 
-        # Check that vcirc uses its prior params
-        loc, scale = scales['vcirc']
+        # Check that vel.vcirc uses its prior params
+        loc, scale = scales['vel.vcirc']
         assert loc == 200.0  # TruncatedNormal mu
         assert scale == 50.0  # TruncatedNormal sigma
 
