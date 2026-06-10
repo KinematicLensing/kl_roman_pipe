@@ -538,11 +538,22 @@ class TestCorrectness:
         ), f"v0=100 peak={peak1:.2f}, v0=0 peak={peak2:.2f} should match"
 
     def test_spectral_oversample_convergence(self, source_ha, vel_model, int_model):
-        """Sweep oversample factors, verify monotonic convergence; 5x < 0.5% error.
+        """Sweep oversample factors, verify strict monotonic convergence.
 
         SourceModel.build_cube takes ``spectral_oversample`` as a kwarg
         (legacy passed it through SpectralConfig); same factor controls the
         wavelength sub-bin sampling.
+
+        Threshold at osf=15 (the production default): max relative error
+        < 1e-3 vs osf=25 reference. This is the pixel-level (cube)
+        convergence anchor. Empirical floor at osf=15 is ~5e-4. Lower
+        osf values are reported but not asserted; they remain available
+        for users who want to trade accuracy for speed (osf=5 → ~6e-3
+        cube error, parameter bias 5-25x sigma_Fisher at SNR=10000;
+        osf=9 → ~2e-3, bias ~1-5x). Parameter-level convergence is
+        anchored separately in
+        ``experiments/sweverett/spectral_osf_convergence/`` (script
+        reports bias / sigma_Fisher per parameter at SNR=10000).
         """
         z = 1.0
         lam_center = LINE_LAMBDAS['Halpha'] * (1 + z)
@@ -562,8 +573,9 @@ class TestCorrectness:
         # truth at oversample=25
         cube_truth = source_ha.build_cube(pars, cube_pars, spectral_oversample=25)
 
+        sweep = [3, 5, 9, 15]
         errors = {}
-        for osf in [1, 3, 5, 7, 9]:
+        for osf in sweep:
             cube_test = source_ha.build_cube(pars, cube_pars, spectral_oversample=osf)
 
             max_err = float(
@@ -571,19 +583,20 @@ class TestCorrectness:
             )
             errors[osf] = max_err
 
-        # monotonic convergence
-        err_list = [errors[k] for k in [1, 3, 5, 7, 9]]
+        # strict monotonic convergence
+        err_list = [errors[k] for k in sweep]
         for i in range(len(err_list) - 1):
-            assert err_list[i] >= err_list[i + 1] * 0.9, (
-                f"Not monotonically converging: osf={[1,3,5,7,9][i]} "
-                f"error={err_list[i]:.4f} vs osf={[1,3,5,7,9][i+1]} "
-                f"error={err_list[i+1]:.4f}"
+            assert err_list[i] > err_list[i + 1], (
+                f"Not monotonically converging: osf={sweep[i]} "
+                f"error={err_list[i]:.4e} vs osf={sweep[i+1]} "
+                f"error={err_list[i+1]:.4e}"
             )
 
-        # 5x achieves <0.5% (or at least <2% — some discretization allowed)
+        # default osf=15 must be within 1e-3 of the osf=25 reference cube
+        # (~2x margin over the empirical ~5e-4 floor)
         assert (
-            errors[5] < 0.02
-        ), f"oversample=5 error = {errors[5]:.4f}, expected < 0.02"
+            errors[15] < 1e-3
+        ), f"oversample=15 error = {errors[15]:.4e}, expected < 1e-3"
 
         # save diagnostic plot
         try:

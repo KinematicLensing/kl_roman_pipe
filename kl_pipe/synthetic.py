@@ -1221,10 +1221,10 @@ def generate_datacube_3d(
     else:
         spatial_image_pars = image_pars
 
-    # velocity map (LOS, includes v0) at fine resolution
-    v_map = generate_arctan_velocity_2d(spatial_image_pars, **vel_pars)
-    v0 = vel_pars['v0']
-    v_rotation = v_map - v0
+    # Full LOS velocity at fine resolution (includes systemic v0 +
+    # rotation). Used directly in the Doppler shift so v0 has its proper
+    # physical effect on the observed line wavelength.
+    v_los = generate_arctan_velocity_2d(spatial_image_pars, **vel_pars)
 
     # broadband intensity (for continuum). Cube is the pre-pixel-response
     # intermediate; pass pixel_response=None so the numpy backend does not
@@ -1267,8 +1267,9 @@ def generate_datacube_3d(
             spatial_image_pars, **line_int_pars, oversample=1, pixel_response=None
         )
 
-        # Doppler-shifted observed wavelength per pixel
-        lam_obs = lam_rest * (1.0 + z) * (1.0 + v_rotation / C_KMS)
+        # Doppler-shifted observed wavelength per pixel (v_los includes
+        # systemic v0 + rotation contribution).
+        lam_obs = lam_rest * (1.0 + z) * (1.0 + v_los / C_KMS)
 
         # intrinsic line broadening only; PSF+dispersion downstream is the
         # slitless LSF (mirrors kl_pipe/spectral.py).

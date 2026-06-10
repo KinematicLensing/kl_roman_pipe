@@ -43,7 +43,7 @@ class RenderConfig:
     Parameters
     ----------
     oversample : int
-        K-grid oversampling factor. Extends effective Nyquist to
+        K-grid oversampling factor (spatial). Extends effective Nyquist to
         ``oversample × π / pixel_scale``. Derived from ``effective_maxk``
         when using factory methods.
     pad_factor : int
@@ -53,6 +53,18 @@ class RenderConfig:
         boundaries. Controls ``stepk``. Default 5e-3.
     maxk_threshold : float
         FT amplitude threshold for maxk computation. Default 1e-3.
+    spectral_oversample : int
+        Wavelength sub-bin count for cube assembly in
+        ``SourceModel.build_cube`` / ``render_grism``. Default 15; the
+        former default of 5 was found to produce parameter bias 5-25x
+        ``sigma_Fisher`` at SNR=10000 for spectrally-sensitive params
+        (see ``experiments/sweverett/spectral_osf_convergence/`` and
+        ``docs/oversampling_convergence.md``). osf=15 reduces that to
+        ~sigma_Fisher; cube-pixel convergence at osf=15 vs osf=25 is
+        <1e-3. Cost scales linearly with osf. Only consulted when the
+        obs (or render_grism caller) does not pass an explicit value.
+        Applies to grism obs only; ignored for image/velocity obs that
+        carry RenderConfig.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -65,6 +77,7 @@ class RenderConfig:
     pad_factor: int = 2
     folding_threshold: float = 5e-3
     maxk_threshold: float = 1e-3
+    spectral_oversample: int = 15
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
 
@@ -280,7 +293,11 @@ class RenderConfig:
         )
 
     def __repr__(self) -> str:
-        parts = [f'oversample={self.oversample}', f'pad_factor={self.pad_factor}']
+        parts = [
+            f'oversample={self.oversample}',
+            f'pad_factor={self.pad_factor}',
+            f'spectral_oversample={self.spectral_oversample}',
+        ]
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -300,6 +317,7 @@ def _render_config_flatten(rc):
         rc.pad_factor,
         rc.folding_threshold,
         rc.maxk_threshold,
+        rc.spectral_oversample,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -311,8 +329,9 @@ def _render_config_unflatten(aux, children):
         pad_factor=aux[1],
         folding_threshold=aux[2],
         maxk_threshold=aux[3],
-        effective_maxk=aux[4],
-        stepk=aux[5],
+        spectral_oversample=aux[4],
+        effective_maxk=aux[5],
+        stepk=aux[6],
     )
 
 

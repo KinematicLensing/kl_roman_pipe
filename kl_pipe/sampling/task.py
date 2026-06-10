@@ -577,7 +577,7 @@ class InferenceTask:
         grism_obs: Optional[Dict[str, 'GrismObs']] = None,
         velocity_obs: Optional['VelocityObs'] = None,
         meta_pars: Optional[Dict] = None,
-        spectral_oversample: int = 5,
+        spectral_oversample: Optional[int] = None,
     ) -> 'InferenceTask':
         """Unified SourceModel inference factory.
 
@@ -617,9 +617,12 @@ class InferenceTask:
             Single velocity-map observation.
         meta_pars : dict, optional
             User metadata.
-        spectral_oversample : int, default 5
-            Wavelength sub-bin count passed through to
-            ``SourceModel.render_grism`` / ``build_cube``.
+        spectral_oversample : int, optional
+            Wavelength sub-bin count for cube assembly. When ``None``
+            (default), reads from each grism obs's
+            ``render_config.spectral_oversample`` (default 5); raises if
+            multiple grism obs disagree. Pass an explicit value only to
+            override the obs-recorded settings uniformly.
         """
         from kl_pipe.likelihood import create_jitted_likelihood_from_obs
         from kl_pipe.source import SourceModel
@@ -711,6 +714,20 @@ class InferenceTask:
 
         sampled_names = tuple(priors.sampled_names)
         fixed_pars = dict(priors.fixed_values)
+
+        # resolve spectral_oversample: explicit kwarg wins; else read from
+        # grism obs (every roll must agree); else irrelevant (no grism)
+        if spectral_oversample is None and grism_obs:
+            osfs = {k: o.spectral_oversample for k, o in grism_obs.items()}
+            unique = set(osfs.values())
+            if len(unique) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched spectral_oversample {osfs}; "
+                    f"pass spectral_oversample=N explicitly to override"
+                )
+            spectral_oversample = unique.pop()
+        elif spectral_oversample is None:
+            spectral_oversample = 15  # unused (no grism), but pass a concrete int
 
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,

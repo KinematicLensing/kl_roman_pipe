@@ -289,6 +289,15 @@ class GrismObs:
         """Oversample factor; canonical source is render_config.oversample."""
         return self.render_config.oversample if self.render_config is not None else 1
 
+    @property
+    def spectral_oversample(self) -> int:
+        """Wavelength sub-bin count; canonical source is render_config.spectral_oversample."""
+        return (
+            self.render_config.spectral_oversample
+            if self.render_config is not None
+            else 15
+        )
+
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
         """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
 

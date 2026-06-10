@@ -370,14 +370,13 @@ make test-grism-validation      # compare kl_pipe vs geko outputs
 
 ### Rules for AI Agents
 
-1. **Do not run `make format`** — the user will run formatting manually.
-2. **Branch naming**: `se/` prefix for user branches, `cc/` prefix for AI-created branches.
-3. **Read before editing**: never propose changes to code you haven't read.
-4. **Minimal changes**: don't add docstrings, comments, or type annotations to code you didn't change.
-5. **JAX first**: prefer `jax.numpy` over `numpy` in model/likelihood code.
-6. **Physical sanity checks**: verify units and dimensional consistency for any physics code.
-7. **No AI attribution**: never include `Co-Authored-By`, "Generated with Claude Code", or similar AI-generated footers in commit messages, PR descriptions, or comments. All commits must show the user as sole author.
-8. **Plan verification**: when a completed plan modifies test files, run `/test-integrity` before the final commit.
+1. **Branch naming**: `se/` prefix for user branches, `cc/` prefix for AI-created branches.
+2. **Read before editing**: never propose changes to code you haven't read.
+3. **Minimal changes**: don't add docstrings, comments, or type annotations to code you didn't change.
+4. **JAX first**: prefer `jax.numpy` over `numpy` in model/likelihood code.
+5. **Physical sanity checks**: verify units and dimensional consistency for any physics code.
+6. **No AI attribution**: never include `Co-Authored-By`, "Generated with Claude Code", or similar AI-generated footers in commit messages, PR descriptions, or comments. All commits must show the user as sole author.
+7. **Plan verification**: when a completed plan modifies test files, run `/test-integrity` before the final commit.
 
 ### PR Review Focus Categories
 

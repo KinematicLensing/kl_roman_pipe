@@ -238,13 +238,13 @@ class SpectralModel:
         z = self.get_param('z', theta_spec)
         vel_disp = self.get_param('vel_dispersion', theta_spec)
 
-        # 1. velocity map in obs frame (includes v0)
+        # Full LOS velocity in the obs frame (includes systemic v0 +
+        # rotation contribution). Used directly in the Doppler shift so
+        # v0 has its proper physical effect on the observed line
+        # wavelength. The v0/z degeneracy is real and is left to the
+        # caller to manage at the prior level.
         X, Y = build_map_grid_from_image_pars(cube_pars.image_pars)
-        v_map = self.velocity_model(theta_vel, plane, X, Y)
-
-        # subtract v0 for rotation-only Doppler
-        v0 = self.velocity_model.get_param('v0', theta_vel)
-        v_rotation = v_map - v0  # (Nrow, Ncol)
+        v_los = self.velocity_model(theta_vel, plane, X, Y)
 
         # 2. broadband intensity (for continuum)
         I_broadband = self.intensity_model.render_unconvolved(
@@ -286,9 +286,10 @@ class SpectralModel:
             # per-line continuum
             cont = self.get_param(f'{prefix}_cont', theta_spec)
 
-            # Doppler-shifted observed wavelength per pixel
+            # Doppler-shifted observed wavelength per pixel (v_los includes
+            # systemic v0 + rotation contribution).
             lam_rest = line.line_spec.lambda_rest
-            lam_obs = lam_rest * (1.0 + z) * (1.0 + v_rotation / C_KMS)  # (Nrow, Ncol)
+            lam_obs = lam_rest * (1.0 + z) * (1.0 + v_los / C_KMS)  # (Nrow, Ncol)
 
             # intrinsic line broadening only; the slitless LSF is reproduced by
             # the PSF-per-slice + dispersion geometry downstream (see issue #40).

@@ -249,20 +249,31 @@ class TestConfig:
             'v0': {1000: 1.0, 500: 1.0, 100: 1.0, 50: 1.0, 10: 1.5},
             # nu-rscale degeneracy makes nu harder to constrain at low SNR
             'nu': {1000: 1.0, 500: 1.0, 100: 1.5, 50: 2.0, 10: 2.5},
+            # Emission-line kinematic dispersion (line width). Empirical
+            # 10-seed scan at SNR=1000 with the joint-phot-grism setup
+            # showed mean offset -0.4% +/- 1.5% std (consistent with the
+            # Fisher floor of ~1.65% inferred from the slice curvature).
+            # The 1/SNR scaling of the offset is clean (no systematic bias
+            # observed). 3x scaling places the tolerance 1-sigma above the
+            # Fisher floor at SNR=1000.
+            'dispersion': {1000: 3.0, 500: 3.0, 100: 3.0, 50: 3.0, 10: 3.0},
         }
 
-        # Optimizer test scaling (more lenient for weakly constrained params)
+        # Optimizer test scaling (more lenient for weakly constrained params).
+        # Keys are unprefixed; get_tolerance strips a leading dotted prefix
+        # (e.g. 'vel.x0' / 'F087.x0' / 'Halpha.x0' all lookup 'x0').
         self.optimizer_param_scaling = {
             # Shear degeneracies with other geometric parameters in optimization
             'g1': {1000: 2.0, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
             'g2': {1000: 2.0, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
             # v0 can get stuck in local optima
             'v0': {1000: 1.5, 500: 1.5, 100: 1.5, 50: 2.0, 10: 2.5},
-            # Offsets can have shallow likelihood surfaces
-            'vel_x0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
-            'vel_y0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
-            'int_x0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
-            'int_y0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
+            # Offsets can have shallow likelihood surfaces (applies to vel + intensity)
+            'x0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
+            'y0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
+            # theta_int partially degenerate with (g1, g2) under joint
+            # optimization when shear is resolved at high SNR.
+            'theta_int': {10000: 1.5},
             # nu-rscale degeneracy in optimization
             'nu': {1000: 1.5, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
         }
@@ -273,18 +284,19 @@ class TestConfig:
         # (e.g. emulator-induced bias on n=4 bulge profile parameters).
         self.composite_param_scaling = {}
 
-        # absolute tolerance floor (for parameters near zero)
-        # if true value is very small, relative error is misleading
+        # absolute tolerance floor (for parameters near zero).
+        # Keys are unprefixed defaults; get_tolerance tries the full dotted name
+        # first, then falls back to the suffix after the first '.'. Add a prefixed
+        # entry (e.g. 'vel.x0') only when a band / component / channel needs a
+        # tolerance distinct from the shared default.
         self.absolute_tolerance_floor = {
             'g1': 0.004,  # noise floor ~0.003 for g~0.02 at SNR=10 on non-square grids
             'g2': 0.004,
-            'vel_x0': 0.1,
-            'vel_y0': 0.1,
-            'int_x0': 0.1,
-            'int_y0': 0.1,
-            'int_h_over_r': 0.01,  # low sensitivity at h/r=0.1
-            'disk_h_over_r': 0.01,  # composite disk: same physical param as int_h_over_r
-            'bulge_h_over_hlr': 0.01,  # composite bulge: same physical param as int_h_over_r
+            'x0': 0.1,  # shared default for vel + intensity centroids
+            'y0': 0.1,
+            'h_over_r': 0.01,  # low sensitivity at h/r=0.1
+            'disk_h_over_r': 0.01,  # composite disk: same physical param as h_over_r
+            'bulge_h_over_hlr': 0.01,  # composite bulge: same physical param as h_over_r
             'nu': 0.05,  # Spergel index absolute floor
         }
 
@@ -410,9 +422,18 @@ class TestConfig:
                 else self.likelihood_slice_param_scaling
             )
 
+        # Parameter-name lookup: exact match (full dotted name) first, then
+        # suffix after the first '.' (e.g. 'F087.x0' -> 'x0'). Lets the dict
+        # carry shared defaults under unprefixed keys while permitting per-
+        # namespace overrides (e.g. 'vel.x0') when physics demands them.
+        suffix_key = param_name.split('.', 1)[-1] if '.' in param_name else param_name
+
         # Apply parameter-specific scaling
         if param_name in param_scaling:
             scaling = param_scaling[param_name].get(snr, 1.0)
+            relative_tol = base_tol * scaling
+        elif suffix_key in param_scaling:
+            scaling = param_scaling[suffix_key].get(snr, 1.0)
             relative_tol = base_tol * scaling
         else:
             relative_tol = base_tol
@@ -424,7 +445,10 @@ class TestConfig:
         # compute absolute tolerance
         # use the larger of: (relative_tol × |value|) or absolute_floor
         absolute_from_relative = relative_tol * abs(param_value)
-        absolute_floor = self.absolute_tolerance_floor.get(param_name, 0.0)
+        if param_name in self.absolute_tolerance_floor:
+            absolute_floor = self.absolute_tolerance_floor[param_name]
+        else:
+            absolute_floor = self.absolute_tolerance_floor.get(suffix_key, 0.0)
         absolute_tol = max(absolute_from_relative, absolute_floor)
 
         if has_psf:
@@ -629,8 +653,19 @@ def check_degenerate_product_recovery(
         Statistics about the product recovery.
     """
 
-    # Check if required parameters exist
-    if 'vcirc' not in pars_true or 'cosi' not in pars_true:
+    # Look up vcirc under either the unprefixed name or the dotted
+    # ``vel.vcirc`` form (callers may use either). cosi is shared and
+    # unprefixed in both conventions.
+    def _vcirc(pars):
+        if 'vcirc' in pars:
+            return pars['vcirc']
+        if 'vel.vcirc' in pars:
+            return pars['vel.vcirc']
+        return None
+
+    vcirc_true = _vcirc(pars_true)
+    vcirc_recovered = _vcirc(pars_recovered)
+    if vcirc_true is None or 'cosi' not in pars_true:
         return True, {'note': 'vcirc or cosi not in model, skipping product check'}
 
     # Set tolerance based on SNR if not explicitly provided
@@ -651,11 +686,11 @@ def check_degenerate_product_recovery(
 
     # Compute true product
     sini_true = np.sqrt(1 - pars_true['cosi'] ** 2)
-    product_true = pars_true['vcirc'] * sini_true
+    product_true = vcirc_true * sini_true
 
     # Compute recovered product
     sini_recovered = np.sqrt(1 - pars_recovered['cosi'] ** 2)
-    product_recovered = pars_recovered['vcirc'] * sini_recovered
+    product_recovered = vcirc_recovered * sini_recovered
 
     # Check tolerance
     abs_error = abs(product_recovered - product_true)
@@ -824,7 +859,7 @@ def slice_likelihood_1d(
 
 def slice_all_parameters(
     log_like_fn: Callable,
-    model,
+    sampled_names,
     theta_true: jnp.ndarray,
     config: TestConfig,
     n_points: int = 201,
@@ -838,8 +873,10 @@ def slice_all_parameters(
     ----------
     log_like_fn : callable
         JIT-compiled log-likelihood function.
-    model : Model
-        Model instance (for parameter names).
+    sampled_names : sequence of str
+        Ordered names of sampled parameters (e.g. ``priors.sampled_names``).
+        Defines the index → name mapping used to label slices and align with
+        ``theta_true``.
     theta_true : jnp.ndarray
         True parameter array.
     config : TestConfig
@@ -859,7 +896,7 @@ def slice_all_parameters(
 
     slices = {}
 
-    for idx, param_name in enumerate(model.PARAMETER_NAMES):
+    for idx, param_name in enumerate(sampled_names):
         param_values, log_probs = slice_likelihood_1d(
             log_like_fn,
             theta_true,

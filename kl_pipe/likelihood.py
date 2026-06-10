@@ -711,7 +711,7 @@ def _log_likelihood_grism_source(
     obs: 'GrismObs',
     sampled_names: tuple,
     fixed_pars: dict,
-    spectral_oversample: int = 5,
+    spectral_oversample: int = 15,
 ) -> float:
     """SourceModel grism log-likelihood for one dispersed observation."""
     pars = _build_pars_dict(theta_sampled, sampled_names, fixed_pars)
@@ -740,7 +740,7 @@ def _log_likelihood_total_source(
     velocity_obs,
     sampled_names: tuple,
     fixed_pars: dict,
-    spectral_oversample: int = 5,
+    spectral_oversample: int = 15,
 ) -> float:
     """Dispatch sum over all populated channels for SourceModel inference.
 
@@ -781,7 +781,7 @@ def create_jitted_likelihood_from_obs(
     image_obs: dict = None,
     grism_obs: dict = None,
     velocity_obs=None,
-    spectral_oversample: int = 5,
+    spectral_oversample: int = 15,
 ) -> Callable[[jnp.ndarray], float]:
     """JIT-compiled total log-likelihood for SourceModel-based inference.
 

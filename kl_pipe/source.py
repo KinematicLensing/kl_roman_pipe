@@ -220,7 +220,7 @@ class SourceModel:
         pars: dict,
         obs: 'GrismObs',
         plane: str = 'obs',
-        spectral_oversample: int = 5,
+        spectral_oversample: int | None = None,
     ) -> jnp.ndarray:
         """Render the dispersed 2D grism image.
 
@@ -240,10 +240,23 @@ class SourceModel:
            every wavelength slice. Per-line / wavelength-dependent PSFs
            and per-line sub-cubes are tracked as an open architectural
            item — see issue #51. Deferred past Phase 3.
+
+        Parameters
+        ----------
+        spectral_oversample : int, optional
+            Wavelength sub-bin count for cube assembly. When ``None``
+            (default), reads ``obs.spectral_oversample`` (which itself
+            reads from ``obs.render_config.spectral_oversample``,
+            default 5). Pass an explicit value only to override the
+            obs-recorded setting (e.g., convergence tests).
         """
         from kl_pipe.dispersion import disperse_cube
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.spectral import CubePars
+
+        # resolve spectral_oversample: explicit kwarg wins, else read from obs
+        if spectral_oversample is None:
+            spectral_oversample = obs.spectral_oversample
 
         # build_cube spatial grid: fine when oversampling is active
         if obs.psf_data is not None and obs.oversample > 1:
@@ -343,7 +356,7 @@ class SourceModel:
         self,
         pars: dict,
         cube_pars: 'CubePars',
-        spectral_oversample: int = 5,
+        spectral_oversample: int = 15,
         plane: str = 'obs',
         image_rotation: float = 0.0,
     ) -> jnp.ndarray:
@@ -396,14 +409,19 @@ class SourceModel:
 
         z = pars['z']
 
-        # velocity map at the cube spatial grid
+        # Full LOS velocity at the cube spatial grid. ``v_map`` already
+        # includes the systemic ``v0`` (the velocity model evaluates
+        # ``v_los = v0 + v_rotation``); we pass it straight into the Doppler
+        # shift below so v0 has its proper physical effect on the observed
+        # line wavelength. The degeneracy between v0 and z is real and is
+        # handled at the prior level (typical workflow: fix z from an outside
+        # estimate and either fix v0=0 or let it absorb residual systemic
+        # motion within a sigma_z-aware prior).
         X, Y = build_map_grid_from_image_pars(cube_pars.image_pars)
         vm = self.velocity_model
         theta_vel = _build_component_theta(pars, 'vel', vm.PARAMETER_NAMES)
         theta_vel = _apply_obs_rotation(theta_vel, vm.PARAMETER_NAMES, image_rotation)
-        v_map = vm(theta_vel, plane, X, Y)
-        v0 = vm.get_param('v0', theta_vel)
-        v_rotation = v_map - v0  # rotation-only Doppler
+        v_los = vm(theta_vel, plane, X, Y)
 
         # build the fine wavelength grid
         lambda_coarse = cube_pars.lambda_grid
@@ -431,8 +449,9 @@ class SourceModel:
             )
             I_line = int_model(theta_int, plane, X, Y)
 
-            # Doppler-shifted observed wavelength per pixel
-            lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_rotation / _C_KMS)
+            # Doppler-shifted observed wavelength per pixel (full LOS v_los
+            # includes systemic v0 + rotation contribution).
+            lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_los / _C_KMS)
 
             # intrinsic kinematic dispersion (resolving dispersion_key)
             disp_owner = (

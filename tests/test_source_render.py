@@ -422,6 +422,73 @@ class TestBuildCube:
         with pytest.raises(ValueError, match="velocity_model"):
             src.build_cube(pars, cube_pars)
 
+    def test_v0_shifts_cube(self, cube_pars, pars):
+        """Non-zero ``vel.v0`` must shift the rendered cube in wavelength.
+
+        Regression for a previous bug where build_cube subtracted v0
+        before computing Doppler ("rotation-only Doppler"), making the
+        systemic velocity observationally invisible. The physical
+        behavior is that v_los = v0 + v_rotation, and the line wavelength
+        at each pixel must shift by (1 + v_los/c), including the v0
+        contribution.
+
+        The v0/z degeneracy is real and is left to the caller to manage
+        at the prior level -- but the *forward model* must include v0 or
+        a non-zero v0 silently has no effect (a class of bug this test
+        is designed to catch).
+        """
+        from kl_pipe.source import _C_KMS as c_kms
+
+        src = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(intensity=InclinedExponentialModel())
+            },
+        )
+
+        pars_zero = dict(pars)
+        pars_zero['vel.v0'] = 0.0
+
+        pars_nonzero = dict(pars)
+        pars_nonzero['vel.v0'] = 200.0  # km/s
+
+        cube_zero = src.build_cube(pars_zero, cube_pars, spectral_oversample=3)
+        cube_v0 = src.build_cube(pars_nonzero, cube_pars, spectral_oversample=3)
+
+        # 1. cubes must differ
+        assert not jnp.allclose(cube_zero, cube_v0), (
+            "cube with v0=200 km/s identical to cube with v0=0 -- "
+            "v0 is not entering the Doppler shift (renderer bug)"
+        )
+
+        # 2. spectral centroid must shift by (1 + v0/c) at fixed z.
+        # Compute the wavelength-weighted mean per pixel and average over
+        # nonzero pixels.
+        lam_grid = cube_pars.lambda_grid
+
+        def centroid(cube):
+            num = (cube * lam_grid[None, None, :]).sum(axis=-1)
+            den = cube.sum(axis=-1)
+            # mean wavelength where there's significant flux
+            mask = den > 0.01 * float(den.max())
+            return float((num[mask] / den[mask]).mean())
+
+        lam_mean_zero = centroid(cube_zero)
+        lam_mean_v0 = centroid(cube_v0)
+        shift = lam_mean_v0 - lam_mean_zero
+
+        # Expected shift: lambda_rest * (1+z) * v0 / c
+        # lambda_rest is the Halpha registry value (656.28 nm)
+        from kl_pipe.lines import LINE_LAMBDAS
+
+        z = pars_zero['z']
+        expected = LINE_LAMBDAS['Halpha'] * (1.0 + z) * (200.0 / c_kms)
+        # Tolerance 5% accounts for line-broadening + intensity weighting
+        assert abs(shift - expected) / expected < 0.05, (
+            f"v0=200 km/s should shift line centroid by ~{expected:.4f} nm; "
+            f"got {shift:.4f} nm"
+        )
+
     def test_no_emission_lines_raises(self, cube_pars, pars):
         src = SourceModel(velocity_model=CenteredVelocityModel())
         with pytest.raises(ValueError, match="emission_lines"):

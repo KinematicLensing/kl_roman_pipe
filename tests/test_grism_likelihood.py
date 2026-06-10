@@ -1,25 +1,21 @@
 """
-Tests for the grism likelihood + ``InferenceTask`` factory hookup.
+Tests for the SourceModel grism likelihood via ``InferenceTask.from_obs``.
 
 Covers:
-  - Unit tests: eval / JIT compile / grad / factory construction (grism-only
-    and joint photometry+grism)
-  - Likelihood slice tests: ``Ha_flux`` at SNR in {100, 1000}; ``vcirc``
-    and ``vel_dispersion`` at SNR=1000.
-  - One smoke optimizer-recovery test for ``Ha_flux`` + ``vcirc`` +
-    ``vel_dispersion`` at SNR=1000.
+  - Unit tests: likelihood eval + JIT + grad + factory construction for
+    grism-only and joint photometry+grism patterns.
+  - Likelihood slice tests: ``Halpha.flux`` at SNR in {100, 1000}; ``vel.vcirc``
+    and ``Halpha.dispersion`` at SNR=1000.
+  - One smoke optimizer-recovery test for ``Halpha.flux`` + ``vel.vcirc`` +
+    ``Halpha.dispersion`` at SNR=1000.
 
 The smoke recovery test fixes most parameters and optimizes over a small subset
-to confirm end-to-end inference works. It is not a tight tolerance gate;
-tighter parameter recovery awaits the centroid-decoupling refactor described
-in ``docs/plans/phase3_sourcemodel_refactor.md``.
+to confirm end-to-end inference works. It is not a tight tolerance gate.
 
-Known limitations of the current grism likelihood (see
-``docs/plans/grism_inference_plan.md``):
-  - The photometric image and the emission cube inside ``render_grism``
-    share ``kl_model.intensity_model``'s single ``int_x0``/``int_y0``
-    centroid pair. Independent astrometric solutions across channels are
-    not yet supported. Tracked in ``docs/plans/phase3_sourcemodel_refactor.md``.
+Continuum coverage uses ``EmissionLine(continuum=...)`` with
+``Halpha.cont.flux=0.05`` fixed. The continuum's spatial parameters are fixed
+equal to the line's own spatial parameters (i.e. the continuum and the line
+share a single spatial profile in this test).
 """
 
 import os
@@ -39,23 +35,12 @@ import galsim
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import OffsetVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
-from kl_pipe.spectral import (
-    SpectralConfig,
-    SpectralModel,
-    halpha_line,
-    HALPHA,
-)
+from kl_pipe.source import SourceModel
+from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
 from kl_pipe.dispersion import build_grism_pars_for_line
 from kl_pipe.observation import build_image_obs, build_grism_obs
-from kl_pipe.priors import PriorDict, Uniform, Gaussian
+from kl_pipe.priors import PriorDict, Uniform
 from kl_pipe.sampling.task import InferenceTask
-from kl_pipe.likelihood import (
-    _log_likelihood_grism,
-    _log_likelihood_joint_photometry_grism,
-    create_jitted_likelihood_grism,
-    create_jitted_likelihood_joint_photometry_grism,
-)
 
 # output directory for diagnostic plots
 OUT_DIR = os.path.join(os.path.dirname(__file__), 'out', 'grism_likelihood')
@@ -67,57 +52,92 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # =============================================================================
 
 _IMAGE_PARS = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='ij')
-_SHARED_PARS = {'cosi', 'theta_int', 'g1', 'g2'}
 _Z = 1.0
 
-# Truth parameters spanning velocity, intensity, and spectral sub-models. The
-# spectral sub-model adds ``z`` plus per-line ``Ha_flux``, ``Ha_cont``,
-# and shared ``vel_dispersion``.
+# Truth parameters in the SourceModel dotted-key namespace.
+# Continuum spatial pars are fixed equal to the line's own spatial pars,
+# so the continuum and the line share a single spatial profile.
 _TRUE_PARS = {
-    # velocity
-    'v0': 0.0,
-    'vcirc': 200.0,
-    'vel_rscale': 0.4,
-    'vel_x0': 0.0,
-    'vel_y0': 0.0,
-    # intensity
-    'flux': 100.0,
-    'int_rscale': 0.3,
-    'int_h_over_r': 0.15,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
-    # shared geometry
+    # shared geometry (unprefixed)
     'cosi': 0.6,
     'theta_int': 0.7,
     'g1': 0.0,
     'g2': 0.0,
-    # spectral
     'z': _Z,
-    'vel_dispersion': 50.0,
-    'Ha_flux': 100.0,
-    'Ha_cont': 0.05,
+    # velocity (vel. prefix)
+    'vel.v0': 0.0,
+    'vel.vcirc': 200.0,
+    'vel.rscale': 0.4,
+    'vel.x0': 0.0,
+    'vel.y0': 0.0,
+    # broadband F087
+    'F087.flux': 100.0,
+    'F087.rscale': 0.3,
+    'F087.h_over_r': 0.15,
+    'F087.x0': 0.0,
+    'F087.y0': 0.0,
+    # Halpha emission line — own spatial profile + continuum
+    'Halpha.flux': 100.0,
+    'Halpha.rscale': 0.3,
+    'Halpha.h_over_r': 0.15,
+    'Halpha.x0': 0.0,
+    'Halpha.y0': 0.0,
+    'Halpha.dispersion': 50.0,
+    # Halpha continuum (spatial pars fixed = line spatial pars)
+    'Halpha.cont.flux': 0.05,
+    'Halpha.cont.rscale': 0.3,
+    'Halpha.cont.h_over_r': 0.15,
+    'Halpha.cont.x0': 0.0,
+    'Halpha.cont.y0': 0.0,
 }
 
 
+def _make_priors():
+    """Production-typical priors: Halpha.flux, vel.vcirc, Halpha.dispersion
+    sampled (Uniform); everything else fixed at truth. Used by the unit
+    + slice + recovery tests so the sampled namespace is consistent."""
+    priors_dict = {k: float(v) for k, v in _TRUE_PARS.items()}
+    priors_dict['Halpha.flux'] = Uniform(20.0, 200.0)
+    priors_dict['vel.vcirc'] = Uniform(100.0, 300.0)
+    priors_dict['Halpha.dispersion'] = Uniform(20.0, 150.0)
+    return PriorDict(priors_dict)
+
+
+def _theta_sampled_truth(priors):
+    """Pack the sampled-truth vector in priors.sampled_names order."""
+    return jnp.array([_TRUE_PARS[n] for n in priors.sampled_names])
+
+
 @pytest.fixture(scope='module')
-def kl_model():
-    """KLModel with Hα emission line, OffsetVelocityModel, InclinedExponential."""
-    vel_model = OffsetVelocityModel()
-    int_model = InclinedExponentialModel()
-    spec_config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-    spec_model = SpectralModel(spec_config, int_model, vel_model)
-    return KLModel(
-        vel_model,
-        int_model,
-        shared_pars=_SHARED_PARS,
-        spectral_model=spec_model,
+def source():
+    """SourceModel: OffsetVelocity + broadband F087 + Halpha with continuum.
+
+    Per-line continuum exercises the ``EmissionLine(continuum=...)`` code
+    path. The continuum carries its own ``Halpha.cont.*`` dotted keys; its
+    spatial truth is set equal to the line's own spatial truth in
+    ``_TRUE_PARS`` so the continuum and the line share a single spatial
+    profile in this test.
+    """
+    return SourceModel(
+        velocity_model=OffsetVelocityModel(),
+        broadband_models={'F087': InclinedExponentialModel()},
+        emission_lines={
+            'Halpha': EmissionLine(
+                intensity=InclinedExponentialModel(),
+                continuum=InclinedExponentialModel(),
+            ),
+        },
     )
 
 
 @pytest.fixture(scope='module')
-def theta_true(kl_model):
-    """Composite theta array at truth."""
-    return kl_model.pars2theta(_TRUE_PARS)
+def priors():
+    return _make_priors()
+
+
+@pytest.fixture(scope='module')
+def theta_true_sampled(priors):
+    return _theta_sampled_truth(priors)
 
 
 @pytest.fixture(scope='module')
@@ -129,18 +149,18 @@ def roman_psf():
 @pytest.fixture(scope='module')
 def grism_pars():
     return build_grism_pars_for_line(
-        HALPHA.lambda_rest,
+        LINE_LAMBDAS['Halpha'],
         redshift=_Z,
         image_pars=_IMAGE_PARS,
         dispersion=1.1,
     )
 
 
-def _build_grism_synthetic(kl_model, theta_true, grism_pars, psf, snr, seed=0):
+def _build_grism_synthetic(source, pars, grism_pars, psf, snr, seed=0):
     """Render a clean grism image, add Gaussian noise calibrated to a target
     matched-filter SNR, return (data, variance, obs_with_data)."""
     obs_no_data = build_grism_obs(grism_pars, z=_Z, psf=psf)
-    clean = kl_model.render_grism(theta_true, obs_no_data)
+    clean = source.render_grism(pars, obs_no_data)
     clean = np.asarray(clean)
 
     # matched-filter SNR for a known signal vs constant-variance Gaussian noise:
@@ -163,15 +183,10 @@ def _build_grism_synthetic(kl_model, theta_true, grism_pars, psf, snr, seed=0):
     return jnp.asarray(data), float(variance), obs
 
 
-def _build_intensity_synthetic(kl_model, theta_true, psf, snr, seed=1):
+def _build_intensity_synthetic(source, pars, psf, snr, seed=1, band_key='F087'):
     """Render a clean broadband intensity image and add Gaussian noise."""
-    obs_no_data = build_image_obs(
-        _IMAGE_PARS, int_model=kl_model.intensity_model, psf=psf
-    )
-    theta_int = kl_model.get_intensity_pars(theta_true)
-    clean = kl_model.intensity_model.render_image(
-        theta_int, obs=obs_no_data, render_config=obs_no_data.render_config
-    )
+    obs_no_data = build_image_obs(_IMAGE_PARS, psf=psf, broadband_key=band_key)
+    clean = source.render_broadband(pars, obs_no_data, band_key=band_key)
     clean = np.asarray(clean)
 
     signal_power = float(np.sum(clean**2))
@@ -183,28 +198,28 @@ def _build_intensity_synthetic(kl_model, theta_true, psf, snr, seed=1):
 
     obs = build_image_obs(
         _IMAGE_PARS,
-        int_model=kl_model.intensity_model,
         psf=psf,
         data=jnp.asarray(data),
         variance=float(variance),
+        broadband_key=band_key,
     )
     return jnp.asarray(data), float(variance), obs
 
 
 @pytest.fixture(scope='module')
-def grism_obs_high_snr(kl_model, theta_true, grism_pars, roman_psf):
+def grism_obs_high_snr(source, grism_pars, roman_psf):
     """High-SNR grism synthetic obs (SNR=1000) — used for unit + recovery tests."""
     _, _, obs = _build_grism_synthetic(
-        kl_model, theta_true, grism_pars, roman_psf, snr=1000, seed=0
+        source, _TRUE_PARS, grism_pars, roman_psf, snr=1000, seed=0
     )
     return obs
 
 
 @pytest.fixture(scope='module')
-def image_obs_high_snr(kl_model, theta_true, roman_psf):
+def image_obs_high_snr(source, roman_psf):
     """High-SNR broadband intensity synthetic obs (SNR=1000)."""
     _, _, obs = _build_intensity_synthetic(
-        kl_model, theta_true, roman_psf, snr=1000, seed=1
+        source, _TRUE_PARS, roman_psf, snr=1000, seed=1
     )
     return obs
 
@@ -215,62 +230,63 @@ def image_obs_high_snr(kl_model, theta_true, roman_psf):
 
 
 class TestGrismLikelihoodUnits:
-    """Smoke tests confirming the grism likelihood evaluates, JITs, and grads."""
+    """Smoke tests confirming the SourceModel grism likelihood evaluates,
+    JIT-compiles, and produces finite gradients."""
 
     def test_log_likelihood_grism_evaluates(
-        self, kl_model, theta_true, grism_obs_high_snr
+        self, source, priors, theta_true_sampled, grism_obs_high_snr
     ):
-        """log_like at theta_true is finite."""
-        log_l = _log_likelihood_grism(theta_true, grism_obs_high_snr, kl_model)
+        """log_like at truth is finite."""
+        task = InferenceTask.from_obs(
+            source, priors, grism_obs={'roll0': grism_obs_high_snr}
+        )
+        log_l = task.likelihood_fn(theta_true_sampled)
         assert jnp.isfinite(log_l), f"log_like not finite: {log_l}"
 
     def test_log_likelihood_grism_jit_compiles(
-        self, kl_model, theta_true, grism_obs_high_snr
+        self, source, priors, theta_true_sampled, grism_obs_high_snr
     ):
-        """JIT-compiled grism likelihood compiles and runs."""
-        log_like_fn = create_jitted_likelihood_grism(kl_model, grism_obs_high_snr)
-        log_l = log_like_fn(theta_true)
+        """task.likelihood_fn is already JIT-compiled; re-invoke to confirm."""
+        task = InferenceTask.from_obs(
+            source, priors, grism_obs={'roll0': grism_obs_high_snr}
+        )
+        log_l = task.likelihood_fn(theta_true_sampled)
         assert jnp.isfinite(log_l)
 
     def test_log_likelihood_grism_grad_finite(
-        self, kl_model, theta_true, grism_obs_high_snr
+        self, source, priors, theta_true_sampled, grism_obs_high_snr
     ):
-        """jax.grad of grism likelihood produces finite values for all params."""
-        log_like_fn = create_jitted_likelihood_grism(kl_model, grism_obs_high_snr)
-        grad_fn = jax.grad(log_like_fn)
-        grad = grad_fn(theta_true)
+        """jax.grad of grism likelihood produces finite values for all sampled params."""
+        task = InferenceTask.from_obs(
+            source, priors, grism_obs={'roll0': grism_obs_high_snr}
+        )
+        grad_fn = jax.grad(task.likelihood_fn)
+        grad = grad_fn(theta_true_sampled)
         assert jnp.all(jnp.isfinite(grad)), (
             f"non-finite gradient components: indices "
             f"{jnp.where(~jnp.isfinite(grad))[0].tolist()}"
         )
 
-    def test_from_grism_obs_factory_builds_task(
-        self, kl_model, grism_obs_high_snr, theta_true
-    ):
-        """InferenceTask.from_grism_obs builds a working task with finite log_posterior."""
-        # at least one sampled prior so theta_sampled is non-empty.
-        priors_dict = {k: float(v) for k, v in _TRUE_PARS.items()}
-        priors_dict['Ha_flux'] = Uniform(20.0, 200.0)
-        priors = PriorDict(priors_dict)
-
-        task = InferenceTask.from_grism_obs(kl_model, priors, grism_obs_high_snr)
-
+    def test_from_obs_grism_builds_task(self, source, priors, grism_obs_high_snr):
+        """InferenceTask.from_obs builds a working grism-only task with
+        finite log_posterior on a prior-sampled theta."""
+        task = InferenceTask.from_obs(
+            source, priors, grism_obs={'roll0': grism_obs_high_snr}
+        )
         theta_sampled = task.sample_prior(jax.random.PRNGKey(0), n_samples=1)[0]
         log_post = task.log_posterior(theta_sampled)
         assert jnp.isfinite(log_post), f"log_posterior not finite: {log_post}"
 
-    def test_from_joint_photometry_grism_obs_factory_builds_task(
-        self, kl_model, grism_obs_high_snr, image_obs_high_snr, theta_true
+    def test_from_obs_joint_photometry_grism_builds_task(
+        self, source, priors, grism_obs_high_snr, image_obs_high_snr
     ):
-        """from_joint_photometry_grism_obs builds a working task."""
-        priors_dict = {k: float(v) for k, v in _TRUE_PARS.items()}
-        priors_dict['Ha_flux'] = Uniform(20.0, 200.0)
-        priors = PriorDict(priors_dict)
-
-        task = InferenceTask.from_joint_photometry_grism_obs(
-            kl_model, priors, image_obs_high_snr, grism_obs_high_snr
+        """from_obs builds a joint photometry+grism task with finite log_posterior."""
+        task = InferenceTask.from_obs(
+            source,
+            priors,
+            image_obs={'F087': image_obs_high_snr},
+            grism_obs={'roll0': grism_obs_high_snr},
         )
-
         theta_sampled = task.sample_prior(jax.random.PRNGKey(0), n_samples=1)[0]
         log_post = task.log_posterior(theta_sampled)
         assert jnp.isfinite(log_post)
@@ -281,11 +297,11 @@ class TestGrismLikelihoodUnits:
 # =============================================================================
 
 
-def _slice_log_likelihood(log_like_fn, theta_true, param_idx, values):
+def _slice_log_likelihood(log_like_fn, theta_sampled, param_idx, values):
     """Evaluate log_like along a single-parameter slice (others fixed at truth)."""
     log_ls = []
     for v in values:
-        theta = theta_true.at[param_idx].set(v)
+        theta = theta_sampled.at[param_idx].set(v)
         log_ls.append(float(log_like_fn(theta)))
     return np.asarray(log_ls)
 
@@ -303,24 +319,25 @@ def _save_slice_plot(values, log_ls, true_val, peak_val, param_name, snr, out_di
     ax.set_title(f'{param_name} slice @ SNR={snr}')
     ax.legend()
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, f'slice_{param_name}_snr{snr}.png'), dpi=120)
+    fname = f'slice_{param_name.replace(".", "_")}_snr{snr}.png'
+    fig.savefig(os.path.join(out_dir, fname), dpi=120)
     plt.close(fig)
 
 
 @pytest.mark.parametrize(
     "param_name,prior_range,snr,tol_frac",
     [
-        # Ha_flux is well-constrained by the integrated line signal at both SNRs.
-        ('Ha_flux', (20.0, 200.0), 100, 0.15),
-        ('Ha_flux', (20.0, 200.0), 1000, 0.15),
-        # vcirc shifts the line wavelength across the disk; needs high SNR
+        # Halpha.flux is well-constrained by the integrated line signal at both SNRs.
+        ('Halpha.flux', (20.0, 200.0), 100, 0.15),
+        ('Halpha.flux', (20.0, 200.0), 1000, 0.15),
+        # vel.vcirc shifts the line wavelength across the disk; needs high SNR
         # because the projected velocity gradient onto the dispersion axis is
         # reduced by sin(i) * cos(theta_int_vs_dispersion).
-        ('vcirc', (100.0, 300.0), 1000, 0.15),
-        # vel_dispersion is identifiable post-LSF-refactor (sigma_eff = vel_disp);
+        ('vel.vcirc', (100.0, 300.0), 1000, 0.15),
+        # Halpha.dispersion is identifiable post-LSF-refactor (sigma_eff = vel_disp);
         # the line width on the detector reflects the kinematic dispersion plus
         # PSF+dispersion broadening (constant across the grid).
-        ('vel_dispersion', (20.0, 150.0), 1000, 0.15),
+        ('Halpha.dispersion', (20.0, 150.0), 1000, 0.15),
     ],
 )
 def test_grism_likelihood_slice_peaks_near_truth(
@@ -328,8 +345,7 @@ def test_grism_likelihood_slice_peaks_near_truth(
     param_name,
     prior_range,
     tol_frac,
-    kl_model,
-    theta_true,
+    source,
     grism_pars,
     roman_psf,
 ):
@@ -341,21 +357,26 @@ def test_grism_likelihood_slice_peaks_near_truth(
     """
     # build fresh synthetic data at this SNR
     _, _, obs = _build_grism_synthetic(
-        kl_model, theta_true, grism_pars, roman_psf, snr=snr, seed=snr * 10
+        source, _TRUE_PARS, grism_pars, roman_psf, snr=snr, seed=snr * 10
     )
-    log_like_fn = create_jitted_likelihood_grism(kl_model, obs)
 
-    # locate the param index in the composite theta
-    param_names = kl_model.PARAMETER_NAMES
+    priors = _make_priors()
+    task = InferenceTask.from_obs(source, priors, grism_obs={'roll0': obs})
+    log_like_fn = task.likelihood_fn
+
+    # locate the param index in the sampled-name vector
+    sampled_names = list(priors.sampled_names)
     assert (
-        param_name in param_names
-    ), f"{param_name} not in kl_model.PARAMETER_NAMES = {param_names}"
-    param_idx = param_names.index(param_name)
+        param_name in sampled_names
+    ), f"{param_name} not in priors.sampled_names = {sampled_names}"
+    param_idx = sampled_names.index(param_name)
     true_val = float(_TRUE_PARS[param_name])
+
+    theta_sampled = _theta_sampled_truth(priors)
 
     # 25-point slice over the prior range
     values = np.linspace(prior_range[0], prior_range[1], 25)
-    log_ls = _slice_log_likelihood(log_like_fn, theta_true, param_idx, values)
+    log_ls = _slice_log_likelihood(log_like_fn, theta_sampled, param_idx, values)
 
     # peak should be near truth
     peak_idx = int(np.argmax(log_ls))
@@ -368,7 +389,7 @@ def test_grism_likelihood_slice_peaks_near_truth(
     assert rel_err < tol_frac, (
         f"{param_name} slice peak {peak_val:.3f} differs from truth "
         f"{true_val:.3f} by {rel_err:.2%}; tolerance {tol_frac:.0%} "
-        f"(SNR={snr}). See {OUT_DIR}/slice_{param_name}_snr{snr}.png"
+        f"(SNR={snr}). See {OUT_DIR}/slice_{param_name.replace('.', '_')}_snr{snr}.png"
     )
 
 
@@ -377,43 +398,41 @@ def test_grism_likelihood_slice_peaks_near_truth(
 # =============================================================================
 
 
-def test_grism_optimizer_recovery_smoke(kl_model, theta_true, grism_obs_high_snr):
-    """Smoke test: recover Ha_flux + vcirc + vel_dispersion at SNR=1000.
+def test_grism_optimizer_recovery_smoke(source, grism_obs_high_snr):
+    """Smoke test: recover Halpha.flux + vel.vcirc + Halpha.dispersion at SNR=1000.
 
     Fixes everything else at truth; optimizes the 3 free params from a
     perturbed initial guess. Confirms end-to-end JAX gradient + scipy
-    optimizer path works for grism inference.
+    optimizer path works for grism inference under SourceModel.
 
-    Tolerances are loose (±15% relative). vel_dispersion is recoverable
-    post-LSF-refactor (sigma_eff = vel_disp).
+    Tolerances are loose (±15% relative).
     """
-    log_like_fn = create_jitted_likelihood_grism(kl_model, grism_obs_high_snr)
+    priors = _make_priors()
+    task = InferenceTask.from_obs(
+        source, priors, grism_obs={'roll0': grism_obs_high_snr}
+    )
+    log_like_fn = task.likelihood_fn
     grad_fn = jax.jit(jax.grad(log_like_fn))
 
-    param_names = kl_model.PARAMETER_NAMES
-    free_names = ['Ha_flux', 'vcirc', 'vel_dispersion']
-    free_indices = [param_names.index(n) for n in free_names]
+    sampled_names = list(priors.sampled_names)
+    free_names = ['Halpha.flux', 'vel.vcirc', 'Halpha.dispersion']
+    free_indices = [sampled_names.index(n) for n in free_names]
 
-    theta_init = np.array(theta_true)
+    theta_true_sampled = np.array(_theta_sampled_truth(priors))
     # 15% perturbation on free params for the initial guess
     rng = np.random.default_rng(42)
+    theta_init = theta_true_sampled.copy()
     for idx in free_indices:
         theta_init[idx] = theta_init[idx] * (1 + 0.15 * rng.standard_normal())
 
+    free_indices_arr = jnp.asarray(free_indices)
+
     def objective(x_free):
-        theta = (
-            jnp.asarray(theta_init)
-            .at[jnp.asarray(free_indices)]
-            .set(jnp.asarray(x_free))
-        )
+        theta = jnp.asarray(theta_init).at[free_indices_arr].set(jnp.asarray(x_free))
         return -float(log_like_fn(theta))
 
     def gradient(x_free):
-        theta = (
-            jnp.asarray(theta_init)
-            .at[jnp.asarray(free_indices)]
-            .set(jnp.asarray(x_free))
-        )
+        theta = jnp.asarray(theta_init).at[free_indices_arr].set(jnp.asarray(x_free))
         g = grad_fn(theta)
         return -np.asarray(g)[free_indices]
 
