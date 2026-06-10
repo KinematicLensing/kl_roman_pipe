@@ -167,6 +167,11 @@ test-sampling-all:
 	@echo "Running ALL MCMC sampling tests (including nautilus - slow)..."
 	@INCLUDE_NAUTILUS=1 conda run -n klpipe pytest tests/test_sampling_diagnostics.py -v
 
+.PHONY: test-flagship
+test-flagship:
+	@echo "Running flagship Roman-like joint phot+grism recovery test..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --override-ini="markers=slow"
+
 .PHONY: test-basic
 test-basic:
 	@echo "Running fast tests (excluding TNG50 and slow, no download required)..."
