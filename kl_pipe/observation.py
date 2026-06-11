@@ -194,11 +194,10 @@ class VelocityObs(ImageObs):
     """2D velocity observation with flux weighting for PSF convolution.
 
     Velocity PSF requires: v_obs = Conv(I*v, PSF) / Conv(I, PSF).
-    Three modes for intensity source:
+    Two modes for intensity source:
 
     - flux_model + flux_theta: evaluate intensity model with fixed params
     - flux_image: pre-rendered intensity map (upsampled to fine scale if needed)
-    - flux_model + flux_theta_override at render time: joint inference
     """
 
     flux_model: Optional['IntensityModel'] = None
@@ -254,7 +253,7 @@ class GrismObs:
         Boolean mask (True=valid).
     pixel_response_fft : jnp.ndarray, optional
         Precomputed BoxPixel sinc on the fine k-grid, used by the
-        post-dispersion 2D pixel-response step in ``KLModel.render_grism``.
+        post-dispersion 2D pixel-response step in ``SourceModel.render_grism``.
         Set by ``build_grism_obs`` when ``oversample > 1``; None at
         ``oversample == 1`` (no fine-grid sinc needed).
     psf : galsim.GSObject, optional
@@ -714,9 +713,8 @@ def build_velocity_obs(
         if flux_model is None and flux_image is None and flux_weight_key is None:
             raise ValueError(
                 "Velocity PSF requires a flux source. Provide flux_model + "
-                "flux_theta (legacy joint inference), flux_image (pre-rendered), "
-                "or flux_weight_key (SourceModel emission line reference). "
-                "For legacy joint inference use build_joint_obs."
+                "flux_theta, flux_image (pre-rendered), or flux_weight_key "
+                "(SourceModel emission line reference)."
             )
 
         # process flux_image: resample + upsample if needed
@@ -791,136 +789,6 @@ def build_velocity_obs(
         flux_image=processed_flux_image,
         psf=psf,
         flux_weight_key=flux_weight_key,
-    )
-
-
-def build_joint_obs(
-    image_pars_vel: ImagePars,
-    image_pars_int: ImagePars,
-    intensity_model: 'IntensityModel',
-    *,
-    psf_vel=None,
-    psf_int=None,
-    oversample: int = 5,
-    gsparams=None,
-    data_vel=None,
-    variance_vel=None,
-    mask_vel=None,
-    data_int=None,
-    variance_int=None,
-    mask_int=None,
-    pixel_response=_PIXEL_RESPONSE_UNSET,
-    render_config_vel=None,
-    render_config_int=None,
-) -> tuple:
-    """Build paired velocity+intensity obs for joint inference.
-
-    Velocity gets flux_model=intensity_model (joint mode: flux_theta
-    provided at render time via flux_theta_override).
-
-    Parameters
-    ----------
-    pixel_response : PixelResponse or None, optional
-        Passed through to build_image_obs for the intensity obs.
-        Default (sentinel): auto-construct BoxPixel. Pass None to disable.
-    render_config_vel, render_config_int : RenderConfig, optional
-        Per-channel rendering recipes; default constructs from ``oversample``.
-
-    Returns
-    -------
-    obs_vel : VelocityObs
-    obs_int : ImageObs
-    """
-    # velocity obs: flux_model set for joint mode, no flux_theta/flux_image
-    obs_vel = _build_velocity_obs_joint(
-        image_pars_vel,
-        psf=psf_vel,
-        oversample=oversample,
-        gsparams=gsparams,
-        data=data_vel,
-        variance=variance_vel,
-        mask=mask_vel,
-        flux_model=intensity_model,
-        render_config=render_config_vel,
-    )
-
-    obs_int = build_image_obs(
-        image_pars_int,
-        psf=psf_int,
-        oversample=oversample,
-        gsparams=gsparams,
-        data=data_int,
-        variance=variance_int,
-        mask=mask_int,
-        int_model=intensity_model,
-        pixel_response=pixel_response,
-        render_config=render_config_int,
-    )
-
-    return obs_vel, obs_int
-
-
-def _build_velocity_obs_joint(
-    image_pars,
-    *,
-    psf=None,
-    oversample=5,
-    gsparams=None,
-    data=None,
-    variance=None,
-    mask=None,
-    flux_model=None,
-    render_config=None,
-):
-    """Build VelocityObs for joint mode (flux_model set, no flux_theta/flux_image)."""
-    if render_config is None:
-        render_config = RenderConfig(oversample=oversample)
-    oversample = render_config.oversample
-
-    X, Y = build_map_grid_from_image_pars(image_pars)
-
-    psf_data = None
-    fine_X = None
-    fine_Y = None
-
-    if psf is not None:
-        from kl_pipe.psf import precompute_psf_fft
-
-        psf_data = precompute_psf_fft(
-            psf,
-            image_pars=image_pars,
-            oversample=oversample,
-            gsparams=gsparams,
-        )
-
-    # fine grids: create when oversample > 1, regardless of PSF
-    if oversample > 1:
-        fine_image_pars = image_pars.make_fine_scale(oversample)
-        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
-
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
-
-    return VelocityObs(
-        image_pars=image_pars,
-        X=X,
-        Y=Y,
-        render_config=render_config,
-        psf_data=psf_data,
-        fine_X=fine_X,
-        fine_Y=fine_Y,
-        data=data,
-        variance=variance,
-        mask=mask,
-        kspace_psf_fft=None,
-        flux_model=flux_model,
-        flux_theta=None,
-        flux_image=None,
-        psf=psf,
     )
 
 

@@ -8,6 +8,8 @@ BlackJAX) through a common interface.
 Quick Start
 -----------
 >>> from kl_pipe.velocity import OffsetVelocityModel
+>>> from kl_pipe.source import SourceModel
+>>> from kl_pipe.observation import build_velocity_obs
 >>> from kl_pipe.priors import Uniform, Gaussian, TruncatedNormal, PriorDict
 >>> from kl_pipe.sampling import (
 ...     InferenceTask, EnsembleSamplerConfig, build_sampler
@@ -15,19 +17,15 @@ Quick Start
 >>>
 >>> # Define priors (sampled) and fixed values
 >>> priors = PriorDict({
-...     'vcirc': Uniform(100, 350),
+...     'vel.vcirc': Uniform(100, 350),
 ...     'cosi': TruncatedNormal(0.5, 0.2, 0.1, 0.99),
-...     'v0': 10.0,  # Fixed
+...     'vel.v0': 10.0,  # Fixed
 ... })
 >>>
 >>> # Create inference task
->>> task = InferenceTask.from_velocity_model(
-...     model=OffsetVelocityModel(),
-...     priors=priors,
-...     data_vel=data,
-...     variance_vel=25.0,
-...     image_pars=image_pars,
-... )
+>>> source = SourceModel(velocity_model=OffsetVelocityModel())
+>>> obs = build_velocity_obs(image_pars, data=data, variance=25.0)
+>>> task = InferenceTask.from_obs(source, priors, velocity_obs=obs)
 >>>
 >>> # Configure and run sampler
 >>> config = EnsembleSamplerConfig(n_walkers=64, n_iterations=5000)

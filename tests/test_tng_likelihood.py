@@ -11,8 +11,31 @@ import numpy as np
 from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel
-from kl_pipe.likelihood import create_jitted_likelihood_velocity
+from kl_pipe.source import SourceModel
+from kl_pipe.priors import PriorDict, Uniform
+from kl_pipe.sampling.task import InferenceTask
 from kl_pipe.observation import build_velocity_obs
+
+
+def _velocity_only_task(obs_vel, vcirc_low=100.0, vcirc_high=300.0):
+    """Build a velocity-only InferenceTask with vcirc as the sole sampled param.
+
+    All other geometry/velocity params are fixed; theta_sampled is a length-1
+    vector holding vcirc. Mirrors the legacy single-parameter grid-search setup.
+    """
+    source = SourceModel(velocity_model=CenteredVelocityModel())
+    priors = PriorDict(
+        {
+            'vel.vcirc': Uniform(vcirc_low, vcirc_high),
+            'vel.v0': 0.0,
+            'vel.rscale': 1.0,
+            'cosi': 0.7,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+        }
+    )
+    return InferenceTask.from_obs(source, priors, velocity_obs=obs_vel)
 
 
 # Mark all tests in this file to require TNG data
@@ -102,29 +125,15 @@ def test_tng_model_fitting_high_snr(test_galaxy, image_pars_medium):
     )
     data_vel, variance = gen.generate_velocity_map(config, snr=1000)
 
-    # For now, just test that we can create a likelihood
-    # Future: implement proper masking support in likelihood functions
-    model = CenteredVelocityModel()
-
     # Simple check: likelihood function can be created and evaluated
     try:
         obs_vel = build_velocity_obs(
             image_pars_medium, data=data_vel, variance=variance
         )
-        log_like = create_jitted_likelihood_velocity(model, obs_vel)
+        task = _velocity_only_task(obs_vel)
 
-        # Test with reasonable parameters
-        pars_test = {
-            'v0': 0.0,
-            'vcirc': 200.0,
-            'vel_rscale': 1.0,
-            'cosi': 0.7,
-            'theta_int': 0.0,
-            'g1': 0.0,
-            'g2': 0.0,
-        }
-        theta_test = model.pars2theta(pars_test)
-        ll_value = log_like(theta_test)
+        # evaluate at vcirc = 200 km/s (sole sampled param)
+        ll_value = task.log_likelihood(np.array([200.0]))
 
         assert np.isfinite(ll_value), "Log-likelihood should be finite"
         print(f"\nLog-likelihood at test parameters: {ll_value:.2f}")
@@ -149,31 +158,16 @@ def test_tng_parameter_recovery_grid_search(test_galaxy, image_pars_medium):
     )
     data_vel, variance = gen.generate_velocity_map(config, snr=1000)
 
-    # Setup model and baseline parameters
-    model = CenteredVelocityModel()
-    pars_base = {
-        'v0': 0.0,
-        'vcirc': 200.0,
-        'vel_rscale': 1.0,
-        'cosi': 0.7,
-        'theta_int': 0.0,
-        'g1': 0.0,
-        'g2': 0.0,
-    }
-
-    # Create likelihood
+    # Create likelihood (vcirc is the sole sampled param)
     obs_vel = build_velocity_obs(image_pars_medium, data=data_vel, variance=variance)
-    log_like = create_jitted_likelihood_velocity(model, obs_vel)
+    task = _velocity_only_task(obs_vel)
 
     # Grid search over vcirc
     vcirc_values = np.linspace(100, 300, 20)
     log_likes = []
 
     for vcirc in vcirc_values:
-        pars_test = pars_base.copy()
-        pars_test['vcirc'] = vcirc
-        theta_test = model.pars2theta(pars_test)
-        ll = log_like(theta_test)
+        ll = task.log_likelihood(np.array([vcirc]))
         if np.isfinite(ll):
             log_likes.append(ll)
         else:

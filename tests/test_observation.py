@@ -21,7 +21,6 @@ from kl_pipe.observation import (
     GrismObs,
     build_image_obs,
     build_velocity_obs,
-    build_joint_obs,
     build_grism_obs,
 )
 from kl_pipe.utils import build_map_grid_from_image_pars
@@ -153,52 +152,6 @@ class TestBuildVelocityObs:
         assert isinstance(obs, VelocityObs)
         assert obs.flux_model is int_model
         assert obs.flux_theta is not None
-
-
-# ==============================================================================
-# Joint obs factory tests
-# ==============================================================================
-
-
-class TestBuildJointObs:
-    """Tests for build_joint_obs factory."""
-
-    def test_no_psf(self, image_pars, data_16, variance_16):
-        from kl_pipe.intensity import InclinedExponentialModel
-
-        int_model = InclinedExponentialModel()
-        obs_vel, obs_int = build_joint_obs(
-            image_pars,
-            image_pars,
-            int_model,
-            data_vel=data_16,
-            variance_vel=variance_16,
-            data_int=data_16,
-            variance_int=variance_16,
-        )
-        assert isinstance(obs_vel, VelocityObs)
-        assert isinstance(obs_int, ImageObs)
-        # joint mode: vel obs gets flux_model but no flux_theta
-        assert obs_vel.flux_model is int_model
-        assert obs_vel.flux_theta is None
-
-    def test_with_psf(self, image_pars, gaussian_psf, data_16, variance_16):
-        from kl_pipe.intensity import InclinedExponentialModel
-
-        int_model = InclinedExponentialModel()
-        obs_vel, obs_int = build_joint_obs(
-            image_pars,
-            image_pars,
-            int_model,
-            psf_vel=gaussian_psf,
-            psf_int=gaussian_psf,
-            data_vel=data_16,
-            variance_vel=variance_16,
-            data_int=data_16,
-            variance_int=variance_16,
-        )
-        assert obs_vel.psf_data is not None
-        assert obs_int.psf_data is not None
 
 
 # ==============================================================================

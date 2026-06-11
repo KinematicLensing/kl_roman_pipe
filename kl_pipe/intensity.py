@@ -1208,7 +1208,7 @@ class InclinedExponentialModel(IntensityModel):
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         Calls _render_kspace without psf_kernel_fft.
         """
         return self._render_kspace(
@@ -1731,7 +1731,7 @@ class InclinedSpergelModel(IntensityModel):
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         """
         return self._render_kspace(
             theta,
@@ -2433,7 +2433,7 @@ class InclinedSersicModel(IntensityModel):
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         """
         return self._render_kspace(
             theta,
@@ -2711,8 +2711,8 @@ class CompositeIntensityModel(IntensityModel):
     ``1 - sum(other fracs)``, so the sum of all component fluxes equals
     ``total_flux`` exactly.
 
-    When used as the intensity model in KLModel, the composite's total
-    flux weights the velocity PSF convolution. The flux-weighted velocity
+    When used as a flux-weighting intensity model for velocity rendering,
+    the composite's total flux weights the velocity PSF convolution. The flux-weighted velocity
     field shows reduced ``V_circ`` near the center. Two physical effects
     compound to produce this: (i) per-pixel velocity values are flux-
     weighted, and a centrally-concentrated bulge component pulls the

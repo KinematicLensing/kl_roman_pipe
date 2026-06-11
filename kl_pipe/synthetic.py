@@ -1186,7 +1186,7 @@ def generate_datacube_3d(
     """Independent numpy datacube generator for validation.
 
     The cube is the pre-pixel-response intermediate (PSF convolved per
-    channel only when ``psf`` is supplied; JAX ``SpectralModel.build_cube``
+    channel only when ``psf`` is supplied; the JAX cube assembly
     is pre-PSF by construction). Pixel response is a detector property
     applied only at the 2D dispersed observable in ``generate_grism_2d``,
     not per-channel on the cube.
@@ -1263,7 +1263,7 @@ def generate_datacube_3d(
     Nlam = len(lambda_grid)
     osf = spectral_oversample
 
-    # fine wavelength grid (mirrors JAX SpectralModel.build_cube)
+    # fine wavelength grid (mirrors JAX SourceModel.build_cube)
     if osf > 1 and Nlam >= 2:
         dl = lambda_grid[1] - lambda_grid[0]
         half = dl / 2.0
