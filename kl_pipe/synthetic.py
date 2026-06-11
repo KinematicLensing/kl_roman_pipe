@@ -273,9 +273,16 @@ def _generate_inclined_kspace_scipy(
     kx = 2 * np.pi * np.fft.fftfreq(pc, d=eff_ps)
     KY, KX = np.meshgrid(ky, kx, indexing='ij')
 
-    # centroid phase: half-pixel correction uses COARSE grid centering
-    hx = 0.5 * ps * (1 - Ncol % 2)
-    hy = 0.5 * ps * (1 - Nrow % 2)
+    # centroid phase: half-pixel correction in FINE-grid units. The post-IFFT
+    # roll places the rendered source at fine pixel ``(Nrow*os) // 2``; the
+    # canonical ``_centered_coords(N)`` arcsec-zero used by SourceModel maps
+    # to fine pixel ``(N*os - 1)/2``. The phase compensates for the difference
+    # (-0.5 fine pixels) when ``N*os`` is even, and zero when ``N*os`` is odd.
+    # Using ``ps`` (coarse) here instead of ``eff_ps`` (fine) used to silently
+    # work only at oversample=1 and broke the binned centroid for oversample > 1
+    # (offset of ``-(os-1)/(2*os)`` coarse pixels per axis).
+    hx = 0.5 * eff_ps * (1 - (Ncol * oversample) % 2)
+    hy = 0.5 * eff_ps * (1 - (Nrow * oversample) % 2)
     phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
 
     # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
@@ -309,6 +316,16 @@ def _generate_inclined_kspace_scipy(
         # fuse PSF on the profile's k-grid before IFFT
         # real-space kernel (independent from model's drawKImage path)
         kern_size = psf.getGoodImageSize(eff_ps)
+        # force odd kern_size so the kernel peak lands on a pixel center.
+        # GalSim's drawImage places ``true_center`` at ``((N-1)/2, (N-1)/2)``
+        # in 0-indexed array coords. For odd N this is an integer index that
+        # matches ``kr // 2``; for even N it is a half-pixel offset and the
+        # ``np.roll(kernel, -(kr // 2))`` below lands the kernel centroid
+        # at fine-pixel (-0.5, -0.5) instead of (0, 0), shifting every
+        # PSF-convolved image by half a fine pixel. Matches the convention
+        # used by ``kl_pipe/psf.py:gsobj_to_kernel``.
+        if kern_size % 2 == 0:
+            kern_size += 1
         kern_img = psf.drawImage(
             nx=kern_size, ny=kern_size, scale=eff_ps, method='no_pixel'
         )
@@ -323,8 +340,14 @@ def _generate_inclined_kspace_scipy(
         I_hat = I_hat * np.fft.fft2(kernel_padded)
 
     full = np.fft.ifft2(I_hat).real
-    roll_row = (Nrow // 2) * oversample
-    roll_col = (Ncol // 2) * oversample
+    # roll-to-center in FINE-pixel units. ``(N*os) // 2`` is the canonical
+    # roll origin: for odd ``N*os`` it lands the centroid exactly on the
+    # canonical fine pixel ``(N*os - 1)/2``; for even ``N*os`` it lands at
+    # ``N*os/2`` and the half-pixel ``hx`` phase above absorbs the residual
+    # 0.5-pixel offset. The legacy ``(N // 2) * oversample`` was short by
+    # ``(os - 1)/2`` fine pixels for odd N + oversample > 1.
+    roll_row = (Nrow * oversample) // 2
+    roll_col = (Ncol * oversample) // 2
     full = np.roll(full, (roll_row, roll_col), axis=(0, 1))
     intensity = full[:eff_Nrow, :eff_Ncol]
 
