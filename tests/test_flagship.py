@@ -445,7 +445,9 @@ class TestFlagship:
             seed=42,
             progress=False,
             reparam_strategy='prior',
-            dense_mass=False,  # diagonal is faster + sufficient at narrow priors
+            dense_mass=True,  # joint phot+grism posterior is correlated; dense
+            # mass is 1.3x faster + samples 2-4x better here (diagonal was a
+            # premature optimization -- see experiments/sweverett/flagship_speedup)
             target_accept_prob=0.8,
             max_tree_depth=8,
             init_strategy='prior',  # narrow priors are centered on truth
