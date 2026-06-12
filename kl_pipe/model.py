@@ -466,8 +466,8 @@ class IntensityModel(Model):
         """
 
         # extract transformation parameters
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         theta_int = self.get_param('theta_int', theta)
@@ -507,7 +507,7 @@ class IntensityModel(Model):
         Parameters
         ----------
         params : dict
-            Profile parameters (e.g., int_rscale, int_hlr, n_sersic).
+            Profile parameters (e.g., rscale, hlr, n_sersic).
         threshold : float
             Maximum acceptable FT amplitude. Default 1e-3.
 

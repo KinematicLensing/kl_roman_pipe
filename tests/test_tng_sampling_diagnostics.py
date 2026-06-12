@@ -220,14 +220,14 @@ def estimate_intensity_params(
     half_light_radius_arcsec = half_light_radius_pix * image_pars.pixel_scale
 
     # For exponential profile, half-light radius ≈ 1.68 * scale_length
-    int_rscale = half_light_radius_arcsec / 1.68
+    rscale = half_light_radius_arcsec / 1.68
 
     # Ensure reasonable bounds
-    int_rscale = max(0.1, min(3.0, int_rscale))
+    rscale = max(0.1, min(3.0, rscale))
 
     return {
         'r.flux': flux,
-        'r.rscale': int_rscale,
+        'r.rscale': rscale,
         'r.h_over_r': 0.1,
         'r.x0': 0.0,
         'r.y0': 0.0,

@@ -557,7 +557,7 @@ def _extract_worst_case_params(model, priors) -> tuple:
 
         prior = spec
         if hasattr(prior, 'low') and hasattr(prior, 'high'):
-            if name in ('int_rscale', 'int_hlr'):
+            if name in ('rscale', 'hlr'):
                 # smallest scale → highest maxk
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.high

@@ -278,12 +278,12 @@ class TestPSFEffectiveMaxk:
                 'cosi': Uniform(0.95, 0.99),
                 'theta_int': Uniform(0, np.pi),
                 'flux': LogUniform(0.01, 1000.0),
-                'int_rscale': Uniform(1.0, 2.0),
-                'int_h_over_r': 0.2,
+                'rscale': Uniform(1.0, 2.0),
+                'h_over_r': 0.2,
                 'g1': 0.0,
                 'g2': 0.0,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'x0': 0.0,
+                'y0': 0.0,
             }
         )
 
@@ -295,13 +295,13 @@ class TestPSFEffectiveMaxk:
                 'cosi': Uniform(0.95, 0.99),
                 'theta_int': Uniform(0, np.pi),
                 'flux': LogUniform(0.01, 1000.0),
-                'int_rscale': Uniform(1.0, 2.0),
-                'int_h_over_r': 0.2,
+                'rscale': Uniform(1.0, 2.0),
+                'h_over_r': 0.2,
                 'nu': Uniform(-0.4, 0.5),
                 'g1': 0.0,
                 'g2': 0.0,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'x0': 0.0,
+                'y0': 0.0,
             }
         )
 

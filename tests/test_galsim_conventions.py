@@ -67,9 +67,9 @@ def test_production_path_galsim_synthetic_matches_klpipe_sersic():
     """``_generate_sersic_galsim`` (scale_radius parameterization) must match
     kl_pipe's InclinedSersicModel render at matched physical h_z."""
     bn = float(_sersic_bn(_N))
-    int_rscale = _HLR / bn**_N
+    rscale = _HLR / bn**_N
     h_z = _H_OVER_HLR * _HLR
-    int_h_over_r = h_z / int_rscale  # = _H_OVER_HLR * bn**_N
+    h_over_r = h_z / rscale  # = _H_OVER_HLR * bn**_N
 
     image_pars = ImagePars(
         shape=(_NPIX, _NPIX), pixel_scale=_PIXEL_SCALE, indexing='ij'
@@ -79,15 +79,15 @@ def test_production_path_galsim_synthetic_matches_klpipe_sersic():
     gs_image = _generate_sersic_galsim(
         image_pars=image_pars,
         flux=_FLUX,
-        int_rscale=int_rscale,
+        rscale=rscale,
         n_sersic=_N,
         cosi=_COSI,
         theta_int=0.0,
         g1=0.0,
         g2=0.0,
-        int_x0=0.0,
-        int_y0=0.0,
-        int_h_over_r=int_h_over_r,
+        x0=0.0,
+        y0=0.0,
+        h_over_r=h_over_r,
         gsparams=_gs_params(),
         psf=psf,
         method='auto',

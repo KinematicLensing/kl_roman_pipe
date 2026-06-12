@@ -521,10 +521,10 @@ def test_recover_inclined_exponential(snr, test_config, intensity_grids):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -625,10 +625,10 @@ def test_recover_inclined_exponential_with_shear(snr, test_config, intensity_gri
         'g1': 0.03,
         'g2': -0.02,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -739,11 +739,17 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
         'rscale': 5.0,
         'x0': 0.0,
         'y0': 0.0,
+    }
+    int_pars_flat = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -778,7 +784,7 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
     )
     data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
         InclinedExponentialModel,
-        true_pars_flat,
+        int_pars_flat,
         test_config.image_pars_intensity,
         snr,
         test_config,
@@ -895,11 +901,17 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
         'rscale': 5.0,
         'x0': 1.0,
         'y0': -0.5,
+    }
+    int_pars_flat = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 1.0,
-        'int_y0': -0.5,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 1.0,
+        'y0': -0.5,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -934,7 +946,7 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
     )
     data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
         InclinedExponentialModel,
-        true_pars_flat,
+        int_pars_flat,
         test_config.image_pars_intensity,
         snr,
         test_config,
@@ -1042,10 +1054,10 @@ def test_recover_inclined_exponential_with_psf(test_config, intensity_grids):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -1162,10 +1174,10 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     # Full SourceModel dotted dict (used for fixed-pars + slice labelling).
     pars_dotted = {
@@ -1300,11 +1312,17 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
         'rscale': 5.0,
         'x0': 0.0,
         'y0': 0.0,
+    }
+    int_pars_flat = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -1341,7 +1359,7 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
     synth_int = SyntheticIntensity(
         {
             k: v
-            for k, v in true_pars_flat.items()
+            for k, v in int_pars_flat.items()
             if k in InclinedExponentialModel.PARAMETER_NAMES
         },
         model_type='exponential',
@@ -1359,7 +1377,7 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
 
     int_pars_for_vel = {
         k: v
-        for k, v in true_pars_flat.items()
+        for k, v in int_pars_flat.items()
         if k in InclinedExponentialModel.PARAMETER_NAMES
     }
     flux_image = generate_sersic_intensity_2d(
@@ -1542,10 +1560,10 @@ _INT_INVARIANCE_TRUTH_FLAT = {
     'g1': 0.0,
     'g2': 0.0,
     'flux': 1.0,
-    'int_rscale': 3.0,
-    'int_h_over_r': 0.1,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
+    'rscale': 3.0,
+    'h_over_r': 0.1,
+    'x0': 0.0,
+    'y0': 0.0,
 }
 _INT_INVARIANCE_TRUTH_DOTTED = {
     'cosi': 0.7,
@@ -1817,10 +1835,10 @@ def test_recover_inclined_exponential_masked_aperture(test_config, intensity_gri
         'g1': 0.0,
         'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -1931,11 +1949,17 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
         'rscale': 5.0,
         'x0': 0.0,
         'y0': 0.0,
+    }
+    int_pars_flat = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.0,
+        'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -1970,7 +1994,7 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
     )
     data_int_true, data_int_noisy, variance_int = generate_synthetic_intensity_data(
         InclinedExponentialModel,
-        true_pars_flat,
+        int_pars_flat,
         test_config.image_pars_intensity,
         snr,
         test_config,
@@ -2175,11 +2199,11 @@ def test_recover_inclined_spergel(snr, test_config, intensity_grids):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
         'nu': 0.5,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -2231,11 +2255,11 @@ def test_recover_inclined_spergel_devac(snr, test_config, intensity_grids):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 1.0,
-        'int_rscale': 1.5,
-        'int_h_over_r': 0.1,
+        'rscale': 1.5,
+        'h_over_r': 0.1,
         'nu': -0.6,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -2332,11 +2356,11 @@ def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
         'g1': 0.03,
         'g2': -0.02,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
         'nu': 0.5,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.7,
@@ -2388,10 +2412,10 @@ def test_recover_joint_phot_grism_base(snr, test_config):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 100.0,
-        'int_rscale': 0.3,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     vel_pars_flat = {
         'cosi': 0.6,
@@ -2642,9 +2666,9 @@ def test_recover_bulge_disk(snr, test_config):
     X, Y = build_map_grid_from_image_pars(_IMAGE_PARS, unit='arcsec', centered=True)
     true_pars_flat = dict(_TRUE_PARS_SHARED)
     # Project flat composite keys into the F087 broadband namespace.
-    # int_x0 / int_y0 strip their int_ prefix on resolution -> F087.x0/F087.y0.
+    # x0 / y0 strip their int_ prefix on resolution -> F087.x0/F087.y0.
     _SHARED = {'cosi', 'theta_int', 'g1', 'g2'}
-    _PREFIX_STRIP = {'int_x0': 'x0', 'int_y0': 'y0'}
+    _PREFIX_STRIP = {'x0': 'x0', 'y0': 'y0'}
     pars_dotted = {}
     for k, v in true_pars_flat.items():
         if k in _SHARED:
@@ -2696,8 +2720,8 @@ def test_recover_bulge_disk(snr, test_config):
         'theta_int': Uniform(0.0, np.pi),
         'g1': Uniform(-0.1, 0.1),
         'g2': Uniform(-0.1, 0.1),
-        'F087.x0': 0.0,  # fixed (resolves int_x0)
-        'F087.y0': 0.0,  # fixed (resolves int_y0)
+        'F087.x0': 0.0,  # fixed (resolves x0)
+        'F087.y0': 0.0,  # fixed (resolves y0)
         'F087.total_flux': Uniform(0.1, 10.0),
         'F087.bulge_frac': Uniform(0.01, 0.99),
         'F087.disk_rscale': Uniform(0.5, 10.0),

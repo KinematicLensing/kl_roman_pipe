@@ -86,7 +86,7 @@ _BASE_SHARED_PARS = {
 
 class TestStripParamPrefix:
     def test_int_prefix(self):
-        assert _strip_param_prefix('int_rscale') == 'rscale'
+        assert _strip_param_prefix('rscale') == 'rscale'
 
     def test_vel_prefix(self):
         assert _strip_param_prefix('rscale') == 'rscale'
@@ -99,15 +99,15 @@ class TestStripParamPrefix:
 class TestLookupParam:
     def test_dotted_first(self):
         pars = {'cosi': 0.4, 'F087.rscale': 0.3}
-        assert _lookup_param(pars, 'F087', 'int_rscale') == 0.3
+        assert _lookup_param(pars, 'F087', 'rscale') == 0.3
 
     def test_top_level_fallback(self):
         pars = {'cosi': 0.5}
         assert _lookup_param(pars, 'F087', 'cosi') == 0.5
 
     def test_verbatim_fallback(self):
-        pars = {'int_rscale': 0.3}
-        assert _lookup_param(pars, 'F087', 'int_rscale') == 0.3
+        pars = {'rscale': 0.3}
+        assert _lookup_param(pars, 'F087', 'rscale') == 0.3
 
     def test_dotted_wins_over_top_level(self):
         """Per-component value overrides top-level when both present."""
@@ -116,7 +116,7 @@ class TestLookupParam:
 
     def test_missing_raises(self):
         with pytest.raises(KeyError, match="could not resolve"):
-            _lookup_param({}, 'F087', 'int_rscale')
+            _lookup_param({}, 'F087', 'rscale')
 
 
 class TestApplyObsRotation:
@@ -124,10 +124,10 @@ class TestApplyObsRotation:
         theta = jnp.array([100.0, 0.3, 0.15, 0.0, 0.0, 0.0, 0.0, 0.3, 0.5])
         names = (
             'flux',
-            'int_rscale',
-            'int_h_over_r',
-            'int_x0',
-            'int_y0',
+            'rscale',
+            'h_over_r',
+            'x0',
+            'y0',
             'g1',
             'g2',
             'theta_int',

@@ -39,9 +39,9 @@ Generate synthetic intensity data:
 >>> from kl_pipe.synthetic import SyntheticIntensity
 >>>
 >>> true_params = {
-...     'flux': 1.0, 'int_rscale': 3.0, 'n_sersic': 1.0,
+...     'flux': 1.0, 'rscale': 3.0, 'n_sersic': 1.0,
 ...     'cosi': 0.8, 'theta_int': 0.785,
-...     'g1': 0.0, 'g2': 0.0, 'int_x0': 0.0, 'int_y0': 0.0
+...     'g1': 0.0, 'g2': 0.0, 'x0': 0.0, 'y0': 0.0
 ... }
 >>>
 >>> synth_int = SyntheticIntensity(true_params, model_type='sersic', seed=42)
@@ -76,33 +76,33 @@ REQUIRED_PARAMS = {
     },
     'sersic': {
         'flux',
-        'int_rscale',
+        'rscale',
         'n_sersic',
         'cosi',
         'theta_int',
         'g1',
         'g2',
         # TODO: we could add support for optional parameters later
-        # 'int_x0',
-        # 'int_y0',
+        # 'x0',
+        # 'y0',
     },
     'exponential': {
         'flux',
-        'int_rscale',
-        'int_h_over_r',
+        'rscale',
+        'h_over_r',
         'cosi',
         'theta_int',
         'g1',
         'g2',
         # TODO: we could add support for optional parameters later
-        # 'int_x0',
-        # 'int_y0',
+        # 'x0',
+        # 'y0',
     },
     'spergel': {
         'flux',
-        'int_rscale',
+        'rscale',
         'nu',
-        'int_h_over_r',
+        'h_over_r',
         'cosi',
         'theta_int',
         'g1',
@@ -221,14 +221,14 @@ def _generate_inclined_kspace_scipy(
     radial_ft_fn,
     image_pars,
     flux,
-    int_rscale,
+    rscale,
     cosi,
     theta_int,
     g1,
     g2,
-    int_x0,
-    int_y0,
-    int_h_over_r,
+    x0,
+    y0,
+    h_over_r,
     psf=None,
     oversample=1,
     pixel_response=_PIXEL_RESPONSE_UNSET,
@@ -283,7 +283,7 @@ def _generate_inclined_kspace_scipy(
     # (offset of ``-(os-1)/(2*os)`` coarse pixels per axis).
     hx = 0.5 * eff_ps * (1 - (Ncol * oversample) % 2)
     hy = 0.5 * eff_ps * (1 - (Nrow * oversample) % 2)
-    phase = np.exp(-1j * (KX * (int_x0 - hx) + KY * (int_y0 - hy)))
+    phase = np.exp(-1j * (KX * (x0 - hx) + KY * (y0 - hy)))
 
     # shear: (1+g1) multiplies kx (horizontal), (1-g1) multiplies ky (vertical)
     norm_s = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
@@ -296,12 +296,12 @@ def _generate_inclined_kspace_scipy(
     ky_gal = s * kx_s + c * ky_s
 
     # analytic FT
-    kx_sc = kx_gal * int_rscale
-    ky_sc = ky_gal * int_rscale
+    kx_sc = kx_gal * rscale
+    ky_sc = ky_gal * rscale
     k_sq = kx_sc**2 + (ky_sc * cosi) ** 2
     ft_radial = radial_ft_fn(k_sq)
 
-    u = (np.pi / 2) * int_h_over_r * ky_sc * sini
+    u = (np.pi / 2) * h_over_r * ky_sc * sini
     u_safe = np.where(np.abs(u) < 1e-4, np.ones_like(u), u)
     ft_vertical = np.where(np.abs(u) < 1e-4, 1.0 - u**2 / 6.0, u_safe / np.sinh(u_safe))
 
@@ -362,15 +362,15 @@ def _generate_inclined_kspace_scipy(
 def generate_sersic_intensity_2d(
     image_pars: ImagePars,
     flux: float,
-    int_rscale: float,
+    rscale: float,
     n_sersic: float,
     cosi: float,
     theta_int: float,
     g1: float = 0.0,
     g2: float = 0.0,
-    int_x0: float = 0.0,
-    int_y0: float = 0.0,
-    int_h_over_r: float = 0.0,
+    x0: float = 0.0,
+    y0: float = 0.0,
+    h_over_r: float = 0.0,
     backend: str = 'scipy',
     psf=None,
     oversample: int = 1,
@@ -385,7 +385,7 @@ def generate_sersic_intensity_2d(
         Image parameters defining the coordinate grids.
     flux : float
         Total flux.
-    int_rscale : float
+    rscale : float
         Scale radius.
     n_sersic : float
         Sersic index (n=1 for exponential, n=4 for de Vaucouleurs).
@@ -395,9 +395,9 @@ def generate_sersic_intensity_2d(
         Intrinsic position angle in radians.
     g1, g2 : float, optional
         Shear components.
-    int_x0, int_y0 : float, optional
+    x0, y0 : float, optional
         Centroid offsets.
-    int_h_over_r : float, optional
+    h_over_r : float, optional
         Scale height / scale radius ratio for 3D disk. Default 0.0 (thin disk).
     backend : str, optional
         Backend for computation ('scipy' or 'galsim'). Default is 'scipy'.
@@ -414,37 +414,37 @@ def generate_sersic_intensity_2d(
         return _generate_sersic_galsim(
             image_pars,
             flux,
-            int_rscale,
+            rscale,
             n_sersic,
             cosi,
             theta_int,
             g1,
             g2,
-            int_x0,
-            int_y0,
-            int_h_over_r=int_h_over_r,
+            x0,
+            y0,
+            h_over_r=h_over_r,
             psf=psf,
         )
     else:
         return _generate_sersic_scipy(
             image_pars,
             flux,
-            int_rscale,
+            rscale,
             n_sersic,
             cosi,
             theta_int,
             g1,
             g2,
-            int_x0,
-            int_y0,
-            int_h_over_r=int_h_over_r,
+            x0,
+            y0,
+            h_over_r=h_over_r,
             psf=psf,
             oversample=oversample,
             pixel_response=pixel_response,
         )
 
 
-def _build_sersic_ft_galsim(n_sersic, int_rscale):
+def _build_sersic_ft_galsim(n_sersic, rscale):
     """Build a Sersic radial FT function using GalSim's numerical kValue.
 
     Uses GalSim's Ogata-based Hankel transform (precomputed + spline cache)
@@ -458,7 +458,7 @@ def _build_sersic_ft_galsim(n_sersic, int_rscale):
     ----------
     n_sersic : float
         Sersic index.
-    int_rscale : float
+    rscale : float
         Sersic scale radius r_s (arcsec), where I(r) = I_0 * exp(-(r/r_s)^{1/n}).
         Related to half-light radius by R_e = b_n^n * r_s.
 
@@ -466,19 +466,19 @@ def _build_sersic_ft_galsim(n_sersic, int_rscale):
     -------
     callable
         k_sq -> FT array (normalized: FT(0) = 1).
-        k_sq is dimensionless: (k_physical * int_rscale)^2.
+        k_sq is dimensionless: (k_physical * rscale)^2.
     """
     # convert r_s to R_e for GalSim
     n = n_sersic
     bn = 2.0 * n - 1.0 / 3.0 + 4.0 / (405.0 * n) + 46.0 / (25515.0 * n**2)
-    Re = int_rscale * bn**n
+    Re = rscale * bn**n
 
     # GalSim Sersic with this R_e (flux=1 gives normalized FT)
     gs_prof = gs.Sersic(n=n_sersic, half_light_radius=Re, flux=1.0)
 
     def radial_ft_fn(k_sq):
-        # k_sq = (k_physical * int_rscale)^2, so k_physical = sqrt(k_sq)/int_rscale
-        k_phys = np.sqrt(np.maximum(k_sq, 0.0)) / int_rscale
+        # k_sq = (k_physical * rscale)^2, so k_physical = sqrt(k_sq)/rscale
+        k_phys = np.sqrt(np.maximum(k_sq, 0.0)) / rscale
         # the FT is radially symmetric — evaluate on unique |k| values
         # and interpolate back to the full grid
         k_flat = k_phys.ravel()
@@ -505,22 +505,22 @@ def _build_sersic_ft_galsim(n_sersic, int_rscale):
 def _generate_sersic_scipy(
     image_pars: ImagePars,
     flux: float,
-    int_rscale: float,
+    rscale: float,
     n_sersic: float,
     cosi: float,
     theta_int: float,
     g1: float,
     g2: float,
-    int_x0: float,
-    int_y0: float,
-    int_h_over_r: float = 0.0,
+    x0: float,
+    y0: float,
+    h_over_r: float = 0.0,
     psf=None,
     oversample: int = 1,
     pixel_response=_PIXEL_RESPONSE_UNSET,
 ) -> np.ndarray:
     """Generate Sersic profile using scipy.
 
-    When int_h_over_r > 0 and n_sersic == 1.0, uses 3D LOS integration
+    When h_over_r > 0 and n_sersic == 1.0, uses 3D LOS integration
     through a sech² vertical profile (matching GalSim InclinedExponential).
     """
 
@@ -530,8 +530,8 @@ def _generate_sersic_scipy(
     sini = np.sqrt(1.0 - cosi**2)
 
     # Step 1: Recenter (obs -> cen)
-    X_c = X - int_x0
-    Y_c = Y - int_y0
+    X_c = X - x0
+    Y_c = Y - y0
 
     # Step 2: area-preserving shear (cen -> source), matches GalSim .shear()
     norm = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
@@ -545,26 +545,26 @@ def _generate_sersic_scipy(
     Y_gal = sin_pa * X_shear + cos_pa * Y_shear
 
     # 3D k-space rendering via shared core
-    if int_h_over_r > 0:
+    if h_over_r > 0:
         if n_sersic == 1.0:
             # exact exponential FT
             radial_ft = lambda k_sq: 1.0 / (1.0 + k_sq) ** 1.5
         else:
             # numerical Sersic FT via GalSim kValue (independent of emulator)
-            radial_ft = _build_sersic_ft_galsim(n_sersic, int_rscale)
+            radial_ft = _build_sersic_ft_galsim(n_sersic, rscale)
 
         return _generate_inclined_kspace_scipy(
             radial_ft,
             image_pars,
             flux,
-            int_rscale,
+            rscale,
             cosi,
             theta_int,
             g1,
             g2,
-            int_x0,
-            int_y0,
-            int_h_over_r,
+            x0,
+            y0,
+            h_over_r,
             psf=psf,
             oversample=oversample,
             pixel_response=pixel_response,
@@ -580,12 +580,12 @@ def _generate_sersic_scipy(
 
     # Convert flux to central surface brightness
     if n_sersic == 1.0:
-        I0_disk = flux / (2.0 * np.pi * int_rscale**2)
+        I0_disk = flux / (2.0 * np.pi * rscale**2)
     else:
-        norm_factor = int_rscale**2 * 2.0 * np.pi * n_sersic * gamma(2.0 * n_sersic)
+        norm_factor = rscale**2 * 2.0 * np.pi * n_sersic * gamma(2.0 * n_sersic)
         I0_disk = flux / norm_factor
 
-    intensity_disk = I0_disk * np.exp(-np.power(r_disk / int_rscale, 1.0 / n_sersic))
+    intensity_disk = I0_disk * np.exp(-np.power(r_disk / rscale, 1.0 / n_sersic))
     intensity_obs = intensity_disk / cosi if cosi > 0 else intensity_disk
 
     if psf is not None:
@@ -600,15 +600,15 @@ def _generate_sersic_scipy(
 def _generate_sersic_galsim(
     image_pars: ImagePars,
     flux: float,
-    int_rscale: float,
+    rscale: float,
     n_sersic: float,
     cosi: float,
     theta_int: float,
     g1: float,
     g2: float,
-    int_x0: float,
-    int_y0: float,
-    int_h_over_r: float = 0.0,
+    x0: float,
+    y0: float,
+    h_over_r: float = 0.0,
     gsparams: gs.GSParams = None,
     psf=None,
     method: str = 'auto',
@@ -625,7 +625,7 @@ def _generate_sersic_galsim(
         Image parameters defining grid geometry, pixel scale, WCS.
     flux : float
         Total integrated flux.
-    int_rscale : float
+    rscale : float
         Scale radius in arcsec.
     n_sersic : float
         Sersic index.
@@ -635,7 +635,7 @@ def _generate_sersic_galsim(
         Position angle in radians (measured E of N).
     g1, g2 : float
         Reduced shear components.
-    int_x0, int_y0 : float
+    x0, y0 : float
         Centroid offsets in arcsec.
     gsparams : galsim.GSParams, optional
         GalSim parameters for profile generation.
@@ -649,14 +649,14 @@ def _generate_sersic_galsim(
     inclination = gs.Angle(np.arccos(cosi), gs.radians)
 
     # scale_h_over_r: use provided value, or GalSim default (0.1)
-    h_over_r = int_h_over_r if int_h_over_r > 0 else 0.1
+    h_over_r = h_over_r if h_over_r > 0 else 0.1
 
     # Create the inclined profile
     if n_sersic == 1.0:
         # Use InclinedExponential for speed
         profile = gs.InclinedExponential(
             inclination=inclination,
-            scale_radius=int_rscale,
+            scale_radius=rscale,
             scale_h_over_r=h_over_r,
             flux=flux,
             gsparams=gsparams,
@@ -666,7 +666,7 @@ def _generate_sersic_galsim(
         profile = gs.InclinedSersic(
             n=n_sersic,
             inclination=inclination,
-            scale_radius=int_rscale,
+            scale_radius=rscale,
             scale_h_over_r=h_over_r,
             flux=flux,
             gsparams=gsparams,
@@ -679,7 +679,7 @@ def _generate_sersic_galsim(
     # Apply shear and centroid offset
     mu = 1.0 / (1.0 - (g1**2 + g2**2))  # magnification factor
     profile = profile.lens(g1=g1, g2=g2, mu=mu)
-    profile = profile.shift(int_x0, int_y0)
+    profile = profile.shift(x0, y0)
 
     # Convolve with PSF if provided (GalSim native convolution)
     if psf is not None:
@@ -706,15 +706,15 @@ def _generate_sersic_galsim(
 def generate_spergel_intensity_2d(
     image_pars: ImagePars,
     flux: float,
-    int_rscale: float,
+    rscale: float,
     nu: float,
     cosi: float,
     theta_int: float,
     g1: float = 0.0,
     g2: float = 0.0,
-    int_x0: float = 0.0,
-    int_y0: float = 0.0,
-    int_h_over_r: float = 0.1,
+    x0: float = 0.0,
+    y0: float = 0.0,
+    h_over_r: float = 0.1,
     backend: str = 'scipy',
     psf=None,
     oversample: int = 1,
@@ -728,7 +728,7 @@ def generate_spergel_intensity_2d(
         Image parameters defining the coordinate grids.
     flux : float
         Total flux.
-    int_rscale : float
+    rscale : float
         Spergel scale length c (arcsec).
     nu : float
         Spergel index. nu=0.5 is exponential, nu=-0.6 ~ de Vaucouleurs.
@@ -738,9 +738,9 @@ def generate_spergel_intensity_2d(
         Position angle in radians.
     g1, g2 : float, optional
         Shear components.
-    int_x0, int_y0 : float, optional
+    x0, y0 : float, optional
         Centroid offsets.
-    int_h_over_r : float, optional
+    h_over_r : float, optional
         Scale height / scale radius. Default 0.1.
     backend : str, optional
         'scipy' (any inclination) or 'galsim' (face-on only).
@@ -758,29 +758,29 @@ def generate_spergel_intensity_2d(
         return _generate_spergel_galsim(
             image_pars,
             flux,
-            int_rscale,
+            rscale,
             nu,
             cosi,
             theta_int,
             g1,
             g2,
-            int_x0,
-            int_y0,
+            x0,
+            y0,
             psf=psf,
         )
     else:
         return _generate_spergel_scipy(
             image_pars,
             flux,
-            int_rscale,
+            rscale,
             nu,
             cosi,
             theta_int,
             g1,
             g2,
-            int_x0,
-            int_y0,
-            int_h_over_r,
+            x0,
+            y0,
+            h_over_r,
             psf=psf,
             oversample=oversample,
             pixel_response=pixel_response,
@@ -790,15 +790,15 @@ def generate_spergel_intensity_2d(
 def _generate_spergel_scipy(
     image_pars,
     flux,
-    int_rscale,
+    rscale,
     nu,
     cosi,
     theta_int,
     g1,
     g2,
-    int_x0,
-    int_y0,
-    int_h_over_r=0.1,
+    x0,
+    y0,
+    h_over_r=0.1,
     psf=None,
     oversample=1,
     pixel_response=_PIXEL_RESPONSE_UNSET,
@@ -811,14 +811,14 @@ def _generate_spergel_scipy(
         lambda k_sq: 1.0 / (1.0 + k_sq) ** (1.0 + nu),
         image_pars,
         flux,
-        int_rscale,
+        rscale,
         cosi,
         theta_int,
         g1,
         g2,
-        int_x0,
-        int_y0,
-        int_h_over_r,
+        x0,
+        y0,
+        h_over_r,
         psf=psf,
         oversample=oversample,
         pixel_response=pixel_response,
@@ -828,14 +828,14 @@ def _generate_spergel_scipy(
 def _generate_spergel_galsim(
     image_pars,
     flux,
-    int_rscale,
+    rscale,
     nu,
     cosi,
     theta_int,
     g1,
     g2,
-    int_x0,
-    int_y0,
+    x0,
+    y0,
     gsparams=None,
     psf=None,
     method='no_pixel',
@@ -858,7 +858,7 @@ def _generate_spergel_galsim(
 
     profile = gs.Spergel(
         nu=nu,
-        scale_radius=int_rscale,
+        scale_radius=rscale,
         flux=flux,
         gsparams=gsparams,
     )
@@ -867,7 +867,7 @@ def _generate_spergel_galsim(
     profile = profile.rotate(theta_int * gs.radians)
     mu = 1.0 / (1.0 - (g1**2 + g2**2))
     profile = profile.lens(g1=g1, g2=g2, mu=mu)
-    profile = profile.shift(int_x0, int_y0)
+    profile = profile.shift(x0, y0)
 
     if psf is not None:
         profile = gs.Convolve(profile, psf)
@@ -1207,7 +1207,7 @@ def generate_datacube_3d(
     vel_pars : dict
         {v0, vcirc, rscale, cosi, theta_int, g1, g2}
     int_pars : dict
-        {flux, int_rscale, n_sersic, cosi, theta_int, g1, g2}
+        {flux, rscale, n_sersic, cosi, theta_int, g1, g2}
     spectral_pars : dict
         {z, vel_dispersion, lines: [{lambda_rest, flux, cont}, ...]}
     lambda_grid : ndarray

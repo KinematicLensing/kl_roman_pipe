@@ -51,13 +51,13 @@ class TestSpergelCuspGuard:
                 'cosi': Uniform(cosi_low, cosi_high),
                 'theta_int': Uniform(0, np.pi),
                 'flux': Uniform(0.5, 2.0),
-                'int_rscale': Uniform(0.3, 1.5),
-                'int_h_over_r': 0.1,
+                'rscale': Uniform(0.3, 1.5),
+                'h_over_r': 0.1,
                 'nu': Uniform(nu_low, nu_high),
                 'g1': 0.0,
                 'g2': 0.0,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'x0': 0.0,
+                'y0': 0.0,
             }
         )
 
@@ -156,12 +156,12 @@ class TestDeVaucouleursCuspGuard:
                 'cosi': Uniform(cosi_low, cosi_high),
                 'theta_int': Uniform(0, np.pi),
                 'flux': Uniform(0.5, 2.0),
-                'int_rscale': Uniform(0.3, 1.5),
-                'int_h_over_r': 0.1,
+                'rscale': Uniform(0.3, 1.5),
+                'h_over_r': 0.1,
                 'g1': 0.0,
                 'g2': 0.0,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'x0': 0.0,
+                'y0': 0.0,
             }
         )
 

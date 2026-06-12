@@ -609,11 +609,17 @@ def joint_model_task_bounded():
         'theta_int': 0.785,
         'g1': 0.03,
         'g2': -0.02,
+    }
+    int_true = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     # Dotted-key form for SourceModel priors / downstream consumers
     true_pars = {
@@ -642,9 +648,7 @@ def joint_model_task_bounded():
 
     # Generate intensity data — convolved with the same PSF the model assumes
     int_model = InclinedExponentialModel()
-    int_pars = {
-        k: v for k, v in true_pars_flat.items() if k in int_model.PARAMETER_NAMES
-    }
+    int_pars = {k: v for k, v in int_true.items() if k in int_model.PARAMETER_NAMES}
     synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
     data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance
@@ -718,11 +722,17 @@ def joint_model_task_gaussian():
         'theta_int': 0.785,
         'g1': 0.03,
         'g2': -0.02,
+    }
+    int_true = {
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     # Dotted-key form for SourceModel priors / downstream consumers
     true_pars = {
@@ -751,9 +761,7 @@ def joint_model_task_gaussian():
 
     # Generate intensity data — convolved with the same PSF the model assumes
     int_model = InclinedExponentialModel()
-    int_pars = {
-        k: v for k, v in true_pars_flat.items() if k in int_model.PARAMETER_NAMES
-    }
+    int_pars = {k: v for k, v in int_true.items() if k in int_model.PARAMETER_NAMES}
     synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
     data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance

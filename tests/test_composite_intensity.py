@@ -81,8 +81,8 @@ def bulge_disk_shared_pars():
         'theta_int': 0.3,
         'g1': 0.02,
         'g2': -0.01,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'x0': 0.0,
+        'y0': 0.0,
         'total_flux': 1e4,
         'bulge_frac': 0.25,
         'disk_rscale': 1.0,
@@ -127,8 +127,8 @@ class TestBulgeDiskParameterNames:
     def test_shared_centroids(self, bulge_disk_shared):
         pnames = bulge_disk_shared.PARAMETER_NAMES
         assert len(pnames) == 12
-        assert 'int_x0' in pnames
-        assert 'int_y0' in pnames
+        assert 'x0' in pnames
+        assert 'y0' in pnames
         assert 'disk_x0' not in pnames
         assert 'bulge_x0' not in pnames
 
@@ -252,10 +252,10 @@ class TestCompositeRendering:
             'g1': 0.02,
             'g2': -0.01,
             'flux': total_flux * (1 - bf),
-            'int_rscale': 1.0,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 1.0,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         disk_img = disk._render_kspace(disk.pars2theta(disk_pars), 64, 64, 0.11)
 
@@ -266,11 +266,11 @@ class TestCompositeRendering:
             'g1': 0.02,
             'g2': -0.01,
             'flux': total_flux * bf,
-            'int_hlr': 0.3,
-            'int_h_over_hlr': 0.3,
+            'hlr': 0.3,
+            'h_over_hlr': 0.3,
             'n_sersic': 4.0,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         bulge_img = bulge._render_kspace(bulge.pars2theta(bulge_pars), 64, 64, 0.11)
 
@@ -294,8 +294,8 @@ class TestCompositeRendering:
             'disk_h_over_r': 0.1,
             'bulge_hlr': 0.3,
             'bulge_h_over_hlr': 0.3,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         theta = bulge_disk_shared.pars2theta(pars)
         composite_img = bulge_disk_shared._render_kspace(theta, 64, 64, 0.11)
@@ -307,10 +307,10 @@ class TestCompositeRendering:
             'g1': 0.0,
             'g2': 0.0,
             'flux': 1e4,
-            'int_rscale': 1.0,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 1.0,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         disk_img = disk._render_kspace(disk.pars2theta(disk_pars), 64, 64, 0.11)
 
@@ -333,8 +333,8 @@ class TestCompositeRendering:
             'disk_h_over_r': 0.1,
             'bulge_hlr': 0.3,
             'bulge_h_over_hlr': 0.3,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         theta = bulge_disk_shared.pars2theta(pars)
         composite_img = bulge_disk_shared._render_kspace(theta, 64, 64, 0.11)
@@ -346,11 +346,11 @@ class TestCompositeRendering:
             'g1': 0.0,
             'g2': 0.0,
             'flux': 1e4,
-            'int_hlr': 0.3,
-            'int_h_over_hlr': 0.3,
+            'hlr': 0.3,
+            'h_over_hlr': 0.3,
             'n_sersic': 4.0,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         bulge_img = bulge._render_kspace(bulge.pars2theta(bulge_pars), 64, 64, 0.11)
 
@@ -597,9 +597,9 @@ class TestGenericComposite:
                     fixed_params={'n_sersic': 2.0},
                 ),
             ],
-            shared_pars={'cosi', 'theta_int', 'g1', 'g2', 'int_x0', 'int_y0'},
+            shared_pars={'cosi', 'theta_int', 'g1', 'g2', 'x0', 'y0'},
         )
-        assert 'int_x0' in model.PARAMETER_NAMES
+        assert 'x0' in model.PARAMETER_NAMES
         assert 'a_x0' not in model.PARAMETER_NAMES
         assert 'b_x0' not in model.PARAMETER_NAMES
 
@@ -726,8 +726,8 @@ _TRUE_PARS_SHARED = {
     'theta_int': 0.785,
     'g1': 0.0,
     'g2': 0.0,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
+    'x0': 0.0,
+    'y0': 0.0,
     'total_flux': 1.0,
     'bulge_frac': 0.25,
     'disk_rscale': 2.0,
@@ -794,8 +794,8 @@ def _generate_galsim_composite(pars, image_pars, psf=None):
     theta_int = pars.get('theta_int', 0.0)
     g1 = pars.get('g1', 0.0)
     g2 = pars.get('g2', 0.0)
-    x0 = pars.get('int_x0', pars.get('disk_x0', 0.0))
-    y0 = pars.get('int_y0', pars.get('disk_y0', 0.0))
+    x0 = pars.get('x0', pars.get('disk_x0', 0.0))
+    y0 = pars.get('y0', pars.get('disk_y0', 0.0))
 
     composite = composite.rotate(theta_int * gs.radians)
     if abs(g1) > 0 or abs(g2) > 0:

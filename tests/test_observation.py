@@ -131,10 +131,10 @@ class TestBuildVelocityObs:
         int_theta = int_model.pars2theta(
             {
                 'flux': 100.0,
-                'int_rscale': 0.5,
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'rscale': 0.5,
+                'h_over_r': 0.1,
+                'x0': 0.0,
+                'y0': 0.0,
                 'cosi': 0.5,
                 'theta_int': 0.0,
                 'g1': 0.0,

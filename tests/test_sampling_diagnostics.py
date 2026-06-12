@@ -177,13 +177,13 @@ def generate_joint_synthetic_data(
     var_vel = synth_vel.variance
 
     # Intensity: SyntheticIntensity expects PARAMETER_NAMES form (flux,
-    # int_rscale, int_h_over_r, int_x0, int_y0, cosi, theta_int, g1, g2).
+    # rscale, h_over_r, x0, y0, cosi, theta_int, g1, g2).
     int_pars = {
         'flux': true_pars['F087.flux'],
-        'int_rscale': true_pars['F087.rscale'],
-        'int_h_over_r': true_pars['F087.h_over_r'],
-        'int_x0': true_pars['F087.x0'],
-        'int_y0': true_pars['F087.y0'],
+        'rscale': true_pars['F087.rscale'],
+        'h_over_r': true_pars['F087.h_over_r'],
+        'x0': true_pars['F087.x0'],
+        'y0': true_pars['F087.y0'],
         'cosi': true_pars['cosi'],
         'theta_int': true_pars['theta_int'],
         'g1': true_pars['g1'],

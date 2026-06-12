@@ -83,14 +83,14 @@ def galsim_image_pars():
 @pytest.fixture
 def spergel_theta():
     """Standard theta for InclinedSpergelModel (10 params)."""
-    # (cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, nu, int_x0, int_y0)
+    # (cosi, theta_int, g1, g2, flux, rscale, h_over_r, nu, x0, y0)
     return jnp.array([0.7, 0.785, 0.02, -0.01, 1.0, 3.0, 0.1, 0.5, 0.0, 0.0])
 
 
 @pytest.fixture
 def devaucouleurs_theta():
     """Standard theta for InclinedDeVaucouleursModel (9 params)."""
-    # (cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0)
+    # (cosi, theta_int, g1, g2, flux, rscale, h_over_r, x0, y0)
     return jnp.array([0.7, 0.785, 0.02, -0.01, 1.0, 3.0, 0.1, 0.0, 0.0])
 
 
@@ -109,7 +109,7 @@ def test_spergel_parameter_names():
     """Test that nu is at index 7 and all expected params exist."""
     model = InclinedSpergelModel()
     assert model.PARAMETER_NAMES[7] == 'nu'
-    for name in ('flux', 'int_rscale', 'cosi', 'theta_int', 'nu', 'int_x0', 'int_y0'):
+    for name in ('flux', 'rscale', 'cosi', 'theta_int', 'nu', 'x0', 'y0'):
         assert name in model.PARAMETER_NAMES
 
 
@@ -121,11 +121,11 @@ def test_spergel_theta_roundtrip():
         'g1': 0.02,
         'g2': -0.01,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
         'nu': 0.5,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     theta = InclinedSpergelModel.pars2theta(pars)
     pars_back = InclinedSpergelModel.theta2pars(theta)
@@ -193,7 +193,7 @@ def test_spergel_flux_conservation(nu, cosi, g1, g2, galsim_image_pars):
 
 
 @pytest.mark.parametrize(
-    "nu,cosi,int_h_over_r,tol",
+    "nu,cosi,h_over_r,tol",
     [
         (0.5, 0.7, 0.1, 5e-3),
         (2.0, 0.7, 0.1, 5e-3),
@@ -201,7 +201,7 @@ def test_spergel_flux_conservation(nu, cosi, g1, g2, galsim_image_pars):
     ],
 )
 def test_spergel_render_image_vs_call_consistency(
-    nu, cosi, int_h_over_r, tol, galsim_image_pars
+    nu, cosi, h_over_r, tol, galsim_image_pars
 ):
     """K-space render_image vs real-space __call__ consistency.
 
@@ -210,9 +210,7 @@ def test_spergel_render_image_vs_call_consistency(
     Matches the existing exponential render_vs_call test convention.
     """
     model = InclinedSpergelModel()
-    theta = jnp.array(
-        [cosi, np.pi / 6, 0.02, -0.01, 1.0, 2.0, int_h_over_r, nu, 0.3, -0.2]
-    )
+    theta = jnp.array([cosi, np.pi / 6, 0.02, -0.01, 1.0, 2.0, h_over_r, nu, 0.3, -0.2])
 
     X, Y = build_map_grid_from_image_pars(
         galsim_image_pars, unit='arcsec', centered=True
@@ -231,7 +229,7 @@ def test_spergel_render_image_vs_call_consistency(
 
     assert max_frac < tol, (
         f"render vs call: max|resid|/peak = {max_frac:.2e} "
-        f"(nu={nu}, cosi={cosi}, h/r={int_h_over_r}, tol={tol})"
+        f"(nu={nu}, cosi={cosi}, h/r={h_over_r}, tol={tol})"
     )
 
 
@@ -604,35 +602,33 @@ def test_spergel_scipy_vs_render_image_consistency(galsim_image_pars):
 
     cosi = 0.7
     flux = 1.0
-    int_rscale = 2.0
-    int_h_over_r = 0.1
+    rscale = 2.0
+    h_over_r = 0.1
     nu = 0.5
     theta_int = np.pi / 6
     g1 = 0.02
     g2 = -0.01
-    int_x0 = 0.3
-    int_y0 = -0.2
+    x0 = 0.3
+    y0 = -0.2
 
     # pixel_response=None on both sides: point-sampled method comparison
     scipy_image = _generate_spergel_scipy(
         galsim_image_pars,
         flux=flux,
-        int_rscale=int_rscale,
+        rscale=rscale,
         nu=nu,
         cosi=cosi,
         theta_int=theta_int,
         g1=g1,
         g2=g2,
-        int_x0=int_x0,
-        int_y0=int_y0,
-        int_h_over_r=int_h_over_r,
+        x0=x0,
+        y0=y0,
+        h_over_r=h_over_r,
         pixel_response=None,
     )
 
     model = InclinedSpergelModel()
-    theta = jnp.array(
-        [cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, nu, int_x0, int_y0]
-    )
+    theta = jnp.array([cosi, theta_int, g1, g2, flux, rscale, h_over_r, nu, x0, y0])
     render = np.array(
         model.render_image(theta, image_pars=galsim_image_pars, pixel_response=None)
     )
@@ -938,15 +934,15 @@ def test_galsim_regression_spergel_inclined_nu05(cosi, theta_int, galsim_image_p
     gs_image = _generate_sersic_galsim(
         galsim_image_pars,
         flux=flux,
-        int_rscale=rscale,
+        rscale=rscale,
         n_sersic=1.0,
         cosi=cosi,
         theta_int=theta_int,
         g1=0.0,
         g2=0.0,
-        int_x0=0.0,
-        int_y0=0.0,
-        int_h_over_r=h_over_r,
+        x0=0.0,
+        y0=0.0,
+        h_over_r=h_over_r,
         gsparams=gsp,
         method='auto',
     )
@@ -984,15 +980,15 @@ def test_spergel_nu05_vs_inclined_sersic_n1(galsim_image_pars):
     gs_image = _generate_sersic_galsim(
         galsim_image_pars,
         flux=flux,
-        int_rscale=rscale,
+        rscale=rscale,
         n_sersic=1.0,
         cosi=cosi,
         theta_int=0.0,
         g1=0.0,
         g2=0.0,
-        int_x0=0.0,
-        int_y0=0.0,
-        int_h_over_r=h_over_r,
+        x0=0.0,
+        y0=0.0,
+        h_over_r=h_over_r,
         gsparams=gsp,
         method='auto',
     )

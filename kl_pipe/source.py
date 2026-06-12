@@ -50,7 +50,7 @@ _C_KMS = 299792.458
 def _strip_param_prefix(name: str) -> str:
     """Drop the int_ / vel_ class-tuple prefix used by IntensityModel /
     VelocityModel today. SourceModel exposes params without the prefix in
-    the dotted-key namespace (``F087.rscale`` rather than ``F087.int_rscale``).
+    the dotted-key namespace (``F087.rscale`` rather than ``F087.rscale``).
     """
     if name.startswith('int_'):
         return name[4:]

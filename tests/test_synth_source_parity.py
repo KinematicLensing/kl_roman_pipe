@@ -73,10 +73,10 @@ def _render_pair(pars_flat, image_pars, psf, oversample):
         'g1': pars_flat['g1'],
         'g2': pars_flat['g2'],
         'F087.flux': pars_flat['flux'],
-        'F087.rscale': pars_flat['int_rscale'],
-        'F087.h_over_r': pars_flat['int_h_over_r'],
-        'F087.x0': pars_flat['int_x0'],
-        'F087.y0': pars_flat['int_y0'],
+        'F087.rscale': pars_flat['rscale'],
+        'F087.h_over_r': pars_flat['h_over_r'],
+        'F087.x0': pars_flat['x0'],
+        'F087.y0': pars_flat['y0'],
     }
 
     synth = SyntheticIntensity(pars_flat, model_type='exponential', seed=42, psf=psf)
@@ -122,10 +122,10 @@ def test_parity_face_on_no_psf(N):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 100.0,
-        'int_rscale': 0.3,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     image_pars = ImagePars(shape=(N, N), pixel_scale=0.11, indexing='ij')
     img_synth, img_source = _render_pair(pars_flat, image_pars, psf=None, oversample=5)
@@ -141,10 +141,10 @@ def test_parity_inclined_no_psf(N):
         'g1': 0.02,
         'g2': -0.01,
         'flux': 100.0,
-        'int_rscale': 0.3,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     image_pars = ImagePars(shape=(N, N), pixel_scale=0.11, indexing='ij')
     img_synth, img_source = _render_pair(pars_flat, image_pars, psf=None, oversample=5)
@@ -169,10 +169,10 @@ def test_parity_face_on_with_psf(N):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 100.0,
-        'int_rscale': 0.3,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     image_pars = ImagePars(shape=(N, N), pixel_scale=0.11, indexing='ij')
     psf = galsim.Gaussian(fwhm=0.18)
@@ -189,10 +189,10 @@ def test_parity_inclined_with_psf(N):
         'g1': 0.02,
         'g2': -0.01,
         'flux': 100.0,
-        'int_rscale': 0.3,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     image_pars = ImagePars(shape=(N, N), pixel_scale=0.11, indexing='ij')
     psf = galsim.Gaussian(fwhm=0.18)
@@ -237,10 +237,10 @@ def test_centroid_alignment_with_psf(synth_oversample, N):
         'g1': 0.0,
         'g2': 0.0,
         'flux': 100.0,
-        'int_rscale': 0.05,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 0.05,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     image_pars = ImagePars(shape=(N, N), pixel_scale=0.11, indexing='ij')
     psf = galsim.Gaussian(fwhm=0.18)
@@ -286,10 +286,10 @@ def test_parity_psf_with_centroid_offset(x0_arcsec, y0_arcsec):
         'g1': 0.02,
         'g2': -0.01,
         'flux': 100.0,
-        'int_rscale': 0.3,
-        'int_h_over_r': 0.1,
-        'int_x0': x0_arcsec,
-        'int_y0': y0_arcsec,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'x0': x0_arcsec,
+        'y0': y0_arcsec,
     }
     image_pars = ImagePars(shape=(33, 33), pixel_scale=0.11, indexing='ij')
     psf = galsim.Gaussian(fwhm=0.18)

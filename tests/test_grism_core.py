@@ -64,10 +64,10 @@ _INT_PARS = {
     'g1': 0.0,
     'g2': 0.0,
     'flux': 100.0,
-    'int_rscale': 0.3,
-    'int_h_over_r': 0.1,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
+    'rscale': 0.3,
+    'h_over_r': 0.1,
+    'x0': 0.0,
+    'y0': 0.0,
 }
 
 _SHARED_PARS = {'cosi', 'theta_int', 'g1', 'g2'}
@@ -134,18 +134,18 @@ def _make_pars(
     }
     for line_key, line_flux in line_fluxes.items():
         pars[f'{line_key}.flux'] = line_flux
-        pars[f'{line_key}.rscale'] = int_pars['int_rscale']
-        pars[f'{line_key}.h_over_r'] = int_pars['int_h_over_r']
-        pars[f'{line_key}.x0'] = int_pars['int_x0']
-        pars[f'{line_key}.y0'] = int_pars['int_y0']
+        pars[f'{line_key}.rscale'] = int_pars['rscale']
+        pars[f'{line_key}.h_over_r'] = int_pars['h_over_r']
+        pars[f'{line_key}.x0'] = int_pars['x0']
+        pars[f'{line_key}.y0'] = int_pars['y0']
         pars[f'{line_key}.dispersion'] = vel_dispersion
     if line_conts:
         for line_key, cont_flux in line_conts.items():
             pars[f'{line_key}.cont.flux'] = cont_flux
-            pars[f'{line_key}.cont.rscale'] = int_pars['int_rscale']
-            pars[f'{line_key}.cont.h_over_r'] = int_pars['int_h_over_r']
-            pars[f'{line_key}.cont.x0'] = int_pars['int_x0']
-            pars[f'{line_key}.cont.y0'] = int_pars['int_y0']
+            pars[f'{line_key}.cont.rscale'] = int_pars['rscale']
+            pars[f'{line_key}.cont.h_over_r'] = int_pars['h_over_r']
+            pars[f'{line_key}.cont.x0'] = int_pars['x0']
+            pars[f'{line_key}.cont.y0'] = int_pars['y0']
     return pars
 
 

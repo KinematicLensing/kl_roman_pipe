@@ -138,8 +138,8 @@ def test_model_instantiation():
     assert model.name == 'inclined_sersic'
     assert len(model.PARAMETER_NAMES) == 10
     assert 'n_sersic' in model.PARAMETER_NAMES
-    assert 'int_hlr' in model.PARAMETER_NAMES
-    assert 'int_h_over_hlr' in model.PARAMETER_NAMES
+    assert 'hlr' in model.PARAMETER_NAMES
+    assert 'h_over_hlr' in model.PARAMETER_NAMES
 
 
 def test_factory():

@@ -87,7 +87,7 @@ class TestValidationUtils:
         gp = get_geko_params('static_base')
         # cosi=0.5 -> i=60 deg
         assert abs(gp['i'] - 60.0) < 0.1
-        # re = 1.678 * int_rscale = 1.678 * 0.3
+        # re = 1.678 * rscale = 1.678 * 0.3
         assert abs(gp['re'] - 1.678 * 0.3) < 1e-6
         # PA: theta_int=0 -> PA=90
         assert abs(gp['PA'] - 90.0) < 0.1

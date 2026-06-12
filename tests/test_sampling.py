@@ -225,10 +225,10 @@ class TestInferenceTaskMask:
             'g1': 0.0,
             'g2': 0.0,
             'flux': 1.0,
-            'int_rscale': 3.0,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 3.0,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -286,11 +286,17 @@ class TestInferenceTaskMask:
             'rscale': 5.0,
             'x0': 0.0,
             'y0': 0.0,
+        }
+        int_true = {
+            'cosi': 0.6,
+            'theta_int': 0.785,
+            'g1': 0.0,
+            'g2': 0.0,
             'flux': 1.0,
-            'int_rscale': 3.0,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 3.0,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
 
         ip_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -307,7 +313,7 @@ class TestInferenceTaskMask:
 
         int_pars = {
             k: v
-            for k, v in true_pars.items()
+            for k, v in int_true.items()
             if k in InclinedExponentialModel.PARAMETER_NAMES
         }
         synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)

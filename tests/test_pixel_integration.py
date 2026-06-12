@@ -69,7 +69,7 @@ def exp_model():
 
 @pytest.fixture
 def exp_theta():
-    # cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0
+    # cosi, theta_int, g1, g2, flux, rscale, h_over_r, x0, y0
     return jnp.array([0.7, 0.5, 0.0, 0.0, 1e4, 0.3, 0.1, 0.0, 0.0])
 
 
@@ -203,10 +203,10 @@ class TestBaseRenderImageUnits:
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'int_rscale': 0.2,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 0.2,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         theta = model.pars2theta(pars)
         obs = build_image_obs(image_pars, oversample=5, psf=None, pixel_response=None)
@@ -333,15 +333,15 @@ class TestOversampleConvergence:
 
         common = dict(
             flux=float(params['flux']),
-            int_rscale=float(params['int_rscale']),
+            rscale=float(params['rscale']),
             n_sersic=1.0,
             cosi=float(params['cosi']),
             theta_int=float(params['theta_int']),
             g1=0.0,
             g2=0.0,
-            int_x0=0.0,
-            int_y0=0.0,
-            int_h_over_r=float(params['int_h_over_r']),
+            x0=0.0,
+            y0=0.0,
+            h_over_r=float(params['h_over_r']),
             gsparams=gsp,
         )
 
@@ -417,7 +417,7 @@ class TestMaxkStepk:
 
     def test_exponential_maxk_analytic(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 0.3, 'cosi': 1.0}
+        params = {'rscale': 0.3, 'cosi': 1.0}
         maxk = model.maxk(params, threshold=1e-3)
         expected = np.sqrt(1e-3 ** (-2.0 / 3.0) - 1.0) / 0.3
         np.testing.assert_allclose(maxk, expected, rtol=1e-10)
@@ -425,13 +425,13 @@ class TestMaxkStepk:
     def test_exponential_maxk_inclined(self):
         """Inclination increases maxk by 1/cosi."""
         model = InclinedExponentialModel()
-        maxk_fo = model.maxk({'int_rscale': 0.3, 'cosi': 1.0})
-        maxk_inc = model.maxk({'int_rscale': 0.3, 'cosi': 0.5})
+        maxk_fo = model.maxk({'rscale': 0.3, 'cosi': 1.0})
+        maxk_inc = model.maxk({'rscale': 0.3, 'cosi': 0.5})
         np.testing.assert_allclose(maxk_inc, maxk_fo / 0.5, rtol=1e-10)
 
     def test_spergel_maxk_analytic(self):
         model = InclinedSpergelModel()
-        params = {'int_rscale': 0.3, 'nu': 0.5, 'cosi': 1.0}
+        params = {'rscale': 0.3, 'nu': 0.5, 'cosi': 1.0}
         maxk = model.maxk(params, threshold=1e-3)
         expected = np.sqrt(1e-3 ** (-1.0 / 1.5) - 1.0) / 0.3
         np.testing.assert_allclose(maxk, expected, rtol=1e-10)
@@ -439,7 +439,7 @@ class TestMaxkStepk:
     def test_sersic_maxk_rootfinding(self):
         model = InclinedSersicModel()
         for n in [1.0, 2.0, 4.0]:
-            params = {'int_hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
+            params = {'hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
             maxk = model.maxk(params, threshold=1e-3)
             assert maxk > 0, f"maxk should be positive for n={n}"
             assert np.isfinite(maxk), f"maxk should be finite for n={n}"
@@ -449,7 +449,7 @@ class TestMaxkStepk:
         model = InclinedSersicModel()
         maxks = []
         for n in [1.0, 2.0, 3.0, 4.0]:
-            params = {'int_hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
+            params = {'hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
             maxks.append(model.maxk(params))
         for i in range(1, len(maxks)):
             assert maxks[i] > maxks[i - 1]
@@ -458,11 +458,11 @@ class TestMaxkStepk:
         """maxk should raise KeyError if cosi missing."""
         model = InclinedExponentialModel()
         with pytest.raises(KeyError, match='cosi'):
-            model.maxk({'int_rscale': 0.3})
+            model.maxk({'rscale': 0.3})
 
     def test_stepk_exponential(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 0.3}
+        params = {'rscale': 0.3}
         stepk = model.stepk(params)
         assert stepk > 0
         hlr = 1.6783469900166605 * 0.3
@@ -473,7 +473,7 @@ class TestMaxkStepk:
         """Pixel sinc attenuation should reduce effective maxk vs bare."""
         model = InclinedExponentialModel()
         bp = BoxPixel(0.11)
-        params = {'int_rscale': 0.3, 'cosi': 0.5}
+        params = {'rscale': 0.3, 'cosi': 0.5}
         bare = model.maxk(params)
         eff = compute_effective_maxk(model, params, pixel_response=bp)
         assert eff < bare, "pixel sinc should reduce effective maxk"
@@ -491,7 +491,7 @@ class TestMaxkStepk:
         our_maxks = []
         gs_maxks = []
         for r in rscales:
-            our_maxks.append(model.maxk({'int_rscale': r, 'cosi': 1.0}))
+            our_maxks.append(model.maxk({'rscale': r, 'cosi': 1.0}))
             gs_profile = galsim.Exponential(scale_radius=r)
             gs_maxks.append(gs_profile.maxk)
 
@@ -518,13 +518,13 @@ class TestGridAdequacy:
 
     def test_grid_requirements_compact_galaxy(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 0.1, 'cosi': 1.0}
+        params = {'rscale': 0.1, 'cosi': 1.0}
         rc = RenderConfig.for_model(model, params, 0.11)
         assert rc.oversample > 1, "compact galaxy should need oversample > 1"
 
     def test_grid_requirements_extended_galaxy(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 1.0, 'cosi': 1.0}
+        params = {'rscale': 1.0, 'cosi': 1.0}
         rc = RenderConfig.for_model(model, params, 0.11)
         assert rc.oversample == 1, "extended galaxy should not need oversample"
 
@@ -539,10 +539,10 @@ class TestGridAdequacy:
                 'g1': 0.0,
                 'g2': 0.0,
                 'flux': Uniform(1e3, 1e5),
-                'int_rscale': Uniform(0.1, 1.0),
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'rscale': Uniform(0.1, 1.0),
+                'h_over_r': 0.1,
+                'x0': 0.0,
+                'y0': 0.0,
             }
         )
         rc = RenderConfig.for_priors(model, priors, 0.11)
@@ -553,7 +553,7 @@ class TestGridAdequacy:
         """Pixel sinc attenuation should reduce effective maxk."""
         model = InclinedExponentialModel()
         bp = BoxPixel(0.11)
-        params = {'int_rscale': 0.3, 'cosi': 0.5}
+        params = {'rscale': 0.3, 'cosi': 0.5}
         bare = compute_effective_maxk(model, params)
         with_pixel = compute_effective_maxk(model, params, pixel_response=bp)
         assert with_pixel < bare
@@ -685,7 +685,7 @@ class TestEdgeCases:
     def test_sersic_high_n(self):
         """High Sersic n=5 should still compute maxk/stepk."""
         model = InclinedSersicModel()
-        params = {'int_hlr': 0.5, 'n_sersic': 5.0, 'cosi': 1.0}
+        params = {'hlr': 0.5, 'n_sersic': 5.0, 'cosi': 1.0}
         maxk = model.maxk(params)
         stepk = model.stepk(params)
         assert maxk > 0
@@ -723,10 +723,10 @@ class TestInferenceTaskRenderConfig:
             'g1': 0.0,
             'g2': 0.0,
             'flux': 1e4,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 0.3,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         # dotted-key true pars for the from_obs sampled-name ordering
         true_pars_dotted = {
@@ -744,9 +744,9 @@ class TestInferenceTaskRenderConfig:
         # generate data with pixel response (default on)
         data = generate_sersic_intensity_2d(
             ip,
-            **{k: v for k, v in true_pars.items() if k != 'int_h_over_r'},
+            **{k: v for k, v in true_pars.items() if k != 'h_over_r'},
             n_sersic=1.0,
-            int_h_over_r=0.1,
+            h_over_r=0.1,
         )
         # add simple Gaussian noise (avoid Poisson issues with negative pixels)
         rng = np.random.default_rng(42)
@@ -861,15 +861,15 @@ class TestWrapCorrectness:
         gs_img = _generate_sersic_galsim(
             ip,
             flux=1.0,
-            int_rscale=0.3,
+            rscale=0.3,
             n_sersic=1.0,
             cosi=0.5,
             theta_int=0.5,
             g1=0.0,
             g2=0.0,
-            int_x0=0.0,
-            int_y0=0.0,
-            int_h_over_r=0.1,
+            x0=0.0,
+            y0=0.0,
+            h_over_r=0.1,
             gsparams=gsp,
             method='auto',
         )
@@ -926,7 +926,7 @@ class TestWrapCorrectness:
         resolution then post-binned, while ALSO multiplying by sinc in
         k-space. The bin acted as a second pixel integration on top of
         sinc, biasing the rendered image. Under flux/pixel convention
-        this drove ~16.5% systematic in int_h_over_r recovery.
+        this drove ~16.5% systematic in h_over_r recovery.
 
         After Commit 4 (wrap engaged in fused path), the call passes
         oversample=N to the core, wrap+sinc gives exact pixel integration,
@@ -953,15 +953,15 @@ class TestWrapCorrectness:
         gs_img = _generate_sersic_galsim(
             ip,
             flux=1.0,
-            int_rscale=0.3,
+            rscale=0.3,
             n_sersic=1.0,
             cosi=0.5,
             theta_int=0.5,
             g1=0.0,
             g2=0.0,
-            int_x0=0.0,
-            int_y0=0.0,
-            int_h_over_r=0.1,
+            x0=0.0,
+            y0=0.0,
+            h_over_r=0.1,
             psf=psf,
             gsparams=gsp,
             method='auto',
@@ -1043,15 +1043,15 @@ class TestSubPixelLocation:
                 gs_img = _generate_sersic_galsim(
                     ip,
                     flux=flux,
-                    int_rscale=rscale,
+                    rscale=rscale,
                     n_sersic=1.0,
                     cosi=cosi,
                     theta_int=theta_int,
                     g1=0.0,
                     g2=0.0,
-                    int_x0=x0,
-                    int_y0=y0,
-                    int_h_over_r=h_over_r,
+                    x0=x0,
+                    y0=y0,
+                    h_over_r=h_over_r,
                     gsparams=gsp,
                     method='auto',
                 )
