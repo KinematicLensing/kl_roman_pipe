@@ -916,3 +916,119 @@ class TestNumpyroConfig:
         """Invalid reparam_strategy raises ValueError."""
         with pytest.raises(ValueError, match="reparam_strategy"):
             NumpyroSamplerConfig(reparam_strategy='invalid')
+
+
+# ==============================================================================
+# Laplace Preconditioning (opt-in)
+# ==============================================================================
+
+
+class TestLaplacePreconditionerConfig:
+    """Config validation for the precondition option (no sampling)."""
+
+    def test_precondition_default_none(self):
+        """Preconditioning is opt-in: default is 'none'."""
+        assert NumpyroSamplerConfig().precondition == 'none'
+
+    def test_valid_precondition_values(self):
+        """'none' and 'laplace' are accepted."""
+        assert NumpyroSamplerConfig(precondition='none').precondition == 'none'
+        assert NumpyroSamplerConfig(precondition='laplace').precondition == 'laplace'
+
+    def test_invalid_precondition_raises(self):
+        """Unknown precondition value raises ValueError."""
+        with pytest.raises(ValueError, match="precondition"):
+            NumpyroSamplerConfig(precondition='bogus')
+
+    def test_invalid_n_map_starts_raises(self):
+        """n_map_starts < 1 raises ValueError."""
+        with pytest.raises(ValueError, match="n_map_starts"):
+            NumpyroSamplerConfig(n_map_starts=0)
+
+
+class TestLaplacePreconditioner:
+    """The InferenceTask.laplace_preconditioner utility + preconditioned NUTS."""
+
+    def test_preconditioner_utility(self, simple_velocity_task):
+        """Truth-free MAP + regularized inverse-Hessian mass matrix is valid."""
+        task, true_pars = simple_velocity_task
+        pre = task.laplace_preconditioner(n_starts=3, seed=0)
+
+        D = task.n_params
+        assert pre.map_point.shape == (D,)
+        assert pre.inverse_mass_matrix.shape == (D, D)
+        assert pre.n_starts_converged >= 1
+        # Mass matrix must be symmetric positive-definite (valid metric).
+        assert np.allclose(pre.inverse_mass_matrix, pre.inverse_mass_matrix.T)
+        assert np.all(np.linalg.eigvalsh(pre.inverse_mass_matrix) > 0)
+        # MAP found from prior draws (not truth) should land near the well-
+        # constrained truth at SNR=1000.
+        names = task.sampled_names
+        vcirc_map = pre.map_point[names.index('vel.vcirc')]
+        assert abs(vcirc_map - true_pars['vel.vcirc']) / 200.0 < 0.1
+
+    def test_preconditioned_converges_and_recovers(self, simple_velocity_task):
+        """precondition='laplace' yields a converged chain recovering truth."""
+        task, true_pars = simple_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=400,
+            n_warmup=150,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=42,
+            progress=False,
+            precondition='laplace',
+            n_map_starts=3,
+        )
+        result = build_sampler('numpyro', task, config).run()
+
+        # Converged + healthy.
+        rhats = result.get_rhat()
+        assert max(rhats.values()) < 1.05
+        assert result.diagnostics['divergence_rate'] < 0.1
+        # Diagnostics record the preconditioner used.
+        assert result.diagnostics['preconditioner']['method'] == 'laplace'
+        # Recovers the well-constrained velocity scale.
+        names = list(result.param_names)
+        means = result.samples.mean(axis=0)
+        vcirc = means[names.index('vel.vcirc')]
+        assert abs(vcirc - true_pars['vel.vcirc']) / 200.0 < 0.05
+
+    def test_preconditioned_matches_standard(self, simple_velocity_task):
+        """Preconditioning must not change the posterior: means/stds agree with
+        the standard (model-based, adapted) path within MCMC error."""
+        task, _ = simple_velocity_task
+        common = dict(
+            n_samples=400,
+            n_warmup=300,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=7,
+            progress=False,
+        )
+        std_res = build_sampler(
+            'numpyro', task, NumpyroSamplerConfig(precondition='none', **common)
+        ).run()
+        pre_res = build_sampler(
+            'numpyro',
+            task,
+            NumpyroSamplerConfig(precondition='laplace', n_map_starts=3, **common),
+        ).run()
+
+        names = list(std_res.param_names)
+        std_mean = std_res.samples.mean(axis=0)
+        std_std = std_res.samples.std(axis=0)
+        pre_mean = pre_res.samples.mean(axis=0)
+        pre_std = pre_res.samples.std(axis=0)
+        for i, name in enumerate(names):
+            # Means agree to well within a posterior std (MCMC error is ~0.1
+            # std at this ESS; 0.75 is a safe bound, not a tuned one).
+            assert abs(pre_mean[i] - std_mean[i]) < 0.75 * std_std[i], (
+                f"{name}: preconditioned mean {pre_mean[i]:.4g} vs standard "
+                f"{std_mean[i]:.4g} (std {std_std[i]:.4g})"
+            )
+            # Posterior widths agree within 50%.
+            assert abs(pre_std[i] - std_std[i]) < 0.5 * std_std[i], (
+                f"{name}: preconditioned std {pre_std[i]:.4g} vs standard "
+                f"{std_std[i]:.4g}"
+            )

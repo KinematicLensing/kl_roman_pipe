@@ -29,6 +29,37 @@ class GridAdequacyWarning(UserWarning):
     """FFT grid may be too small for the model + prior combination."""
 
 
+@dataclass
+class LaplacePreconditioner:
+    """Laplace-approximation preconditioner for gradient-based sampling.
+
+    Bundles the MAP point and a regularized inverse-Hessian to use as a NUTS
+    mass matrix, letting warmup start near-optimally conditioned instead of
+    climbing from an identity metric. Produced by
+    ``InferenceTask.laplace_preconditioner``; consumed by ``NumpyroSampler``
+    (directly, or via ``NumpyroSamplerConfig(precondition='laplace')``).
+
+    Attributes
+    ----------
+    map_point : np.ndarray
+        MAP estimate in sampled-parameter (physical) space, ``sampled_names``
+        order. Used as the chain init.
+    inverse_mass_matrix : np.ndarray
+        Regularized inverse Hessian of the negative log-posterior at the MAP
+        (``(n_params, n_params)``), in the same space/order. Used as the
+        fixed NUTS inverse mass matrix.
+    n_starts_converged : int
+        Number of multi-start optimizations that converged to the best mode.
+    condition_number : float
+        Condition number of the regularized Hessian (post eigenvalue floor).
+    """
+
+    map_point: np.ndarray
+    inverse_mass_matrix: np.ndarray
+    n_starts_converged: int
+    condition_number: float
+
+
 if TYPE_CHECKING:
     from kl_pipe.model import Model
     from kl_pipe.source import SourceModel
@@ -517,6 +548,124 @@ class InferenceTask:
             Array of shape (n_samples, n_params) with prior samples.
         """
         return self.priors.sample(rng_key, n_samples)
+
+    def laplace_preconditioner(
+        self,
+        n_starts: int = 4,
+        eig_floor: float = 1e-4,
+        maxiter: int = 300,
+        seed: int = 0,
+    ) -> 'LaplacePreconditioner':
+        """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
+
+        Multi-start L-BFGS-B from prior draws (truth-free) locates the MAP,
+        then the Hessian of the negative log-posterior there is regularized
+        (eigenvalue floor) and inverted to serve as a NUTS mass matrix. Lets
+        warmup begin near-optimally conditioned, skipping the expensive
+        early-warmup transient. See
+        ``experiments/sweverett/flagship_speedup`` for the validating study.
+
+        The optimizer uses the prior bounds (``get_bounds``), so iterates stay
+        in-support; the Hessian is taken at the interior MAP.
+
+        Parameters
+        ----------
+        n_starts : int, default 4
+            Number of L-BFGS-B starts from independent prior draws. The best
+            (highest log-posterior) converged mode is used. Multi-start guards
+            against local modes (e.g. the position-angle multimodality).
+        eig_floor : float, default 1e-4
+            Hessian eigenvalues below ``eig_floor * max_eigenvalue`` are floored
+            to that value before inversion, capping the mass-matrix condition
+            number at ``1/eig_floor`` (handles near-degenerate directions).
+        maxiter : int, default 300
+            Max L-BFGS-B iterations per start.
+        seed : int, default 0
+            PRNG seed for the prior-draw starting points.
+
+        Returns
+        -------
+        LaplacePreconditioner
+            MAP point + regularized inverse-Hessian mass matrix.
+
+        Raises
+        ------
+        RuntimeError
+            If no optimization start converges to a finite-log-posterior mode.
+        """
+        from scipy.optimize import minimize
+
+        val_and_grad = self.get_log_posterior_and_grad_fn()
+        hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
+
+        # Per-parameter characteristic scale from prior draws. The physical
+        # problem is badly scaled (e.g. vcirc~200 vs g1~0.02); optimizing in
+        # scaled coords u (theta = loc + scale*u) conditions L-BFGS-B well.
+        prior_batch = np.asarray(
+            self.sample_prior(jax.random.PRNGKey(seed), n_samples=512)
+        )
+        loc = prior_batch.mean(axis=0)
+        scale = prior_batch.std(axis=0)
+        scale = np.where(scale > 0, scale, 1.0)  # guard degenerate/fixed dims
+
+        def neg_u(u):
+            theta = jnp.asarray(loc + scale * u)
+            v, g = val_and_grad(theta)
+            # chain rule: d(-logpost)/du = -grad_theta * scale
+            return float(-v), np.asarray(-g, dtype=np.float64) * scale
+
+        # Multi-start from prior draws (truth-free), in scaled coords.
+        starts = np.asarray(
+            self.sample_prior(jax.random.PRNGKey(seed + 1), n_samples=n_starts)
+        )
+        best = None
+        n_converged = 0
+        for s0 in starts:
+            u0 = (np.asarray(s0, dtype=np.float64) - loc) / scale
+            res = minimize(
+                neg_u,
+                u0,
+                jac=True,
+                method='L-BFGS-B',
+                options={'maxiter': maxiter},
+            )
+            if res.success and np.isfinite(res.fun):
+                n_converged += 1
+                if best is None or res.fun < best.fun:
+                    best = res
+
+        if best is None:
+            raise RuntimeError(
+                "laplace_preconditioner: no optimization start converged to a "
+                "finite-log-posterior mode (tried "
+                f"{n_starts} starts). Check priors/data."
+            )
+
+        theta_map = jnp.asarray(loc + scale * best.x)
+        H = np.asarray(hess_fn(theta_map), dtype=np.float64)
+        H = 0.5 * (H + H.T)
+        # Scale-aware regularization: normalize the Hessian by the per-parameter
+        # scale (diag(scale) @ H @ diag(scale)) BEFORE flooring eigenvalues, so
+        # the eigenvalue floor caps only genuine degeneracy -- not the benign
+        # scale spread (e.g. vcirc~200 vs g1~0.02, which the mass matrix must
+        # keep). Floor a raw physical Hessian and you destroy that scale range.
+        Hn = (scale[:, None] * H) * scale[None, :]
+        Hn = 0.5 * (Hn + Hn.T)
+        w, V = np.linalg.eigh(Hn)
+        w_floored = np.maximum(w, w.max() * eig_floor)  # floor soft/neg dirs
+        Hn_reg = (V * w_floored) @ V.T
+        inv_n = np.linalg.inv(Hn_reg)
+        # map back: inv_mass_theta = S @ inv(Hn_reg) @ S = inv(H_reg) with scale kept
+        inv_mass = (scale[:, None] * inv_n) * scale[None, :]
+        inv_mass = 0.5 * (inv_mass + inv_mass.T)
+        cond = float(w_floored.max() / w_floored.min())
+
+        return LaplacePreconditioner(
+            map_point=np.asarray(theta_map, dtype=np.float64),
+            inverse_mass_matrix=inv_mass,
+            n_starts_converged=n_converged,
+            condition_number=cond,
+        )
 
     # =========================================================================
     # Grid adequacy validation
