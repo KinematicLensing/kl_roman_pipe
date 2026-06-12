@@ -101,7 +101,7 @@ For k-space intensity models: the rendering chain is `profile_FT × pixel_FT × 
 - **Standalone**: `render_image(theta, image_pars=ip)` auto-computes `RenderConfig` from theta via `model.maxk(params)` / `model.stepk(params)`. Grid adapts per call.
 - **Inference**: `RenderConfig.for_priors(model, priors, pixel_scale, ...)` computes worst-case from prior bounds. Frozen into `InferenceTask`'s likelihood closure. JIT-compatible.
 
-`maxk` depends on both `int_rscale` (or `int_hlr`) and `cosi` — inclination compresses the FT along ky, extending it by 1/cosi. When `pixel_response` is present, the effective maxk is computed from the combined product `profile_FT × sinc`, not individual maxks — sinc attenuation significantly reduces the needed grid size.
+`maxk` depends on both `rscale` (or `hlr`) and `cosi` — inclination compresses the FT along ky, extending it by 1/cosi. When `pixel_response` is present, the effective maxk is computed from the combined product `profile_FT × sinc`, not individual maxks — sinc attenuation significantly reduces the needed grid size.
 
 **Trade-off**: narrower cosi prior → smaller worst-case maxk → smaller grid → faster inference. The `maxk_threshold` parameter controls the aliasing budget (default 1e-3).
 
@@ -131,9 +131,10 @@ All raise `ValueError` on unknown names.
 | `theta` | JAX array of params in `PARAMETER_NAMES` order | `theta`, `theta_vel` |
 | `pars` | Dict of named parameters | `true_pars`, `meta_pars` |
 | `PARAMETER_NAMES` | Class tuple defining canonical ordering | — |
-| `vel_*` | Velocity model parameter | `vel_rscale`, `vel_x0` |
-| `int_*` | Intensity model parameter | `int_rscale`, `int_x0` |
-| No prefix | Shared geometric parameter | `cosi`, `theta_int`, `g1`, `g2` |
+| `vel.<param>` | Velocity model parameter (dotted SourceModel key) | `vel.rscale`, `vel.x0` |
+| `<band>.<param>` / `<line>.<param>` | Intensity component parameter (dotted SourceModel key) | `F087.rscale`, `Halpha.x0` |
+| No prefix | Shared geometric parameter (top-level) | `cosi`, `theta_int`, `g1`, `g2` |
+| Class `PARAMETER_NAMES` | Bare names (no `vel_`/`int_` prefix) | `rscale`, `x0`, `flux`, `h_over_r` |
 | `X, Y` | 2D coordinate grids | From `build_map_grid_from_image_pars()` |
 
 ### Physical Units

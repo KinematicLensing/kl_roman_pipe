@@ -39,7 +39,6 @@ from kl_pipe.source import (  # noqa: E402
     _apply_obs_rotation,
     _build_component_theta,
     _lookup_param,
-    _strip_param_prefix,
 )
 from kl_pipe.spectral import CubePars  # noqa: E402
 from kl_pipe.velocity import CenteredVelocityModel  # noqa: E402
@@ -82,18 +81,6 @@ _BASE_SHARED_PARS = {
 # ===========================================================================
 # Theta routing helpers
 # ===========================================================================
-
-
-class TestStripParamPrefix:
-    def test_int_prefix(self):
-        assert _strip_param_prefix('rscale') == 'rscale'
-
-    def test_vel_prefix(self):
-        assert _strip_param_prefix('rscale') == 'rscale'
-
-    def test_no_prefix(self):
-        assert _strip_param_prefix('cosi') == 'cosi'
-        assert _strip_param_prefix('flux') == 'flux'
 
 
 class TestLookupParam:

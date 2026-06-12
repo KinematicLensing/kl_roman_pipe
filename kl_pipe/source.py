@@ -47,36 +47,21 @@ _C_KMS = 299792.458
 # ===========================================================================
 
 
-def _strip_param_prefix(name: str) -> str:
-    """Drop the int_ / vel_ class-tuple prefix used by IntensityModel /
-    VelocityModel today. SourceModel exposes params without the prefix in
-    the dotted-key namespace (``F087.rscale`` rather than ``F087.rscale``).
-    """
-    if name.startswith('int_'):
-        return name[4:]
-    if name.startswith('vel_'):
-        return name[4:]
-    return name
-
-
 def _lookup_param(pars: dict, prefix: str, param_name: str):
     """Resolve one model parameter from a dotted-key ``pars`` dict.
 
     Resolution order:
-      1. ``<prefix>.<bare>`` -- per-component value (e.g. ``F087.rscale``).
-      2. ``<bare>``           -- top-level shared value (e.g. ``cosi``, ``g1``).
-      3. ``<param_name>``     -- verbatim (for params without int_/vel_ prefix).
+      1. ``<prefix>.<param_name>`` -- per-component value (e.g. ``F087.rscale``).
+      2. ``<param_name>``          -- top-level shared value (e.g. ``cosi``, ``g1``).
 
-    ``bare`` is ``param_name`` with the leading ``int_`` / ``vel_`` stripped.
-    Raises ``KeyError`` if none of the three keys is present.
+    Raises ``KeyError`` if neither key is present.
     """
-    bare = _strip_param_prefix(param_name)
-    for key in (f'{prefix}.{bare}', bare, param_name):
+    for key in (f'{prefix}.{param_name}', param_name):
         if key in pars:
             return pars[key]
     raise KeyError(
         f"could not resolve param '{param_name}' for component '{prefix}'; "
-        f"tried '{prefix}.{bare}', '{bare}', '{param_name}'"
+        f"tried '{prefix}.{param_name}', '{param_name}'"
     )
 
 
@@ -97,20 +82,17 @@ def _component_priors_for_intensity(
     query by ``model.PARAMETER_NAMES``) see the right specs. Resolution
     mirrors ``_lookup_param``:
 
-    1. ``<prefix>.<bare>`` -- per-component value (e.g. ``F087.rscale``).
-    2. ``<bare>``          -- top-level shared value (e.g. ``cosi``).
-    3. ``<param_name>``    -- verbatim.
+    1. ``<prefix>.<param_name>`` -- per-component value (e.g. ``F087.rscale``).
+    2. ``<param_name>``          -- top-level shared value (e.g. ``cosi``).
 
-    where ``<bare>`` strips ``int_`` / ``vel_`` from ``param_name``. Skips
-    params absent from all three lookups; ``_extract_worst_case_params``
+    Skips params absent from both lookups; ``_extract_worst_case_params``
     tolerates missing names.
     """
     from kl_pipe.priors import PriorDict
 
     spec = {}
     for name in model_param_names:
-        bare = _strip_param_prefix(name)
-        for key in (f'{prefix}.{bare}', bare, name):
+        for key in (f'{prefix}.{name}', name):
             if key in priors._param_spec:
                 spec[name] = priors._param_spec[key]
                 break
@@ -570,8 +552,7 @@ class SourceModel:
         """
         values = []
         for p in model.PARAMETER_NAMES:
-            bare = _strip_param_prefix(p)
-            if bare == 'flux':
+            if p == 'flux':
                 values.append(_lookup_param(pars, own_prefix, p))
             else:
                 values.append(_lookup_param(pars, spatial_owner_prefix, p))
