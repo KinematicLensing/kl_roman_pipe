@@ -76,7 +76,7 @@ def simple_velocity_task():
     true_pars_flat = {
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
         'cosi': 0.6,
         'theta_int': 0.785,
         'g1': 0.02,
@@ -141,7 +141,7 @@ def joint_model_task():
     true_pars_flat = {
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
         'cosi': 0.6,
         'theta_int': 0.785,
         'g1': 0.03,

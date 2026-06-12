@@ -258,7 +258,7 @@ class RenderConfig:
         try:
             grad_v_max = velocity_model.grad_bandwidth(vel_worst)
         except KeyError:
-            # velocity priors missing one of (vcirc, vel_rscale, cosi) -- assume
+            # velocity priors missing one of (vcirc, rscale, cosi) -- assume
             # no velocity-modulation bandwidth contribution
             grad_v_max = 0.0
 
@@ -578,8 +578,8 @@ def _extract_worst_case_params(model, priors) -> tuple:
                 # largest vcirc → steepest velocity gradient → highest k_G
                 worst_maxk_params[name] = prior.high
                 worst_stepk_params[name] = prior.high
-            elif name == 'vel_rscale':
-                # smallest vel_rscale → steepest velocity gradient → highest k_G
+            elif name == 'rscale':
+                # smallest rscale → steepest velocity gradient → highest k_G
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.high
             else:

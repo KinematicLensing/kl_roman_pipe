@@ -227,9 +227,9 @@ def test_recover_centered_velocity_base(snr, test_config, velocity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 5.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -329,7 +329,7 @@ def test_recover_centered_velocity_with_shear(snr, test_config, velocity_grids):
         'g2': -0.03,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -412,7 +412,7 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
     """
     Test parameter recovery for OffsetVelocityModel.
 
-    Includes centroid offsets (vel_x0, vel_y0) in addition to kinematic parameters.
+    Includes centroid offsets (x0, y0) in addition to kinematic parameters.
     This tests our ability to recover spatial offsets along with velocities.
     """
 
@@ -425,9 +425,9 @@ def test_recover_offset_velocity(snr, test_config, velocity_grids):
         'g2': -0.01,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 1.5,
-        'vel_y0': -1.0,
+        'rscale': 5.0,
+        'x0': 1.5,
+        'y0': -1.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -736,9 +736,9 @@ def test_recover_joint_base(snr, test_config, velocity_grids, intensity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 5.0,
+        'x0': 0.0,
+        'y0': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
         'int_h_over_r': 0.1,
@@ -892,9 +892,9 @@ def test_recover_joint_with_shear(snr, test_config, velocity_grids, intensity_gr
         'g2': -0.02,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 1.0,
-        'vel_y0': -0.5,
+        'rscale': 5.0,
+        'x0': 1.0,
+        'y0': -0.5,
         'flux': 1.0,
         'int_rscale': 3.0,
         'int_h_over_r': 0.1,
@@ -1154,7 +1154,7 @@ def test_recover_centered_velocity_with_psf(test_config, velocity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
     true_pars_int_flat = {
         'cosi': 0.6,
@@ -1297,9 +1297,9 @@ def test_recover_joint_with_psf(test_config, velocity_grids, intensity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 5.0,
+        'x0': 0.0,
+        'y0': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
         'int_h_over_r': 0.1,
@@ -1524,7 +1524,7 @@ _VEL_INVARIANCE_TRUTH_FLAT = {
     'g2': 0.0,
     'v0': 10.0,
     'vcirc': 200.0,
-    'vel_rscale': 5.0,
+    'rscale': 5.0,
 }
 _VEL_INVARIANCE_TRUTH_DOTTED = {
     'cosi': 0.6,
@@ -1719,7 +1719,7 @@ def test_recover_centered_velocity_masked_aperture(test_config, velocity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -1928,9 +1928,9 @@ def test_recover_joint_masked(test_config, velocity_grids, intensity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 5.0,
+        'x0': 0.0,
+        'y0': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
         'int_h_over_r': 0.1,
@@ -2400,9 +2400,9 @@ def test_recover_joint_phot_grism_base(snr, test_config):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 0.4,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 0.4,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     pars_dotted = {
         'cosi': 0.6,

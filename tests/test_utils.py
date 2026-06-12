@@ -763,7 +763,7 @@ def compute_parameter_bounds(
             upper = upper_pct
 
     # Special case: centroid offsets (bounded by image)
-    elif param_name in ['x0', 'y0', 'vel_x0', 'vel_y0', 'int_x0', 'int_y0']:
+    elif param_name in ['x0', 'y0', 'x0', 'y0', 'int_x0', 'int_y0']:
         if image_pars is not None:
             # Use image extent
             extent = image_pars.shape[0] * image_pars.pixel_scale / 2

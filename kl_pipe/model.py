@@ -263,8 +263,8 @@ class VelocityModel(Model):
         cosi = self.get_param('cosi', theta)
 
         # centroid offsets are not present in all models, so check first
-        x0 = self.get_param('vel_x0', theta) if 'vel_x0' in self._param_indices else 0.0
-        y0 = self.get_param('vel_y0', theta) if 'vel_y0' in self._param_indices else 0.0
+        x0 = self.get_param('x0', theta) if 'x0' in self._param_indices else 0.0
+        y0 = self.get_param('y0', theta) if 'y0' in self._param_indices else 0.0
 
         # transform to disk plane
         x_disk, y_disk = transform_to_disk_plane(
@@ -334,7 +334,7 @@ class VelocityModel(Model):
         with non-arctan rotation curves should override.
         """
         vcirc = float(params['vcirc'])
-        r_v = float(params['vel_rscale'])
+        r_v = float(params['rscale'])
         cosi = float(params['cosi'])
         sini = (1.0 - cosi**2) ** 0.5
         return (2.0 / np.pi) * vcirc * sini / r_v

@@ -24,11 +24,11 @@ class CenteredVelocityModel(VelocityModel):
         Systemic velocity.
     vcirc : float
         Circular velocity.
-    vel_rscale : float
+    rscale : float
         Scale radius.
     """
 
-    PARAMETER_NAMES = ('cosi', 'theta_int', 'g1', 'g2', 'v0', 'vcirc', 'vel_rscale')
+    PARAMETER_NAMES = ('cosi', 'theta_int', 'g1', 'g2', 'v0', 'vcirc', 'rscale')
 
     @property
     def name(self) -> str:
@@ -47,7 +47,7 @@ class CenteredVelocityModel(VelocityModel):
         v_circ(r) = (2/π) * vcirc * arctan(r / rscale)
         """
         vcirc = self.get_param('vcirc', theta)
-        rscale = self.get_param('vel_rscale', theta)
+        rscale = self.get_param('rscale', theta)
 
         # circular radius in (centered) disk plane
         r = jnp.sqrt(x**2 + y**2)
@@ -76,11 +76,11 @@ class OffsetVelocityModel(VelocityModel):
         Systemic velocity.
     vcirc : float
         Circular velocity.
-    vel_rscale : float
+    rscale : float
         Scale radius.
-    vel_x0 : float
+    x0 : float
         X-coordinate offset for the velocity image.
-    vel_y0 : float
+    y0 : float
         Y-coordinate offset for the velocity image.
     """
 
@@ -91,9 +91,9 @@ class OffsetVelocityModel(VelocityModel):
         'g2',
         'v0',
         'vcirc',
-        'vel_rscale',
-        'vel_x0',
-        'vel_y0',
+        'rscale',
+        'x0',
+        'y0',
     )
 
     @property
@@ -113,7 +113,7 @@ class OffsetVelocityModel(VelocityModel):
         v_circ(r) = (2/π) * vcirc * arctan(r / rscale)
         """
         vcirc = self.get_param('vcirc', theta)
-        rscale = self.get_param('vel_rscale', theta)
+        rscale = self.get_param('rscale', theta)
 
         # circular radius in (centered) disk plane
         r = jnp.sqrt(x**2 + y**2)

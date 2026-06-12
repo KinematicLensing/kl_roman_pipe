@@ -169,7 +169,7 @@ def _midpoint_pars_from_priors(priors):
 
 
 def _worst_case_pars_from_priors(priors):
-    """Pick worst-case values: smallest cosi, largest vcirc, smallest vel_rscale,
+    """Pick worst-case values: smallest cosi, largest vcirc, smallest rscale,
     smallest sigma_v -- matches what build_grism_render_config validates against."""
     pars = {}
     for name, spec in priors._param_spec.items():

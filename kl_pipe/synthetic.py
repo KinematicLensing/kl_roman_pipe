@@ -18,9 +18,9 @@ Generate synthetic velocity data:
 >>>
 >>> # Define true parameters
 >>> true_params = {
-...     'v0': 10.0, 'vcirc': 200.0, 'vel_rscale': 5.0,
+...     'v0': 10.0, 'vcirc': 200.0, 'rscale': 5.0,
 ...     'cosi': 0.8, 'theta_int': 0.785,
-...     'g1': 0.0, 'g2': 0.0, 'vel_x0': 0.0, 'vel_y0': 0.0
+...     'g1': 0.0, 'g2': 0.0, 'x0': 0.0, 'y0': 0.0
 ... }
 >>>
 >>> # Create synthetic observation
@@ -65,14 +65,14 @@ REQUIRED_PARAMS = {
     'arctan': {
         'v0',
         'vcirc',
-        'vel_rscale',
+        'rscale',
         'cosi',
         'theta_int',
         'g1',
         'g2',
         # TODO: we could add support for optional parameters later
-        # 'vel_x0',
-        # 'vel_y0',
+        # 'x0',
+        # 'y0',
     },
     'sersic': {
         'flux',
@@ -120,13 +120,13 @@ def generate_arctan_velocity_2d(
     image_pars: ImagePars,
     v0: float,
     vcirc: float,
-    vel_rscale: float,
+    rscale: float,
     cosi: float,
     theta_int: float,
     g1: float = 0.0,
     g2: float = 0.0,
-    vel_x0: float = 0.0,
-    vel_y0: float = 0.0,
+    x0: float = 0.0,
+    y0: float = 0.0,
     psf=None,
     intensity_for_psf=None,
 ) -> np.ndarray:
@@ -141,7 +141,7 @@ def generate_arctan_velocity_2d(
         Systemic velocity in km/s.
     vcirc : float
         Asymptotic circular velocity in km/s.
-    vel_rscale : float
+    rscale : float
         Scale radius for rotation curve, same units as X, Y.
     cosi: float
         Cosine of inclination angle (0=face-on, 1=edge-on).
@@ -149,7 +149,7 @@ def generate_arctan_velocity_2d(
         Intrinsic position angle in radians.
     g1, g2 : float, optional
         Shear components. Default is 0.0 (no shear).
-    vel_x0, vel_y0 : float, optional
+    x0, y0 : float, optional
         Centroid offsets, same units as X, Y. Default is 0.0.
 
     Returns
@@ -164,8 +164,8 @@ def generate_arctan_velocity_2d(
     sini = np.sqrt(1.0 - cosi**2)
 
     # Step 1: recenter
-    X_c = X - vel_x0
-    Y_c = Y - vel_y0
+    X_c = X - x0
+    Y_c = Y - y0
 
     # Step 2: area-preserving shear (image→source), matches GalSim .shear()
     norm = 1.0 / np.sqrt(1.0 - (g1**2 + g2**2))
@@ -186,7 +186,7 @@ def generate_arctan_velocity_2d(
     r_disk = np.sqrt(X_disk**2 + Y_disk**2)
 
     # Evaluate arctan rotation curve
-    v_circ = (2.0 / np.pi) * vcirc * np.arctan(r_disk / vel_rscale)
+    v_circ = (2.0 / np.pi) * vcirc * np.arctan(r_disk / rscale)
 
     # Project to line-of-sight
     phi = np.arctan2(Y_disk, X_disk)
@@ -1205,7 +1205,7 @@ def generate_datacube_3d(
     image_pars : ImagePars
         Coarse-detector spatial grid.
     vel_pars : dict
-        {v0, vcirc, vel_rscale, cosi, theta_int, g1, g2}
+        {v0, vcirc, rscale, cosi, theta_int, g1, g2}
     int_pars : dict
         {flux, int_rscale, n_sersic, cosi, theta_int, g1, g2}
     spectral_pars : dict

@@ -242,8 +242,8 @@ def test_offset_model_gradient(offset_velocity_model, offset_theta, test_grid):
     assert gradient.shape == offset_theta.shape
     assert jnp.isfinite(gradient).all()
     # Position parameters should have gradients
-    assert gradient[7] != 0  # vel_x0
-    assert gradient[8] != 0  # vel_y0
+    assert gradient[7] != 0  # x0
+    assert gradient[8] != 0  # y0
 
 
 # ----------------------------------------------------------------------

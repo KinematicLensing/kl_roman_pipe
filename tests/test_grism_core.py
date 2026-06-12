@@ -55,7 +55,7 @@ _VEL_PARS = {
     'g2': 0.0,
     'v0': 10.0,
     'vcirc': 200.0,
-    'vel_rscale': 0.5,
+    'rscale': 0.5,
 }
 
 _INT_PARS = {
@@ -130,7 +130,7 @@ def _make_pars(
         'z': z,
         'vel.v0': vel_pars['v0'],
         'vel.vcirc': vel_pars['vcirc'],
-        'vel.rscale': vel_pars['vel_rscale'],
+        'vel.rscale': vel_pars['rscale'],
     }
     for line_key, line_flux in line_fluxes.items():
         pars[f'{line_key}.flux'] = line_flux

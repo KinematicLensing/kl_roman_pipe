@@ -71,7 +71,7 @@ def simple_velocity_problem():
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
 
     # Generate synthetic data
@@ -175,7 +175,7 @@ class TestInferenceTaskMask:
             'g2': 0.0,
             'v0': 10.0,
             'vcirc': 200.0,
-            'vel_rscale': 5.0,
+            'rscale': 5.0,
         }
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -283,9 +283,9 @@ class TestInferenceTaskMask:
             'g2': 0.0,
             'v0': 10.0,
             'vcirc': 200.0,
-            'vel_rscale': 5.0,
-            'vel_x0': 0.0,
-            'vel_y0': 0.0,
+            'rscale': 5.0,
+            'x0': 0.0,
+            'y0': 0.0,
             'flux': 1.0,
             'int_rscale': 3.0,
             'int_h_over_r': 0.1,
@@ -380,7 +380,7 @@ class TestInferenceTaskMask:
             'g2': 0.0,
             'v0': 10.0,
             'vcirc': 200.0,
-            'vel_rscale': 5.0,
+            'rscale': 5.0,
         }
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')

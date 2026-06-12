@@ -150,12 +150,12 @@ def estimate_velocity_params(
     # At r=rscale, v = vcirc * (2/pi) * (pi/4) = vcirc/2
     # Use half-light radius as rough proxy
     fov_arcsec = image_pars.Nx * image_pars.pixel_scale
-    vel_rscale = fov_arcsec / 6.0  # Rough estimate
+    rscale = fov_arcsec / 6.0  # Rough estimate
 
     return {
         'vel.v0': v0,
         'vel.vcirc': vcirc_estimate,
-        'vel.rscale': vel_rscale,
+        'vel.rscale': rscale,
         'vel.x0': 0.0,  # Assume centered initially
         'vel.y0': 0.0,
     }

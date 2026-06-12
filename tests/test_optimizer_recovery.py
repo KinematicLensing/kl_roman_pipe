@@ -202,7 +202,7 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
     # SourceModel dotted form.
     pars_dotted = {
@@ -360,7 +360,7 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
 
     X, Y = velocity_grids
 
-    # Flat-key dict for SyntheticVelocity. vel_x0/vel_y0 are not in
+    # Flat-key dict for SyntheticVelocity. x0/y0 are not in
     # REQUIRED_PARAMS['arctan'] but the synthetic generator ignores extras.
     true_pars_flat = {
         'cosi': 0.6,
@@ -369,9 +369,9 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
         'g2': -0.01,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 1.5,
-        'vel_y0': -1.0,
+        'rscale': 5.0,
+        'x0': 1.5,
+        'y0': -1.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -879,9 +879,9 @@ def test_optimize_joint_vel_phot_line_with_psf(
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 5.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     # SourceModel dotted dict (single source of truth for likelihood path).
     pars_dotted = {
@@ -1338,7 +1338,7 @@ def test_optimize_centered_velocity_masked(test_config, velocity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
     pars_dotted = {
         'cosi': 0.6,
@@ -1607,9 +1607,9 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 0.0,
-        'vel_y0': 0.0,
+        'rscale': 5.0,
+        'x0': 0.0,
+        'y0': 0.0,
         'flux': 1.0,
         'int_rscale': 3.0,
         'int_h_over_r': 0.1,

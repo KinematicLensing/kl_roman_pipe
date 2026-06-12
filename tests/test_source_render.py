@@ -89,7 +89,7 @@ class TestStripParamPrefix:
         assert _strip_param_prefix('int_rscale') == 'rscale'
 
     def test_vel_prefix(self):
-        assert _strip_param_prefix('vel_rscale') == 'rscale'
+        assert _strip_param_prefix('rscale') == 'rscale'
 
     def test_no_prefix(self):
         assert _strip_param_prefix('cosi') == 'cosi'

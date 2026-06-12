@@ -43,7 +43,7 @@ _VEL_PARS = {
     'g2': 0.0,
     'v0': 10.0,
     'vcirc': 200.0,
-    'vel_rscale': 0.5,
+    'rscale': 0.5,
 }
 
 _INT_PARS = {
@@ -78,7 +78,7 @@ def _make_pars(vel_pars, int_pars, z, vel_dispersion, line_fluxes, line_conts=No
         # velocity
         'vel.v0': vel_pars['v0'],
         'vel.vcirc': vel_pars['vcirc'],
-        'vel.rscale': vel_pars['vel_rscale'],
+        'vel.rscale': vel_pars['rscale'],
     }
     # per-line spatial profile parameters (shared spatial shape from int_pars,
     # per-line flux via line_fluxes[k])

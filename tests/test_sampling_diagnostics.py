@@ -161,11 +161,11 @@ def generate_joint_synthetic_data(
         Intensity variance.
     """
     # Velocity: SyntheticVelocity expects PARAMETER_NAMES form (v0, vcirc,
-    # vel_rscale, cosi, theta_int, g1, g2). Strip the 'vel.' prefix.
+    # rscale, cosi, theta_int, g1, g2). Strip the 'vel.' prefix.
     vel_pars = {
         'v0': true_pars['vel.v0'],
         'vcirc': true_pars['vel.vcirc'],
-        'vel_rscale': true_pars['vel.rscale'],
+        'rscale': true_pars['vel.rscale'],
         'cosi': true_pars['cosi'],
         'theta_int': true_pars['theta_int'],
         'g1': true_pars['g1'],
