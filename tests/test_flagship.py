@@ -105,10 +105,13 @@ GRISM_DISPERSION_NM_PER_PIX = 1.1
 # bias on rendered images. Cuts FFT work ~3x vs default.
 SPATIAL_OVERSAMPLE = 3
 
-# Sampler settings -- v1 demo uses moderate counts with init-at-truth.
-# Production should bump to n_warmup=1000, n_samples=1000, n_chains=4,
-# init_strategy='prior', dense_mass=True, max_tree_depth=10.
-N_WARMUP = 300
+# Sampler settings. Uses the Laplace preconditioner (precondition='laplace'):
+# NUTS starts at the MAP with a fixed inverse-Hessian mass matrix, so warmup is
+# short (just step-size adaptation) instead of the ~300 iters dense-mass needs
+# to climb from an identity metric. Validated ~5x faster (8.5 vs 42.5 min) with
+# equal recovery + better convergence; see experiments/sweverett/flagship_speedup.
+# Production should bump to n_samples=1000, n_chains=4, max_tree_depth=10.
+N_WARMUP = 50
 N_SAMPLES = 300
 N_CHAINS = 2
 
@@ -358,10 +361,10 @@ class TestFlagship:
             'g1': pars_dotted['g1'],
             'g2': pars_dotted['g2'],
             'flux': pars_dotted['F087.flux'],
-            'int_rscale': pars_dotted['F087.rscale'],
-            'int_h_over_r': pars_dotted['F087.h_over_r'],
-            'int_x0': pars_dotted['F087.x0'],
-            'int_y0': pars_dotted['F087.y0'],
+            'rscale': pars_dotted['F087.rscale'],
+            'h_over_r': pars_dotted['F087.h_over_r'],
+            'x0': pars_dotted['F087.x0'],
+            'y0': pars_dotted['F087.y0'],
         }
         synth_F087 = SyntheticIntensity(
             F087_pars_flat, model_type='exponential', seed=42, psf=psf
@@ -445,9 +448,10 @@ class TestFlagship:
             seed=42,
             progress=False,
             reparam_strategy='prior',
-            dense_mass=True,  # joint phot+grism posterior is correlated; dense
-            # mass is 1.3x faster + samples 2-4x better here (diagonal was a
-            # premature optimization -- see experiments/sweverett/flagship_speedup)
+            dense_mass=True,  # (inert under precondition='laplace', which uses
+            # the fixed inv-Hessian metric; kept for the non-preconditioned path)
+            precondition='laplace',  # MAP init + fixed Laplace mass -> ~5x faster
+            # warmup on this correlated joint posterior (see flagship_speedup)
             target_accept_prob=0.8,
             max_tree_depth=8,
             init_strategy='prior',  # narrow priors are centered on truth
