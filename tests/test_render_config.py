@@ -30,6 +30,8 @@ from kl_pipe.render import (
     RenderConfig,
     build_grism_render_config,
     build_image_render_config,
+    compute_effective_maxk,
+    compute_effective_maxk_grism,
 )
 from kl_pipe.sampling import InferenceTask
 from kl_pipe.source import SourceModel
@@ -424,6 +426,48 @@ class TestPSFEffectiveMaxk:
             f"oversample(fwhm={fwhms[0]}) == oversample(fwhm={fwhms[-1]}); "
             f"PSF factor probably stuck at unity"
         )
+
+
+class TestEffectiveMaxkLoudGuard:
+    """The effective-maxk scans must raise (not silently return 0) when no k
+    crosses threshold. That can only happen if a profile/pixel/PSF factor is
+    not flux-normalized (its DC term should be ~1 > threshold). A silent 0
+    would undersize the FFT grid and alias the render -- so the guard is a
+    correctness tripwire, exercised here with deliberately un-normalized fakes
+    (the only way to reach the branch, since real inputs always have DC ~1).
+    """
+
+    def test_compute_effective_maxk_raises_on_subthreshold_product(self):
+        class _UnnormalizedFTModel:
+            # maxk gives a positive scan upper bound, but the FT envelope sits
+            # entirely below threshold (DC term != 1) -> empty above-set.
+            def maxk(self, params, threshold=1e-3):
+                return 10.0
+
+            def _ft_envelope(self, k, params):
+                return 0.0
+
+        with pytest.raises(ValueError, match="no k with product > threshold"):
+            compute_effective_maxk(_UnnormalizedFTModel(), params={})
+
+    def test_compute_effective_maxk_grism_raises_on_dead_psf(self):
+        class _UnnormalizedModel:
+            def maxk(self, params, threshold=1e-3):
+                return 5.0
+
+        class _DeadPSF:
+            # FT well below threshold at every k, including k=0 (not normalized)
+            def kValue(self, pos):
+                return 1e-9 + 0j
+
+        with pytest.raises(ValueError, match="no k with FT\\[PSF\\] > threshold"):
+            compute_effective_maxk_grism(
+                _UnnormalizedModel(),
+                intensity_params={},
+                sigma_v=50.0,
+                grad_v_max=100.0,
+                psf=_DeadPSF(),
+            )
 
 
 # ============================================================================

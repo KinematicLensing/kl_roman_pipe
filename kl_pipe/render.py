@@ -419,9 +419,17 @@ def compute_effective_maxk(
 
     above = k_scan[product > threshold]
     if len(above) == 0:
-        # nothing crosses threshold (shouldn't happen at k=0 where DC is 1)
-        # but if it does, return 0 as a safe upper bound that won't oversize.
-        return 0.0
+        # the DC term (k=0) of a flux-normalized profile x pixel x PSF product
+        # is ~1, so it must exceed threshold; an empty result means one factor
+        # is not normalized (a real bug). Returning 0 would silently undersize
+        # the FFT grid and alias the render -- raise loudly instead.
+        raise ValueError(
+            f"effective-maxk scan found no k with product > threshold "
+            f"({threshold:g}); DC product={product[0]:g} (expected ~1 for a "
+            f"flux-normalized profile x pixel x PSF). Model "
+            f"{type(model).__name__!r} _ft_envelope, pixel_response, or PSF is "
+            f"likely not normalized. params={params}"
+        )
     return float(above[-1])
 
 
@@ -474,8 +482,13 @@ def compute_effective_maxk_grism(
     Returns
     -------
     float
-        Effective maxk in rad/arcsec. ``0.0`` if PSF crosses threshold
-        at k=0 (defensive guard).
+        Effective maxk in rad/arcsec.
+
+    Raises
+    ------
+    ValueError
+        If the PSF FT never exceeds ``threshold`` (including at k=0), which
+        indicates a non-normalized PSF rather than a legitimate bandwidth.
     """
     if sigma_v <= 0:
         raise ValueError(
@@ -509,7 +522,15 @@ def compute_effective_maxk_grism(
 
     above = k_scan[psf_ft > threshold]
     if len(above) == 0:
-        return 0.0
+        # FT[PSF](k=0) is ~1 for a flux-normalized PSF, so it must exceed
+        # threshold; an empty result means the PSF is not normalized (a real
+        # bug). Returning 0 would silently undersize the grism fine-grid and
+        # alias the render -- raise loudly instead.
+        raise ValueError(
+            f"grism effective-maxk scan found no k with FT[PSF] > threshold "
+            f"({threshold:g}); FT[PSF](0)={psf_ft[0]:g} (expected ~1 for a "
+            f"flux-normalized PSF). The supplied PSF is likely not normalized."
+        )
     return float(above[-1])
 
 
