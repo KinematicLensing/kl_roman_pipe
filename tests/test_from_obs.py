@@ -37,6 +37,7 @@ from kl_pipe.priors import PriorDict, Uniform  # noqa: E402
 from kl_pipe.sampling.task import InferenceTask  # noqa: E402
 from kl_pipe.source import SourceModel  # noqa: E402
 from kl_pipe.velocity import CenteredVelocityModel  # noqa: E402
+from kl_pipe.render import RenderConfig
 
 
 # ===========================================================================
@@ -248,7 +249,7 @@ class TestGrismOnly:
             gp,
             z=1.0,
             psf=gauss_psf,
-            oversample=3,
+            render_config=RenderConfig(oversample=3),
             data=_toy_image_data(rng),
             variance=0.25,
         )
@@ -301,7 +302,7 @@ class TestJointPhotometryGrism:
             gp,
             z=1.0,
             psf=gauss_psf,
-            oversample=3,
+            render_config=RenderConfig(oversample=3),
             data=_toy_image_data(rng),
             variance=0.25,
         )
@@ -353,7 +354,7 @@ class TestMultiRollGrism:
             gp,
             z=1.0,
             psf=gauss_psf,
-            oversample=3,
+            render_config=RenderConfig(oversample=3),
             data=data_a,
             variance=0.25,
         )
@@ -361,7 +362,7 @@ class TestMultiRollGrism:
             gp,
             z=1.0,
             psf=gauss_psf,
-            oversample=3,
+            render_config=RenderConfig(oversample=3),
             data=data_b,
             variance=0.25,
         )
@@ -369,7 +370,7 @@ class TestMultiRollGrism:
             gp,
             z=1.0,
             psf=gauss_psf,
-            oversample=3,
+            render_config=RenderConfig(oversample=3),
             data=np.zeros_like(data_b),
             variance=0.25,
         )

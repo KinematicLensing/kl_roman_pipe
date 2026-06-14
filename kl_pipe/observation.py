@@ -31,6 +31,14 @@ from kl_pipe.render import RenderConfig
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 
+# default oversample for builders when no explicit RenderConfig is supplied.
+# RenderConfig is the single source of truth for oversampling; this constant
+# only sets the fallback recipe used for bespoke (non-inference) rendering.
+# inference ignores it (InferenceTask.from_obs rebuilds with a priors-sized rc
+# whenever the obs was built with a default RenderConfig).
+DEFAULT_OVERSAMPLE = 5
+
+
 # ============================================================================
 # Observation types
 # ============================================================================
@@ -511,7 +519,6 @@ def build_image_obs(
     image_pars: ImagePars,
     *,
     psf=None,
-    oversample: int = 5,
     gsparams=None,
     data=None,
     variance=None,
@@ -529,14 +536,6 @@ def build_image_obs(
         Pixel grid metadata.
     psf : galsim.GSObject, optional
         PSF profile. None = no PSF convolution.
-    oversample : int
-        Oversampling factor for source evaluation (positive odd int).
-        Used for velocity models (spatial oversampling) and as legacy
-        anti-aliasing for k-space models. For k-space intensity models,
-        pixel integration is handled by ``pixel_response`` in k-space;
-        most users should rely on adaptive grid sizing via
-        ``folding_threshold`` rather than manual ``oversample``.
-        Default 5.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -554,20 +553,17 @@ def build_image_obs(
         ``pixel_response=None`` explicitly to disable pixel integration
         (for testing or point-sampled comparisons).
     render_config : RenderConfig, optional
-        When provided, ``render_config.oversample`` takes precedence over
-        the bare ``oversample`` parameter for PSF FFT sizing and fine-grid
-        construction. When omitted, the obs is marked
+        Rendering recipe (single source of truth for oversampling, PSF FFT
+        sizing, and fine-grid construction). When omitted, defaults to
+        ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)`` and the obs is marked
         ``_rc_was_default=True``: ``InferenceTask.from_obs`` will derive a
         priors-sized rc and rebuild the obs internally. For bespoke
         (non-inference) rendering with tight priors, pass an explicit
         ``build_image_render_config(...)`` result.
     """
-    # render_config is the canonical source of truth; if both render_config
-    # and bare oversample are provided, render_config wins (and oversample
-    # arg is effectively ignored).
     rc_was_default = render_config is None
     if rc_was_default:
-        render_config = RenderConfig(oversample=oversample)
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample
 
     X, Y = build_map_grid_from_image_pars(image_pars)
@@ -648,7 +644,6 @@ def build_velocity_obs(
     image_pars: ImagePars,
     *,
     psf=None,
-    oversample: int = 5,
     gsparams=None,
     data=None,
     variance=None,
@@ -668,8 +663,6 @@ def build_velocity_obs(
         Pixel grid metadata.
     psf : galsim.GSObject, optional
         PSF profile.
-    oversample : int
-        Oversampling factor. Default 5.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -687,10 +680,11 @@ def build_velocity_obs(
     flux_image_pars : ImagePars, optional
         Image parameters of flux_image (for resampling if shape differs).
     render_config : RenderConfig, optional
-        Rendering recipe; default constructs from ``oversample``.
+        Rendering recipe (single source of truth for oversampling). When
+        omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``.
     """
     if render_config is None:
-        render_config = RenderConfig(oversample=oversample)
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample
 
     X, Y = build_map_grid_from_image_pars(image_pars)
@@ -797,7 +791,6 @@ def build_grism_obs(
     z: float,
     *,
     psf=None,
-    oversample: int = 5,
     gsparams=None,
     data=None,
     variance=None,
@@ -814,9 +807,6 @@ def build_grism_obs(
         Concrete redshift for pre-computing cube_pars.
     psf : galsim.GSObject, optional
         PSF profile for per-slice convolution.
-    oversample : int
-        Spatial oversampling factor. Default 5. Ignored when
-        ``render_config`` is provided.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -826,8 +816,9 @@ def build_grism_obs(
     mask : jnp.ndarray, optional
         Boolean mask.
     render_config : RenderConfig, optional
-        Rendering recipe; default constructs from ``oversample``. When
-        omitted, the obs is marked ``_rc_was_default=True``:
+        Rendering recipe (single source of truth for oversampling). When
+        omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``
+        and the obs is marked ``_rc_was_default=True``:
         ``InferenceTask.from_obs`` will derive a priors-sized rc and
         rebuild the obs internally. For bespoke (non-inference) rendering
         with tight priors, pass an explicit
@@ -836,7 +827,7 @@ def build_grism_obs(
     """
     rc_was_default = render_config is None
     if rc_was_default:
-        render_config = RenderConfig(oversample=oversample)
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample  # canonical
 
     cube_pars = grism_pars.to_cube_pars(z)

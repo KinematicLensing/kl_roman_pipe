@@ -170,7 +170,7 @@ class TestObsDefaults:
 
     def test_no_psf_preserves_oversample(self, image_pars):
         """Issue #38: oversample should NOT be forced to 1 without PSF."""
-        obs = build_image_obs(image_pars, oversample=5)
+        obs = build_image_obs(image_pars, render_config=RenderConfig(oversample=5))
         assert obs.oversample == 5
         assert obs.fine_X is not None
 
@@ -209,7 +209,12 @@ class TestBaseRenderImageUnits:
             'y0': 0.0,
         }
         theta = model.pars2theta(pars)
-        obs = build_image_obs(image_pars, oversample=5, psf=None, pixel_response=None)
+        obs = build_image_obs(
+            image_pars,
+            render_config=RenderConfig(oversample=5),
+            psf=None,
+            pixel_response=None,
+        )
         img = Model.render_image(model, theta, obs=obs)
         assert img.shape == image_pars.shape
         # flux convention: sum over pixels ≈ total flux. tolerance accounts
@@ -634,7 +639,7 @@ class TestFluxConservation:
     def test_flux_conservation_exponential(self, exp_model, image_pars, rscale):
         flux = 1e4
         theta = jnp.array([0.7, 0.5, 0.0, 0.0, flux, rscale, 0.1, 0.0, 0.0])
-        obs = build_image_obs(image_pars, oversample=1)
+        obs = build_image_obs(image_pars, render_config=RenderConfig(oversample=1))
 
         img = exp_model.render_image(theta, obs=obs)
         # render outputs flux/pixel; sum gives total flux directly
@@ -664,7 +669,7 @@ class TestEdgeCases:
     def test_subpixel_galaxy(self, exp_model, image_pars, box_pixel):
         """Galaxy smaller than pixel — sinc should still work."""
         theta = jnp.array([0.9, 0.0, 0.0, 0.0, 1e4, 0.05, 0.1, 0.0, 0.0])
-        obs = build_image_obs(image_pars, oversample=1)
+        obs = build_image_obs(image_pars, render_config=RenderConfig(oversample=1))
         img = exp_model.render_image(theta, obs=obs)
         assert img.shape == (64, 64)
         assert float(jnp.max(img)) > 0
@@ -672,8 +677,10 @@ class TestEdgeCases:
     def test_extended_galaxy(self, exp_model, image_pars):
         """Galaxy much larger than pixel — sinc effect should be negligible."""
         theta = jnp.array([0.9, 0.0, 0.0, 0.0, 1e4, 2.0, 0.1, 0.0, 0.0])
-        obs_pix = build_image_obs(image_pars, oversample=1)
-        obs_none = build_image_obs(image_pars, oversample=1, pixel_response=None)
+        obs_pix = build_image_obs(image_pars, render_config=RenderConfig(oversample=1))
+        obs_none = build_image_obs(
+            image_pars, render_config=RenderConfig(oversample=1), pixel_response=None
+        )
 
         img_pix = exp_model.render_image(theta, obs=obs_pix)
         img_none = exp_model.render_image(theta, obs=obs_none)

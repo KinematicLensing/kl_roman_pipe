@@ -33,6 +33,7 @@ from kl_pipe.source import SourceModel
 from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
 from kl_pipe.dispersion import build_grism_pars_for_line
 from kl_pipe.observation import build_grism_obs
+from kl_pipe.render import RenderConfig
 
 
 # Roman grism resolving power at lambda (slitless spec): R = 461 * lambda_um.
@@ -88,7 +89,9 @@ def test_psf_dispersion_resolution_matches_roman_spec():
     )
 
     psf = galsim.Gaussian(fwhm=0.18)
-    grism_obs = build_grism_obs(grism_pars, z=z, psf=psf, oversample=5)
+    grism_obs = build_grism_obs(
+        grism_pars, z=z, psf=psf, render_config=RenderConfig(oversample=5)
+    )
 
     pars = {
         # geometry / shared

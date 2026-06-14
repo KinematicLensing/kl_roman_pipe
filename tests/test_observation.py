@@ -24,6 +24,7 @@ from kl_pipe.observation import (
     build_grism_obs,
 )
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 
 # ==============================================================================
@@ -85,14 +86,18 @@ class TestBuildImageObs:
         assert obs.mask.shape == (16, 16)
 
     def test_with_psf_oversample_1(self, image_pars, gaussian_psf):
-        obs = build_image_obs(image_pars, psf=gaussian_psf, oversample=1)
+        obs = build_image_obs(
+            image_pars, psf=gaussian_psf, render_config=RenderConfig(oversample=1)
+        )
         assert obs.psf_data is not None
         assert obs.oversample == 1
         assert obs.fine_X is None
         assert obs.fine_Y is None
 
     def test_with_psf_oversample_5(self, image_pars, gaussian_psf):
-        obs = build_image_obs(image_pars, psf=gaussian_psf, oversample=5)
+        obs = build_image_obs(
+            image_pars, psf=gaussian_psf, render_config=RenderConfig(oversample=5)
+        )
         assert obs.psf_data is not None
         assert obs.oversample == 5
         assert obs.fine_X is not None
@@ -105,7 +110,10 @@ class TestBuildImageObs:
 
         model = InclinedExponentialModel()
         obs = build_image_obs(
-            image_pars, psf=gaussian_psf, oversample=5, int_model=model
+            image_pars,
+            psf=gaussian_psf,
+            render_config=RenderConfig(oversample=5),
+            int_model=model,
         )
         assert obs.kspace_psf_fft is not None
 
@@ -202,7 +210,9 @@ class TestPytreeRoundTrip:
         assert obs2.oversample == obs.oversample
 
     def test_image_obs_with_psf_roundtrip(self, image_pars, gaussian_psf):
-        obs = build_image_obs(image_pars, psf=gaussian_psf, oversample=3)
+        obs = build_image_obs(
+            image_pars, psf=gaussian_psf, render_config=RenderConfig(oversample=3)
+        )
         leaves, treedef = jax.tree_util.tree_flatten(obs)
         obs2 = treedef.unflatten(leaves)
 
@@ -249,7 +259,9 @@ class TestBuildGrismObs:
             dispersion_angle=0.0,
         )
         psf = galsim.Gaussian(fwhm=0.2)
-        obs = build_grism_obs(gp, z=1.0, psf=psf, oversample=3)
+        obs = build_grism_obs(
+            gp, z=1.0, psf=psf, render_config=RenderConfig(oversample=3)
+        )
 
         assert obs.psf_data is not None
         assert obs.oversample == 3

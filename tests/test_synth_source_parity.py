@@ -55,6 +55,7 @@ from kl_pipe.parameters import ImagePars
 from kl_pipe.source import SourceModel
 from kl_pipe.synthetic import SyntheticIntensity
 from kl_pipe.velocity import CenteredVelocityModel
+from kl_pipe.render import RenderConfig
 
 
 # max(|synth - source|) / max(source). Sub-percent floor from FFT padding
@@ -88,7 +89,10 @@ def _render_pair(pars_flat, image_pars, psf, oversample):
         broadband_models={'F087': InclinedExponentialModel()},
     )
     obs = build_image_obs(
-        image_pars, psf=psf, oversample=oversample, broadband_key='F087'
+        image_pars,
+        psf=psf,
+        render_config=RenderConfig(oversample=oversample),
+        broadband_key='F087',
     )
     img_source = np.asarray(source.render_broadband(pars_dotted, obs, 'F087'))
 

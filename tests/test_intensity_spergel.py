@@ -27,6 +27,7 @@ from kl_pipe.intensity import (
 from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir, build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 # maximum GB for a single GalSim FFT allocation in tests
 _MAX_FFT_GB = 8.0
@@ -384,7 +385,7 @@ def test_spergel_psf_path_consistency(galsim_image_pars):
     obs_kspace = build_image_obs(
         galsim_image_pars,
         psf=psf_obj,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
     )
     img_kspace = np.array(model.render_image(theta, obs=obs_kspace))
@@ -395,7 +396,7 @@ def test_spergel_psf_path_consistency(galsim_image_pars):
     obs_realspace = build_image_obs(
         galsim_image_pars,
         psf=psf_obj,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         pixel_response=None,
     )
     img_realspace = np.array(model.render_image(theta, obs=obs_realspace))
@@ -716,7 +717,7 @@ def test_galsim_regression_spergel_faceon_cuspy(nu, galsim_image_pars):
     obs = build_image_obs(
         galsim_image_pars,
         psf=psf,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
         gsparams=gsp,
     )
@@ -822,7 +823,7 @@ def test_galsim_regression_spergel_faceon_with_shear_negative_nu(
     obs = build_image_obs(
         galsim_image_pars,
         psf=psf,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
         gsparams=gsp,
     )
@@ -873,7 +874,7 @@ def test_galsim_regression_devaucouleurs_faceon(galsim_image_pars):
     obs = build_image_obs(
         galsim_image_pars,
         psf=psf,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
         gsparams=gsp,
     )
@@ -1065,7 +1066,13 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
     theta = jnp.array(
         [cosi, 0.0, 0.0, 0.0, flux, spergel_rscale, h_over_r, -0.6, 0.0, 0.0]
     )
-    obs = build_image_obs(ip, psf=psf, oversample=5, int_model=model, gsparams=gsp)
+    obs = build_image_obs(
+        ip,
+        psf=psf,
+        render_config=RenderConfig(oversample=5),
+        int_model=model,
+        gsparams=gsp,
+    )
     our_image = np.array(model.render_image(theta, obs=obs))
 
     peak = np.max(np.abs(gs_sb))
@@ -1211,7 +1218,7 @@ def _render_spergel_vs_sersic_panel(
                 obs = build_image_obs(
                     ip,
                     psf=psf_obj,
-                    oversample=oversample,
+                    render_config=RenderConfig(oversample=oversample),
                     int_model=model,
                     gsparams=gsp,
                 )
@@ -1487,7 +1494,7 @@ def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=oversample,
+                render_config=RenderConfig(oversample=oversample),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -1801,7 +1808,7 @@ def _faceon_n4_diagnostic(
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=oversample,
+                render_config=RenderConfig(oversample=oversample),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -1994,7 +2001,11 @@ def test_oversample_convergence(spergel_output_dir):
             ref_label = 'GalSim'
         else:
             obs_ref = build_image_obs(
-                ip, psf=psf, oversample=ref_osamp, int_model=model, gsparams=gsp
+                ip,
+                psf=psf,
+                render_config=RenderConfig(oversample=ref_osamp),
+                int_model=model,
+                gsparams=gsp,
             )
             ref_sb = np.array(model.render_image(theta, obs=obs_ref))
             ref_label = f'oversample={ref_osamp}'
@@ -2006,7 +2017,11 @@ def test_oversample_convergence(spergel_output_dir):
         print(f'\n  cosi={cosi} (ref={ref_label}):')
         for osamp in oversamples:
             obs = build_image_obs(
-                ip, psf=psf, oversample=osamp, int_model=model, gsparams=gsp
+                ip,
+                psf=psf,
+                render_config=RenderConfig(oversample=osamp),
+                int_model=model,
+                gsparams=gsp,
             )
             our_sb = np.array(model.render_image(theta, obs=obs))
             diff = our_sb - ref_sb

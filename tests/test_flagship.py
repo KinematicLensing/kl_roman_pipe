@@ -85,6 +85,7 @@ from kl_pipe.source import SourceModel
 from kl_pipe.synthetic import SyntheticIntensity
 from kl_pipe.utils import get_test_dir
 from kl_pipe.velocity import CenteredVelocityModel
+from kl_pipe.render import RenderConfig
 
 
 pytestmark = pytest.mark.slow
@@ -400,7 +401,7 @@ class TestFlagship:
         obs_F087 = build_image_obs(
             image_pars,
             psf=psf,
-            oversample=SPATIAL_OVERSAMPLE,
+            render_config=RenderConfig(oversample=SPATIAL_OVERSAMPLE),
             data=jnp.asarray(data_F087_noisy),
             variance=var_F087,
             int_model=f087_int,
@@ -410,7 +411,7 @@ class TestFlagship:
             grism_pars,
             z=Z,
             psf=psf,
-            oversample=SPATIAL_OVERSAMPLE,
+            render_config=RenderConfig(oversample=SPATIAL_OVERSAMPLE),
             data=jnp.asarray(data_grism_noisy),
             variance=float(var_grism),
         )

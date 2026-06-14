@@ -42,6 +42,7 @@ from kl_pipe.source import (  # noqa: E402
 )
 from kl_pipe.spectral import CubePars  # noqa: E402
 from kl_pipe.velocity import CenteredVelocityModel  # noqa: E402
+from kl_pipe.render import RenderConfig
 
 
 # ===========================================================================
@@ -292,7 +293,10 @@ class TestRenderVelocity:
         """PSF + flux_weight_key -> SourceModel computes flux map and threads it."""
         gauss_psf = galsim.Gaussian(fwhm=0.18)
         obs = build_velocity_obs(
-            image_pars, psf=gauss_psf, flux_weight_key='Halpha', oversample=3
+            image_pars,
+            psf=gauss_psf,
+            flux_weight_key='Halpha',
+            render_config=RenderConfig(oversample=3),
         )
         v_map = source.render_velocity(pars, obs)
         assert v_map.shape == (16, 16)
@@ -524,7 +528,9 @@ class TestRenderGrism:
             dispersion_angle_detector=0.0,
         )
         gauss_psf = galsim.Gaussian(fwhm=0.18)
-        obs = build_grism_obs(gp, z=1.0, psf=gauss_psf, oversample=3)
+        obs = build_grism_obs(
+            gp, z=1.0, psf=gauss_psf, render_config=RenderConfig(oversample=3)
+        )
         img = source.render_grism(pars, obs)
         assert img.shape == (16, 16)
         assert float(img.sum()) > 0

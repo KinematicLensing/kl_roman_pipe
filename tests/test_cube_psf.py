@@ -38,6 +38,7 @@ from kl_pipe.observation import GrismObs, build_image_obs, build_grism_obs
 from kl_pipe.pixel import BoxPixel
 from kl_pipe.grism import _apply_post_dispersion_pixel_response
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 # =============================================================================
 # Output directory
@@ -625,7 +626,11 @@ class TestDiagnostics:
         theta_int = _build_component_theta(
             merged_pars, 'Halpha', int_model.PARAMETER_NAMES
         )
-        img_obs = build_image_obs(cube_pars.image_pars, psf=gaussian_psf, oversample=1)
+        img_obs = build_image_obs(
+            cube_pars.image_pars,
+            psf=gaussian_psf,
+            render_config=RenderConfig(oversample=1),
+        )
         img_2d = np.array(int_model.render_image(theta_int, obs=img_obs))
 
         # note: these aren't expected to match exactly (cube slice = line flux,
@@ -995,7 +1000,9 @@ class TestPostDispersionPixelResponsePrecompute:
             image_pars=cube_pars.image_pars,
             dispersion=1.1,
         )
-        return build_grism_obs(gp, z=1.0, psf=None, oversample=oversample)
+        return build_grism_obs(
+            gp, z=1.0, psf=None, render_config=RenderConfig(oversample=oversample)
+        )
 
     @pytest.mark.parametrize('oversample', [3, 5, 7])
     def test_precompute_matches_inline_rebuild(self, cube_pars, oversample):

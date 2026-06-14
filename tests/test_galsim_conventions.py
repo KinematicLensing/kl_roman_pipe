@@ -31,6 +31,7 @@ from kl_pipe.intensity import InclinedSersicModel, _sersic_bn
 from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import _generate_sersic_galsim
+from kl_pipe.render import RenderConfig
 
 
 # Test geometry — n=4 chosen to maximize the b_n^n convention sensitivity.
@@ -95,7 +96,7 @@ def test_production_path_galsim_synthetic_matches_klpipe_sersic():
 
     model = InclinedSersicModel()
     theta = jnp.array([_COSI, 0.0, 0.0, 0.0, _FLUX, _HLR, _H_OVER_HLR, _N, 0.0, 0.0])
-    obs = build_image_obs(image_pars, psf=psf, oversample=5)
+    obs = build_image_obs(image_pars, psf=psf, render_config=RenderConfig(oversample=5))
     kl_image = np.array(model.render_image(theta, obs=obs))
 
     peak = np.max(np.abs(gs_image))
