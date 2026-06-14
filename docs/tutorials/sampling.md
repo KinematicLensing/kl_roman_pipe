@@ -1,35 +1,42 @@
+---
+jupytext:
+  text_representation:
+    extension: .md
+    format_name: myst
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
+
 # Bayesian Inference with MCMC Sampling
 
-This tutorial demonstrates Bayesian parameter inference using the `kl_pipe` sampling module.
+Posterior inference with the `kl_pipe` sampling module, built on the
+`SourceModel` + `InferenceTask` + `PriorDict` stack from `quickstart.md`.
 
-> **TL;DR:** emcee for exploration, nautilus for evidence/model comparison, **numpyro for production** (recommended -- handles multi-scale gradients, provides R-hat/ESS), blackjax for simple velocity-only problems (known issues with joint models).
-
-**NOTE:** To read this as a Jupyter Notebook, run:
-```bash
-jupytext --to ipynb docs/tutorials/sampling.md
-```
-
----
-
-## Design Philosophy
-
-The sampling module follows the same JAX-compatible, functional design as the rest of `kl_pipe`:
-
-1. **InferenceTask**: Bundles model, likelihood, priors, and data into a single object
-2. **PriorDict**: Separates sampled parameters (have Prior objects) from fixed parameters (numeric values)
-3. **Factory Pattern**: `build_sampler('emcee', task, config)` creates samplers with a unified interface
-4. **SamplerResult**: Unified output format across all backends
-
----
-
-## Quick Overview
+> **TL;DR:** emcee for exploration, nautilus for evidence / model comparison,
+> **numpyro for production** (gradients, R-hat / ESS, multi-chain), blackjax for
+> simple velocity-only problems. For the joint broadband + grism configuration,
+> use numpyro with the **Laplace preconditioner** (Section 6).
 
 ```{code-cell} python
 import os
 CI_MODE = os.environ.get('KL_PIPE_CI', '0') == '1'
-if CI_MODE:
-    print("CI mode: using reduced MCMC settings for faster execution")
 
+import jax
+jax.config.update('jax_enable_x64', True)
+import numpy as np
+import jax.numpy as jnp
+import jax.random as random
+import matplotlib.pyplot as plt
+
+from kl_pipe.parameters import ImagePars
+from kl_pipe.velocity import CenteredVelocityModel
+from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.source import SourceModel
+from kl_pipe.observation import build_velocity_obs, build_image_obs, build_grism_obs
+from kl_pipe.noise import add_velocity_noise, add_intensity_noise
+from kl_pipe.priors import PriorDict, Uniform, Gaussian, TruncatedNormal
 from kl_pipe.sampling import (
     InferenceTask,
     EnsembleSamplerConfig,
@@ -39,234 +46,133 @@ from kl_pipe.sampling import (
     build_sampler,
     get_available_samplers,
 )
+from kl_pipe.sampling.diagnostics import (
+    plot_corner, plot_trace, print_summary, plot_recovery,
+)
 
-# See what samplers are available
 print("Available samplers:", get_available_samplers())
 ```
 
+## Design philosophy
+
+1. **InferenceTask** bundles source, likelihood, priors, and data; exposes a
+   JIT-compiled, differentiable log-posterior.
+2. **PriorDict** separates sampled parameters (with `Prior` objects) from fixed
+   ones (numeric); sampled names sort alphabetically into the sampling vector.
+3. **Factory**: `build_sampler(name, task, config)` returns a unified interface.
+4. **SamplerResult** is the common output across all backends.
+
+Parameters use the dotted-key namespace (`cosi`, `vel.vcirc`, `F087.flux`,
+`Halpha.dispersion`); see `quickstart.md`.
+
 ---
 
-## Section 1: Velocity-Only Inference with emcee
+## Section 1: Velocity-only inference with emcee
 
-Let's start with a simple velocity-only inference problem using the emcee ensemble sampler.
+### Generate synthetic data
 
-### 1.1 Generate Synthetic Data
+We render a velocity field from a velocity-only `SourceModel` and add noise.
 
 ```{code-cell} python
-import jax.numpy as jnp
-import numpy as np
-import matplotlib.pyplot as plt
-
-from kl_pipe.velocity import CenteredVelocityModel
-from kl_pipe.parameters import ImagePars
-from kl_pipe.synthetic import SyntheticVelocity
-
-# Define true parameters
-true_pars = {
-    'v0': 10.0,           # km/s systemic velocity
-    'vcirc': 200.0,       # km/s asymptotic velocity
-    'vel_rscale': 5.0,    # arcsec turnover radius
-    'cosi': 0.6,          # ~53 deg inclination
-    'theta_int': 0.785,   # ~45 deg position angle
+vsource = SourceModel(velocity_model=CenteredVelocityModel())
+true_vel = {
+    'cosi': 0.6,
+    'theta_int': 0.785,
     'g1': 0.0,
     'g2': 0.0,
+    'vel.v0': 10.0,
+    'vel.vcirc': 200.0,
+    'vel.rscale': 2.0,
 }
-
-# Generate synthetic velocity data
 image_pars = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
-synth = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
-snr = 20
-data_noisy = synth.generate(image_pars, snr=snr)
-variance = synth.variance
 
-print(f"Data shape: {data_noisy.shape}")
-# variance is now a per-pixel array (matched-filter noise convention from base)
-print(f"Variance: shape={variance.shape}, mean={float(np.mean(variance)):.2f} (km/s)^2")
+v_true = np.asarray(vsource.render_velocity(true_vel, build_velocity_obs(image_pars)))
+v_noisy, v_var = add_velocity_noise(v_true, target_snr=20, seed=42)
 
-# Plot the data
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-im0 = axes[0].imshow(synth.data_true.T, origin='lower', cmap='RdBu_r')
-axes[0].set_title('True Velocity Field')
-plt.colorbar(im0, ax=axes[0], label='km/s')
-
-im1 = axes[1].imshow(data_noisy.T, origin='lower', cmap='RdBu_r')
-axes[1].set_title(f'Noisy Data (SNR={snr})')
-plt.colorbar(im1, ax=axes[1], label='km/s')
-plt.tight_layout()
-plt.show()
+for ax, img, title in [(axes[0], v_true, 'true velocity'),
+                       (axes[1], v_noisy, 'noisy (SNR=20)')]:
+    vmax = float(np.max(np.abs(v_true)))
+    im = ax.imshow(img, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    ax.set_title(title); plt.colorbar(im, ax=ax, label='km/s')
+plt.tight_layout(); plt.show()
 ```
 
-### 1.2 Define Priors
-
-The `PriorDict` class automatically separates sampled parameters (those with `Prior` objects) from fixed parameters (numeric values).
+### Priors and InferenceTask
 
 ```{code-cell} python
-from kl_pipe.priors import Uniform, Gaussian, TruncatedNormal, PriorDict
-
-# Define priors for parameters we want to sample
-# Parameters with Prior objects will be sampled
-# Parameters with numeric values will be fixed
 priors = PriorDict({
-    # Sampled parameters
-    'v0': Gaussian(10.0, 5.0),          # Weakly constrained around true
-    'vcirc': Uniform(100, 300),          # Broad uniform prior
-    'vel_rscale': Uniform(1.0, 10.0),    # Reasonable range
-    'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),  # Gaussian truncated to valid range
-    'theta_int': Uniform(0, np.pi),      # Position angle
-
-    # Fixed parameters (not sampled)
+    'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
+    'theta_int': Uniform(0.0, np.pi),
     'g1': 0.0,
     'g2': 0.0,
+    'vel.v0': Gaussian(10.0, 5.0),
+    'vel.vcirc': Uniform(100.0, 300.0),
+    'vel.rscale': Uniform(0.5, 8.0),
 })
+print(f"sampled: {priors.sampled_names}   fixed: {priors.fixed_names}")
 
-print(f"Sampled parameters: {priors.sampled_names}")
-print(f"Fixed parameters: {priors.fixed_names}")
-print(f"Number of dimensions: {priors.n_sampled}")
-```
+vel_obs = build_velocity_obs(image_pars, data=jnp.asarray(v_noisy), variance=v_var)
+task = InferenceTask.from_obs(vsource, priors, velocity_obs=vel_obs)
 
-### 1.3 Create InferenceTask
-
-The `InferenceTask` bundles everything needed for sampling: model, likelihood function, priors, and data.
-
-```{code-cell} python
-from kl_pipe.sampling import InferenceTask
-from kl_pipe.observation import build_velocity_obs
-
-# Create the velocity model
-model = CenteredVelocityModel()
-
-# Build observation and create the inference task
-obs_vel = build_velocity_obs(image_pars, data=jnp.array(data_noisy), variance=variance)
-task = InferenceTask.from_velocity_obs(
-    model=model,
-    priors=priors,
-    obs=obs_vel,
-)
-
-print(f"Sampled parameters: {task.sampled_names}")
-print(f"Fixed parameters: {task.fixed_params}")
-print(f"Number of dimensions: {task.n_params}")
-
-# Test that the log posterior is finite
-import jax.random as random
 key = random.PRNGKey(42)
-theta_test = task.sample_prior(key, 1)[0]
-log_prob_fn = task.get_log_posterior_fn()
-print(f"Log posterior at prior sample: {log_prob_fn(theta_test):.2f}")
+theta0 = task.sample_prior(key, 1)[0]
+print(f"log-posterior at a prior draw: {float(task.log_posterior(theta0)):.2f}")
 ```
 
-### 1.4 Configure and Run emcee
+### Configure and run emcee
 
 ```{code-cell} python
-from kl_pipe.sampling import EnsembleSamplerConfig, build_sampler
-
-# Configure the sampler
-config = EnsembleSamplerConfig(
+config_emcee = EnsembleSamplerConfig(
     n_walkers=32,
     n_iterations=200 if CI_MODE else 2000,
     burn_in=50 if CI_MODE else 500,
-    thin=1,
     seed=42,
     progress=not CI_MODE,
 )
-
-# Build and run the sampler
-sampler = build_sampler('emcee', task, config)
-result = sampler.run()
-
-print(f"Number of samples: {result.n_samples}")
-print(f"Acceptance fraction: {result.acceptance_fraction:.1%}")
+result_emcee = build_sampler('emcee', task, config_emcee).run()
+print(f"samples: {result_emcee.n_samples}   acceptance: {result_emcee.acceptance_fraction:.1%}")
 ```
 
-### 1.5 Analyze Results
-
 ```{code-cell} python
-from kl_pipe.sampling.diagnostics import plot_corner, plot_trace, print_summary
-
-# Print summary statistics
-print_summary(result, true_values=true_pars)
-
-# Corner plot
-fig = plot_corner(result, true_values=true_pars, sampler_info={'name': 'emcee'})
+print_summary(result_emcee, true_values=true_vel)
+fig = plot_corner(result_emcee, true_values=true_vel, sampler_info={'name': 'emcee'})
 plt.show()
-
-# Trace plots (useful for convergence diagnosis)
-fig = plot_trace(result)
+fig = plot_trace(result_emcee)
 plt.show()
 ```
 
 ---
 
-## Section 2: Nested Sampling with nautilus
+## Section 2: Nested sampling with nautilus
 
-Nautilus uses neural networks to efficiently explore the parameter space and provides evidence estimates for model comparison.
-
-### 2.1 Configure nautilus
+Nautilus uses neural networks to explore the posterior and returns the Bayesian
+evidence for model comparison. It reuses the same `task`.
 
 ```{code-cell} python
-from kl_pipe.sampling import NestedSamplerConfig
-
-# nautilus configuration
 config_nautilus = NestedSamplerConfig(
-    n_live=100 if CI_MODE else 500,
-    n_networks=4,
-    seed=42,
-    progress=not CI_MODE,
+    n_live=100 if CI_MODE else 500, n_networks=4, seed=42, progress=not CI_MODE,
 )
-
-print("Nested sampler configuration:")
-print(f"  Live points: {config_nautilus.n_live}")
-```
-
-### 2.2 Run nautilus
-
-```{code-cell} python
-# Use the same task as before
-sampler_nautilus = build_sampler('nautilus', task, config_nautilus)
-result_nautilus = sampler_nautilus.run()
-
-print(f"Number of samples: {result_nautilus.n_samples}")
-```
-
-### 2.3 Evidence and Results
-
-```{code-cell} python
-# Nautilus provides the Bayesian evidence
-print_summary(result_nautilus, true_values=true_pars)
-
+result_nautilus = build_sampler('nautilus', task, config_nautilus).run()
+print_summary(result_nautilus, true_values=true_vel)
 if result_nautilus.evidence is not None:
-    print(f"\nLog evidence: {result_nautilus.evidence:.2f}")
-    # TODO: nautilus doesn't currently expose evidence_error
-
-# Corner plot
-fig = plot_corner(result_nautilus, true_values=true_pars, sampler_info={'name': 'nautilus'})
-plt.show()
+    print(f"log evidence: {result_nautilus.evidence:.2f}")
 ```
 
-The log evidence (Z) is useful for Bayesian model comparison. If you have two models with evidences Z1 and Z2, the Bayes factor is:
-
-$$\text{Bayes factor} = \frac{Z_1}{Z_2} = e^{\log Z_1 - \log Z_2}$$
+The log evidence `Z` gives Bayes factors for model comparison: for models with
+evidences `Z1`, `Z2`, the Bayes factor is `exp(log Z1 - log Z2)`.
 
 ---
 
-## Section 3: Gradient-Based Sampling with NumPyro (Recommended)
+## Section 3: Gradient-based NUTS with NumPyro (recommended)
 
-NumPyro provides a robust NUTS implementation with superior mass matrix adaptation and built-in Z-score reparameterization. This is the **recommended gradient-based sampler** for joint velocity+intensity models.
-
-### 3.1 Why NumPyro?
-
-NumPyro is particularly effective when:
-- Parameters span multiple scales (e.g., intensity ~10^7, velocity ~10^3)
-- You need robust convergence diagnostics (R-hat, ESS)
-- The posterior has parameter correlations
-
-The key feature is **Z-score reparameterization**, which automatically normalizes parameter scales so the sampler sees O(1) gradients for all parameters.
-
-### 3.2 Configure NumPyro
+NumPyro's NUTS uses the gradients JAX provides, adapts a (dense) mass matrix, and
+reports R-hat / ESS across chains. Its **Z-score reparameterization** rescales
+each parameter by its prior so the sampler sees O(1) gradients, which is what
+makes it robust when parameters span very different scales (intensity ~1e2-1e4,
+velocity ~1e2, shear ~1e-2).
 
 ```{code-cell} python
-from kl_pipe.sampling import NumpyroSamplerConfig, ReparamStrategy
-
 config_numpyro = NumpyroSamplerConfig(
     n_samples=200 if CI_MODE else 1250,
     n_warmup=100 if CI_MODE else 625,
@@ -277,808 +183,362 @@ config_numpyro = NumpyroSamplerConfig(
     seed=42,
     progress=not CI_MODE,
 )
-
-print("NumPyro configuration:")
-print(f"  Samples per chain: {config_numpyro.n_samples}")
-print(f"  Chains: {config_numpyro.n_chains}")
-print(f"  Reparameterization: {config_numpyro.reparam_strategy}")
-```
-
-### 3.3 Run NumPyro NUTS
-
-```{code-cell} python
-sampler_numpyro = build_sampler('numpyro', task, config_numpyro)
-result_numpyro = sampler_numpyro.run()
-
-print(f"Total samples: {result_numpyro.n_samples}")
-print(f"Acceptance rate: {result_numpyro.acceptance_fraction:.1%}")
-
-# Corner plot
-fig = plot_corner(result_numpyro, true_values=true_pars, sampler_info={'name': 'numpyro'})
+result_numpyro = build_sampler('numpyro', task, config_numpyro).run()
+print(f"samples: {result_numpyro.n_samples}   acceptance: {result_numpyro.acceptance_fraction:.1%}")
+fig = plot_corner(result_numpyro, true_values=true_vel, sampler_info={'name': 'numpyro'})
 plt.show()
 ```
 
-### 3.4 Check Convergence Diagnostics
+### Convergence diagnostics
 
 ```{code-cell} python
-# R-hat should be close to 1.0 (< 1.01 is good)
-r_hats = result_numpyro.get_rhat()
-print("R-hat values:")
-for name, rhat in r_hats.items():
-    status = "OK" if rhat < 1.01 else "WARNING"
-    print(f"  {name}: {rhat:.4f} {status}")
-
-# Effective sample size
-ess = result_numpyro.get_ess()
-print("\nEffective sample size:")
-for name, n_eff in ess.items():
-    print(f"  {name}: {n_eff:.0f}")
-
-# Divergences
-n_div = result_numpyro.diagnostics.get('n_divergences', 0)
-print(f"\nDivergences: {n_div}")
+for name, rhat in result_numpyro.get_rhat().items():
+    print(f"  R-hat {name:<12}: {rhat:.4f} {'OK' if rhat < 1.01 else 'WARN'}")
+print("min ESS:", f"{min(result_numpyro.get_ess().values()):.0f}")
+print("divergences:", result_numpyro.diagnostics.get('n_divergences', 0))
 ```
 
-### 3.5 Z-Score Reparameterization Strategies
+### Reparameterization strategies
 
-NumPyro supports three reparameterization strategies:
-
-```{code-cell} python
-from kl_pipe.sampling import ReparamStrategy
-
-# Strategy 1: Prior-based (default, fast)
-# Uses prior mean/std for scaling
-config_prior = NumpyroSamplerConfig(
-    reparam_strategy=ReparamStrategy.PRIOR,
-    # ...
-)
-
-# Strategy 2: Empirical (slower, more robust)
-# Runs short warmup to estimate posterior scales
-config_empirical = NumpyroSamplerConfig(
-    reparam_strategy=ReparamStrategy.EMPIRICAL,
-    empirical_warmup_frac=0.1,  # Use 10% of warmup for estimation
-    # ...
-)
-
-# Strategy 3: None (sample in physical space)
-# Only use if you know parameters are well-scaled
-config_none = NumpyroSamplerConfig(
-    reparam_strategy=ReparamStrategy.NONE,
-    # ...
-)
-```
+`reparam_strategy` controls the Z-score scaling: `'prior'` (default, uses prior
+mean/std), `'empirical'` (a short warmup estimates posterior scales; more robust,
+slower), or `'none'` (sample in physical space; only if parameters are already
+well-scaled). Set it on `NumpyroSamplerConfig(reparam_strategy=...)`.
 
 ---
 
 ## Section 4: BlackJAX
 
-BlackJAX provides JAX-native HMC/NUTS sampling using `GradientSamplerConfig`. It works for simple velocity-only models but has **known issues with joint velocity+intensity models** where parameter gradients span multiple orders of magnitude. For joint models, use NumPyro instead.
-
-Configuration reference:
+BlackJAX provides JAX-native HMC / NUTS via `GradientSamplerConfig`. It works for
+simple velocity-only problems but has known issues on joint velocity+intensity
+models where gradients span many orders of magnitude (it lacks the Z-score
+reparam); use NumPyro there.
 
 ```python
-from kl_pipe.sampling import GradientSamplerConfig
-
-config = GradientSamplerConfig(
-    n_samples=2000,
-    n_warmup=500,
-    algorithm='nuts',       # or 'hmc'
-    target_acceptance=0.8,
-    seed=42,
-)
-sampler = build_sampler('blackjax', task, config)
+config = GradientSamplerConfig(n_samples=2000, n_warmup=500,
+                               algorithm='nuts', target_acceptance=0.8, seed=42)
+result = build_sampler('blackjax', task, config).run()
 ```
 
-See `tests/test_blackjax.py` for diagnostic patterns and known limitations.
+See `tests/test_blackjax.py` for diagnostics and the known limitations.
 
 ---
 
-## Section 5: Joint Velocity + Intensity Inference with Shear
+## Section 5: Joint velocity + intensity with shear
 
-For kinematic lensing, we jointly fit velocity and intensity maps to constrain the lensing shear.
-
-### 5.1 Generate Joint Data
+Jointly fitting a velocity map and a broadband image constrains the lensing
+shear. The source carries a velocity model and a broadband band sharing the
+geometry; `from_obs` takes both a `velocity_obs` and an `image_obs`.
 
 ```{code-cell} python
-from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
-from kl_pipe.synthetic import SyntheticIntensity
-
-# True parameters including shear
-true_pars_joint = {
-    # Velocity
-    'v0': 10.0,
-    'vcirc': 200.0,
-    'vel_rscale': 5.0,
-    # Intensity
-    'flux': 1.0,
-    'int_rscale': 3.0,
-    'int_h_over_r': 0.1,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
-    # Shared geometry
+joint_source = SourceModel(
+    velocity_model=CenteredVelocityModel(),
+    broadband_models={'F087': InclinedExponentialModel()},
+)
+true_joint = {
     'cosi': 0.6,
     'theta_int': 0.785,
-    'g1': 0.03,    # Non-zero shear!
+    'g1': 0.03,            # non-zero shear
     'g2': -0.02,
+    'vel.v0': 10.0,
+    'vel.vcirc': 200.0,
+    'vel.rscale': 2.0,
+    'F087.flux': 100.0,
+    'F087.rscale': 0.6,
+    'F087.h_over_r': 0.1,
+    'F087.x0': 0.0,
+    'F087.y0': 0.0,
 }
+ip_vel = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
+ip_img = ImagePars(shape=(48, 48), pixel_scale=0.2, indexing='ij')
+f087 = joint_source.broadband_models['F087']
 
-# Generate velocity data
-image_pars_vel = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
-vel_pars = {k: v for k, v in true_pars_joint.items() if k in CenteredVelocityModel().PARAMETER_NAMES}
-synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
-data_vel = synth_vel.generate(image_pars_vel, snr=30)
-var_vel = synth_vel.variance
+v_t = np.asarray(joint_source.render_velocity(true_joint, build_velocity_obs(ip_vel)))
+v_n, v_v = add_velocity_noise(v_t, target_snr=30, seed=42)
+img_clean = np.asarray(joint_source.render_broadband(
+    true_joint, build_image_obs(ip_img, broadband_key='F087', int_model=f087), 'F087'))
+i_n, i_v = add_intensity_noise(img_clean, target_snr=30, seed=43)
 
-# Generate intensity data
-image_pars_int = ImagePars(shape=(48, 48), pixel_scale=0.2, indexing='ij')
-int_pars = {k: v for k, v in true_pars_joint.items() if k in InclinedExponentialModel().PARAMETER_NAMES}
-synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
-data_int = synth_int.generate(image_pars_int, snr=30, include_poisson=False)
-var_int = synth_int.variance
-
-# Plot both datasets
-fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-im0 = axes[0].imshow(data_vel.T, origin='lower', cmap='RdBu_r')
-axes[0].set_title('Velocity Map')
-plt.colorbar(im0, ax=axes[0], label='km/s')
-
-im1 = axes[1].imshow(data_int.T, origin='lower', cmap='viridis')
-axes[1].set_title('Intensity Map')
-plt.colorbar(im1, ax=axes[1], label='Flux')
-plt.tight_layout()
-plt.show()
+obs_vel_j = build_velocity_obs(ip_vel, data=jnp.asarray(v_n), variance=v_v)
+obs_img_j = build_image_obs(ip_img, broadband_key='F087', int_model=f087,
+                            data=jnp.asarray(i_n), variance=i_v)
 ```
 
-### 5.2 Create Joint Model
-
-The `KLModel` combines velocity and intensity models, with shared geometric parameters.
-
 ```{code-cell} python
-# Create component models
-vel_model = CenteredVelocityModel()
-int_model = InclinedExponentialModel()
-
-# Create joint model with shared parameters
-joint_model = KLModel(
-    velocity_model=vel_model,
-    intensity_model=int_model,
-    shared_pars={'cosi', 'theta_int', 'g1', 'g2'},  # These appear once in joint theta
-)
-
-print(f"Joint model parameters: {joint_model.PARAMETER_NAMES}")
-print(f"Velocity parameters: {vel_model.PARAMETER_NAMES}")
-print(f"Intensity parameters: {int_model.PARAMETER_NAMES}")
-print(f"Shared parameters: {joint_model.shared_pars}")
-```
-
-### 5.3 Define Joint Priors
-
-```{code-cell} python
+# Shear is sampled; the vcirc prior is the Tully-Fisher prior (see quickstart
+# Example 4) that pins inclination so shape and shear separate.
 priors_joint = PriorDict({
-    # Velocity params
-    'v0': Gaussian(10.0, 5.0),
-    'vcirc': Uniform(100, 300),
-    'vel_rscale': Uniform(1.0, 10.0),
-
-    # Intensity params
-    'flux': Uniform(0.1, 5.0),
-    'int_rscale': Uniform(0.5, 10.0),
-    'int_h_over_r': 0.1,  # Fixed
-    'int_x0': 0.0,  # Fixed
-    'int_y0': 0.0,  # Fixed
-
-    # Shared geometric params
     'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
-    'theta_int': Uniform(0, np.pi),
-
-    # Shear - sample these to constrain from joint fit!
+    'theta_int': Uniform(0.0, np.pi),
     'g1': Uniform(-0.1, 0.1),
     'g2': Uniform(-0.1, 0.1),
+    'vel.v0': Gaussian(10.0, 5.0),
+    'vel.vcirc': TruncatedNormal(200.0, 37.0, 100.0, 300.0),
+    'vel.rscale': Uniform(0.5, 8.0),
+    'F087.flux': Uniform(10.0, 500.0),
+    'F087.rscale': Uniform(0.1, 2.0),
+    'F087.h_over_r': 0.1,
+    'F087.x0': 0.0,
+    'F087.y0': 0.0,
 })
-
-print(f"Sampled parameters ({priors_joint.n_sampled}):")
-for name in priors_joint.sampled_names:
-    print(f"  {name}")
-```
-
-### 5.4 Create Joint InferenceTask
-
-```{code-cell} python
-from kl_pipe.observation import build_joint_obs
-from kl_pipe.pixel import BoxPixel
-from kl_pipe.render import RenderConfig
-
-# Compute the intensity render_config from priors so the FFT grid is sized
-# for the worst-case parameters in the prior bounds. obs.render_config is
-# the single source of truth for grid sizing — passing it here guarantees
-# InferenceTask doesn't need to recompute (which would risk a mismatch).
-rc_int = RenderConfig.for_priors(
-    joint_model.intensity_model,
-    priors_joint,
-    image_pars_int.pixel_scale,
-    pixel_response=BoxPixel(image_pars_int.pixel_scale),
+task_joint = InferenceTask.from_obs(
+    joint_source, priors_joint, velocity_obs=obs_vel_j, image_obs={'F087': obs_img_j},
 )
+print(f"joint task: {task_joint.n_params} sampled params, "
+      f"intensity oversample={obs_img_j.render_config.oversample}")
 
-obs_vel, obs_int = build_joint_obs(
-    image_pars_vel, image_pars_int, joint_model.intensity_model,
-    data_vel=jnp.array(data_vel), variance_vel=var_vel,
-    data_int=jnp.array(data_int), variance_int=var_int,
-    render_config_int=rc_int,
-)
-task_joint = InferenceTask.from_joint_obs(
-    model=joint_model,
-    priors=priors_joint,
-    obs_vel=obs_vel,
-    obs_int=obs_int,
-)
-
-print(f"Joint task has {task_joint.n_params} sampled parameters")
-print(f"Intensity rendering oversample: {obs_int.render_config.oversample}")
-```
-
-### 5.5 Run Joint Inference with NumPyro
-
-For joint models, NumPyro is recommended due to its Z-score reparameterization:
-
-```{code-cell} python
-# NumPyro handles multi-scale gradients automatically
 config_joint = NumpyroSamplerConfig(
-    n_samples=200 if CI_MODE else 2500,
-    n_warmup=100 if CI_MODE else 1250,
+    n_samples=200 if CI_MODE else 2000,
+    n_warmup=100 if CI_MODE else 1000,
     n_chains=1 if CI_MODE else 4,
-    dense_mass=True,
-    seed=42,
-    progress=not CI_MODE,
+    dense_mass=True, seed=42, progress=not CI_MODE,
 )
-
-sampler_joint = build_sampler('numpyro', task_joint, config_joint)
-result_joint = sampler_joint.run()
-
-print_summary(result_joint, true_values=true_pars_joint)
-
-# Check convergence
-print(f"\nMax R-hat: {max(result_joint.get_rhat().values()):.4f}")
-print(f"Divergences: {result_joint.diagnostics.get('n_divergences', 0)}")
+result_joint = build_sampler('numpyro', task_joint, config_joint).run()
+print_summary(result_joint, true_values=true_joint)
+print(f"max R-hat: {max(result_joint.get_rhat().values()):.4f}")
 ```
 
-### 5.6 Examine Shear Constraints
-
 ```{code-cell} python
-# Corner plot focusing on shear parameters
-fig = plot_corner(
-    result_joint,
-    params=['g1', 'g2', 'cosi', 'vcirc'],
-    true_values=true_pars_joint,
-    sampler_info={'name': 'numpyro'},
-)
+fig = plot_corner(result_joint, params=['g1', 'g2', 'cosi', 'vel.vcirc'],
+                  true_values=true_joint, sampler_info={'name': 'numpyro'})
 plt.show()
-
-# Get shear constraints
-summary = result_joint.get_summary()
-print("\nShear Constraints:")
-print(f"  g1 = {summary['g1']['quantiles'][0.5]:.4f} "
-      f"+{summary['g1']['quantiles'][0.84] - summary['g1']['quantiles'][0.5]:.4f} "
-      f"-{summary['g1']['quantiles'][0.5] - summary['g1']['quantiles'][0.16]:.4f}")
-print(f"  g2 = {summary['g2']['quantiles'][0.5]:.4f} "
-      f"+{summary['g2']['quantiles'][0.84] - summary['g2']['quantiles'][0.5]:.4f} "
-      f"-{summary['g2']['quantiles'][0.5] - summary['g2']['quantiles'][0.16]:.4f}")
-print(f"\nTrue values: g1={true_pars_joint['g1']}, g2={true_pars_joint['g2']}")
 ```
 
 ---
 
-## Section 6: Grism Inference (Single and Joint Photometry + Grism)
+## Section 6: Grism and joint photometry + grism (the production configuration)
 
-Grism observations plug into the same `InferenceTask` infrastructure as velocity and intensity. Two factory methods cover the common cases:
-
-- `InferenceTask.from_grism_obs` — grism-only inference, e.g. a single Roman grism cutout of an emission-line galaxy.
-- `InferenceTask.from_joint_photometry_grism_obs` — joint broadband image + grism, the configuration the Roman kinematic-lensing pipeline targets for production.
-
-Both require a `KLModel` constructed with a `spectral_model`. See `docs/tutorials/grism.md` for the spectral model + `GrismObs` setup; this section focuses on the inference wrapper.
-
-### 6.1 Build a Grism Observation
+The Roman kinematic-lensing target is a broadband image fit jointly with a
+slitless grism roll. The source adds an emission line; `from_obs` takes
+`image_obs` and `grism_obs` dicts. See `grism.md` for the forward model.
 
 ```{code-cell} python
-import galsim
-from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.velocity import OffsetVelocityModel
-from kl_pipe.spectral import (
-    SpectralConfig, SpectralModel, halpha_line, HALPHA,
-)
+from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
 from kl_pipe.dispersion import build_grism_pars_for_line
-from kl_pipe.observation import build_grism_obs
-from kl_pipe.model import KLModel
-from kl_pipe.parameters import ImagePars
+from kl_pipe.render import RenderConfig
+import galsim
 
-image_pars = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='ij')
-shared = {'cosi', 'theta_int', 'g1', 'g2'}
+Z = 1.0
+ip = ImagePars(shape=(28, 28), pixel_scale=0.11, indexing='ij')
+psf = galsim.Gaussian(fwhm=0.18)              # Gaussian stand-in, Roman-like FWHM
+rc = RenderConfig(oversample=3)               # low for tutorial speed
 
-vel_model = OffsetVelocityModel()
-int_model = InclinedExponentialModel()
-sm = SpectralModel(SpectralConfig(lines=(halpha_line(),), spectral_oversample=5),
-                   int_model, vel_model)
-kl = KLModel(vel_model, int_model, shared_pars=shared, spectral_model=sm)
-
-z = 1.0
-true_pars = {
-    # velocity
-    'v0': 0.0, 'vcirc': 200.0, 'vel_rscale': 0.4, 'vel_x0': 0.0, 'vel_y0': 0.0,
-    # intensity
-    'flux': 100.0, 'int_rscale': 0.3, 'int_h_over_r': 0.15, 'int_x0': 0.0, 'int_y0': 0.0,
-    # shared geometry
-    'cosi': 0.6, 'theta_int': 0.7, 'g1': 0.0, 'g2': 0.0,
-    # spectral
-    'z': z, 'vel_dispersion': 50.0, 'Ha_flux': 100.0, 'Ha_cont': 0.05,
+f087 = InclinedExponentialModel()
+halpha = InclinedExponentialModel()
+src = SourceModel(
+    velocity_model=CenteredVelocityModel(),
+    broadband_models={'F087': f087},
+    emission_lines={'Halpha': EmissionLine(intensity=halpha)},
+)
+truth = {
+    'cosi': 0.6,
+    'theta_int': 0.785,
+    'g1': 0.02,
+    'g2': -0.01,
+    'vel.v0': 10.0,
+    'vel.vcirc': 200.0,
+    'vel.rscale': 0.3,
+    'F087.flux': 100.0,
+    'F087.rscale': 0.3,
+    'F087.h_over_r': 0.1,
+    'F087.x0': 0.0,
+    'F087.y0': 0.0,
+    'Halpha.flux': 100.0,
+    'Halpha.rscale': 0.25,
+    'Halpha.h_over_r': 0.1,
+    'Halpha.x0': 0.0,
+    'Halpha.y0': 0.0,
+    'Halpha.dispersion': 50.0,
+    'z': Z,
 }
-theta_true = kl.pars2theta(true_pars)
 
-gp = build_grism_pars_for_line(HALPHA.lambda_rest, redshift=z,
-                                image_pars=image_pars, dispersion=1.1)
-psf = galsim.Gaussian(fwhm=0.18)
+gp = build_grism_pars_for_line(LINE_LAMBDAS['Halpha'], redshift=Z, image_pars=ip, dispersion=1.1)
+img_clean = np.asarray(src.render_broadband(
+    truth, build_image_obs(ip, psf=psf, render_config=rc, int_model=f087, broadband_key='F087'), 'F087'))
+g_clean = np.asarray(src.render_grism(truth, build_grism_obs(gp, z=Z, psf=psf, render_config=rc)))
+i_n, i_v = add_intensity_noise(img_clean, target_snr=100, seed=1)
+g_n, g_v = add_intensity_noise(g_clean, target_snr=100, seed=2)
 
-# render a clean grism image and add Gaussian noise (matched-filter SNR=200)
-obs_clean = build_grism_obs(gp, z=z, psf=psf)
-clean = np.array(kl.render_grism(theta_true, obs_clean))
-snr = 200
-variance = float(np.sum(clean**2)) / snr**2
-rng = np.random.default_rng(0)
-data_grism = clean + rng.normal(0.0, np.sqrt(variance), size=clean.shape)
+obs_F087 = build_image_obs(ip, psf=psf, render_config=rc, int_model=f087, broadband_key='F087',
+                           data=jnp.asarray(i_n), variance=i_v)
+obs_grism = build_grism_obs(gp, z=Z, psf=psf, render_config=rc,
+                            data=jnp.asarray(g_n), variance=g_v)
 
-obs_grism = build_grism_obs(
-    gp, z=z, psf=psf,
-    data=jnp.asarray(data_grism), variance=variance,
-)
-```
-
-### 6.2 Define Priors
-
-`Ha_flux`, `vcirc`, `vel_rscale`, and `vel_dispersion` are well-identified by the grism likelihood. Geometry (`cosi`, `theta_int`) and shear (`g1`, `g2`) are not separately well-constrained by a single grism cutout — they need either tight priors or the joint photometry term.
-
-```{code-cell} python
-priors_grism = PriorDict({
-    # velocity (sampled where the grism informs them)
-    'v0': 0.0,
-    'vcirc': Uniform(50.0, 400.0),
-    'vel_rscale': Uniform(0.1, 1.0),
-    'vel_x0': 0.0,
-    'vel_y0': 0.0,
-    # intensity (fixed for grism-only; the broadband image would constrain these in joint mode)
-    'flux': 100.0,
-    'int_rscale': 0.3,
-    'int_h_over_r': 0.15,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
-    # shared geometry — tight priors for grism-only inference
-    'cosi': Gaussian(0.6, 0.1),
-    'theta_int': Gaussian(0.7, 0.2),
-    'g1': 0.0,
-    'g2': 0.0,
-    # spectral
-    'z': z,
-    'vel_dispersion': Uniform(10.0, 200.0),
-    'Ha_flux': Uniform(20.0, 200.0),
-    'Ha_cont': 0.05,
+priors = PriorDict({
+    'cosi': TruncatedNormal(0.6, 0.15, 0.05, 0.99),
+    'theta_int': TruncatedNormal(0.785, 0.3, 0.0, np.pi / 2),
+    'g1': Uniform(-0.25, 0.25),
+    'g2': Uniform(-0.25, 0.25),
+    'vel.v0': Gaussian(10.0, 10.0),
+    'vel.vcirc': TruncatedNormal(200.0, 37.0, 80.0, 400.0),    # TF prior
+    'vel.rscale': TruncatedNormal(0.3, 0.1, 0.05, 1.0),
+    'F087.flux': TruncatedNormal(100.0, 20.0, 30.0, 250.0),
+    'F087.rscale': TruncatedNormal(0.3, 0.08, 0.05, 1.0),
+    'F087.h_over_r': 0.1,
+    'F087.x0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
+    'F087.y0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
+    'Halpha.flux': TruncatedNormal(100.0, 20.0, 30.0, 250.0),
+    'Halpha.rscale': TruncatedNormal(0.25, 0.08, 0.05, 1.0),
+    'Halpha.h_over_r': 0.1,
+    'Halpha.x0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
+    'Halpha.y0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
+    'Halpha.dispersion': TruncatedNormal(50.0, 20.0, 5.0, 150.0),
+    'z': Z,
 })
+task_pg = InferenceTask.from_obs(src, priors, image_obs={'F087': obs_F087},
+                                 grism_obs={'roll0': obs_grism})
+print(f"joint phot+grism task: {task_pg.n_params} sampled params")
 ```
 
-### 6.3 Grism-Only Inference with NumPyro
+### The Laplace preconditioner
+
+This joint posterior is correlated and the gradient is dominated by the grism
+`build_cube` cost, so NUTS warmup (climbing from an identity mass matrix) is the
+bottleneck. The **Laplace preconditioner** starts NUTS at the MAP with a fixed
+inverse-Hessian mass matrix, so warmup only tunes the step size. On the flagship
+test this is ~5x faster (8.5 vs ~42 min) with equal recovery and better
+convergence. Enable it with `precondition='laplace'` and a short warmup:
 
 ```{code-cell} python
-task_grism = InferenceTask.from_grism_obs(
-    model=kl, priors=priors_grism, obs=obs_grism,
+config_laplace = NumpyroSamplerConfig(
+    n_samples=150 if CI_MODE else 500,
+    n_warmup=30 if CI_MODE else 50,        # short: the MAP + Laplace metric do the work
+    n_chains=1 if CI_MODE else 2,
+    precondition='laplace',                # MAP init + fixed Laplace mass matrix
+    n_map_starts=2 if CI_MODE else 4,
+    chain_method='vectorized',
+    seed=42, progress=not CI_MODE,
 )
-
-config = NumpyroSamplerConfig(
-    n_samples=200 if CI_MODE else 1000,
-    n_warmup=100 if CI_MODE else 500,
-    n_chains=1 if CI_MODE else 4,
-    dense_mass=True,
-    seed=42,
-    progress=not CI_MODE,
-)
-sampler = build_sampler('numpyro', task_grism, config)
-result_grism = sampler.run()
-
-print_summary(result_grism, true_values=true_pars)
-print(f"Max R-hat: {max(result_grism.get_rhat().values()):.4f}")
+result_pg = build_sampler('numpyro', task_pg, config_laplace).run()
+print(f"max R-hat: {max(result_pg.get_rhat().values()):.4f}")
+print(f"min ESS:   {min(result_pg.get_ess().values()):.0f}")
 ```
-
-### 6.4 Joint Photometry + Grism
-
-Joint inference adds a broadband image term; the underlying log-posterior is the sum of the two independent Gaussian likelihoods. The intensity-channel grid-adequacy validation that `from_intensity_obs` runs is also applied here.
 
 ```{code-cell} python
-from kl_pipe.observation import build_image_obs
-
-# synthetic broadband image at the same parameters
-obs_int_clean = build_image_obs(image_pars, int_model=kl.intensity_model, psf=psf)
-clean_int = np.array(kl.intensity_model.render_image(
-    kl.get_intensity_pars(theta_true), obs=obs_int_clean,
-    render_config=obs_int_clean.render_config,
-))
-var_int = float(np.sum(clean_int**2)) / snr**2
-data_int = clean_int + np.random.default_rng(1).normal(0.0, np.sqrt(var_int), size=clean_int.shape)
-obs_int = build_image_obs(
-    image_pars, int_model=kl.intensity_model, psf=psf,
-    data=jnp.asarray(data_int), variance=var_int,
-)
-
-# joint priors — let the broadband image constrain intensity morphology
-# and the geometry / shear that grism-only could not pin down
-priors_joint = PriorDict({
-    # velocity
-    'v0':              0.0,
-    'vcirc':           Uniform(50.0, 400.0),
-    'vel_rscale':      Uniform(0.1, 1.0),
-    'vel_x0':          0.0,
-    'vel_y0':          0.0,
-    # intensity — now sampled (broadband image constrains them)
-    'flux':            Uniform(10.0, 500.0),
-    'int_rscale':      Uniform(0.05, 1.0),
-    'int_h_over_r':    0.15,
-    'int_x0':          0.0,
-    'int_y0':          0.0,
-    # shared geometry — now sampled too
-    'cosi':            Uniform(0.1, 0.99),
-    'theta_int':       Uniform(0.0, np.pi),
-    'g1':              Uniform(-0.1, 0.1),
-    'g2':              Uniform(-0.1, 0.1),
-    # spectral
-    'z':               z,
-    'vel_dispersion':  Uniform(10.0, 200.0),
-    'Ha_flux':         Uniform(20.0, 200.0),
-    'Ha_cont':         0.05,
-})
-
-task_joint = InferenceTask.from_joint_photometry_grism_obs(
-    model=kl, priors=priors_joint,
-    obs_int=obs_int, obs_grism=obs_grism,
-)
-
-sampler_joint = build_sampler('numpyro', task_joint, config)
-result_joint = sampler_joint.run()
-
-print_summary(result_joint, true_values=true_pars)
-print(f"Max R-hat: {max(result_joint.get_rhat().values()):.4f}")
+fig = plot_corner(result_pg, params=['g1', 'g2', 'cosi', 'vel.vcirc', 'Halpha.dispersion'],
+                  true_values=truth, sampler_info={'name': 'numpyro+laplace'})
+plt.show()
 ```
 
-### 6.5 Known Limitations of the Current Grism Likelihood
-
-- **Photometric and emission centroids are shared.** Both broadband image rendering and grism cube assembly use `kl_model.intensity_model`'s `int_x0`/`int_y0`. If the two channels have independent astrometric solutions this is the wrong degree of freedom. The planned `SourceModel` refactor introduces per-component centroids. See `docs/plans/phase3_sourcemodel_refactor.md`.
-- **The intensity-channel grid-adequacy validation is not yet generalized to grism.** `from_joint_photometry_grism_obs` runs it on `obs_int`; `from_grism_obs` does not run it at all. Affects rare prior configurations with extreme cusp profiles + tight grids.
-
-`vel_dispersion` is now identifiable: line broadening in the cube is purely intrinsic (`sigma_eff = vel_disp`); the slitless instrumental LSF is produced by the PSF-per-slice + dispersion geometry downstream, and the empirical gate `tests/test_lsf_gate.py` verifies it matches the Roman spec `R = 461 * lambda_um` to within 5%.
+The plain dense-mass path (`precondition='none'`, the default) is the stable
+anchor; switch to `'laplace'` with a short warmup for the joint phot+grism
+configuration. `tests/test_flagship.py` runs the full production version.
 
 ---
 
-## Section 7: TNG Data Vector Integration
+## Section 7: TNG data-vector integration
 
-The TNG50 simulation provides realistic galaxy morphologies and kinematics that introduce model mismatch -- the analytic models in `kl_pipe` (arctan rotation curves, exponential disks) can't perfectly describe the complex structure of simulated galaxies. This is a feature, not a bug: it lets us test how well the inference pipeline performs under realistic conditions.
-
-### 7.1 Load TNG Data
-
-```{code-cell} python
-try:
-    from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
-    tng_data = TNG50MockData()
-    TNG_AVAILABLE = True
-except Exception:
-    TNG_AVAILABLE = False
-    print("TNG50 data not available. Skipping TNG sections.")
-    print("Download with: make download-cyverse-data")
-
-if TNG_AVAILABLE:
-    print(f"Number of galaxies: {tng_data.n_galaxies}")
-    print(f"Available SubhaloIDs: {tng_data.subhalo_ids[:10]}...")
-    galaxy = tng_data.get_galaxy(subhalo_id=8)
-```
-
-### 7.2 Generate Data Vectors
+TNG50 galaxies provide realistic morphologies and kinematics that the analytic
+models cannot perfectly describe, which tests inference under model mismatch.
+The cell below is tagged skip-execution (it needs the CyVerse TNG data, absent in
+CI); run it locally after `make download-cyverse-data`. The data-vector pipeline
+itself is covered in `tng50_data.md`.
 
 ```{code-cell} python
-if TNG_AVAILABLE:
-    # Create render configuration
-    image_pars_tng = ImagePars(shape=(32, 32), pixel_scale=0.2, indexing='ij')
-    render_config = TNGRenderConfig(
-        image_pars=image_pars_tng,
-        band='r',                       # r-band photometry
-        use_native_orientation=True,    # Use TNG catalog orientation
-        target_redshift=0.3,            # Scale to z=0.3 (Roman-like)
-        use_cic_gridding=True,          # Cloud-in-Cell interpolation
-    )
+:tags: [skip-execution]
 
-    # Generate velocity and intensity maps from particle data
-    gen = TNGDataVectorGenerator(galaxy)
-    velocity_map, var_vel_tng = gen.generate_velocity_map(render_config, snr=30.0, seed=42)
-    intensity_map, var_int_tng = gen.generate_intensity_map(render_config, snr=30.0, seed=43)
+from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
 
-    print(f"Velocity map shape: {velocity_map.shape}")
-    print(f"Intensity map shape: {intensity_map.shape}")
-    print(f"Native inclination: {gen.native_inclination_deg:.1f} deg")
-    print(f"Native PA: {gen.native_pa_deg:.1f} deg")
+galaxy = TNG50MockData().get_galaxy(subhalo_id=8)
+gen = TNGDataVectorGenerator(galaxy)
+ip_tng = ImagePars(shape=(32, 32), pixel_scale=0.2, indexing='ij')
+rcfg = TNGRenderConfig(image_pars=ip_tng, band='r', use_native_orientation=True,
+                       target_redshift=0.3, use_cic_gridding=True)
+vel_map, v_var = gen.generate_velocity_map(rcfg, snr=30.0, seed=42)
+int_map, i_var = gen.generate_intensity_map(rcfg, snr=30.0, seed=43)
+flux_est = float(np.sum(int_map))
+int_norm = int_map / flux_est
 
-    # Plot the TNG data
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    im0 = axes[0].imshow(velocity_map.T, origin='lower', cmap='RdBu_r')
-    axes[0].set_title('TNG Velocity Map')
-    plt.colorbar(im0, ax=axes[0], label='km/s')
-
-    im1 = axes[1].imshow(intensity_map.T, origin='lower', cmap='viridis')
-    axes[1].set_title('TNG Intensity Map')
-    plt.colorbar(im1, ax=axes[1], label='Flux')
-    plt.tight_layout()
-    plt.show()
+src_tng = SourceModel(velocity_model=CenteredVelocityModel(),
+                      broadband_models={'r': InclinedExponentialModel()})
+rmodel = src_tng.broadband_models['r']
+priors_tng = PriorDict({
+    'cosi': TruncatedNormal(gen.native_cosi, 0.2, 0.05, 0.99),
+    'theta_int': Uniform(0.0, np.pi),
+    'g1': Uniform(-0.1, 0.1),
+    'g2': Uniform(-0.1, 0.1),
+    'vel.v0': Gaussian(0.0, 20.0),
+    'vel.vcirc': Uniform(50.0, 400.0),
+    'vel.rscale': Uniform(0.5, 15.0),
+    'r.flux': Uniform(0.01, 10.0),
+    'r.rscale': Uniform(0.2, 10.0),
+    'r.h_over_r': 0.1,
+    'r.x0': 0.0,
+    'r.y0': 0.0,
+})
+obs_vel_t = build_velocity_obs(ip_tng, data=jnp.asarray(vel_map), variance=v_var)
+obs_int_t = build_image_obs(ip_tng, broadband_key='r', int_model=rmodel,
+                            data=jnp.asarray(int_norm), variance=i_var / flux_est**2)
+task_tng = InferenceTask.from_obs(src_tng, priors_tng,
+                                  velocity_obs=obs_vel_t, image_obs={'r': obs_int_t})
+cfg_tng = NumpyroSamplerConfig(n_samples=1250, n_warmup=625, n_chains=4,
+                               dense_mass=True, seed=42, progress=True)
+result_tng = build_sampler('numpyro', task_tng, cfg_tng).run()
+print_summary(result_tng)
+print(f"max R-hat: {max(result_tng.get_rhat().values()):.4f}")
 ```
 
-### 7.3 Normalize Intensity
-
-TNG luminosities are in physical units (erg/s). For sampling with `kl_pipe`'s normalized intensity model, we need to estimate the flux normalization.
-
-```{code-cell} python
-if TNG_AVAILABLE:
-    flux_estimate = float(np.sum(intensity_map))
-    intensity_normalized = intensity_map / flux_estimate
-
-    print(f"Total flux: {flux_estimate:.2e}")
-    print(f"Normalized peak: {intensity_normalized.max():.4f}")
-```
-
-### 7.4 Estimate Initial Parameters
-
-Use the TNG catalog orientation as starting estimates:
-
-```{code-cell} python
-if TNG_AVAILABLE:
-    initial_pars = {
-        'cosi': gen.native_cosi,
-        'theta_int': gen.native_pa_rad,
-        'g1': 0.0,
-        'g2': 0.0,
-    }
-
-    print(f"Initial cosi: {initial_pars['cosi']:.3f}")
-    print(f"Initial theta_int: {initial_pars['theta_int']:.3f} rad")
-```
-
-### 7.5 Build Joint Task and Run
-
-```{code-cell} python
-if TNG_AVAILABLE:
-    priors_tng = PriorDict({
-        # Velocity
-        'v0': Gaussian(0.0, 20.0),
-        'vcirc': Uniform(50, 400),
-        'vel_rscale': Uniform(0.5, 15.0),
-
-        # Intensity
-        'flux': Uniform(0.01, 10.0),
-        'int_rscale': Uniform(0.2, 10.0),
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
-
-        # Geometry -- use TNG estimates to inform priors
-        'cosi': TruncatedNormal(gen.native_cosi, 0.2, 0.05, 0.99),
-        'theta_int': Uniform(0, np.pi),
-        'g1': Uniform(-0.1, 0.1),
-        'g2': Uniform(-0.1, 0.1),
-    })
-
-    vel_model_tng = CenteredVelocityModel()
-    int_model_tng = InclinedExponentialModel()
-    joint_model_tng = KLModel(
-        velocity_model=vel_model_tng,
-        intensity_model=int_model_tng,
-        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
-    )
-
-    rc_int_tng = RenderConfig.for_priors(
-        int_model_tng,
-        priors_tng,
-        image_pars_tng.pixel_scale,
-        pixel_response=BoxPixel(image_pars_tng.pixel_scale),
-    )
-    obs_vel_tng, obs_int_tng = build_joint_obs(
-        image_pars_tng, image_pars_tng, int_model_tng,
-        data_vel=jnp.array(velocity_map), variance_vel=var_vel_tng,
-        data_int=jnp.array(intensity_normalized),
-        variance_int=var_int_tng / flux_estimate**2,
-        render_config_int=rc_int_tng,
-    )
-    task_tng = InferenceTask.from_joint_obs(
-        model=joint_model_tng,
-        priors=priors_tng,
-        obs_vel=obs_vel_tng,
-        obs_int=obs_int_tng,
-    )
-
-    config_tng = NumpyroSamplerConfig(
-        n_samples=200 if CI_MODE else 1250,
-        n_warmup=100 if CI_MODE else 625,
-        n_chains=1 if CI_MODE else 4,
-        dense_mass=True,
-        seed=42,
-        progress=not CI_MODE,
-    )
-
-    sampler_tng = build_sampler('numpyro', task_tng, config_tng)
-    result_tng = sampler_tng.run()
-
-    print_summary(result_tng)
-    print(f"\nMax R-hat: {max(result_tng.get_rhat().values()):.4f}")
-    print(f"Divergences: {result_tng.diagnostics.get('n_divergences', 0)}")
-```
-
-### 7.6 Interpreting TNG Results
-
-With TNG data there is no single "true" parameter set -- the analytic model is an approximation. Expect model mismatch: the posterior will be shifted from the TNG catalog values because the arctan rotation curve and exponential disk don't perfectly describe TNG morphology. The key question is whether shear constraints remain unbiased despite this mismatch.
-
-```{code-cell} python
-if TNG_AVAILABLE:
-    tng_reference = {
-        'cosi': gen.native_cosi,
-        'theta_int': gen.native_pa_rad,
-        'g1': 0.0,
-        'g2': 0.0,
-    }
-
-    fig = plot_corner(
-        result_tng,
-        params=['g1', 'g2', 'cosi', 'theta_int'],
-        true_values=tng_reference,
-        sampler_info={'name': 'numpyro'},
-    )
-    plt.show()
-```
+With TNG data there is no single "true" parameter set; the analytic model is an
+approximation, so the posterior is shifted from the catalog orientation by model
+mismatch. The science question is whether the shear constraint stays unbiased
+despite it. See `tng50_data.md` for the data-vector pipeline.
 
 ---
 
-## Section 8: Diagnostic Analysis
-
-### 8.1 Trace Plots for Convergence
-
-Trace plots show parameter values over the sampling iterations. Look for:
-- **Stationarity**: Chains should fluctuate around a stable mean
-- **Mixing**: Chains should explore the full range of the posterior
-- **No trends**: Avoid drifting or slow exploration
+## Section 8: Diagnostics
 
 ```{code-cell} python
 fig = plot_trace(result_joint)
 plt.show()
-```
-
-### 8.2 Corner Plots
-
-Corner plots reveal parameter degeneracies and correlations. The `plot_corner` function includes:
-
-- **MAP summary box** (upper right): median +/- std for each parameter, with per-parameter sigma offsets color-coded (green <2, orange 2-3, red >3)
-- **Joint N-sigma**: Mahalanobis distance from truth using posterior covariance
-- **+/-1 sigma shading** on diagonal histograms (gray bands)
-- **True values** (black solid lines/markers) and **MAP values** (red dashed)
-
-```{code-cell} python
-fig = plot_corner(result_joint, true_values=true_pars_joint, sampler_info={'name': 'numpyro'})
+fig, recovery_stats = plot_recovery(result_joint, true_joint)
 plt.show()
+print(f"joint Nsigma: {recovery_stats['joint_nsigma']:.2f}")
 ```
 
-### 8.3 Parameter Recovery Assessment
-
-```{code-cell} python
-from kl_pipe.sampling.diagnostics import plot_recovery
-
-fig, recovery_stats = plot_recovery(result_joint, true_pars_joint)
-plt.show()
-
-# The joint Nsigma statistic accounts for parameter correlations
-print(f"Joint Nsigma: {recovery_stats['joint_nsigma']:.2f}")
-print(f"P-value: {recovery_stats['joint_pvalue']:.4f}")
-```
-
-### 8.4 Comparing Samplers
-
-Overlay results from different samplers to compare their posteriors using `plot_corner_comparison`. The baseline sampler (default: numpyro) is shown with filled contours; others with dashed contours clipped to the baseline region.
-
-```{code-cell} python
-from kl_pipe.sampling.diagnostics import plot_corner_comparison
-
-# Run samplers on the same problem
-results_comparison = {}
-
-config_quick = EnsembleSamplerConfig(
-    n_walkers=24, n_iterations=100 if CI_MODE else 500, burn_in=20 if CI_MODE else 100, seed=42, progress=False)
-results_comparison['emcee'] = build_sampler('emcee', task, config_quick).run()
-
-config_nautilus_quick = NestedSamplerConfig(n_live=50 if CI_MODE else 200, seed=42, progress=False)
-results_comparison['nautilus'] = build_sampler('nautilus', task, config_nautilus_quick).run()
-
-config_numpyro_quick = NumpyroSamplerConfig(
-    n_samples=100 if CI_MODE else 500, n_warmup=50 if CI_MODE else 200, n_chains=1, seed=42, progress=False)
-results_comparison['numpyro'] = build_sampler('numpyro', task, config_numpyro_quick).run()
-
-fig = plot_corner_comparison(results_comparison, true_values=true_pars)
-plt.show()
-```
+`plot_corner` annotates the median +/- std per parameter, the joint N-sigma
+(Mahalanobis distance from truth using the posterior covariance), and overlays
+true (black) and MAP (red) values. `plot_corner_comparison` overlays posteriors
+from several samplers run on the same task.
 
 ---
 
-## Section 9: Running Tests
+## Section 9: Choosing a sampler
 
-### Makefile targets
+| Sampler | Gradients | Evidence | R-hat / ESS | Best for |
+|---|---|---|---|---|
+| emcee | No | No | No | multi-modal posteriors, exploration |
+| nautilus | No | Yes | No | model comparison, evidence |
+| **numpyro** | **Yes** | No | **Yes** | joint models, multi-scale params, production |
+| blackjax | Yes | No | No | simple velocity-only |
 
-| Target | What it runs |
-|--------|-------------|
-| `make test-sampling` | Sampling diagnostics tests (excludes nautilus) |
-| `make test-sampling-all` | All sampling tests including nautilus (slow) |
-| `make test-tng-diagnostics` | TNG sampling end-to-end tests |
-| `make test-basic` | Fast tests excluding TNG and slow |
-| `make test-all` | Everything |
-| `make diagnostics` | Generate HTML report from test output images |
-
-### TestConfig pattern
-
-Tests use a `TestConfig` container that holds output directories, SNR-dependent tolerance tables, and image parameters:
-
-```python
-from tests.test_utils import TestConfig, redirect_sampler_output
-from pathlib import Path
-
-config = TestConfig(
-    output_dir=Path("tests/out"),
-    enable_plots=True,
-    verbose_terminal=False,
-    seed=42,
-)
-
-# Redirect sampler output to log file (keeps test output clean)
-log_path = config.get_sampler_log_path("my_test", "numpyro")
-with redirect_sampler_output(log_path):
-    result = sampler.run()
-```
+Decision shortcuts: need evidence -> nautilus; joint / production -> numpyro
+(add the Laplace preconditioner for phot+grism); multi-modal -> emcee.
 
 ---
 
-## Section 10: Choosing a Sampler
+## Section 10: Troubleshooting
 
-### Decision flowchart
-
-1. **Need evidence for model comparison?** --> nautilus
-2. **Joint velocity+intensity model?** --> numpyro (handles multi-scale gradients)
-3. **Simple velocity-only, want fast results?** --> emcee or numpyro
-4. **Multi-modal posterior?** --> emcee (gradient-free, handles multiple modes)
-5. **Production run with convergence guarantees?** --> numpyro (R-hat, ESS)
-
-### Comparison table
-
-| Sampler | Gradients | Evidence | R-hat/ESS | Best For |
-|---------|-----------|----------|-----------|----------|
-| **emcee** | No | No | No | Multi-modal posteriors, easy setup, initial exploration |
-| **nautilus** | No | Yes | No | Model comparison, evidence estimation |
-| **numpyro** | Yes | No | Yes | Joint models, multi-scale parameters, production runs |
-| **blackjax** | Yes | No | No | Simple velocity-only models (known issues with joint) |
+| Problem | Likely cause | Fix |
+|---|---|---|
+| Poor mixing (emcee) | too few walkers / degenerate posterior | `n_walkers` > 4x n_params |
+| Divergences (numpyro) | stiff geometry | `reparam_strategy='empirical'`; raise `target_accept_prob` to 0.9 |
+| High R-hat | not converged | more warmup / samples; check multimodality |
+| Zero variance (blackjax) | gradient collapse on joint models | use numpyro |
+| Low ESS | strong correlations | `dense_mass=True`; or the Laplace preconditioner |
+| Slow phot+grism warmup | warmup-dominated wallclock | `precondition='laplace'` + short warmup |
+| Hitting max tree depth | step size / geometry | raise `max_tree_depth` to 12-15 |
+| NaN log-posterior | parameter outside model domain | check prior bounds |
 
 ---
 
-## Section 11: Common Issues & Troubleshooting
+## Section 11: Running tests and next steps
 
-| Problem | Likely Cause | Fix |
-|---------|-------------|-----|
-| Poor mixing (emcee) | Too few walkers or degenerate posterior | Increase `n_walkers` to >4x n_params |
-| Low acceptance (emcee) | Walkers stuck in low-probability region | Check prior bounds; increase burn-in |
-| Divergences (numpyro) | Numerical issues in likelihood/prior | Try `reparam_strategy='empirical'`; increase `target_accept_prob` to 0.9 |
-| High R-hat (numpyro) | Chains not converged | Increase `n_warmup` and `n_samples`; check for multimodality |
-| Zero variance (blackjax) | Gradient collapse in joint models | Use numpyro instead -- blackjax lacks Z-score reparam |
-| Low ESS (numpyro) | Strong correlations or poor mass matrix | Use `dense_mass=True`; increase warmup |
-| Slow nautilus | Too many live points or complex posterior | Reduce `n_live` for exploration; increase for final runs |
-| `NaN` in log-posterior | Parameter outside model domain | Check prior bounds match model requirements |
-| Hitting max tree depth (numpyro) | Step size too large or posterior geometry | Increase `max_tree_depth` to 12-15 |
+| Target | Runs |
+|---|---|
+| `make test-sampling` | sampling diagnostics (excludes nautilus) |
+| `make test-sampling-all` | all sampling tests including nautilus |
+| `pytest tests/test_flagship.py` | the full joint phot+grism Laplace run |
 
----
-
-## Section 12: Next Steps
-
-- **Architecture reference**: `kl_pipe/sampling/README.md` -- full config reference, design patterns, adding backends
-- **Test examples**: `tests/test_sampling.py`, `tests/test_numpyro.py`, `tests/test_sampling_diagnostics.py`
-- **TNG integration**: `docs/tutorials/tng50_data.md` -- detailed TNG data pipeline
-- **BlackJAX diagnostics**: `tests/test_blackjax.py` -- gradient diagnostic patterns
+- **Config reference**: `kl_pipe/sampling/README.md`.
+- **Test examples**: `tests/test_numpyro.py`, `tests/test_sampling.py`.
+- **TNG pipeline**: `tng50_data.md`. **Forward model**: `quickstart.md`, `grism.md`.
