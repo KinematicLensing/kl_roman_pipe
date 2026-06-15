@@ -1508,6 +1508,11 @@ def _int_priors_for_invariance(true_pars_dotted):
     for k, v in true_pars_dotted.items():
         if k.endswith('h_over_r'):
             sampled[k] = v  # fixed
+        elif k == 'cosi':
+            # physical cosi range (0, 1]; the wide v +/- 1 default would reach
+            # edge-on, which the intensity-task guard rejects. these invariance
+            # tests evaluate logL at the truth, so the exact bounds are immaterial.
+            sampled[k] = Uniform(0.05, 0.99)
         else:
             sampled[k] = Uniform(v - 1.0, v + 1.0) if v != 0.0 else Uniform(-0.5, 0.5)
     return PriorDict(sampled)

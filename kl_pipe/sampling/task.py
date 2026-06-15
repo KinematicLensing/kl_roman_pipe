@@ -773,6 +773,7 @@ class InferenceTask:
         """
         from kl_pipe.likelihood import create_jitted_likelihood_from_obs
         from kl_pipe.source import SourceModel
+        from kl_pipe.transformation import COSI_FLOOR
 
         # ---- validate source-to-obs binding -----------------------------
 
@@ -833,6 +834,30 @@ class InferenceTask:
                     f"velocity_obs.flux_weight_key='{fwk}' has no entry in "
                     f"source.emission_lines "
                     f"(have: {sorted(source.emission_lines)})"
+                )
+
+        # cosi floor: the inclined-disk surface-brightness brightening
+        # (IntensityModel.__call__, ~1/cosi) diverges at edge-on. Reject cosi
+        # priors that reach COSI_FLOOR for any task that renders an intensity
+        # component (broadband image, grism emission line, or PSF flux-weighted
+        # velocity). Velocity-only tasks are exempt: edge-on cosi is physical
+        # and informative there (LOS projection uses sin i, not 1/cosi).
+        # Unbounded priors (e.g. Gaussian -> bounds (None, None)) are not
+        # statically checkable and pass through.
+        renders_intensity = (
+            bool(image_obs)
+            or bool(grism_obs)
+            or (velocity_obs is not None and velocity_obs.flux_weight_key is not None)
+        )
+        if renders_intensity:
+            cosi_low, _ = priors.get_param_bounds('cosi')
+            if cosi_low is not None and cosi_low < COSI_FLOOR:
+                raise ValueError(
+                    f"cosi prior lower bound ({cosi_low:g}) reaches the edge-on "
+                    f"floor (COSI_FLOOR={COSI_FLOOR:g}); the 1/cosi surface-"
+                    f"brightness brightening diverges there. Use a strictly "
+                    f"positive lower bound (e.g. Uniform(0.05, 0.99)) for "
+                    f"intensity-rendering tasks."
                 )
 
         # ---- per-channel rc handling (auto-derive or validate) -----------

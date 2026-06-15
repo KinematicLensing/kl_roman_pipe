@@ -6,7 +6,7 @@ import numpy as np
 from abc import abstractmethod, ABC
 from typing import Any
 
-from kl_pipe.transformation import transform_to_disk_plane
+from kl_pipe.transformation import COSI_FLOOR, transform_to_disk_plane
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import build_map_grid_from_image_pars
 
@@ -485,8 +485,12 @@ class IntensityModel(Model):
         if plane == 'disk':
             return I_disk
         else:
-            # apply cos(i) brightening factor for projected intensity
-            return I_disk / cosi
+            # apply cos(i) brightening factor for projected intensity. clamp
+            # cosi to COSI_FLOOR to match the gal->disk deprojection guard in
+            # transformation.py; inference rejects cosi priors that reach the
+            # floor, so within the valid range this is a no-op edge guard.
+            cosi_safe = jnp.maximum(cosi, COSI_FLOOR)
+            return I_disk / cosi_safe
 
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.

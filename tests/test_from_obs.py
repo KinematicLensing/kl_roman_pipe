@@ -465,6 +465,59 @@ class TestValidationErrors:
         with pytest.raises(ValueError, match="disagrees with its dict key"):
             InferenceTask.from_obs(src, priors, image_obs={'F184': obs_mislabeled})
 
+    def test_cosi_prior_reaching_edge_on_raises_for_intensity(
+        self, src_broadband, img_obs
+    ):
+        """A cosi prior whose lower bound reaches the edge-on floor must be
+        rejected for intensity-rendering tasks (1/cosi SB diverges)."""
+        priors = PriorDict(
+            {
+                'cosi': Uniform(0.0, 0.99),  # lower bound at edge-on
+                'theta_int': 0.3,
+                'g1': 0.0,
+                'g2': 0.0,
+                **_broadband_priors(),
+            }
+        )
+        with pytest.raises(ValueError, match="reaches the edge-on floor"):
+            InferenceTask.from_obs(src_broadband, priors, image_obs={'F087': img_obs})
+
+    def test_cosi_fixed_at_zero_raises_for_intensity(self, src_broadband, img_obs):
+        """A cosi fixed at 0 is also caught (get_param_bounds -> (0, 0))."""
+        priors = PriorDict(
+            {
+                'cosi': 0.0,
+                'theta_int': 0.3,
+                'g1': 0.0,
+                'g2': 0.0,
+                **_broadband_priors(),
+            }
+        )
+        with pytest.raises(ValueError, match="reaches the edge-on floor"):
+            InferenceTask.from_obs(src_broadband, priors, image_obs={'F087': img_obs})
+
+    def test_cosi_edge_on_allowed_for_velocity_only(self, image_pars, rng):
+        """Velocity-only tasks are exempt: edge-on cosi is physical and
+        informative (LOS projection uses sin i, not 1/cosi)."""
+        src = SourceModel(velocity_model=CenteredVelocityModel())
+        priors = PriorDict(
+            {
+                'cosi': Uniform(0.0, 0.99),
+                'theta_int': 0.3,
+                'g1': 0.0,
+                'g2': 0.0,
+                **_velocity_priors(),
+            }
+        )
+        obs = build_velocity_obs(
+            image_pars,
+            data=rng.normal(0, 10.0, size=(16, 16)),
+            variance=100.0,
+        )
+        # must NOT raise
+        task = InferenceTask.from_obs(src, priors, velocity_obs=obs)
+        assert task is not None
+
     def test_grism_without_velocity_model(self, image_pars, rng, priors_grism):
         """grism_obs requires source.velocity_model."""
         src = SourceModel(
