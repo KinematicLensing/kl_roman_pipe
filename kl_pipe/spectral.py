@@ -176,6 +176,8 @@ class FiberPars:
                 red_limit=self.lambda_grid[-1],
             )
             self._bp_array = jnp.array(self.throughput(self.lambda_grid))
+            self.sky_model = gs.LookupTable.from_file(obs_conf["SKYMODEL"], f_log=True) # Ang v.s. 1e-17 erg s-1 cm-2 A-1 arcsec-2
+            self._sky_array = jnp.array(self.sky_model(10*self.lambda_grid))
             self.lambda_eff = self.throughput.effective_wavelength
 
         else:  # photometry
@@ -195,6 +197,8 @@ class FiberPars:
                     red_limit=_lrange[1],
                 )
             self._bp_array = jnp.array(self.throughput(self.lambda_grid))
+            self.sky_model = None #flat "SKY_LEVEL" param in the obs_conf for photometry, rather than a spectrum
+            self._sky_array = None
             self.lambda_eff = self.throughput.effective_wavelength
         #return cls(cube_pars=cube_pars, obs_conf=obs_conf)
     

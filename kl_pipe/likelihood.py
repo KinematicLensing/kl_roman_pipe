@@ -234,7 +234,7 @@ def _log_likelihood_fiber(
         img_and_noise = kl_model.render_fiber(
             theta=theta,
             theta_spec = theta_spec,
-            obs=obs,
+            obs=obs, #contains observational details
             plane='obs',
             force_noise_free=True,
         )  # spectrum or photometric image from model
@@ -428,7 +428,6 @@ def create_jitted_likelihood_joint(
         )
     )
 
-#@profile
 def create_jitted_likelihood_fiber(
     theta_spec: jnp.ndarray,
     kl_model: 'KLModel',

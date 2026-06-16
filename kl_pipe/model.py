@@ -1007,10 +1007,10 @@ class KLModel(object):
         theta: jnp.ndarray,
         theta_spec: jnp.ndarray,
         #fiber_pars,
-        obs,
+        obs, #contains fiber_pars
         plane: str = 'obs',
         #cube_pars=None,
-        force_noise_free=True,
+        force_noise_free=False,
         run_mode='ETC',
     ) -> jnp.ndarray:
 
@@ -1032,26 +1032,22 @@ class KLModel(object):
     def fiber_observe_cube(
         self, 
         cube, 
-        fiber_pars, 
+        fiber_pars, #i mean, this doesn't really need to be a separate argument because fiber_pars is contained in obs
         obs, 
-        force_noise_free=True, 
+        force_noise_free=False, 
         run_mode='ETC'
     ):
         # if photometry image...wip
         if not fiber_pars.is_dispersed:
 
             #self.ATMPSF_conv_fiber_mask = None
-            #self.resolution_mat = None #do not set to None because the model will be reused for photometry
-
-            psfdata = obs.psf_data #self._fiber_photo_psf_data
-            #psfdata = self._fiber_psf_data
-            # galsim_psf = self._build_PSF_model_fiber(fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff)
-            # self.intensity_model.configure_psf(galsim_psf, image_pars = fiber_pars.cube_pars.image_pars, image_shape= (fiber_pars.obs_conf.NAXIS1,fiber_pars.obs_conf.NAXIS2), pixel_scale=fiber_pars.obs_conf['PIXSCALE'], oversample=1)
+            #self.resolution_mat = None #do not set to None because the model will be reused for photometry and right 
+            psfdata = obs.psf_data
             if run_mode == 'ETC':
-                # psf_convolved_int = self.intensity_model.render_image(theta=theta_int, image_pars = fiberpars_instance.cube_pars.image_pars, plane='obs', oversample =1)
-                cube_bp = cube * jnp.array(fiber_pars._bp_array)
+                cube_bp = cube * jnp.array(fiber_pars._bp_array) #theoretical cube, not PSF-convolved
                 raw_img = jnp.sum(cube_bp, axis=2) * fiber_pars.dlambda
-                #print(fiber_pars.dlambda)
+                
+                #I'm not gonna worry about oversampling
                 # if self._fiber_psf_data.oversample == 1:
                 # highres_img = raw_img
                 # elif self._fiber_psf_data.oversample > 1: #might not be correct
@@ -1060,6 +1056,7 @@ class KLModel(object):
                 # self._fiber_psf_data.oversample,
                 # axis=1,
                 # )
+
                 factor = (
                     jnp.pi
                     * (fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
@@ -1069,40 +1066,39 @@ class KLModel(object):
 
                 img = factor * convolve_fft(
                     raw_img, psfdata
-                )  # downsampling baked into convolve_fft
-
-            # add SNR mode too
+                ) 
 
             if force_noise_free:
                 return img, None
 
             else:
-                print('photometry noise implementation WIP')
-                # noise_type = fiber_pars.obs_conf['NOISETYP']
-                # if noise_type == 'ccd':
-                # read_noise = fiber_pars.obs_conf['RDNOISE'] #electrons/pixel probably
-                # gain = fiber_pars.obs_conf['GAIN'] #electrons/ADU
-                # exp_time = fiber_pars.obs_conf['EXPTIME']
-                # sky_level = fiber_pars.obs_conf['SKYLEVEL']*exp_time/gain #what are the units of this? ADU/pixel? ADU/pixel/second? if /second then I should multiply by exposure time. #divide sky level by gain to get electrons/pixel
-                # noise_std = ((sky_level+img)+read_noise**2)**0.5
-                # key = jax.random.key(0)
-                # noise = (jax.random.normal(key, shape=(img.shape[0],img.shape[1])) * noise_std)
-                # print('noise', noise)
-                # print('shape', jnp.shape(noise))
-                # img_withNoise = img.copy()
-                # img_withNoise += noise
-                # noise_img = img_withNoise - img
-                # assert (img_withNoise.array is not None), "Null data"
-                # assert (img.array is not None), "Null data"
-                # if fiber_pars.obs_conf['ADDNOISE']:
-                # return img_withNoise.array, noise_img.array
-                # else:
-                # return img.array, noise_img.array
-                return img, None
+                #print('photometry noise implementation WIP') #this stuff should be put into noise.py I'd think
+                #return img, None
+                noise_type = fiber_pars.obs_conf['NOISETYP']
+                if noise_type == 'ccd':
+                    read_noise = fiber_pars.obs_conf['RDNOISE'] #electrons/pixel probably
+                    gain = fiber_pars.obs_conf['GAIN'] #electrons/ADU
+                    exp_time = fiber_pars.obs_conf['EXPTIME']
+                    sky_level = fiber_pars.obs_conf['SKYLEVEL']*exp_time/gain #what are the units of this? ADU/pixel? ADU/pixel/second? if /second then I should multiply by exposure time. #divide sky level by gain to get electrons/pixel
+                    noise_std = ((sky_level+img)+read_noise**2)**0.5 #note this includes poisson noise
+                    key = jax.random.key(0)
+                    noise = (jax.random.normal(key, shape=(img.shape[0],img.shape[1])) * noise_std)
+                    #print('noise', noise)
+                    #print('shape', jnp.shape(noise))
+                    img_withNoise = img.copy()
+                    img_withNoise += noise
+                    noise_img = img_withNoise - img
+                    #assert (img_withNoise.array is not None), "Null data"
+                    #assert (img.array is not None), "Null data"
+                    if fiber_pars.obs_conf['ADDNOISE']:
+                        return jnp.array(img_withNoise), jnp.array(noise_img)
+                    else:
+                        return jnp.array(img), jnp.array(noise_img)
 
         # if fiber 1D spectrum
         else:
-            # see notes in kl-tools for why it can be done this way
+            # see notes in kl-tools for why it can be done this way. Do I not need to do a flux-weighted convolution though?
+            #I guess this is approximately ok. It's not like I have a slitless spectrum or something
             wave = fiber_pars.lambda_grid
             spec_1D = jnp.sum(
                 (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
@@ -1125,20 +1121,18 @@ class KLModel(object):
             if force_noise_free:
                 return spec_1D, None
             else: #work in progress
-                if (
-                    run_mode == 'ETC'
-                ):  # noise computed from sky level; realistic sky level from kitt peak for example
+                if (run_mode == 'ETC'):  #only ETC mode so far
+                    # noise computed from sky level; realistic sky level from kitt peak for example
                     # poisson noise is included too
                     # dark current is ignored; readout noise not ignored
-                    # should precompute skysb, definitely don't repeat every likelihood eval
-                    skysb = galsim.LookupTable.from_file(
-                        fiber_pars.obs_conf["SKYMODEL"], f_log=True
-                    )  # Ang v.s. 1e-17 erg s-1 cm-2 A-1 arcsec-2
+
+                    sky_array = fiber_pars._sky_array
                     fiber_area = jnp.pi * (fiber_pars.obs_conf["FIBERRAD"]) ** 2
                     _wave = wave * 10  # Angstrom
                     _dwave = _wave[1] - _wave[0]  # Angstrom
                     _hnu = 1986445857.148928 / _wave  # 1e-17 erg
-                    skyct = skysb(_wave) * fiber_area * _dwave / _hnu  # s-1 cm-2
+                    #skyct = skysb(_wave) * fiber_area * _dwave / _hnu  # s-1 cm-2
+                    skyct = sky_array * fiber_area * _dwave / _hnu  # s-1 cm-2
                     skyct *= (
                         fiber_pars._bp_array
                         * jnp.pi
@@ -1156,12 +1150,14 @@ class KLModel(object):
                         jax.random.normal(key, shape=(spec_1D.shape[0],)) * noise_std
                     )
 
-                else:  # for SNR mode, you provide flux and noise parameter and "the code doesn't care what the unit is"
-                    key = jax.random.key(0)
-                    noise = (
-                        jax.random.normal(key, shape=(spec_1D.shape[0],))
-                        * fiber_pars.obs_conf['NOISESIG']
-                    )
+                    #print('skyct', skyct)
+                    #print('noise_std', noise_std) #right now is dominated by poisson noise. not sure if its a units issue
+
+                #else:  # for SNR mode, you provide flux and noise parameter and "the code doesn't care what the unit is"
+                    #key = jax.random.key(0)
+                    #noise = (
+                        #jax.random.normal(key, shape=(spec_1D.shape[0],))
+                        #* fiber_pars.obs_conf['NOISESIG'])
                 if fiber_pars.obs_conf['ADDNOISE']:
                     # print('spec_1D, noise', spec_1D, noise)
                     return spec_1D + noise, noise

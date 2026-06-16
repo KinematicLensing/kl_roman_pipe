@@ -857,11 +857,8 @@ def get_resolution_matrix_fiber(fiber_pars):
     return resolution_mat
 
 
-#should I have a separate fiber obs for each spectrum? yes I think so
-#I could also put in the fiber mask here, and the resolution matrix, and stuff like that...
-#actually yes I should, because right now fiber mask is a part of KLModel and that's no good. I need a different fiber mask for each spectrum
 def build_fiber_obs(
-    fiber_pars, #z: float, not being used rn, *, #what is this
+    fiber_pars,
     psf=None, #galsim object
     oversample: int = 1,
     gsparams=None,
@@ -869,13 +866,14 @@ def build_fiber_obs(
     variance=None,
     ATMPSF_conv_fiber_mask=None,
     resolution_matrix=None,
+    #sky_array=None,
 ) -> FiberObs:
     cube_pars = fiber_pars.cube_pars
 
     psf_data = None
     fine_image_pars = None
 
-    if psf is not None:
+    if psf is not None: #galsim psf object
         from kl_pipe.psf import precompute_psf_fft
 
         #added by me
@@ -907,6 +905,15 @@ def build_fiber_obs(
         resolution_matrix = get_resolution_matrix_fiber(fiber_pars)
         resolution_matrix = jnp.asarray(resolution_matrix)
 
+    #read in sky model here? no I did it in FiberPars
+    #if sky_array is None: #read in sky spectrum model
+        #skysb = galsim.LookupTable.from_file(fiber_pars.obs_conf["SKYMODEL"], f_log=True) #is this a galsim object?
+        #sky_array = skysb(fiber_pars.lambda_grid)
+    #else:
+        #skysb = None
+        #sky_array = None
+    #sky_array = None
+
     return FiberObs(
         fiber_pars=fiber_pars,
         cube_pars=cube_pars,
@@ -917,4 +924,5 @@ def build_fiber_obs(
         variance=variance,
         ATMPSF_conv_fiber_mask=ATMPSF_conv_fiber_mask,
         resolution_matrix=resolution_matrix,
+        #skymodel_array=sky_array
     )
