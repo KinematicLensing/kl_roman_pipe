@@ -177,6 +177,49 @@ def compute_empirical_scales(
     return empirical_scales
 
 
+# Chunk size for end-of-sampling log-posterior evaluation. vmap-ing the full
+# log-posterior over ALL samples at once gives every intermediate in the
+# likelihood (notably the oversampled k-space FFT render grids) a batch
+# dimension equal to n_samples*n_chains -- a transient allocation that scales
+# with the total sample count and spikes to tens of GB at the end of a large
+# run, triggering an OOM SIGKILL ("zsh: killed" at 100%). Evaluating in fixed
+# chunks bounds the peak to ~chunk-size evaluations regardless of sample count.
+_LOG_PROB_CHUNK_SIZE = 256
+
+
+def _batched_log_posterior_chunked(
+    log_posterior_jittable: Callable,
+    samples: np.ndarray,
+    chunk_size: int = _LOG_PROB_CHUNK_SIZE,
+) -> np.ndarray:
+    """Evaluate the log-posterior over many samples in fixed-size chunks.
+
+    Equivalent result to ``jax.vmap(fn)(samples)`` but with peak memory bounded
+    by ``chunk_size`` rather than ``len(samples)``. See ``_LOG_PROB_CHUNK_SIZE``.
+
+    Parameters
+    ----------
+    log_posterior_jittable : callable
+        Single-sample log-posterior ``theta -> scalar``.
+    samples : np.ndarray
+        Array of shape ``(n_total, n_params)``.
+    chunk_size : int
+        Number of samples evaluated per vmap call.
+
+    Returns
+    -------
+    np.ndarray
+        Log-posterior values, shape ``(n_total,)``.
+    """
+    fn = jax.jit(jax.vmap(log_posterior_jittable))
+    n = samples.shape[0]
+    out = []
+    for start in range(0, n, chunk_size):
+        chunk = jnp.asarray(samples[start : start + chunk_size])
+        out.append(np.asarray(fn(chunk)))
+    return np.concatenate(out)
+
+
 class NumpyroSampler(Sampler):
     """
     NumPyro gradient-based sampler with Z-score reparameterization.
@@ -593,9 +636,11 @@ class NumpyroSampler(Sampler):
 
         samples = np.column_stack(samples_list)
 
-        # Compute log probabilities for samples (batched via vmap)
-        _batched_log_posterior = jax.jit(jax.vmap(self.task._log_posterior_jittable))
-        log_probs = np.asarray(_batched_log_posterior(jnp.array(samples)))
+        # Compute log probabilities for samples (chunked to bound peak memory;
+        # see _batched_log_posterior_chunked).
+        log_probs = _batched_log_posterior_chunked(
+            self.task._log_posterior_jittable, samples
+        )
 
         # Collect diagnostics
         diagnostics = self._collect_diagnostics(mcmc, self._reparam_scales)
@@ -709,8 +754,9 @@ class NumpyroSampler(Sampler):
         samples = np.asarray(mcmc.get_samples())
         grouped = np.asarray(mcmc.get_samples(group_by_chain=True))
 
-        _batched_log_posterior = jax.jit(jax.vmap(self.task._log_posterior_jittable))
-        log_probs = np.asarray(_batched_log_posterior(jnp.asarray(samples)))
+        log_probs = _batched_log_posterior_chunked(
+            self.task._log_posterior_jittable, samples
+        )
 
         samples_by_chain = {
             name: grouped[:, :, i] for i, name in enumerate(sampled_names)
