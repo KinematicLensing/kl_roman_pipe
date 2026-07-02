@@ -27,6 +27,13 @@ from typing import Tuple
 
 SUPPORTED_PLANES = ['disk', 'gal', 'source', 'cen', 'obs']
 
+# minimum cos(i) used to keep the gal->disk deprojection (1/cosi) and the
+# inclined-disk surface-brightness brightening (also 1/cosi, IntensityModel
+# __call__) finite at edge-on. Inference rejects cosi priors reaching below
+# this floor for intensity-rendering tasks, so within the valid prior range
+# the clamp never activates -- it is only a degenerate-edge NaN guard.
+COSI_FLOOR = 1e-10
+
 
 def _multiply(transform: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray):
     """
@@ -151,8 +158,8 @@ def gal2disk(
         Coordinates in disk plane.
     """
 
-    # Add small epsilon to prevent division by zero at edge-on (cosi=0)
-    cosi_safe = jnp.maximum(cosi, 1e-10)
+    # clamp to COSI_FLOOR to prevent division by zero at edge-on (cosi=0)
+    cosi_safe = jnp.maximum(cosi, COSI_FLOOR)
     transform = jnp.array([[1.0, 0.0], [0.0, 1.0 / cosi_safe]])
 
     return _multiply(transform, x, y)

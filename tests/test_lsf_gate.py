@@ -29,10 +29,11 @@ from scipy.optimize import curve_fit
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
-from kl_pipe.spectral import SpectralConfig, SpectralModel, halpha_line, HALPHA
+from kl_pipe.source import SourceModel
+from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
 from kl_pipe.dispersion import build_grism_pars_for_line
 from kl_pipe.observation import build_grism_obs
+from kl_pipe.render import RenderConfig
 
 
 # Roman grism resolving power at lambda (slitless spec): R = 461 * lambda_um.
@@ -74,25 +75,23 @@ def test_psf_dispersion_resolution_matches_roman_spec():
 
     vel_model = CenteredVelocityModel()
     int_model = InclinedExponentialModel()
-    spec_config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-    spec_model = SpectralModel(spec_config, int_model, vel_model)
-    kl_model = KLModel(
-        vel_model,
-        int_model,
-        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
-        spectral_model=spec_model,
+    source = SourceModel(
+        velocity_model=vel_model,
+        emission_lines={'Halpha': EmissionLine(intensity=int_model)},
     )
 
     z = 0.98
     grism_pars = build_grism_pars_for_line(
-        HALPHA.lambda_rest,
+        LINE_LAMBDAS['Halpha'],
         redshift=z,
         image_pars=image_pars,
         dispersion=1.1,
     )
 
     psf = galsim.Gaussian(fwhm=0.18)
-    grism_obs = build_grism_obs(grism_pars, z=z, psf=psf, oversample=5)
+    grism_obs = build_grism_obs(
+        grism_pars, z=z, psf=psf, render_config=RenderConfig(oversample=5)
+    )
 
     pars = {
         # geometry / shared
@@ -101,23 +100,20 @@ def test_psf_dispersion_resolution_matches_roman_spec():
         'g1': 0.0,
         'g2': 0.0,
         # velocity
-        'v0': 0.0,
-        'vcirc': 0.0,
-        'vel_rscale': 0.5,
-        # intensity (near-delta in space)
-        'flux': 100.0,
-        'int_rscale': 0.001,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'vel.v0': 0.0,
+        'vel.vcirc': 0.0,
+        'vel.rscale': 0.5,
         # spectral
         'z': z,
-        'vel_dispersion': 1.0,  # numerical regularizer; sub-dominant
-        'Ha_flux': 100.0,
-        'Ha_cont': 0.0,
+        # emission line (near-delta in space)
+        'Halpha.flux': 100.0,
+        'Halpha.rscale': 0.001,
+        'Halpha.h_over_r': 0.1,
+        'Halpha.x0': 0.0,
+        'Halpha.y0': 0.0,
+        'Halpha.dispersion': 1.0,  # numerical regularizer; sub-dominant
     }
-    theta = kl_model.pars2theta(pars)
-    dispersed = np.asarray(kl_model.render_grism(theta, grism_obs))
+    dispersed = np.asarray(source.render_grism(pars, grism_obs))
 
     # extract row slice along dispersion direction (dispersion_angle=0 -> columns)
     row_idx = int(np.argmax(dispersed.sum(axis=1)))
@@ -126,7 +122,7 @@ def test_psf_dispersion_resolution_matches_roman_spec():
     _, _, sigma_pix, _ = _fit_gaussian(profile)
     fwhm_pix = 2.355 * abs(sigma_pix)
     fwhm_nm = fwhm_pix * grism_obs.grism_pars.dispersion
-    lam_obs = HALPHA.lambda_rest * (1.0 + z)
+    lam_obs = LINE_LAMBDAS['Halpha'] * (1.0 + z)
     R_measured = lam_obs / fwhm_nm
     R_spec = _roman_R_spec(lam_obs)
 

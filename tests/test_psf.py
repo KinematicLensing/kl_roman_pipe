@@ -38,6 +38,7 @@ from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.observation import build_image_obs, build_velocity_obs
 from kl_pipe.utils import build_map_grid_from_image_pars, get_test_dir
+from kl_pipe.render import RenderConfig
 
 
 # ==============================================================================
@@ -935,7 +936,9 @@ def test_nonsquare_psf_regression(shape, output_dir):
     theta = jnp.array([0.7, 0.785, 0.0, 0.0, 1.0, 3.0, 0.1, 0.0, 0.0])
 
     model = InclinedExponentialModel()
-    obs = build_image_obs(ip, psf=psf_obj, oversample=1, int_model=model)
+    obs = build_image_obs(
+        ip, psf=psf_obj, render_config=RenderConfig(oversample=1), int_model=model
+    )
     img = np.array(model.render_image(theta, obs=obs))
 
     # with indexing='xy', shape=(Ncol, Nrow) but render_image returns (Nrow, Ncol)
@@ -1034,7 +1037,7 @@ def test_velocity_render_image_flux_weighted(image_pars, gaussian_psf):
     obs = build_velocity_obs(
         image_pars,
         psf=gaussian_psf,
-        oversample=1,
+        render_config=RenderConfig(oversample=1),
         flux_model=int_model,
         flux_theta=theta_int,
     )

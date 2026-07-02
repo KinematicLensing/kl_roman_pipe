@@ -12,8 +12,7 @@ from matplotlib.collections import LineCollection
 
 from kl_pipe.plotting import MidpointNormalize
 from kl_pipe.diagnostics.datacube import _add_colorbar, _pick_channel_indices
-
-_C_KMS = 299792.458
+from kl_pipe.constants import C_KMS as _C_KMS
 
 
 def plot_grism_overview(

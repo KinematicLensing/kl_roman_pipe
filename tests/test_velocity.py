@@ -46,14 +46,14 @@ def basic_meta_pars():
 @pytest.fixture
 def centered_theta():
     """Standard theta array for CenteredVelocityModel."""
-    # (cosi, theta_int, g1, g2, v0, vcirc, vel_rscale)
+    # (cosi, theta_int, g1, g2, v0, vcirc, rscale)
     return jnp.array([0.6, 0.785, 0.05, -0.03, 10.0, 200.0, 5.0])
 
 
 @pytest.fixture
 def offset_theta():
     """Standard theta array for OffsetVelocityModel."""
-    # (cosi, theta_int, g1, g2, v0, vcirc, vel_rscale, vel_x0, vel_y0)
+    # (cosi, theta_int, g1, g2, v0, vcirc, rscale, x0, y0)
     return jnp.array([0.6, 0.785, 0.05, -0.03, 10.0, 200.0, 5.0, 5.0, -3.0])
 
 
@@ -90,10 +90,10 @@ def test_model_parameter_names():
 
     assert 'v0' in centered.PARAMETER_NAMES
     assert 'vcirc' in centered.PARAMETER_NAMES
-    assert 'vel_x0' not in centered.PARAMETER_NAMES
+    assert 'x0' not in centered.PARAMETER_NAMES
 
-    assert 'vel_x0' in offset.PARAMETER_NAMES
-    assert 'vel_y0' in offset.PARAMETER_NAMES
+    assert 'x0' in offset.PARAMETER_NAMES
+    assert 'y0' in offset.PARAMETER_NAMES
 
 
 # Parameter conversion tests
@@ -116,10 +116,10 @@ def test_offset_theta2pars(offset_theta):
     assert isinstance(pars, dict)
     assert len(pars) == 9
     print('\nPARS:', pars, '\n')
-    assert 'vel_x0' in pars
-    assert 'vel_y0' in pars
-    assert pars['vel_x0'] == 5.0
-    assert pars['vel_y0'] == -3
+    assert 'x0' in pars
+    assert 'y0' in pars
+    assert pars['x0'] == 5.0
+    assert pars['y0'] == -3
 
 
 def test_centered_pars2theta():
@@ -131,7 +131,7 @@ def test_centered_pars2theta():
         'g2': -0.03,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
     theta = CenteredVelocityModel.pars2theta(pars)
 
@@ -150,9 +150,9 @@ def test_offset_pars2theta():
         'g2': -0.03,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
-        'vel_x0': 2.0,
-        'vel_y0': -1.5,
+        'rscale': 5.0,
+        'x0': 2.0,
+        'y0': -1.5,
     }
     theta = OffsetVelocityModel.pars2theta(pars)
 
@@ -194,8 +194,8 @@ def test_get_param_offset(offset_theta):
     """Test get_param method for offset model."""
     model = OffsetVelocityModel()
 
-    x0 = model.get_param('vel_x0', offset_theta)
-    y0 = model.get_param('vel_y0', offset_theta)
+    x0 = model.get_param('x0', offset_theta)
+    y0 = model.get_param('y0', offset_theta)
 
     assert float(x0) == 5.0
     assert float(y0) == -3

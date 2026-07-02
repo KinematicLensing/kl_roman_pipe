@@ -31,6 +31,8 @@ from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import SyntheticVelocity, SyntheticIntensity
 from kl_pipe.priors import Uniform, Gaussian, TruncatedNormal, PriorDict
+from kl_pipe.source import SourceModel
+from kl_pipe.observation import build_image_obs, build_velocity_obs
 from kl_pipe.sampling import (
     InferenceTask,
     NumpyroSamplerConfig,
@@ -40,7 +42,6 @@ from kl_pipe.sampling import (
 from kl_pipe.sampling.numpyro import (
     NumpyroSampler,
     compute_reparam_scales,
-    compute_empirical_scales,
 )
 from kl_pipe.utils import get_test_dir
 
@@ -64,30 +65,43 @@ def simple_velocity_task():
     Create a simple velocity-only inference task for basic tests.
 
     Uses Gaussian/TruncatedNormal priors with reasonable scales.
+
+    Returns (task, true_pars_dotted) — true_pars uses dotted-key SourceModel
+    convention; consumers indexing by ``task.sampled_names`` match directly.
     """
     image_pars = ImagePars(shape=(20, 20), pixel_scale=0.4, indexing='ij')
 
-    true_pars = {
+    # Flat-key form for SyntheticVelocity
+    true_pars_flat = {
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.02,
+        'g2': -0.01,
+    }
+    # Dotted-key form for SourceModel priors and downstream consumers
+    true_pars = {
+        'vel.v0': 10.0,
+        'vel.vcirc': 200.0,
+        'vel.rscale': 5.0,
         'cosi': 0.6,
         'theta_int': 0.785,
         'g1': 0.02,
         'g2': -0.01,
     }
 
-    vel_model = CenteredVelocityModel()
-
-    synth_vel = SyntheticVelocity(true_pars, model_type='arctan', seed=42)
+    synth_vel = SyntheticVelocity(true_pars_flat, model_type='arctan', seed=42)
     data_vel_noisy = synth_vel.generate(image_pars, snr=1000)
     var_vel = synth_vel.variance
 
+    source = SourceModel(velocity_model=CenteredVelocityModel())
     priors = PriorDict(
         {
-            'v0': Gaussian(10.0, 5.0),
-            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-            'vel_rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
+            'vel.v0': Gaussian(10.0, 5.0),
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel.rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
             'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
             'theta_int': TruncatedNormal(0.785, 0.3, 0, np.pi),
             'g1': 0.02,  # Fixed
@@ -95,13 +109,10 @@ def simple_velocity_task():
         }
     )
 
-    task = InferenceTask.from_velocity_model(
-        model=vel_model,
-        priors=priors,
-        data_vel=data_vel_noisy,
-        variance_vel=var_vel,
-        image_pars=image_pars,
+    vel_obs = build_velocity_obs(
+        image_pars, data=jnp.array(data_vel_noisy), variance=var_vel
     )
+    task = InferenceTask.from_obs(source, priors, velocity_obs=vel_obs)
 
     return task, true_pars
 
@@ -112,9 +123,11 @@ def joint_model_task():
     Create joint velocity+intensity task - the critical test case.
 
     This is where BlackJAX failed due to gradient scale mismatch.
+
+    Returns (task, true_pars_dotted) so consumers can index by
+    ``task.sampled_names`` directly.
     """
     from kl_pipe.intensity import InclinedExponentialModel
-    from kl_pipe.model import KLModel
 
     image_pars_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
     image_pars_int = ImagePars(shape=(32, 32), pixel_scale=0.3, indexing='ij')
@@ -123,49 +136,72 @@ def joint_model_task():
     # priors don't blow up oversample (cf. Issue #47).
     psf = galsim.Gaussian(fwhm=0.2)
 
-    true_pars = {
+    # Flat-key form for Synthetic* generators
+    true_pars_flat = {
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+    }
+    int_true = {
         'cosi': 0.6,
         'theta_int': 0.785,
         'g1': 0.03,
         'g2': -0.02,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
+        'x0': 0.0,
+        'y0': 0.0,
+    }
+    # Dotted-key form for SourceModel priors and downstream consumers
+    true_pars = {
+        'vel.v0': 10.0,
+        'vel.vcirc': 200.0,
+        'vel.rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': 0.785,
+        'g1': 0.03,
+        'g2': -0.02,
+        'F087.flux': 1.0,
+        'F087.rscale': 3.0,
+        'F087.h_over_r': 0.1,
+        'F087.x0': 0.0,
+        'F087.y0': 0.0,
     }
 
     vel_model = CenteredVelocityModel()
-    vel_pars = {k: v for k, v in true_pars.items() if k in vel_model.PARAMETER_NAMES}
+    vel_pars = {
+        k: v for k, v in true_pars_flat.items() if k in vel_model.PARAMETER_NAMES
+    }
     synth_vel = SyntheticVelocity(vel_pars, model_type='arctan', seed=42)
     data_vel = synth_vel.generate(image_pars_vel, snr=1000)
     var_vel = synth_vel.variance
 
     int_model = InclinedExponentialModel()
-    int_pars = {k: v for k, v in true_pars.items() if k in int_model.PARAMETER_NAMES}
+    int_pars = {k: v for k, v in int_true.items() if k in int_model.PARAMETER_NAMES}
     synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43, psf=psf)
     data_int = synth_int.generate(image_pars_int, snr=1000, include_poisson=False)
     var_int = synth_int.variance
 
-    joint_model = KLModel(
+    source = SourceModel(
         velocity_model=vel_model,
-        intensity_model=int_model,
-        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
+        broadband_models={'F087': int_model},
     )
 
     priors = PriorDict(
         {
-            'v0': Gaussian(true_pars['v0'], 5.0),
-            'vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
-            'vel_rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
-            'flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
-            'int_rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
-            'int_h_over_r': 0.1,  # Fixed
-            'int_x0': 0.0,  # Fixed
-            'int_y0': 0.0,  # Fixed
+            'vel.v0': Gaussian(true_pars['vel.v0'], 5.0),
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel.rscale': TruncatedNormal(5.0, 2.0, 1.0, 10.0),
+            'F087.flux': TruncatedNormal(1.0, 1.0, 0.1, 5.0),
+            'F087.rscale': TruncatedNormal(3.0, 2.0, 0.5, 10.0),
+            'F087.h_over_r': 0.1,  # Fixed
+            'F087.x0': 0.0,  # Fixed
+            'F087.y0': 0.0,  # Fixed
             'cosi': TruncatedNormal(0.5, 0.3, 0.01, 0.99),
             'theta_int': TruncatedNormal(np.pi / 2, 1.0, 0, np.pi),
             'g1': TruncatedNormal(0.0, 0.05, -0.1, 0.1),
@@ -173,16 +209,21 @@ def joint_model_task():
         }
     )
 
-    task = InferenceTask.from_joint_model(
-        model=joint_model,
-        priors=priors,
-        data_vel=jnp.array(data_vel),
-        data_int=jnp.array(data_int),
-        variance_vel=var_vel,
-        variance_int=var_int,
-        image_pars_vel=image_pars_vel,
-        image_pars_int=image_pars_int,
-        psf_int=psf,
+    img_obs = build_image_obs(
+        image_pars_int,
+        psf=psf,
+        data=jnp.array(data_int),
+        variance=var_int,
+        broadband_key='F087',
+    )
+    vel_obs = build_velocity_obs(
+        image_pars_vel, data=jnp.array(data_vel), variance=var_vel
+    )
+    task = InferenceTask.from_obs(
+        source,
+        priors,
+        velocity_obs=vel_obs,
+        image_obs={'F087': img_obs},
     )
 
     return task, true_pars
@@ -231,7 +272,7 @@ class TestReparameterization:
         )
 
         sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
+        scales = sampler._compute_reparam_scales()
 
         for name in task.sampled_names:
             loc, scale = scales[name]
@@ -252,10 +293,10 @@ class TestReparameterization:
         )
 
         sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
+        scales = sampler._compute_reparam_scales()
 
-        # Check that vcirc uses its prior params
-        loc, scale = scales['vcirc']
+        # Check that vel.vcirc uses its prior params
+        loc, scale = scales['vel.vcirc']
         assert loc == 200.0  # TruncatedNormal mu
         assert scale == 50.0  # TruncatedNormal sigma
 
@@ -286,7 +327,7 @@ class TestGradientScaling:
         # Get prior-based scales
         config = NumpyroSamplerConfig(reparam_strategy=ReparamStrategy.PRIOR)
         sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
+        scales = sampler._compute_reparam_scales()
 
         # Build function that computes log_posterior in z-space
         log_posterior_fn = task.get_log_posterior_fn()
@@ -350,54 +391,6 @@ class TestGradientScaling:
         assert (
             ratio < 5000
         ), f"Gradient ratio {ratio:.0f} too large - reparameterization not working"
-
-    @pytest.mark.slow
-    def test_empirical_reparam_improves_gradient_ratio(
-        self, joint_model_task, output_dir
-    ):
-        """Empirical reparameterization should reduce gradient ratio vs prior-based."""
-        task, true_pars = joint_model_task
-
-        # Get empirical scales (short preconditioning run)
-        config = NumpyroSamplerConfig(reparam_strategy=ReparamStrategy.EMPIRICAL)
-        sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
-
-        log_posterior_fn = task.get_log_posterior_fn()
-
-        def log_prob_z(z_dict):
-            theta_physical = []
-            for name in task.sampled_names:
-                loc, scale = scales[name]
-                z = z_dict[name]
-                theta_physical.append(loc + scale * z)
-            theta = jnp.stack(theta_physical)
-            return log_posterior_fn(theta)
-
-        z_true = {}
-        for name in task.sampled_names:
-            loc, scale = scales[name]
-            theta_true = true_pars[name]
-            z_true[name] = jnp.array((theta_true - loc) / scale)
-
-        grad_fn = jax.grad(log_prob_z)
-        grads = grad_fn(z_true)
-        grad_mags = {name: float(jnp.abs(grads[name])) for name in task.sampled_names}
-
-        max_grad = max(grad_mags.values())
-        min_grad = min(grad_mags.values())
-        ratio = max_grad / min_grad if min_grad > 0 else float('inf')
-
-        log_path = output_dir / "gradient_scaling_empirical.txt"
-        with open(log_path, 'w') as f:
-            f.write("Gradient Scaling Test (Empirical Z-space)\n")
-            f.write("=" * 60 + "\n\n")
-            for name, mag in sorted(grad_mags.items()):
-                f.write(f"{name:15s}: |∂log_p/∂z| = {mag:.4e}\n")
-            f.write(f"\nMax/Min ratio: {ratio:.2f}\n")
-
-        # empirical reparam should do better than prior-based
-        assert ratio < 1500, f"Empirical gradient ratio {ratio:.0f} still too large"
 
 
 # ==============================================================================
@@ -517,7 +510,6 @@ class TestNumpyroJointModel:
             n_warmup=500,
             n_chains=1,
             dense_mass=True,
-            reparam_strategy=ReparamStrategy.EMPIRICAL,
             seed=42,
             progress=False,
         )
@@ -563,7 +555,6 @@ class TestNumpyroJointModel:
             n_warmup=500,
             n_chains=1,
             dense_mass=True,
-            reparam_strategy=ReparamStrategy.EMPIRICAL,
             seed=42,
             progress=False,
         )
@@ -600,7 +591,6 @@ class TestNumpyroJointModel:
             n_warmup=500,
             n_chains=1,
             dense_mass=True,
-            reparam_strategy=ReparamStrategy.EMPIRICAL,
             seed=42,
             progress=False,
         )
@@ -878,3 +868,119 @@ class TestNumpyroConfig:
         """Invalid reparam_strategy raises ValueError."""
         with pytest.raises(ValueError, match="reparam_strategy"):
             NumpyroSamplerConfig(reparam_strategy='invalid')
+
+
+# ==============================================================================
+# Laplace Preconditioning (opt-in)
+# ==============================================================================
+
+
+class TestLaplacePreconditionerConfig:
+    """Config validation for the precondition option (no sampling)."""
+
+    def test_precondition_default_none(self):
+        """Preconditioning is opt-in: default is 'none'."""
+        assert NumpyroSamplerConfig().precondition == 'none'
+
+    def test_valid_precondition_values(self):
+        """'none' and 'laplace' are accepted."""
+        assert NumpyroSamplerConfig(precondition='none').precondition == 'none'
+        assert NumpyroSamplerConfig(precondition='laplace').precondition == 'laplace'
+
+    def test_invalid_precondition_raises(self):
+        """Unknown precondition value raises ValueError."""
+        with pytest.raises(ValueError, match="precondition"):
+            NumpyroSamplerConfig(precondition='bogus')
+
+    def test_invalid_n_map_starts_raises(self):
+        """n_map_starts < 1 raises ValueError."""
+        with pytest.raises(ValueError, match="n_map_starts"):
+            NumpyroSamplerConfig(n_map_starts=0)
+
+
+class TestLaplacePreconditioner:
+    """The InferenceTask.laplace_preconditioner utility + preconditioned NUTS."""
+
+    def test_preconditioner_utility(self, simple_velocity_task):
+        """Truth-free MAP + regularized inverse-Hessian mass matrix is valid."""
+        task, true_pars = simple_velocity_task
+        pre = task.laplace_preconditioner(n_starts=3, seed=0)
+
+        D = task.n_params
+        assert pre.map_point.shape == (D,)
+        assert pre.inverse_mass_matrix.shape == (D, D)
+        assert pre.n_starts_converged >= 1
+        # Mass matrix must be symmetric positive-definite (valid metric).
+        assert np.allclose(pre.inverse_mass_matrix, pre.inverse_mass_matrix.T)
+        assert np.all(np.linalg.eigvalsh(pre.inverse_mass_matrix) > 0)
+        # MAP found from prior draws (not truth) should land near the well-
+        # constrained truth at SNR=1000.
+        names = task.sampled_names
+        vcirc_map = pre.map_point[names.index('vel.vcirc')]
+        assert abs(vcirc_map - true_pars['vel.vcirc']) / 200.0 < 0.1
+
+    def test_preconditioned_converges_and_recovers(self, simple_velocity_task):
+        """precondition='laplace' yields a converged chain recovering truth."""
+        task, true_pars = simple_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=400,
+            n_warmup=150,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=42,
+            progress=False,
+            precondition='laplace',
+            n_map_starts=3,
+        )
+        result = build_sampler('numpyro', task, config).run()
+
+        # Converged + healthy.
+        rhats = result.get_rhat()
+        assert max(rhats.values()) < 1.05
+        assert result.diagnostics['divergence_rate'] < 0.1
+        # Diagnostics record the preconditioner used.
+        assert result.diagnostics['preconditioner']['method'] == 'laplace'
+        # Recovers the well-constrained velocity scale.
+        names = list(result.param_names)
+        means = result.samples.mean(axis=0)
+        vcirc = means[names.index('vel.vcirc')]
+        assert abs(vcirc - true_pars['vel.vcirc']) / 200.0 < 0.05
+
+    def test_preconditioned_matches_standard(self, simple_velocity_task):
+        """Preconditioning must not change the posterior: means/stds agree with
+        the standard (model-based, adapted) path within MCMC error."""
+        task, _ = simple_velocity_task
+        common = dict(
+            n_samples=400,
+            n_warmup=300,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=7,
+            progress=False,
+        )
+        std_res = build_sampler(
+            'numpyro', task, NumpyroSamplerConfig(precondition='none', **common)
+        ).run()
+        pre_res = build_sampler(
+            'numpyro',
+            task,
+            NumpyroSamplerConfig(precondition='laplace', n_map_starts=3, **common),
+        ).run()
+
+        names = list(std_res.param_names)
+        std_mean = std_res.samples.mean(axis=0)
+        std_std = std_res.samples.std(axis=0)
+        pre_mean = pre_res.samples.mean(axis=0)
+        pre_std = pre_res.samples.std(axis=0)
+        for i, name in enumerate(names):
+            # Means agree to well within a posterior std (MCMC error is ~0.1
+            # std at this ESS; 0.75 is a safe bound, not a tuned one).
+            assert abs(pre_mean[i] - std_mean[i]) < 0.75 * std_std[i], (
+                f"{name}: preconditioned mean {pre_mean[i]:.4g} vs standard "
+                f"{std_mean[i]:.4g} (std {std_std[i]:.4g})"
+            )
+            # Posterior widths agree within 50%.
+            assert abs(pre_std[i] - std_std[i]) < 0.5 * std_std[i], (
+                f"{name}: preconditioned std {pre_std[i]:.4g} vs standard "
+                f"{std_std[i]:.4g}"
+            )

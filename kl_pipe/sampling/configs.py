@@ -196,15 +196,14 @@ class ReparamStrategy(str, Enum):
         Use prior mean/std for Z-score transform. Default choice.
         Fast, requires no pre-computation, works well when prior
         roughly matches posterior scale.
-    EMPIRICAL : str
-        Run short pre-conditioning phase to estimate posterior
-        scales, then use those for the main sampling. Slower
-        startup but better conditioning for challenging problems.
+
+    For posterior-informed conditioning (a MAP-based mass matrix that also
+    captures parameter correlations) use ``InferenceTask.laplace_preconditioner``
+    rather than a reparam strategy.
     """
 
     NONE = 'none'
     PRIOR = 'prior'
-    EMPIRICAL = 'empirical'
 
 
 @dataclass
@@ -242,15 +241,20 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
         - 'none': Sample in physical space (no transform)
         - 'prior': Z-score using prior mean/std (default, fast)
-        - 'empirical': Estimate scales from short warmup (slower, robust)
-    empirical_warmup_frac : float
-        Fraction of n_warmup for empirical preconditioning (if strategy='empirical').
+
+        For posterior-informed conditioning, use
+        ``InferenceTask.laplace_preconditioner`` instead.
     chain_method : str
         How to run multiple chains:
 
         - 'sequential': Run chains one after another (default, works everywhere)
         - 'parallel': Run chains in parallel via JAX pmap (requires multi-device)
         - 'vectorized': Vectorize across chains (single device, memory intensive)
+
+        'sequential' is the default deliberately: on CPU, 'vectorized' was
+        benchmarked ~2.5x slower (vmap-ing the NUTS kernel adds overhead with
+        no extra parallelism to exploit) at similar peak memory. 'vectorized'
+        is expected to win only on GPU.
     save_warmup : bool
         Whether to save warmup samples in result.
     save_mass_matrix : bool
@@ -279,7 +283,6 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     ...     n_warmup=2000,
     ...     n_chains=4,
     ...     dense_mass=True,
-    ...     reparam_strategy='empirical',
     ...     target_accept_prob=0.9,
     ... )
 
@@ -297,7 +300,6 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     target_accept_prob: float = 0.8
 
     reparam_strategy: ReparamStrategy = ReparamStrategy.PRIOR
-    empirical_warmup_frac: float = 0.1
 
     chain_method: str = 'sequential'
     save_warmup: bool = False
@@ -305,9 +307,22 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
     init_strategy: str = 'prior'
 
+    # Laplace preconditioning (opt-in). 'none' = standard model-based NUTS
+    # (unchanged). 'laplace' = find MAP + regularized inverse Hessian, use as a
+    # fixed NUTS mass matrix initialized at the MAP, skipping the expensive
+    # early-warmup transient. See experiments/sweverett/flagship_speedup.
+    precondition: str = 'none'
+    n_map_starts: int = 4
+
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
             raise ValueError("target_accept_prob must be in (0, 1)")
+        if self.precondition not in ('none', 'laplace'):
+            raise ValueError(
+                f"precondition must be 'none' or 'laplace', got '{self.precondition}'"
+            )
+        if self.n_map_starts < 1:
+            raise ValueError("n_map_starts must be >= 1")
         if self.n_chains < 1:
             raise ValueError("n_chains must be >= 1")
         if self.chain_method not in ('sequential', 'parallel', 'vectorized'):

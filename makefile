@@ -67,11 +67,12 @@ tutorials:
 test-tutorials:
 	@echo "Converting and executing tutorials..."
 	@conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg \
-		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/sampling.md docs/tutorials/grism.md docs/tutorials/tng50_data.md && \
+		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/intensity_models.md docs/tutorials/grism.md docs/tutorials/sampling.md docs/tutorials/tng50_data.md && \
 		jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 \
 			docs/tutorials/quickstart.ipynb \
-			docs/tutorials/sampling.ipynb \
+			docs/tutorials/intensity_models.ipynb \
 			docs/tutorials/grism.ipynb \
+			docs/tutorials/sampling.ipynb \
 			docs/tutorials/tng50_data.ipynb'
 	@echo "All tutorials executed successfully."
 
@@ -166,6 +167,16 @@ test-sampling:
 test-sampling-all:
 	@echo "Running ALL MCMC sampling tests (including nautilus - slow)..."
 	@INCLUDE_NAUTILUS=1 conda run -n klpipe pytest tests/test_sampling_diagnostics.py -v
+
+.PHONY: test-flagship
+test-flagship:
+	@echo "Running flagship Roman-like joint phot+grism recovery test..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --override-ini="markers=slow"
+
+.PHONY: test-flagship-long
+test-flagship-long:
+	@echo "Running flagship test (long production config -- cleaner posteriors)..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-long --override-ini="markers=slow"
 
 .PHONY: test-basic
 test-basic:

@@ -112,42 +112,39 @@ Aliases: `nuts` and `hmc` both resolve to `NumpyroSampler`.
 ### Minimal emcee example
 
 ```python
-from kl_pipe.velocity import CenteredVelocityModel
+from kl_pipe.velocity import OffsetVelocityModel
+from kl_pipe.source import SourceModel
+from kl_pipe.observation import build_velocity_obs
 from kl_pipe.priors import Uniform, Gaussian, TruncatedNormal, PriorDict
 from kl_pipe.sampling import InferenceTask, EnsembleSamplerConfig, build_sampler
 
+source = SourceModel(velocity_model=OffsetVelocityModel())
+
 priors = PriorDict({
-    'vcirc': Uniform(100, 350),
+    'vel.vcirc': Uniform(100, 350),
     'cosi': TruncatedNormal(0.5, 0.2, 0.1, 0.99),
     'theta_int': Uniform(0, 3.14159),
     'g1': Gaussian(0, 0.05),
     'g2': Gaussian(0, 0.05),
-    'v0': 10.0,
-    'vel_rscale': 5.0,
-    'vel_x0': 0.0,
-    'vel_y0': 0.0,
+    'vel.v0': 10.0,
+    'vel.rscale': 5.0,
+    'vel.x0': 0.0,
+    'vel.y0': 0.0,
 })
 
-from kl_pipe.observation import build_velocity_obs
-
 obs = build_velocity_obs(image_pars, data=observed_velocity, variance=25.0)
-task = InferenceTask.from_velocity_obs(
-    model=CenteredVelocityModel(),
-    priors=priors,
-    obs=obs,
-)
+task = InferenceTask.from_obs(source, priors, velocity_obs=obs)
 
 config = EnsembleSamplerConfig(n_walkers=64, n_iterations=5000, burn_in=1000, seed=42)
 result = build_sampler('emcee', task, config).run()
 
 summary = result.get_summary()
-print(f"vcirc = {summary['vcirc']['quantiles'][0.5]:.1f} km/s")
+print(f"vcirc = {summary['vel.vcirc']['quantiles'][0.5]:.1f} km/s")
 ```
 
 ### NumPyro joint model example
 
 ```python
-from kl_pipe.model import KLModel
 from kl_pipe.sampling import NumpyroSamplerConfig, build_sampler
 
 config = NumpyroSamplerConfig(
@@ -215,8 +212,7 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `dense_mass` | `bool` | `True` | Dense vs diagonal mass matrix |
 | `max_tree_depth` | `int` | `10` | Max NUTS tree depth |
 | `target_accept_prob` | `float` | `0.8` | In (0, 1) |
-| `reparam_strategy` | `ReparamStrategy` | `PRIOR` | `'none'`, `'prior'`, `'empirical'` |
-| `empirical_warmup_frac` | `float` | `0.1` | Fraction of warmup for empirical |
+| `reparam_strategy` | `ReparamStrategy` | `PRIOR` | `'none'`, `'prior'` |
 | `chain_method` | `str` | `'sequential'` | `'sequential'`, `'parallel'`, `'vectorized'` |
 | `save_warmup` | `bool` | `False` | Save warmup samples |
 | `save_mass_matrix` | `bool` | `False` | Save adapted inverse mass matrix |
@@ -228,7 +224,9 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 |-------|-------------|
 | `NONE` | Sample in physical space (no transform) |
 | `PRIOR` | Z-score using prior mean/std (default, fast) |
-| `EMPIRICAL` | Estimate scales from short warmup (slower, robust) |
+
+For posterior-informed conditioning (a MAP-based mass matrix capturing parameter
+correlations), use `InferenceTask.laplace_preconditioner` instead of a reparam strategy.
 
 ---
 
@@ -255,22 +253,27 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `get_bounds` | `() -> list[(low, high)]` | Parameter bounds from priors |
 | `sample_prior` | `(rng_key, n_samples) -> jnp.ndarray` | Draw prior samples |
 
-### Factory Methods (preferred — obs-based)
+### Factory Method
+
+A single unified factory builds every inference shape (velocity-only,
+intensity single/multi-band, grism, and any joint combination) from a
+``SourceModel`` plus per-channel observations:
 
 ```python
-InferenceTask.from_velocity_obs(model, priors, obs, meta_pars=None)
-InferenceTask.from_intensity_obs(model, priors, obs, meta_pars=None)
-InferenceTask.from_joint_obs(model, priors, obs_vel, obs_int, meta_pars=None)
+InferenceTask.from_obs(
+    source,                 # SourceModel
+    priors,                 # PriorDict (dotted keys: vel.*, <band>.*, <line>.*)
+    *,
+    image_obs=None,         # Dict[str, ImageObs]  keyed by broadband filter
+    grism_obs=None,         # Dict[str, GrismObs]  keyed by roll id
+    velocity_obs=None,      # VelocityObs
+    meta_pars=None,
+    spectral_oversample=None,
+)
 ```
 
-### Legacy Factory Methods (backward-compatible wrappers)
-
-```python
-InferenceTask.from_velocity_model(model, priors, data_vel, variance_vel, image_pars, meta_pars=None)
-InferenceTask.from_intensity_model(model, priors, data_int, variance_int, image_pars, meta_pars=None)
-InferenceTask.from_joint_model(model, priors, data_vel, data_int, variance_vel, variance_int,
-                               image_pars_vel, image_pars_int, meta_pars=None)
-```
+At least one obs channel must be provided. Each channel is validated against
+the source's components (broadband_models, emission_lines, velocity_model).
 
 ---
 

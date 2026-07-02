@@ -1,3 +1,14 @@
+---
+jupytext:
+  text_representation:
+    extension: .md
+    format_name: myst
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
+
 # Working with TNG50 Mock Data
 
 This tutorial demonstrates how to load TNG50 mock galaxy data and render it as 2D intensity and velocity maps for kinematic lensing analysis.
@@ -16,6 +27,8 @@ This downloads three data files (~340 MB total) to `data/tng50/`:
 ## 1. Loading TNG50 Data
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -33,6 +46,8 @@ except Exception:
 ### Load all galaxies
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     print(f"Number of galaxies: {len(tng_data)}")
     print(f"Available SubhaloIDs: {tng_data.subhalo_ids}")
@@ -41,6 +56,8 @@ if TNG_AVAILABLE:
 ### Access individual galaxies
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     # Access by index
     galaxy = tng_data[0]
@@ -59,6 +76,8 @@ if TNG_AVAILABLE:
 The `TNGDataVectorGenerator` handles coordinate transformations and map rendering:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     gen = TNGDataVectorGenerator(galaxy)
 
@@ -73,6 +92,8 @@ if TNG_AVAILABLE:
 The simplest approach renders the galaxy as it appears in the TNG simulation:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     # Define image parameters
     # TNG galaxies at z~0.01 are HUGE (~20 arcmin), so we use target_redshift to scale them
@@ -97,6 +118,8 @@ if TNG_AVAILABLE:
 ### Visualize the maps
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -123,6 +146,8 @@ if TNG_AVAILABLE:
 You can render at any orientation by specifying geometric parameters:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     # Define custom orientation
     pars = {
@@ -149,6 +174,8 @@ if TNG_AVAILABLE:
 TNG galaxies have real physical misalignment between gas and stellar disks (typically 30-40 deg). The `preserve_gas_stellar_offset` parameter controls this:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     # Compare with and without offset preservation
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -178,6 +205,8 @@ if TNG_AVAILABLE:
 Demonstrate how the galaxy appearance changes with viewing angle:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     fig, axes = plt.subplots(2, 5, figsize=(15, 6))
     cosi_vals = [1.0, 0.8, 0.6, 0.4, 0.2]  # Face-on to nearly edge-on
@@ -219,6 +248,8 @@ if TNG_AVAILABLE:
 Apply weak lensing shear to the galaxy:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     shear_configs = [
@@ -256,6 +287,8 @@ if TNG_AVAILABLE:
 TNG galaxies are at z~0.01 (~50 Mpc), spanning ~20 arcminutes on sky. Use `target_redshift` to scale to Roman-like observations:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     redshifts = [None, 0.5, 1.0]  # None = native z~0.01
@@ -294,6 +327,8 @@ if TNG_AVAILABLE:
 Control the signal-to-noise ratio of generated maps:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     fig, axes = plt.subplots(2, 4, figsize=(14, 7))
     snr_vals = [None, 100, 50, 20]
@@ -332,6 +367,8 @@ if TNG_AVAILABLE:
 Render intensity in different photometric bands:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     fig, axes = plt.subplots(1, 5, figsize=(15, 3))
     bands = ['u', 'g', 'r', 'i', 'z']
@@ -361,6 +398,8 @@ if TNG_AVAILABLE:
 The generator can also create star formation rate (SFR) maps from gas particles:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     config = TNGRenderConfig(
         image_pars=image_pars,
@@ -386,6 +425,8 @@ if TNG_AVAILABLE:
 The generator computes useful diagnostic quantities about galaxy orientation:
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     # Create generator for a galaxy
     gen = TNGDataVectorGenerator(galaxy)
@@ -427,6 +468,8 @@ Diagnostic quantities:
 This module uses proper 3D rotations, not simple 2D projections.
 
 ```{code-cell} python
+:tags: [skip-execution]
+
 if TNG_AVAILABLE:
     # The 3D approach preserves realistic galaxy structure at all angles
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -482,6 +525,6 @@ Key parameters in `TNGRenderConfig`:
 ## Next Steps
 
 1. See `kl_pipe/tng/README.md` for detailed documentation
-2. Use TNG maps with the kinematic lensing likelihood in `kl_pipe.likelihood`
+2. Fit TNG maps with the sampler: see `sampling.md` Section 7 (TNG inference)
 3. Run diagnostic tests: `pytest tests/test_tng_data_vectors.py -v`
 4. View diagnostic plots in `tests/out/tng_diagnostics/`

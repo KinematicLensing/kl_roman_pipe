@@ -21,10 +21,10 @@ from kl_pipe.observation import (
     GrismObs,
     build_image_obs,
     build_velocity_obs,
-    build_joint_obs,
     build_grism_obs,
 )
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 
 # ==============================================================================
@@ -52,6 +52,50 @@ def gaussian_psf():
     import galsim
 
     return galsim.Gaussian(fwhm=0.2)
+
+
+# ==============================================================================
+# Array validation (shared across all three builders)
+# ==============================================================================
+
+
+class TestObsArrayValidation:
+    """Loud validation of data/variance/mask in the obs builders."""
+
+    def test_negative_variance_raises(self, image_pars, data_16):
+        bad = jnp.ones((16, 16)) * 0.01
+        bad = bad.at[0, 0].set(-1.0)
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_image_obs(image_pars, data=data_16, variance=bad)
+
+    def test_zero_variance_raises(self, image_pars, data_16):
+        bad = jnp.zeros((16, 16))
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_image_obs(image_pars, data=data_16, variance=bad)
+
+    def test_scalar_variance_ok(self, image_pars, data_16):
+        # scalar variance is allowed and broadcasts; only positivity checked
+        obs = build_image_obs(image_pars, data=data_16, variance=0.01)
+        assert obs.variance is not None
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_image_obs(image_pars, data=data_16, variance=0.0)
+
+    def test_variance_shape_mismatch_raises(self, image_pars, data_16):
+        with pytest.raises(ValueError, match='variance shape'):
+            build_image_obs(image_pars, data=data_16, variance=jnp.ones((8, 8)) * 0.01)
+
+    def test_mask_shape_mismatch_raises(self, image_pars, data_16, variance_16):
+        with pytest.raises(ValueError, match='mask shape'):
+            build_image_obs(
+                image_pars,
+                data=data_16,
+                variance=variance_16,
+                mask=jnp.ones((8, 8), dtype=bool),
+            )
+
+    def test_velocity_builder_validates(self, image_pars, data_16):
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_velocity_obs(image_pars, data=data_16, variance=jnp.zeros((16, 16)))
 
 
 # ==============================================================================
@@ -86,14 +130,18 @@ class TestBuildImageObs:
         assert obs.mask.shape == (16, 16)
 
     def test_with_psf_oversample_1(self, image_pars, gaussian_psf):
-        obs = build_image_obs(image_pars, psf=gaussian_psf, oversample=1)
+        obs = build_image_obs(
+            image_pars, psf=gaussian_psf, render_config=RenderConfig(oversample=1)
+        )
         assert obs.psf_data is not None
         assert obs.oversample == 1
         assert obs.fine_X is None
         assert obs.fine_Y is None
 
     def test_with_psf_oversample_5(self, image_pars, gaussian_psf):
-        obs = build_image_obs(image_pars, psf=gaussian_psf, oversample=5)
+        obs = build_image_obs(
+            image_pars, psf=gaussian_psf, render_config=RenderConfig(oversample=5)
+        )
         assert obs.psf_data is not None
         assert obs.oversample == 5
         assert obs.fine_X is not None
@@ -106,7 +154,10 @@ class TestBuildImageObs:
 
         model = InclinedExponentialModel()
         obs = build_image_obs(
-            image_pars, psf=gaussian_psf, oversample=5, int_model=model
+            image_pars,
+            psf=gaussian_psf,
+            render_config=RenderConfig(oversample=5),
+            int_model=model,
         )
         assert obs.kspace_psf_fft is not None
 
@@ -132,10 +183,10 @@ class TestBuildVelocityObs:
         int_theta = int_model.pars2theta(
             {
                 'flux': 100.0,
-                'int_rscale': 0.5,
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'rscale': 0.5,
+                'h_over_r': 0.1,
+                'x0': 0.0,
+                'y0': 0.0,
                 'cosi': 0.5,
                 'theta_int': 0.0,
                 'g1': 0.0,
@@ -153,52 +204,6 @@ class TestBuildVelocityObs:
         assert isinstance(obs, VelocityObs)
         assert obs.flux_model is int_model
         assert obs.flux_theta is not None
-
-
-# ==============================================================================
-# Joint obs factory tests
-# ==============================================================================
-
-
-class TestBuildJointObs:
-    """Tests for build_joint_obs factory."""
-
-    def test_no_psf(self, image_pars, data_16, variance_16):
-        from kl_pipe.intensity import InclinedExponentialModel
-
-        int_model = InclinedExponentialModel()
-        obs_vel, obs_int = build_joint_obs(
-            image_pars,
-            image_pars,
-            int_model,
-            data_vel=data_16,
-            variance_vel=variance_16,
-            data_int=data_16,
-            variance_int=variance_16,
-        )
-        assert isinstance(obs_vel, VelocityObs)
-        assert isinstance(obs_int, ImageObs)
-        # joint mode: vel obs gets flux_model but no flux_theta
-        assert obs_vel.flux_model is int_model
-        assert obs_vel.flux_theta is None
-
-    def test_with_psf(self, image_pars, gaussian_psf, data_16, variance_16):
-        from kl_pipe.intensity import InclinedExponentialModel
-
-        int_model = InclinedExponentialModel()
-        obs_vel, obs_int = build_joint_obs(
-            image_pars,
-            image_pars,
-            int_model,
-            psf_vel=gaussian_psf,
-            psf_int=gaussian_psf,
-            data_vel=data_16,
-            variance_vel=variance_16,
-            data_int=data_16,
-            variance_int=variance_16,
-        )
-        assert obs_vel.psf_data is not None
-        assert obs_int.psf_data is not None
 
 
 # ==============================================================================
@@ -249,7 +254,9 @@ class TestPytreeRoundTrip:
         assert obs2.oversample == obs.oversample
 
     def test_image_obs_with_psf_roundtrip(self, image_pars, gaussian_psf):
-        obs = build_image_obs(image_pars, psf=gaussian_psf, oversample=3)
+        obs = build_image_obs(
+            image_pars, psf=gaussian_psf, render_config=RenderConfig(oversample=3)
+        )
         leaves, treedef = jax.tree_util.tree_flatten(obs)
         obs2 = treedef.unflatten(leaves)
 
@@ -296,7 +303,9 @@ class TestBuildGrismObs:
             dispersion_angle=0.0,
         )
         psf = galsim.Gaussian(fwhm=0.2)
-        obs = build_grism_obs(gp, z=1.0, psf=psf, oversample=3)
+        obs = build_grism_obs(
+            gp, z=1.0, psf=psf, render_config=RenderConfig(oversample=3)
+        )
 
         assert obs.psf_data is not None
         assert obs.oversample == 3

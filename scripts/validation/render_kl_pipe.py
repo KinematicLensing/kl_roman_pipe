@@ -3,11 +3,17 @@
 Render all validation tests using kl_pipe.
 
 Part of the grism cross-code validation (see docs/validation/grism_validation_plan.md).
-Loads the 28 test configurations from test_params.yaml, builds a KLModel for each,
-and renders noiseless datacube + grism + velocity/intensity maps. Outputs are saved
-as .npz files for comparison against geko, kl-tools, and grizli.
+Loads the 28 test configurations from test_params.yaml, builds the kl_pipe forward
+model for each, and renders noiseless datacube + grism + velocity/intensity maps.
+Outputs are saved as .npz files for comparison against geko, kl-tools, and grizli.
 
 Each .npz contains keys: cube, grism, vmap, imap, lambda_grid.
+
+NOTE: This renderer is pending migration to the SourceModel API (tracked in
+issue #50). The forward-model construction below still references the removed
+KLModel / SpectralModel classes and will fail to import until migrated.
+``utils.get_kl_pipe_params`` already returns SourceModel-native emission lines
+(dict of kl_pipe.lines.EmissionLine) and dotted parameter keys.
 
 Usage
 -----

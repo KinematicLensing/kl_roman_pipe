@@ -1,11 +1,12 @@
 import inspect
 import jax.numpy as jnp
 import jax
+import numpy as np
 
 from abc import abstractmethod, ABC
-from typing import Tuple, Set, Any
+from typing import Any
 
-from kl_pipe.transformation import transform_to_disk_plane
+from kl_pipe.transformation import COSI_FLOOR, transform_to_disk_plane
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import build_map_grid_from_image_pars
 
@@ -262,8 +263,8 @@ class VelocityModel(Model):
         cosi = self.get_param('cosi', theta)
 
         # centroid offsets are not present in all models, so check first
-        x0 = self.get_param('vel_x0', theta) if 'vel_x0' in self._param_indices else 0.0
-        y0 = self.get_param('vel_y0', theta) if 'vel_y0' in self._param_indices else 0.0
+        x0 = self.get_param('x0', theta) if 'x0' in self._param_indices else 0.0
+        y0 = self.get_param('y0', theta) if 'y0' in self._param_indices else 0.0
 
         # transform to disk plane
         x_disk, y_disk = transform_to_disk_plane(
@@ -317,6 +318,27 @@ class VelocityModel(Model):
             "Subclasses must implement evaluate_circular_velocity method."
         )
 
+    def grad_bandwidth(self, params: dict) -> float:
+        """Maximum spatial gradient |grad v_LOS| (km/s per arcsec) at ``params``.
+
+        Used by the grism cube fine-grid sizing in
+        ``RenderConfig.for_grism_priors`` to bound the spatial bandwidth
+        contributed by the velocity-modulated wavelength Gaussian factor in
+        ``SourceModel.build_cube``. See ``docs/notes/grism_cube_bandwidth.tex``
+        for the derivation.
+
+        Default implementation assumes the arctan rotation curve
+        ``v_c(R) = (2/pi) * v_circ * arctan(R / r_v)``, for which
+        ``max |dv_c/dR| = (2/pi) * v_circ / r_v`` (achieved at the center).
+        The line-of-sight projection multiplies by ``sin(i)``. Subclasses
+        with non-arctan rotation curves should override.
+        """
+        vcirc = float(params['vcirc'])
+        r_v = float(params['rscale'])
+        cosi = float(params['cosi'])
+        sini = (1.0 - cosi**2) ** 0.5
+        return (2.0 / np.pi) * vcirc * sini / r_v
+
     def render_image(
         self,
         theta: jnp.ndarray,
@@ -325,7 +347,6 @@ class VelocityModel(Model):
         X: jnp.ndarray = None,
         Y: jnp.ndarray = None,
         return_speed: bool = False,
-        flux_theta_override: jnp.ndarray = None,
         *,
         obs: Any = None,
         **kwargs,
@@ -354,8 +375,6 @@ class VelocityModel(Model):
             Pre-computed coordinate grids (coarse-scale).
         return_speed : bool
             If True, return speed map. Default is False.
-        flux_theta_override : jnp.ndarray, optional
-            Intensity params for joint mode flux weighting.
         obs : VelocityObs, optional
             Observation object with PSF, grids, flux source, and oversampling.
         **kwargs
@@ -379,9 +398,7 @@ class VelocityModel(Model):
                 if obs.psf_data is not None:
                     from kl_pipe.psf import convolve_flux_weighted
 
-                    flux_map = _get_flux_map(
-                        obs, plane, fine_X, fine_Y, flux_theta_override
-                    )
+                    flux_map = _get_flux_map(obs, plane, fine_X, fine_Y)
                     return convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
 
                 # no PSF but oversampled → bin for pixel integration.
@@ -403,7 +420,7 @@ class VelocityModel(Model):
             if obs.psf_data is not None:
                 from kl_pipe.psf import convolve_flux_weighted
 
-                flux_map = _get_flux_map(obs, plane, obs.X, obs.Y, flux_theta_override)
+                flux_map = _get_flux_map(obs, plane, obs.X, obs.Y)
                 model_vel = convolve_flux_weighted(model_vel, flux_map, obs.psf_data)
 
             return model_vel
@@ -417,66 +434,14 @@ class VelocityModel(Model):
         return self(theta, plane, X, Y, return_speed=return_speed)
 
 
-def _get_flux_map(obs, plane, X, Y, flux_theta_override):
+def _get_flux_map(obs, plane, X, Y):
     """Extract flux map from VelocityObs for PSF weighting."""
-    if flux_theta_override is not None and obs.flux_model is not None:
-        return obs.flux_model(flux_theta_override, plane, X, Y)
-    elif obs.flux_image is not None:
+    if obs.flux_image is not None:
         return obs.flux_image
     elif obs.flux_model is not None and obs.flux_theta is not None:
         return obs.flux_model(obs.flux_theta, plane, X, Y)
     else:
         raise ValueError("No flux source for velocity PSF weighting")
-
-
-def _apply_post_dispersion_pixel_response(
-    dispersed: jnp.ndarray,
-    pixel_response_fft: jnp.ndarray,
-    coarse_shape: tuple,
-    oversample: int,
-) -> jnp.ndarray:
-    """Apply precomputed BoxPixel sinc + sum-bin to coarse on a fine 2D image.
-
-    Pixel response (square detector top-hat) is applied once at the 2D
-    observable readout stage rather than per-channel on the cube. After
-    grism dispersion produces a fine-resolution 2D image, this function
-    convolves with the BoxPixel sinc in k-space (precomputed at obs build
-    time, stored on ``GrismObs.pixel_response_fft``) and sum-bins to coarse
-    detector pixels.
-
-    For ``oversample == 1`` the input is already at coarse detector
-    resolution; no fine-grid sinc is required. Pass-through.
-
-    Parameters
-    ----------
-    dispersed : jnp.ndarray
-        2D dispersed image, shape ``(Nrow*N, Ncol*N)`` for ``oversample=N``,
-        or ``(Nrow, Ncol)`` for ``oversample=1``.
-    pixel_response_fft : jnp.ndarray
-        Precomputed BoxPixel sinc on the fine k-grid (from
-        ``GrismObs.pixel_response_fft``). Unused at ``oversample == 1``.
-    coarse_shape : tuple
-        ``(Nrow_c, Ncol_c)`` of the coarse detector grid.
-    oversample : int
-        Spatial oversampling factor of the input.
-
-    Returns
-    -------
-    jnp.ndarray
-        Coarse-pixel 2D image in flux per coarse pixel, shape == coarse_shape.
-    """
-    if oversample <= 1:
-        return dispersed
-
-    Nrow_c, Ncol_c = coarse_shape
-    N = oversample
-
-    # FFT -> sinc multiply -> IFFT at fine grid
-    img_fft = jnp.fft.fft2(dispersed)
-    pixel_integrated_fine = jnp.fft.ifft2(img_fft * pixel_response_fft).real
-
-    # sum-bin fine to coarse (flux/pixel preservation)
-    return pixel_integrated_fine.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
 
 
 class IntensityModel(Model):
@@ -501,8 +466,8 @@ class IntensityModel(Model):
         """
 
         # extract transformation parameters
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         theta_int = self.get_param('theta_int', theta)
@@ -520,13 +485,17 @@ class IntensityModel(Model):
         if plane == 'disk':
             return I_disk
         else:
-            # apply cos(i) brightening factor for projected intensity
-            return I_disk / cosi
+            # apply cos(i) brightening factor for projected intensity. clamp
+            # cosi to COSI_FLOOR to match the gal->disk deprojection guard in
+            # transformation.py; inference rejects cosi priors that reach the
+            # floor, so within the valid range this is a no-op edge guard.
+            cosi_safe = jnp.maximum(cosi, COSI_FLOOR)
+            return I_disk / cosi_safe
 
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         Subclasses should override with their own k-space implementation.
         """
         raise NotImplementedError(
@@ -542,7 +511,7 @@ class IntensityModel(Model):
         Parameters
         ----------
         params : dict
-            Profile parameters (e.g., int_rscale, int_hlr, n_sersic).
+            Profile parameters (e.g., rscale, hlr, n_sersic).
         threshold : float
             Maximum acceptable FT amplitude. Default 1e-3.
 
@@ -649,494 +618,57 @@ class IntensityModel(Model):
         )
 
 
-class KLModel(object):
-    """
-    Kinematic lensing model combining velocity and intensity components.
+class ContinuumModel:
+    """Adapter wrapping an ``IntensityModel`` for use as a stellar continuum.
 
-    Handles parameter management for models with shared and independent parameters.
-    Builds a unified parameter space and provides slicing to extract sub-arrays
-    for each component model.
+    A continuum's amplitude is a spectral flux *density* (flux per unit
+    wavelength), unlike an emission line's integrated ``flux``. To keep that
+    explicit in the dotted-key namespace, this adapter relabels the wrapped
+    profile's ``flux`` parameter to ``flux_per_nm`` in ``PARAMETER_NAMES``.
+    ``flux_per_nm`` is a spectral flux density [flux / nm]; because the profile
+    is linear in its amplitude, feeding a density produces a density surface
+    brightness [flux / arcsec^2 / nm] = SB/nm, matching the emission-line term's
+    cube voxel (see ``SourceModel.build_cube`` / ``units_and_conventions.md``).
 
-    Parameters
-    ----------
-    velocity_model : VelocityModel
-        Velocity model component.
-    intensity_model : IntensityModel
-        Intensity model component.
-    shared_pars : set of str, optional
-        Parameter names that are shared between models. If a parameter appears
-        in both models and is in shared_pars, it will appear only once in the
-        composite parameter array. Default is None (no shared parameters).
-    meta_pars : dict, optional
-        Fixed metadata for both models.
-
-    Attributes
-    ----------
-    PARAMETER_NAMES : tuple
-        Unified parameter names in order.
-    velocity_slice : slice or array
-        Indices to extract velocity parameters from composite theta.
-    intensity_slice : slice or array
-        Indices to extract intensity parameters from composite theta.
-
-    Examples
-    --------
-    >>> # Models with independent parameters
-    >>> vel_model = OffsetVelocityModel(meta)  # params: v0, vcirc, vel_x0, ve_y0
-    >>> int_model = ExponentialIntensity(meta)  # params: flux, scale
-    >>> kl_model = KLModel(vel_model, int_model)
-    >>> kl_model.PARAMETER_NAMES
-    ('v0', 'vcirc', 'vel_x0', 'vel_y0', 'flux', 'scale')
-    >>>
-    >>> # Models with shared parameters
-    >>> vel_model = OffsetVelocityModel(meta_pars)  # params: v0, vcirc, x0, y0
-    >>> int_model = OffsetIntensity(meta_pars)      # params: flux, x0, y0
-    >>> kl_model = KLModel(vel_model, int_model, shared_pars={'x0', 'y0'})
-    >>> kl_model.PARAMETER_NAMES
-    ('v0', 'vcirc', 'x0', 'y0', 'flux')
+    The relabel is purely external: the wrapped profile still evaluates from a
+    positionally-identical ``theta`` (only the label at the flux index differs),
+    so ``__call__`` delegates unchanged. All other attributes/methods (``name``,
+    ``maxk``, ``render_image``, ``get_param``, ...) delegate to the wrapped
+    profile via ``__getattr__``. Not an ``IntensityModel`` subclass (its
+    ``PARAMETER_NAMES`` is instance-level, incompatible with the class-level
+    contract), but registered as a virtual subclass so ``isinstance`` holds.
     """
 
-    def __init__(
-        self,
-        velocity_model: VelocityModel,
-        intensity_model: IntensityModel,
-        shared_pars: Set[str] = None,
-        meta_pars: dict = None,
-        spectral_model=None,
-    ):
-        self.velocity_model = velocity_model
-        self.intensity_model = intensity_model
-        self.shared_pars = shared_pars or set()
-        self.meta_pars = meta_pars or {}
-        self.spectral_model = spectral_model
-
-        self._build_parameter_structure()
-
-        return
-
-    def _build_parameter_structure(self):
-        """
-        Build the unified parameter space and component slicing indices.
-
-        When spectral_model is present, uses 3-way ordered deduplication:
-        iterate vel_pars, int_pars, spectral_pars in order; first occurrence
-        of each param name wins position.
-        """
-
-        vel_pars = self.velocity_model.PARAMETER_NAMES
-        int_pars = self.intensity_model.PARAMETER_NAMES
-
-        vel_pars_set = set(vel_pars)
-        int_pars_set = set(int_pars)
-
-        if not self.shared_pars.issubset(vel_pars_set & int_pars_set):
-            invalid = self.shared_pars - (vel_pars_set & int_pars_set)
-            raise ValueError(f"Shared parameters {invalid} not present in both models")
-
-        # 3-way ordered deduplication
-        seen = set()
-        param_list = []
-
-        for name in vel_pars:
-            if name not in seen:
-                param_list.append(name)
-                seen.add(name)
-
-        for name in int_pars:
-            if name not in seen:
-                param_list.append(name)
-                seen.add(name)
-            elif name in self.shared_pars:
-                pass  # already added from vel_pars
-
-        if self.spectral_model is not None:
-            spec_pars = self.spectral_model.PARAMETER_NAMES
-            for name in spec_pars:
-                if name not in seen:
-                    param_list.append(name)
-                    seen.add(name)
-
-        self.PARAMETER_NAMES = tuple(param_list)
-
-        composite_param_dict = {name: i for i, name in enumerate(self.PARAMETER_NAMES)}
-
-        self._velocity_indices = jnp.array(
-            [composite_param_dict[name] for name in vel_pars]
-        )
-        self._intensity_indices = jnp.array(
-            [composite_param_dict[name] for name in int_pars]
+    def __init__(self, profile: 'IntensityModel'):
+        if isinstance(profile, ContinuumModel):
+            # idempotent: unwrap so double-wrapping is a no-op
+            profile = profile._profile
+        self._profile = profile
+        self.PARAMETER_NAMES = tuple(
+            'flux_per_nm' if p == 'flux' else p for p in profile.PARAMETER_NAMES
         )
 
-        if self.spectral_model is not None:
-            self._spectral_indices = jnp.array(
-                [composite_param_dict[name] for name in spec_pars]
-            )
-        else:
-            self._spectral_indices = None
+    def __call__(self, theta, plane, x, y, z=None):
+        # theta is positionally identical to the wrapped profile's (only the
+        # flux label changed), so delegate the evaluation unchanged.
+        return self._profile(theta, plane, x, y, z)
 
-        self._param_indices = composite_param_dict
-
-        return
-
-    def get_param(self, name: str, theta: jnp.ndarray):
-        """
-        Extract a parameter value by name from the composite parameter array.
-
-        Parameters
-        ----------
-        name : str
-            Parameter name (must be in PARAMETER_NAMES).
-        theta : jnp.ndarray
-            Composite parameter array.
-
-        Returns
-        -------
-        scalar or jnp.ndarray
-            Parameter value at the corresponding index.
-        """
-        idx = self._param_indices[name]
-
-        return theta[idx]
-
-    def get_velocity_pars(self, theta: jnp.ndarray) -> jnp.ndarray:
-        """
-        Get velocity model parameters from composite array.
-
-        Parameters
-        ----------
-        theta : jnp.ndarray
-            Composite parameter array.
-
-        Returns
-        -------
-        jnp.ndarray
-            Parameter array for velocity model.
-        """
-        return theta[self._velocity_indices]
-
-    def get_intensity_pars(self, theta: jnp.ndarray) -> jnp.ndarray:
-        """
-        Get intensity model parameters from composite array.
-
-        Parameters
-        ----------
-        theta : jnp.ndarray
-            Composite parameter array.
-
-        Returns
-        -------
-        jnp.ndarray
-            Parameter array for intensity model.
-        """
-        return theta[self._intensity_indices]
-
-    def get_spectral_pars(self, theta: jnp.ndarray) -> jnp.ndarray:
-        """Extract spectral component parameters from composite theta."""
-        if self._spectral_indices is None:
-            raise ValueError("No spectral model configured")
-        return theta[self._spectral_indices]
-
-    def render_cube(
-        self,
-        theta: jnp.ndarray,
-        obs_or_cube_pars=None,
-        plane: str = 'obs',
-        cube_pars=None,
-    ) -> jnp.ndarray:
-        """Render PSF-convolved datacube.
-
-        1. Calls spectral_model.build_cube() -> intrinsic cube (no PSF).
-        2. Per-slice convolve_fft(cube[:,:,k], psf_data, bin=False) if PSF
-           is configured. The cube is the post-PSF, pre-pixel-response
-           intermediate; pixel response applies once at the 2D dispersed
-           observable in render_grism, not per-channel on the cube.
-
-        When ``obs.oversample > 1``, the cube is built at fine spatial
-        resolution and convolve_fft is called with ``bin=False`` so the
-        cube stays fine through PSF convolution. The fine cube flows into
-        ``disperse_cube(... oversample=N)`` and the post-dispersion BoxPixel
-        sinc + sum-bin lives in ``render_grism``.
-
-        Two calling conventions:
-        - render_cube(theta, obs=GrismObs) -- PSF from obs
-        - render_cube(theta, cube_pars) -- no PSF (legacy)
-
-        Returns
-        -------
-        jnp.ndarray
-            Datacube. Shape ``(Nrow, Ncol, Nlambda)`` when
-            ``obs.oversample == 1``; shape ``(Nrow*N, Ncol*N, Nlambda)``
-            when ``obs.oversample == N > 1``.
-        """
-        if self.spectral_model is None:
-            raise ValueError("No spectral model configured — use render_image for 2D")
-
-        from kl_pipe.observation import GrismObs
-
-        # resolve arguments: support both obs and legacy cube_pars
-        if isinstance(obs_or_cube_pars, GrismObs):
-            obs = obs_or_cube_pars
-            effective_cube_pars = obs.cube_pars
-            psf_data = obs.psf_data
-            grism_oversample = obs.oversample
-            fine_image_pars = obs.fine_image_pars
-        else:
-            # legacy: obs_or_cube_pars is cube_pars directly
-            effective_cube_pars = (
-                obs_or_cube_pars if obs_or_cube_pars is not None else cube_pars
-            )
-            if effective_cube_pars is None:
-                raise ValueError("Provide obs (GrismObs) or cube_pars")
-            psf_data = None
-            grism_oversample = 1
-            fine_image_pars = None
-
-        theta_vel = self.get_velocity_pars(theta)
-        theta_int = self.get_intensity_pars(theta)
-        theta_spec = self.get_spectral_pars(theta)
-
-        # when PSF oversampling is active, build cube at fine spatial scale
-        if psf_data is not None and grism_oversample > 1:
-            from kl_pipe.spectral import CubePars
-
-            fine_cube_pars = CubePars(
-                image_pars=fine_image_pars,
-                lambda_grid=effective_cube_pars.lambda_grid,
-            )
-            build_cube_pars = fine_cube_pars
-        else:
-            build_cube_pars = effective_cube_pars
-
-        cube = self.spectral_model.build_cube(
-            theta_spec, theta_vel, theta_int, build_cube_pars, plane=plane
-        )
-
-        # per-slice PSF convolution via vmap (JIT-friendly). The cube
-        # intermediate is post-PSF and pre-pixel-response, so we use
-        # bin=False to keep the cube at fine resolution; pixel response
-        # applies once at the 2D output in render_grism.
-        if psf_data is not None:
-            from kl_pipe.psf import convolve_fft
-
-            # vmap over wavelength axis: (Nrow, Ncol, Nlam) -> (Nlam, Nrow, Ncol)
-            cube_transposed = jnp.moveaxis(cube, -1, 0)
-            conv_slice = lambda s: convolve_fft(s, psf_data, bin=False)
-            cube_transposed = jax.vmap(conv_slice)(cube_transposed)
-            # back to (Nrow_fine, Ncol_fine, Nlam) when oversample > 1
-            cube = jnp.moveaxis(cube_transposed, 0, -1)
-
-        return cube
-
-    def render_grism(
-        self,
-        theta: jnp.ndarray,
-        obs_or_grism_pars=None,
-        plane: str = 'obs',
-        cube_pars=None,
-        grism_pars=None,
-    ) -> jnp.ndarray:
-        """Render dispersed grism image.
-
-        1. Calls render_cube -> PSF-convolved cube (fine when oversample > 1).
-        2. Calls disperse_cube(..., oversample=N) -> 2D dispersed image,
-           fine when oversample > 1.
-        3. Applies BoxPixel sinc in k-space + sum-bin to coarse detector
-           pixels at the 2D output. Pixel response is treated as a
-           detector property and applies only at the final readout stage.
-
-        Two calling conventions:
-        - render_grism(theta, obs=GrismObs) -- PSF from obs
-        - render_grism(theta, grism_pars, cube_pars=cube_pars) -- legacy
-
-        For JIT/grad, pre-compute cube_pars with a concrete z and pass it in:
-            cube_pars = gp.to_cube_pars(z=1.0)
-            obs = build_grism_obs(gp, z=1.0, psf=psf)
-            jit(partial(kl.render_grism, obs_or_grism_pars=obs))(theta)
-
-        Returns
-        -------
-        jnp.ndarray
-            Dispersed 2D grism image at coarse detector resolution,
-            shape ``(Nrow, Ncol)``, in flux per coarse pixel.
-        """
-        if self.spectral_model is None:
-            raise ValueError("No spectral model configured")
-
-        from kl_pipe.dispersion import disperse_cube
-        from kl_pipe.observation import GrismObs
-
-        if isinstance(obs_or_grism_pars, GrismObs):
-            obs = obs_or_grism_pars
-            cube = self.render_cube(theta, obs, plane=plane)
-            oversample = obs.oversample
-            dispersed = disperse_cube(
-                cube,
-                obs.grism_pars,
-                obs.cube_pars.lambda_grid,
-                oversample=oversample,
-            )
-            coarse_shape = (
-                obs.grism_pars.image_pars.Nrow,
-                obs.grism_pars.image_pars.Ncol,
-            )
-            return _apply_post_dispersion_pixel_response(
-                dispersed, obs.pixel_response_fft, coarse_shape, oversample
-            )
-        else:
-            # legacy path: no oversampling on this code path (cube_pars +
-            # grism_pars carry no oversample info)
-            gp = obs_or_grism_pars if obs_or_grism_pars is not None else grism_pars
-            if gp is None:
-                raise ValueError("Provide obs (GrismObs) or grism_pars")
-
-            if cube_pars is None:
-                theta_spec = self.get_spectral_pars(theta)
-                z = float(self.spectral_model.get_param('z', theta_spec))
-                cube_pars = gp.to_cube_pars(z)
-
-            cube = self.render_cube(theta, cube_pars, plane=plane)
-            return disperse_cube(cube, gp, cube_pars.lambda_grid)
-
-    def evaluate_velocity(
-        self,
-        theta: jnp.ndarray,
-        plane: str,
-        X: jnp.ndarray,
-        Y: jnp.ndarray,
-        Z: jnp.ndarray = None,
-    ) -> jnp.ndarray:
-        """
-        Evaluate velocity model component.
-
-        Parameters
-        ----------
-        theta : jnp.ndarray
-            Composite parameter array.
-        plane : str
-            Evaluation plane.
-        X, Y : jnp.ndarray
-            Coordinate arrays.
-        Z : jnp.ndarray, optional
-            Z-coordinate array.
-
-        Returns
-        -------
-        jnp.ndarray
-            Velocity map.
-        """
-        theta_vel = self.get_velocity_pars(theta)
-
-        return self.velocity_model(theta_vel, plane, X, Y, Z)
-
-    def evaluate_intensity(
-        self,
-        theta: jnp.ndarray,
-        plane: str,
-        X: jnp.ndarray,
-        Y: jnp.ndarray,
-        Z: jnp.ndarray = None,
-    ) -> jnp.ndarray:
-        """
-        Evaluate intensity model component.
-
-        Parameters
-        ----------
-        theta : jnp.ndarray
-            Composite parameter array.
-        plane : str
-            Evaluation plane.
-        X, Y : jnp.ndarray
-            Coordinate arrays.
-        Z : jnp.ndarray, optional
-            Z-coordinate array.
-
-        Returns
-        -------
-        jnp.ndarray
-            Intensity map.
-        """
-        theta_int = self.get_intensity_pars(theta)
-
-        return self.intensity_model(theta_int, plane, X, Y, Z)
-
-    def __call__(
-        self,
-        theta: jnp.ndarray,
-        plane: str,
-        X: jnp.ndarray,
-        Y: jnp.ndarray,
-        Z: jnp.ndarray = None,
-    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """
-        Evaluate both model components.
-
-        Parameters
-        ----------
-        theta : jnp.ndarray
-            Composite parameter array.
-        plane : str
-            Evaluation plane.
-        X, Y : jnp.ndarray
-            Coordinate arrays.
-        Z : jnp.ndarray, optional
-            Z-coordinate array.
-
-        Returns
-        -------
-        Tuple[jnp.ndarray, jnp.ndarray]
-            (velocity_map, intensity_map).
-        """
-        velocity_map = self.evaluate_velocity(theta, plane, X, Y, Z)
-        intensity_map = self.evaluate_intensity(theta, plane, X, Y, Z)
-
-        return velocity_map, intensity_map
-
-    def render(
-        self,
-        theta: jnp.ndarray,
-        data_type: str,
-        data_pars,
-        plane: str = 'obs',
-        **kwargs,
-    ) -> jnp.ndarray:
-        """High-level rendering interface for different data products."""
-        if data_type == 'cube':
-            return self.render_cube(theta, data_pars, plane=plane, **kwargs)
-        elif data_type == 'grism':
-            return self.render_grism(theta, data_pars, plane=plane, **kwargs)
-        else:
-            raise ValueError(
-                f"Unknown data_type '{data_type}'. " f"Must be one of: 'cube', 'grism'"
-            )
-
-    def theta2pars(self, theta: jnp.ndarray) -> dict:
-        """
-        Convert parameter array to dictionary.
-
-        Parameters
-        ----------
-        theta : jnp.ndarray
-            Composite parameter array.
-
-        Returns
-        -------
-        dict
-            Dictionary mapping parameter names to values.
-        """
+    def theta2pars(self, theta) -> dict:
         return {name: float(theta[i]) for i, name in enumerate(self.PARAMETER_NAMES)}
 
     def pars2theta(self, pars: dict) -> jnp.ndarray:
-        """
-        Convert parameter dictionary to array.
-
-        Parameters
-        ----------
-        pars : dict
-            Dictionary with keys matching self.PARAMETER_NAMES.
-
-        Returns
-        -------
-        jnp.ndarray
-            Composite parameter array ordered according to self.PARAMETER_NAMES.
-        """
         return jnp.array([pars[name] for name in self.PARAMETER_NAMES])
+
+    @property
+    def name(self) -> str:
+        return f'continuum({self._profile.name})'
+
+    def __getattr__(self, item):
+        # only reached for attributes not set on the adapter; delegate to the
+        # wrapped profile. Guard _profile to avoid recursion before __init__.
+        if item == '_profile':
+            raise AttributeError(item)
+        return getattr(self._profile, item)
+
+
+IntensityModel.register(ContinuumModel)

@@ -72,6 +72,17 @@ def suppress_expected_warnings():
 # ==============================================================================
 
 
+def pytest_addoption(parser):
+    """Register custom CLI options."""
+    parser.addoption(
+        "--flagship-long",
+        action="store_true",
+        default=False,
+        help="run the flagship test with the longer production sampler config "
+        "(more samples/chains/tree-depth) for cleaner posteriors",
+    )
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(

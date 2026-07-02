@@ -18,6 +18,8 @@ from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.parameters import ImagePars
 from kl_pipe.synthetic import SyntheticVelocity
 from kl_pipe.priors import Uniform, Gaussian, TruncatedNormal, PriorDict
+from kl_pipe.source import SourceModel
+from kl_pipe.observation import build_image_obs, build_velocity_obs
 from kl_pipe.sampling import (
     InferenceTask,
     SamplerResult,
@@ -61,7 +63,7 @@ def simple_velocity_problem():
 
     Uses CenteredVelocityModel with only 2 sampled parameters for speed.
     """
-    # True parameters
+    # Flat-key dict for SyntheticVelocity
     true_pars = {
         'cosi': 0.6,
         'theta_int': 0.785,
@@ -69,7 +71,7 @@ def simple_velocity_problem():
         'g2': 0.0,
         'v0': 10.0,
         'vcirc': 200.0,
-        'vel_rscale': 5.0,
+        'rscale': 5.0,
     }
 
     # Generate synthetic data
@@ -78,24 +80,24 @@ def simple_velocity_problem():
     data_noisy = synth.generate(image_pars, snr=1000)
     variance = synth.variance
 
-    # Define priors (sample only vcirc and cosi for speed)
+    # SourceModel + dotted-key priors (sample only vcirc and cosi for speed)
+    source = SourceModel(velocity_model=CenteredVelocityModel())
     priors = PriorDict(
         {
-            'vcirc': Uniform(100, 300),
+            'vel.vcirc': Uniform(100, 300),
             'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
             'theta_int': 0.785,  # Fixed
             'g1': 0.0,  # Fixed
             'g2': 0.0,  # Fixed
-            'v0': 10.0,  # Fixed
-            'vel_rscale': 5.0,  # Fixed
+            'vel.v0': 10.0,  # Fixed
+            'vel.rscale': 5.0,  # Fixed
         }
     )
 
-    # Create model and task
-    model = CenteredVelocityModel()
-    task = InferenceTask.from_velocity_model(
-        model, priors, jnp.array(data_noisy), variance, image_pars
+    vel_obs = build_velocity_obs(
+        image_pars, data=jnp.array(data_noisy), variance=variance
     )
+    task = InferenceTask.from_obs(source, priors, velocity_obs=vel_obs)
 
     return task, true_pars
 
@@ -108,14 +110,14 @@ def simple_velocity_problem():
 class TestInferenceTask:
     """Tests for InferenceTask class."""
 
-    def test_from_velocity_model(self, simple_velocity_problem):
-        """Can create task from velocity model."""
+    def test_from_obs_velocity(self, simple_velocity_problem):
+        """Can create task from velocity-only obs."""
         task, true_pars = simple_velocity_problem
 
-        assert task.n_params == 2  # cosi and vcirc
+        assert task.n_params == 2  # cosi and vel.vcirc
         assert 'cosi' in task.sampled_names
-        assert 'vcirc' in task.sampled_names
-        assert task.fixed_params['v0'] == 10.0
+        assert 'vel.vcirc' in task.sampled_names
+        assert task.fixed_params['vel.v0'] == 10.0
 
     def test_log_posterior_finite(self, simple_velocity_problem):
         """Log posterior is finite for valid parameters."""
@@ -165,7 +167,7 @@ class TestInferenceTaskMask:
     """Tests for InferenceTask with pixel masks."""
 
     def test_velocity_with_mask(self):
-        """InferenceTask.from_velocity_model with mask produces finite posterior."""
+        """InferenceTask.from_obs with velocity mask produces finite posterior."""
         true_pars = {
             'cosi': 0.6,
             'theta_int': 0.785,
@@ -173,7 +175,7 @@ class TestInferenceTaskMask:
             'g2': 0.0,
             'v0': 10.0,
             'vcirc': 200.0,
-            'vel_rscale': 5.0,
+            'rscale': 5.0,
         }
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -186,34 +188,34 @@ class TestInferenceTaskMask:
 
         priors = PriorDict(
             {
-                'vcirc': Uniform(100, 300),
+                'vel.vcirc': Uniform(100, 300),
                 'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
                 'theta_int': 0.785,
                 'g1': 0.0,
                 'g2': 0.0,
-                'v0': 10.0,
-                'vel_rscale': 5.0,
+                'vel.v0': 10.0,
+                'vel.rscale': 5.0,
             }
         )
 
-        model = CenteredVelocityModel()
-        task = InferenceTask.from_velocity_model(
-            model,
-            priors,
-            jnp.array(data_noisy),
-            variance,
+        source = SourceModel(velocity_model=CenteredVelocityModel())
+        vel_obs = build_velocity_obs(
             image_pars,
-            mask_vel=jnp.array(mask),
+            data=jnp.array(data_noisy),
+            variance=variance,
+            mask=jnp.array(mask),
         )
+        task = InferenceTask.from_obs(source, priors, velocity_obs=vel_obs)
 
-        assert task.mask['velocity'] is not None
+        # mask is closure-captured in the likelihood via the obs; verify on obs
+        assert vel_obs.mask is not None
         key = random.PRNGKey(42)
         theta = task.sample_prior(key, 1)[0]
         lp = task.log_posterior(theta)
         assert np.isfinite(lp)
 
     def test_intensity_with_mask(self):
-        """InferenceTask.from_intensity_model with mask produces finite posterior."""
+        """InferenceTask.from_obs with intensity mask produces finite posterior."""
         from kl_pipe.intensity import InclinedExponentialModel
         from kl_pipe.synthetic import SyntheticIntensity
 
@@ -223,10 +225,10 @@ class TestInferenceTaskMask:
             'g1': 0.0,
             'g2': 0.0,
             'flux': 1.0,
-            'int_rscale': 3.0,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 3.0,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -239,39 +241,39 @@ class TestInferenceTaskMask:
 
         priors = PriorDict(
             {
-                'flux': Uniform(0.1, 10.0),
-                'int_rscale': Uniform(0.5, 10.0),
+                'F087.flux': Uniform(0.1, 10.0),
+                'F087.rscale': Uniform(0.5, 10.0),
                 'cosi': 0.7,
                 'theta_int': 0.785,
                 'g1': 0.0,
                 'g2': 0.0,
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'F087.h_over_r': 0.1,
+                'F087.x0': 0.0,
+                'F087.y0': 0.0,
             }
         )
 
-        model = InclinedExponentialModel()
-        task = InferenceTask.from_intensity_model(
-            model,
-            priors,
-            jnp.array(data_noisy),
-            variance,
+        source = SourceModel(broadband_models={'F087': InclinedExponentialModel()})
+        img_obs = build_image_obs(
             image_pars,
-            mask_int=jnp.array(mask),
+            data=jnp.array(data_noisy),
+            variance=variance,
+            mask=jnp.array(mask),
+            broadband_key='F087',
         )
+        task = InferenceTask.from_obs(source, priors, image_obs={'F087': img_obs})
 
-        assert task.mask['intensity'] is not None
+        # mask is closure-captured in the likelihood via the obs; verify on obs
+        assert img_obs.mask is not None
         key = random.PRNGKey(42)
         theta = task.sample_prior(key, 1)[0]
         lp = task.log_posterior(theta)
         assert np.isfinite(lp)
 
     def test_joint_with_masks(self):
-        """InferenceTask.from_joint_model with both masks produces finite posterior."""
+        """InferenceTask.from_obs with both masks produces finite posterior."""
         from kl_pipe.intensity import InclinedExponentialModel
         from kl_pipe.velocity import OffsetVelocityModel
-        from kl_pipe.model import KLModel
         from kl_pipe.synthetic import SyntheticIntensity
 
         true_pars = {
@@ -281,14 +283,20 @@ class TestInferenceTaskMask:
             'g2': 0.0,
             'v0': 10.0,
             'vcirc': 200.0,
-            'vel_rscale': 5.0,
-            'vel_x0': 0.0,
-            'vel_y0': 0.0,
+            'rscale': 5.0,
+            'x0': 0.0,
+            'y0': 0.0,
+        }
+        int_true = {
+            'cosi': 0.6,
+            'theta_int': 0.785,
+            'g1': 0.0,
+            'g2': 0.0,
             'flux': 1.0,
-            'int_rscale': 3.0,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 3.0,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
 
         ip_vel = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -305,7 +313,7 @@ class TestInferenceTaskMask:
 
         int_pars = {
             k: v
-            for k, v in true_pars.items()
+            for k, v in int_true.items()
             if k in InclinedExponentialModel.PARAMETER_NAMES
         }
         synth_int = SyntheticIntensity(int_pars, model_type='exponential', seed=43)
@@ -317,53 +325,60 @@ class TestInferenceTaskMask:
         mask_int = np.ones(ip_int.shape, dtype=bool)
         mask_int[:12, :12] = False
 
-        vel_model = OffsetVelocityModel()
-        int_model = InclinedExponentialModel()
-        joint_model = KLModel(
-            vel_model, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'}
+        source = SourceModel(
+            velocity_model=OffsetVelocityModel(),
+            broadband_models={'F087': InclinedExponentialModel()},
         )
 
         priors = PriorDict(
             {
-                'vcirc': Uniform(100, 300),
+                'vel.vcirc': Uniform(100, 300),
                 'cosi': 0.6,
                 'theta_int': 0.785,
                 'g1': 0.0,
                 'g2': 0.0,
-                'v0': 10.0,
-                'vel_rscale': 5.0,
-                'vel_x0': 0.0,
-                'vel_y0': 0.0,
-                'flux': 1.0,
-                'int_rscale': 3.0,
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'vel.v0': 10.0,
+                'vel.rscale': 5.0,
+                'vel.x0': 0.0,
+                'vel.y0': 0.0,
+                'F087.flux': 1.0,
+                'F087.rscale': 3.0,
+                'F087.h_over_r': 0.1,
+                'F087.x0': 0.0,
+                'F087.y0': 0.0,
             }
         )
 
-        task = InferenceTask.from_joint_model(
-            joint_model,
-            priors,
-            jnp.array(data_vel),
-            jnp.array(data_int),
-            var_vel,
-            var_int,
+        vel_obs = build_velocity_obs(
             ip_vel,
+            data=jnp.array(data_vel),
+            variance=var_vel,
+            mask=jnp.array(mask_vel),
+        )
+        img_obs = build_image_obs(
             ip_int,
-            mask_vel=jnp.array(mask_vel),
-            mask_int=jnp.array(mask_int),
+            data=jnp.array(data_int),
+            variance=var_int,
+            mask=jnp.array(mask_int),
+            broadband_key='F087',
+        )
+        task = InferenceTask.from_obs(
+            source,
+            priors,
+            velocity_obs=vel_obs,
+            image_obs={'F087': img_obs},
         )
 
-        assert task.mask['velocity'] is not None
-        assert task.mask['intensity'] is not None
+        # mask is closure-captured in the likelihood via the obs; verify on obs
+        assert vel_obs.mask is not None
+        assert img_obs.mask is not None
         key = random.PRNGKey(42)
         theta = task.sample_prior(key, 1)[0]
         lp = task.log_posterior(theta)
         assert np.isfinite(lp)
 
     def test_mask_none_backward_compat(self):
-        """from_velocity_model without mask arg works identically to before."""
+        """from_obs without mask kwarg yields obs.mask is None."""
         true_pars = {
             'cosi': 0.6,
             'theta_int': 0.785,
@@ -371,7 +386,7 @@ class TestInferenceTaskMask:
             'g2': 0.0,
             'v0': 10.0,
             'vcirc': 200.0,
-            'vel_rscale': 5.0,
+            'rscale': 5.0,
         }
 
         image_pars = ImagePars(shape=(24, 24), pixel_scale=0.4, indexing='ij')
@@ -381,27 +396,26 @@ class TestInferenceTaskMask:
 
         priors = PriorDict(
             {
-                'vcirc': Uniform(100, 300),
+                'vel.vcirc': Uniform(100, 300),
                 'cosi': TruncatedNormal(0.5, 0.3, 0.1, 0.99),
                 'theta_int': 0.785,
                 'g1': 0.0,
                 'g2': 0.0,
-                'v0': 10.0,
-                'vel_rscale': 5.0,
+                'vel.v0': 10.0,
+                'vel.rscale': 5.0,
             }
         )
 
-        model = CenteredVelocityModel()
-        task = InferenceTask.from_velocity_model(
-            model,
-            priors,
-            jnp.array(data_noisy),
-            variance,
+        source = SourceModel(velocity_model=CenteredVelocityModel())
+        vel_obs = build_velocity_obs(
             image_pars,
+            data=jnp.array(data_noisy),
+            variance=variance,
         )
+        task = InferenceTask.from_obs(source, priors, velocity_obs=vel_obs)
 
-        # mask field should be empty dict or contain None
-        assert task.mask.get('velocity') is None
+        # no mask was passed on the obs
+        assert vel_obs.mask is None
 
         key = random.PRNGKey(42)
         theta = task.sample_prior(key, 1)[0]
@@ -671,7 +685,7 @@ class TestParameterRecovery:
         summary = result.get_summary()
 
         # Check vcirc recovery (true = 200)
-        vcirc_median = summary['vcirc']['quantiles'][0.5]
+        vcirc_median = summary['vel.vcirc']['quantiles'][0.5]
         true_vcirc = true_pars['vcirc']
         rel_error = abs(vcirc_median - true_vcirc) / true_vcirc
 
@@ -721,8 +735,8 @@ class TestDiagnostics:
         result = SamplerResult(
             samples=samples,
             log_prob=log_prob,
-            param_names=['cosi', 'vcirc'],
-            fixed_params={'v0': 10.0},
+            param_names=['cosi', 'vel.vcirc'],
+            fixed_params={'vel.v0': 10.0},
             metadata={'backend': 'test'},
         )
 
@@ -731,7 +745,7 @@ class TestDiagnostics:
         captured = capsys.readouterr()
         assert 'SAMPLING SUMMARY' in captured.out
         assert 'cosi' in captured.out
-        assert 'vcirc' in captured.out
+        assert 'vel.vcirc' in captured.out
 
     @pytest.mark.slow
     def test_plot_functions(self, simple_velocity_problem, test_output_dir):
@@ -745,7 +759,7 @@ class TestDiagnostics:
         result = SamplerResult(
             samples=samples,
             log_prob=log_prob,
-            param_names=['cosi', 'vcirc'],
+            param_names=['cosi', 'vel.vcirc'],
             fixed_params={},
         )
 

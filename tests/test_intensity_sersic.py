@@ -35,6 +35,7 @@ from kl_pipe.intensity import (
 )
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir, build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 
 # maximum GB for a single GalSim FFT allocation in tests
@@ -138,8 +139,8 @@ def test_model_instantiation():
     assert model.name == 'inclined_sersic'
     assert len(model.PARAMETER_NAMES) == 10
     assert 'n_sersic' in model.PARAMETER_NAMES
-    assert 'int_hlr' in model.PARAMETER_NAMES
-    assert 'int_h_over_hlr' in model.PARAMETER_NAMES
+    assert 'hlr' in model.PARAMETER_NAMES
+    assert 'h_over_hlr' in model.PARAMETER_NAMES
 
 
 def test_factory():
@@ -295,7 +296,7 @@ def test_faceon_vs_galsim(sersic_output_dir, n):
     # PSF
     psf_obj = gs.Gaussian(fwhm=psf_fwhm, flux=1.0)
     ip = ImagePars(shape=(Npix, Npix), pixel_scale=ps, indexing='ij')
-    obs = build_image_obs(ip, psf=psf_obj, oversample=5)
+    obs = build_image_obs(ip, psf=psf_obj, render_config=RenderConfig(oversample=5))
     img_ours = np.array(model.render_image(theta, obs=obs))
 
     # GalSim reference — method='no_pixel' gives flux/pixel, matching our convention
@@ -351,7 +352,7 @@ def test_inclined_vs_galsim(sersic_output_dir, n, cosi):
 
     psf_obj = gs.Gaussian(fwhm=psf_fwhm, flux=1.0)
     ip = ImagePars(shape=(Npix, Npix), pixel_scale=ps, indexing='ij')
-    obs = build_image_obs(ip, psf=psf_obj, oversample=5)
+    obs = build_image_obs(ip, psf=psf_obj, render_config=RenderConfig(oversample=5))
     img_ours = np.array(model.render_image(theta, obs=obs))
 
     # GalSim InclinedSersic reference
@@ -493,11 +494,15 @@ def test_sersic_psf_path_consistency():
     ip = ImagePars(shape=(64, 64), pixel_scale=0.3125, indexing='ij')
 
     # fused k-space path (default BoxPixel; int_model triggers kspace_psf_fft)
-    obs_kspace = build_image_obs(ip, psf=psf_obj, oversample=5, int_model=model)
+    obs_kspace = build_image_obs(
+        ip, psf=psf_obj, render_config=RenderConfig(oversample=5), int_model=model
+    )
     img_kspace = np.array(model.render_image(theta, obs=obs_kspace))
 
     # fallback real-space path (drawImage PSF includes pixel; no sinc)
-    obs_realspace = build_image_obs(ip, psf=psf_obj, oversample=5, pixel_response=None)
+    obs_realspace = build_image_obs(
+        ip, psf=psf_obj, render_config=RenderConfig(oversample=5), pixel_response=None
+    )
     img_realspace = np.array(model.render_image(theta, obs=obs_realspace))
 
     peak = np.max(np.abs(img_kspace))
@@ -646,7 +651,7 @@ def _faceon_sersic_diagnostic(
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=oversample,
+                render_config=RenderConfig(oversample=oversample),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -822,7 +827,7 @@ def _sersic_2d_diagnostic(output_dir, psf_fwhm=None, cosi=1.0):
         obs = build_image_obs(
             ip,
             psf=psf_obj,
-            oversample=oversample,
+            render_config=RenderConfig(oversample=oversample),
             int_model=model,
             gsparams=gsp,
         )
@@ -999,7 +1004,7 @@ def test_sersic_inclination_diagnostic(sersic_output_dir):
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=5,
+                render_config=RenderConfig(oversample=5),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -1251,7 +1256,7 @@ def test_sersic_oversample_convergence_diagnostic(sersic_output_dir):
             obs_ref = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=ref_osamp,
+                render_config=RenderConfig(oversample=ref_osamp),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -1267,7 +1272,7 @@ def test_sersic_oversample_convergence_diagnostic(sersic_output_dir):
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=osamp,
+                render_config=RenderConfig(oversample=osamp),
                 int_model=model,
                 gsparams=gsp,
             )

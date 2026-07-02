@@ -101,7 +101,7 @@ For k-space intensity models: the rendering chain is `profile_FT × pixel_FT × 
 - **Standalone**: `render_image(theta, image_pars=ip)` auto-computes `RenderConfig` from theta via `model.maxk(params)` / `model.stepk(params)`. Grid adapts per call.
 - **Inference**: `RenderConfig.for_priors(model, priors, pixel_scale, ...)` computes worst-case from prior bounds. Frozen into `InferenceTask`'s likelihood closure. JIT-compatible.
 
-`maxk` depends on both `int_rscale` (or `int_hlr`) and `cosi` — inclination compresses the FT along ky, extending it by 1/cosi. When `pixel_response` is present, the effective maxk is computed from the combined product `profile_FT × sinc`, not individual maxks — sinc attenuation significantly reduces the needed grid size.
+`maxk` depends on both `rscale` (or `hlr`) and `cosi` — inclination compresses the FT along ky, extending it by 1/cosi. When `pixel_response` is present, the effective maxk is computed from the combined product `profile_FT × sinc`, not individual maxks — sinc attenuation significantly reduces the needed grid size.
 
 **Trade-off**: narrower cosi prior → smaller worst-case maxk → smaller grid → faster inference. The `maxk_threshold` parameter controls the aliasing budget (default 1e-3).
 
@@ -131,9 +131,10 @@ All raise `ValueError` on unknown names.
 | `theta` | JAX array of params in `PARAMETER_NAMES` order | `theta`, `theta_vel` |
 | `pars` | Dict of named parameters | `true_pars`, `meta_pars` |
 | `PARAMETER_NAMES` | Class tuple defining canonical ordering | — |
-| `vel_*` | Velocity model parameter | `vel_rscale`, `vel_x0` |
-| `int_*` | Intensity model parameter | `int_rscale`, `int_x0` |
-| No prefix | Shared geometric parameter | `cosi`, `theta_int`, `g1`, `g2` |
+| `vel.<param>` | Velocity model parameter (dotted SourceModel key) | `vel.rscale`, `vel.x0` |
+| `<band>.<param>` / `<line>.<param>` | Intensity component parameter (dotted SourceModel key) | `F087.rscale`, `Halpha.x0` |
+| No prefix | Shared geometric parameter (top-level) | `cosi`, `theta_int`, `g1`, `g2` |
+| Class `PARAMETER_NAMES` | Bare names (no `vel_`/`int_` prefix) | `rscale`, `x0`, `flux`, `h_over_r` |
 | `X, Y` | 2D coordinate grids | From `build_map_grid_from_image_pars()` |
 
 ### Physical Units
@@ -148,11 +149,15 @@ All raise `ValueError` on unknown names.
 | Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)` |
 | Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 | `folding_threshold` | dimensionless | fraction of flux allowed to alias (default 5e-3) |
-| Render output | flux/pixel | `render_image`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |
+| Render output | flux/pixel | `render_image`, `render_grism`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |
 | Analytic profile eval | surface brightness | `__call__`, `evaluate_in_disk_plane` — continuous-coord eval; multiply by `pixel_scale**2` for flux/pixel |
+| Cube assembly intermediate | SB per arcsec² per nm | `build_cube` — intermediate; observable wrappers convert to flux/pixel before output |
+| Dispersed image intermediate | SB per arcsec² | `disperse_cube` output; final `render_grism` multiplies by `coarse_ps²` to convert to flux/pixel |
 | Noise gain | photons-per-(flux/pixel) | `noise.py:add_intensity_noise` Poisson scaling |
 
 **Always perform dimensional sanity checks** on numerical quantities before finalizing code.
+
+**Full render-method contract:** see `docs/units_and_conventions.md` for the tracked source-of-truth covering every `render_*` method's units, intermediate representations, and the SB↔flux/pixel conversion shorthand.
 
 ---
 
@@ -366,14 +371,13 @@ make test-grism-validation      # compare kl_pipe vs geko outputs
 
 ### Rules for AI Agents
 
-1. **Do not run `make format`** — the user will run formatting manually.
-2. **Branch naming**: `se/` prefix for user branches, `cc/` prefix for AI-created branches.
-3. **Read before editing**: never propose changes to code you haven't read.
-4. **Minimal changes**: don't add docstrings, comments, or type annotations to code you didn't change.
-5. **JAX first**: prefer `jax.numpy` over `numpy` in model/likelihood code.
-6. **Physical sanity checks**: verify units and dimensional consistency for any physics code.
-7. **No AI attribution**: never include `Co-Authored-By`, "Generated with Claude Code", or similar AI-generated footers in commit messages, PR descriptions, or comments. All commits must show the user as sole author.
-8. **Plan verification**: when a completed plan modifies test files, run `/test-integrity` before the final commit.
+1. **Branch naming**: `se/` prefix for user branches, `cc/` prefix for AI-created branches.
+2. **Read before editing**: never propose changes to code you haven't read.
+3. **Minimal changes**: don't add docstrings, comments, or type annotations to code you didn't change.
+4. **JAX first**: prefer `jax.numpy` over `numpy` in model/likelihood code.
+5. **Physical sanity checks**: verify units and dimensional consistency for any physics code.
+6. **No AI attribution**: never include `Co-Authored-By`, "Generated with Claude Code", or similar AI-generated footers in commit messages, PR descriptions, or comments. All commits must show the user as sole author.
+7. **Plan verification**: when a completed plan modifies test files, run `/test-integrity` before the final commit.
 
 ### PR Review Focus Categories
 

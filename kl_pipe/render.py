@@ -24,9 +24,12 @@ import jax
 import numpy as np
 
 if TYPE_CHECKING:
+    from kl_pipe.dispersion import GrismPars
     from kl_pipe.model import IntensityModel
+    from kl_pipe.parameters import ImagePars
     from kl_pipe.pixel import PixelResponse
     from kl_pipe.priors import PriorDict
+    from kl_pipe.source import SourceModel
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,7 @@ class RenderConfig:
     Parameters
     ----------
     oversample : int
-        K-grid oversampling factor. Extends effective Nyquist to
+        K-grid oversampling factor (spatial). Extends effective Nyquist to
         ``oversample × π / pixel_scale``. Derived from ``effective_maxk``
         when using factory methods.
     pad_factor : int
@@ -50,6 +53,18 @@ class RenderConfig:
         boundaries. Controls ``stepk``. Default 5e-3.
     maxk_threshold : float
         FT amplitude threshold for maxk computation. Default 1e-3.
+    spectral_oversample : int
+        Wavelength sub-bin count for cube assembly in
+        ``SourceModel.build_cube`` / ``render_grism``. Default 15; the
+        former default of 5 was found to produce parameter bias 5-25x
+        ``sigma_Fisher`` at SNR=10000 for spectrally-sensitive params
+        (see ``experiments/sweverett/spectral_osf_convergence/`` and
+        ``docs/oversampling_convergence.md``). osf=15 reduces that to
+        ~sigma_Fisher; cube-pixel convergence at osf=15 vs osf=25 is
+        <1e-3. Cost scales linearly with osf. Only consulted when the
+        obs (or render_grism caller) does not pass an explicit value.
+        Applies to grism obs only; ignored for image/velocity obs that
+        carry RenderConfig.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -62,6 +77,7 @@ class RenderConfig:
     pad_factor: int = 2
     folding_threshold: float = 5e-3
     maxk_threshold: float = 1e-3
+    spectral_oversample: int = 15
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
 
@@ -182,8 +198,106 @@ class RenderConfig:
             stepk=stepk,
         )
 
+    @classmethod
+    def for_grism_priors(
+        cls,
+        intensity_model: 'IntensityModel',
+        velocity_model: 'VelocityModel',
+        intensity_priors: 'PriorDict',
+        velocity_priors: 'PriorDict',
+        sigma_v_min: float,
+        coarse_pixel_scale: float,
+        psf=None,
+        folding_threshold: float = 5e-3,
+        maxk_threshold: float = 1e-3,
+    ) -> 'RenderConfig':
+        """Compute worst-case ``RenderConfig`` for one emission line's grism
+        cube fine-grid sizing.
+
+        Uses the Minkowski-sum bandwidth bound derived in
+        ``docs/notes/grism_cube_bandwidth.tex``: the cube-slice
+        ``M = I * G`` has support up to ``maxk(I) + maxk(G)`` (Minkowski sum
+        of supports of the convolved FTs), bounded above by the PSF cutoff
+        when PSF is present. No pixel-response factor (post-dispersion only).
+
+        Parameters
+        ----------
+        intensity_model : IntensityModel
+            Emission line's spatial intensity model.
+        velocity_model : VelocityModel
+            Velocity model providing ``grad_bandwidth(params)``.
+        intensity_priors : PriorDict
+            Prior specifications keyed by ``intensity_model.PARAMETER_NAMES``.
+        velocity_priors : PriorDict
+            Prior specifications keyed by ``velocity_model.PARAMETER_NAMES``.
+        sigma_v_min : float
+            Lower prior bound on intrinsic kinematic dispersion (km/s). The
+            worst-case (narrowest line) value.
+        coarse_pixel_scale : float
+            Coarse detector pixel scale (arcsec).
+        psf : galsim.GSObject, optional
+            PSF profile for per-slice damping. Passed through to
+            ``compute_effective_maxk_grism``.
+        folding_threshold : float
+            Max flux folding for ``stepk`` (default 5e-3); same convention as
+            ``for_priors``.
+        maxk_threshold : float
+            FT amplitude threshold for the maxk product walk (default 1e-3).
+
+        Returns
+        -------
+        RenderConfig
+            With ``oversample``, ``effective_maxk``, ``stepk`` derived from
+            the worst-case bandwidth.
+        """
+        int_worst_maxk, int_worst_stepk = _extract_worst_case_params(
+            intensity_model, intensity_priors
+        )
+        vel_worst, _ = _extract_worst_case_params(velocity_model, velocity_priors)
+
+        try:
+            grad_v_max = velocity_model.grad_bandwidth(vel_worst)
+        except KeyError:
+            # velocity priors missing one of (vcirc, rscale, cosi) -- assume
+            # no velocity-modulation bandwidth contribution
+            grad_v_max = 0.0
+
+        try:
+            eff_maxk = compute_effective_maxk_grism(
+                intensity_model,
+                int_worst_maxk,
+                sigma_v_min,
+                grad_v_max,
+                psf=psf,
+                threshold=maxk_threshold,
+            )
+        except (KeyError, NotImplementedError):
+            eff_maxk = np.pi / coarse_pixel_scale  # fallback: coarse Nyquist
+
+        try:
+            stepk = intensity_model.stepk(
+                int_worst_stepk, folding_threshold=folding_threshold
+            )
+        except (KeyError, NotImplementedError):
+            stepk = np.pi / (5.0 * coarse_pixel_scale)  # fallback
+
+        oversample = _oversample_from_maxk(eff_maxk, coarse_pixel_scale)
+
+        return cls(
+            oversample=oversample,
+            pad_factor=2,
+            folding_threshold=folding_threshold,
+            maxk_threshold=maxk_threshold,
+            effective_maxk=eff_maxk,
+            stepk=stepk,
+        )
+
     def __repr__(self) -> str:
-        parts = [f'oversample={self.oversample}', f'pad_factor={self.pad_factor}']
+        parts = [
+            f'oversample={self.oversample}',
+            f'pad_factor={self.pad_factor}',
+            f'spectral_oversample={self.spectral_oversample}',
+        ]
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -203,6 +317,7 @@ def _render_config_flatten(rc):
         rc.pad_factor,
         rc.folding_threshold,
         rc.maxk_threshold,
+        rc.spectral_oversample,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -214,8 +329,9 @@ def _render_config_unflatten(aux, children):
         pad_factor=aux[1],
         folding_threshold=aux[2],
         maxk_threshold=aux[3],
-        effective_maxk=aux[4],
-        stepk=aux[5],
+        spectral_oversample=aux[4],
+        effective_maxk=aux[5],
+        stepk=aux[6],
     )
 
 
@@ -303,9 +419,118 @@ def compute_effective_maxk(
 
     above = k_scan[product > threshold]
     if len(above) == 0:
-        # nothing crosses threshold (shouldn't happen at k=0 where DC is 1)
-        # but if it does, return 0 as a safe upper bound that won't oversize.
-        return 0.0
+        # the DC term (k=0) of a flux-normalized profile x pixel x PSF product
+        # is ~1, so it must exceed threshold; an empty result means one factor
+        # is not normalized (a real bug). Returning 0 would silently undersize
+        # the FFT grid and alias the render -- raise loudly instead.
+        raise ValueError(
+            f"effective-maxk scan found no k with product > threshold "
+            f"({threshold:g}); DC product={product[0]:g} (expected ~1 for a "
+            f"flux-normalized profile x pixel x PSF). Model "
+            f"{type(model).__name__!r} _ft_envelope, pixel_response, or PSF is "
+            f"likely not normalized. params={params}"
+        )
+    return float(above[-1])
+
+
+def compute_effective_maxk_grism(
+    intensity_model,
+    intensity_params: dict,
+    sigma_v: float,
+    grad_v_max: float,
+    psf=None,
+    threshold: float = 1e-3,
+) -> float:
+    """Effective maxk for one emission line's grism cube fine-grid sizing.
+
+    The cube-slice intensity at fixed wavelength is
+    ``M(x, y) = I(x, y) * G(x, y)`` (pointwise product). By the FT
+    convolution theorem, ``FT[M] = FT[I] (*) FT[G]`` (convolution in
+    k-space), and the support of the convolution is the Minkowski sum of
+    supports: ``maxk(M) = maxk(I) + maxk(G)``. The cube slice is then
+    convolved with the PSF in real space, so ``FT[Conv[M, PSF]] = FT[M] *
+    FT[PSF]`` (multiplication). The effective post-PSF bandwidth is bounded
+    by the smaller of:
+
+    - the cube-slice bandwidth ``maxk(I) + maxk(G)``, and
+    - the largest k below which the PSF FT remains above threshold.
+
+    No pixel-response factor is included: the grism rendering chain applies
+    the detector BoxPixel sinc post-dispersion (on the dispersed 2D
+    observable), not per cube-slice cell. See
+    ``docs/notes/grism_cube_bandwidth.tex`` for the derivation.
+
+    Parameters
+    ----------
+    intensity_model : IntensityModel
+        The emission line's spatial intensity model. Must expose
+        ``maxk(params, threshold)``.
+    intensity_params : dict
+        Worst-case intensity parameters (typically the output of
+        ``_extract_worst_case_params(intensity_model, priors)[0]``).
+    sigma_v : float
+        Worst-case (minimum) intrinsic kinematic dispersion sigma_v in km/s.
+    grad_v_max : float
+        Worst-case maximum ``|grad v_LOS|`` in km/s/arcsec across the
+        spatial domain. From ``velocity_model.grad_bandwidth(params)``
+        at worst-case velocity parameters.
+    psf : galsim.GSObject, optional
+        PSF profile. Damps the post-cube product at high k via ``psf.kValue``.
+    threshold : float
+        FT amplitude threshold. Default 1e-3.
+
+    Returns
+    -------
+    float
+        Effective maxk in rad/arcsec.
+
+    Raises
+    ------
+    ValueError
+        If the PSF FT never exceeds ``threshold`` (including at k=0), which
+        indicates a non-normalized PSF rather than a legitimate bandwidth.
+    """
+    if sigma_v <= 0:
+        raise ValueError(
+            f"sigma_v must be positive (got {sigma_v}); the velocity-modulated "
+            f"Gaussian factor is ill-defined at sigma_v = 0"
+        )
+
+    # cube-slice bandwidth bound (Minkowski sum of supports of FT[I] and FT[G])
+    k_I = intensity_model.maxk(intensity_params, threshold=threshold)
+    if grad_v_max > 0:
+        k_G = np.sqrt(-2.0 * np.log(threshold)) * grad_v_max / sigma_v
+    else:
+        # uniform velocity field -> G has no spatial dependence -> no bandwidth
+        # contribution from the modulation factor
+        k_G = 0.0
+    k_cube_bare = k_I + k_G
+
+    if psf is None:
+        return float(k_cube_bare)
+
+    # PSF damping: post-PSF amplitude at k is bounded by FT[PSF](k). Find the
+    # largest k <= k_cube_bare at which FT[PSF] remains above threshold.
+    n_scan = 500
+    k_scan = np.linspace(0.0, k_cube_bare, n_scan)
+
+    import galsim
+
+    psf_ft = np.array(
+        [abs(psf.kValue(galsim.PositionD(0.0, float(k)))) for k in k_scan]
+    )
+
+    above = k_scan[psf_ft > threshold]
+    if len(above) == 0:
+        # FT[PSF](k=0) is ~1 for a flux-normalized PSF, so it must exceed
+        # threshold; an empty result means the PSF is not normalized (a real
+        # bug). Returning 0 would silently undersize the grism fine-grid and
+        # alias the render -- raise loudly instead.
+        raise ValueError(
+            f"grism effective-maxk scan found no k with FT[PSF] > threshold "
+            f"({threshold:g}); FT[PSF](0)={psf_ft[0]:g} (expected ~1 for a "
+            f"flux-normalized PSF). The supplied PSF is likely not normalized."
+        )
     return float(above[-1])
 
 
@@ -353,12 +578,14 @@ def _extract_worst_case_params(model, priors) -> tuple:
 
         prior = spec
         if hasattr(prior, 'low') and hasattr(prior, 'high'):
-            if name in ('int_rscale', 'int_hlr'):
-                # smallest scale → highest maxk
+            if name in ('rscale', 'hlr'):
+                # smallest scale → highest maxk (also the velocity-gradient
+                # worst case: smallest rscale → steepest gradient → highest k_G)
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.high
             elif name == 'cosi':
-                # smallest cosi (most edge-on) → highest maxk
+                # smallest cosi (most edge-on) → highest maxk for intensity
+                # AND highest sin(i) for velocity-gradient bandwidth
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.low
             elif name == 'n_sersic':
@@ -369,6 +596,10 @@ def _extract_worst_case_params(model, priors) -> tuple:
                 # most negative nu → slowest FT decay → highest maxk
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.low
+            elif name == 'vcirc':
+                # largest vcirc → steepest velocity gradient → highest k_G
+                worst_maxk_params[name] = prior.high
+                worst_stepk_params[name] = prior.high
             else:
                 mid = 0.5 * (prior.low + prior.high)
                 worst_maxk_params[name] = mid
@@ -380,3 +611,227 @@ def _extract_worst_case_params(model, priors) -> tuple:
                 worst_stepk_params[name] = prior.mean
 
     return worst_maxk_params, worst_stepk_params
+
+
+# ============================================================================
+# Top-level builders for obs-aware RenderConfig sizing
+# ============================================================================
+#
+# The classmethods ``RenderConfig.for_priors`` / ``RenderConfig.for_grism_priors``
+# are the underlying primitives; they operate on a flat ``model.PARAMETER_NAMES``
+# namespace and bare priors. The builders below are the user-facing entry points
+# for the SourceModel API: they accept dotted-key ``PriorDict`` and the same
+# primitives the ``build_*_obs`` factories take (image_pars / grism_pars, psf,
+# pixel_response, broadband_key), so users construct an rc and an obs with the
+# same arguments and thread the rc into the obs.
+#
+#   rc  = build_image_render_config(source, priors, image_pars, broadband_key='F087', psf=psf)
+#   obs = build_image_obs(image_pars, psf=psf, broadband_key='F087', render_config=rc, data=..., variance=...)
+#
+# Skipping the builder yields ``build_image_obs``'s safe-default rc
+# (``RenderConfig()`` -- point-sampled, oversample=1); appropriate for tutorials
+# and quick renders, but undersized for inference with tight priors.
+
+
+def build_image_render_config(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    image_pars: 'ImagePars',
+    broadband_key: str,
+    *,
+    psf=None,
+    pixel_response: 'PixelResponse' = None,
+    folding_threshold: float = 5e-3,
+    maxk_threshold: float = 1e-3,
+) -> RenderConfig:
+    """Worst-case ``RenderConfig`` for an ``ImageObs`` channel.
+
+    Looks up ``source.broadband_models[broadband_key]``, extracts the
+    band-specific subset of the dotted-key ``priors`` (resolution
+    ``<broadband_key>.<bare>`` → ``<bare>`` → verbatim), runs model-specific
+    prior safety (e.g. Spergel cusp regime), and delegates to
+    ``RenderConfig.for_priors``.
+
+    Parameters
+    ----------
+    source : SourceModel
+        Must have ``broadband_key`` in ``source.broadband_models``.
+    priors : PriorDict
+        Dotted-key SourceModel priors.
+    image_pars : ImagePars
+        Coarse pixel grid; ``pixel_scale`` is read from here.
+    broadband_key : str
+        Band name to size the rc for. Must exist in
+        ``source.broadband_models``.
+    psf : galsim.GSObject, optional
+        PSF for the worst-case maxk product walk; matches what gets
+        passed to ``build_image_obs``.
+    pixel_response : PixelResponse, optional
+        Defaults to ``BoxPixel(image_pars.pixel_scale)`` to match
+        ``build_image_obs``'s default. Pass ``None`` to skip pixel
+        damping in the worst-case scan (rarely what you want for
+        inference).
+    folding_threshold, maxk_threshold : float
+        Passed through to ``RenderConfig.for_priors``.
+
+    Returns
+    -------
+    RenderConfig
+        Sized for the worst-case maxk and stepk in the prior bounds.
+
+    Raises
+    ------
+    ValueError
+        If ``broadband_key`` is not in ``source.broadband_models``.
+    """
+    from kl_pipe.pixel import BoxPixel
+    from kl_pipe.source import _component_priors_for_intensity
+
+    if broadband_key not in source.broadband_models:
+        raise ValueError(
+            f"broadband_key '{broadband_key}' not in source.broadband_models "
+            f"(have: {sorted(source.broadband_models)})"
+        )
+
+    model = source.broadband_models[broadband_key]
+    sub_priors = _component_priors_for_intensity(
+        priors, broadband_key, model.PARAMETER_NAMES
+    )
+
+    # model-specific prior validation (loud failure before the worst-case scan)
+    if hasattr(model, 'check_priors_safe'):
+        model.check_priors_safe(sub_priors)
+
+    if pixel_response is None:
+        pixel_response = BoxPixel(image_pars.pixel_scale)
+
+    return RenderConfig.for_priors(
+        model,
+        sub_priors,
+        image_pars.pixel_scale,
+        pixel_response=pixel_response,
+        psf=psf,
+        folding_threshold=folding_threshold,
+        maxk_threshold=maxk_threshold,
+    )
+
+
+def build_grism_render_config(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    grism_pars: 'GrismPars',
+    *,
+    psf=None,
+    folding_threshold: float = 5e-3,
+    maxk_threshold: float = 1e-3,
+) -> RenderConfig:
+    """Worst-case ``RenderConfig`` for a ``GrismObs`` cube.
+
+    Iterates ``source.emission_lines``; for each line that owns a spatial
+    profile (lines borrowing via ``intensity_key`` are validated through
+    their owner), computes the per-line cube-slice rc via
+    ``RenderConfig.for_grism_priors`` (Minkowski-sum bandwidth bound,
+    intensity-FT support ⊕ velocity-modulation Gaussian support, damped
+    by PSF). Returns the line with the largest required oversample
+    (single shared spatial grid -> the most demanding line dictates).
+
+    Math: see ``docs/notes/grism_cube_bandwidth.tex``.
+
+    Parameters
+    ----------
+    source : SourceModel
+        Must have ``velocity_model`` set and ``emission_lines`` non-empty.
+    priors : PriorDict
+        Dotted-key SourceModel priors. Required keys:
+        ``<line>.<int_param>`` for each spatial-owner line,
+        ``vel.<vel_param>`` for the velocity model,
+        ``<disp_owner>.dispersion`` for each line's sigma_v (``disp_owner``
+        is ``line.dispersion_key`` if set else the line key itself),
+        plus shared ``cosi``, ``theta_int``, ``g1``, ``g2``.
+    grism_pars : GrismPars
+        Coarse pixel scale is read from ``grism_pars.image_pars.pixel_scale``.
+    psf : galsim.GSObject, optional
+        Per-slice PSF; passed through to
+        ``compute_effective_maxk_grism``.
+    folding_threshold, maxk_threshold : float
+        Passed through to ``RenderConfig.for_grism_priors``.
+
+    Returns
+    -------
+    RenderConfig
+        Worst-case across spatial-owner emission lines.
+
+    Raises
+    ------
+    ValueError
+        If ``source.velocity_model`` is None or ``source.emission_lines``
+        is empty or no line owns a spatial profile.
+    KeyError
+        If a required ``<line>.dispersion`` prior key is missing.
+    """
+    from kl_pipe.source import _component_priors_for_intensity
+
+    if source.velocity_model is None:
+        raise ValueError(
+            "build_grism_render_config requires source.velocity_model to be set"
+        )
+    if not source.emission_lines:
+        raise ValueError(
+            "build_grism_render_config requires non-empty source.emission_lines"
+        )
+
+    coarse_pixel_scale = grism_pars.image_pars.pixel_scale
+    velocity_priors = _component_priors_for_intensity(
+        priors, 'vel', source.velocity_model.PARAMETER_NAMES
+    )
+
+    worst_rc = None
+    for line_key, line in source.emission_lines.items():
+        if line.intensity is None:
+            # spatial profile borrowed via intensity_key; validated via owner
+            continue
+        intensity_model = line.intensity
+        intensity_priors = _component_priors_for_intensity(
+            priors, line_key, intensity_model.PARAMETER_NAMES
+        )
+
+        # model-specific prior safety (e.g. Spergel cusp regime)
+        if hasattr(intensity_model, 'check_priors_safe'):
+            intensity_model.check_priors_safe(intensity_priors)
+
+        # sigma_v lookup: per-line dispersion (or shared via dispersion_key)
+        disp_owner = (
+            line.dispersion_key if line.dispersion_key is not None else line_key
+        )
+        disp_key = f'{disp_owner}.dispersion'
+        if disp_key not in priors._param_spec:
+            raise KeyError(
+                f"emission line '{line_key}' requires prior key '{disp_key}'; "
+                f"available: {sorted(priors._param_spec)}"
+            )
+        spec = priors._param_spec[disp_key]
+        if hasattr(spec, 'low'):
+            sigma_v_min = float(spec.low)
+        else:
+            sigma_v_min = float(spec)
+
+        rc = RenderConfig.for_grism_priors(
+            intensity_model=intensity_model,
+            velocity_model=source.velocity_model,
+            intensity_priors=intensity_priors,
+            velocity_priors=velocity_priors,
+            sigma_v_min=sigma_v_min,
+            coarse_pixel_scale=coarse_pixel_scale,
+            psf=psf,
+            folding_threshold=folding_threshold,
+            maxk_threshold=maxk_threshold,
+        )
+        if worst_rc is None or rc.oversample > worst_rc.oversample:
+            worst_rc = rc
+
+    if worst_rc is None:
+        raise ValueError(
+            "no emission line owns a spatial profile (all use intensity_key); "
+            "cannot derive grism RenderConfig"
+        )
+    return worst_rc

@@ -26,8 +26,9 @@ from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import OffsetVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
 from kl_pipe.priors import TruncatedNormal, Gaussian, PriorDict
+from kl_pipe.source import SourceModel
+from kl_pipe.observation import build_image_obs, build_velocity_obs
 from kl_pipe.sampling import (
     InferenceTask,
     SamplerResult,
@@ -122,24 +123,14 @@ def estimate_velocity_params(
     """
     Estimate velocity model parameters from TNG velocity map.
 
-    Parameters
-    ----------
-    velocity_map : np.ndarray
-        TNG velocity map.
-    image_pars : ImagePars
-        Image parameters.
-
-    Returns
-    -------
-    dict
-        Estimated parameters: v0, vcirc, vel_rscale
+    Returns dotted SourceModel keys (``vel.v0``, ``vel.vcirc``, etc.).
     """
     # Mask out zero pixels (no gas particles)
     valid_mask = velocity_map != 0
 
     if valid_mask.sum() < 10:
         # Not enough valid pixels, return defaults
-        return {'v0': 0.0, 'vcirc': 150.0, 'vel_rscale': 0.5}
+        return {'vel.v0': 0.0, 'vel.vcirc': 150.0, 'vel.rscale': 0.5}
 
     valid_vel = velocity_map[valid_mask]
 
@@ -159,14 +150,14 @@ def estimate_velocity_params(
     # At r=rscale, v = vcirc * (2/pi) * (pi/4) = vcirc/2
     # Use half-light radius as rough proxy
     fov_arcsec = image_pars.Nx * image_pars.pixel_scale
-    vel_rscale = fov_arcsec / 6.0  # Rough estimate
+    rscale = fov_arcsec / 6.0  # Rough estimate
 
     return {
-        'v0': v0,
-        'vcirc': vcirc_estimate,
-        'vel_rscale': vel_rscale,
-        'vel_x0': 0.0,  # Assume centered initially
-        'vel_y0': 0.0,
+        'vel.v0': v0,
+        'vel.vcirc': vcirc_estimate,
+        'vel.rscale': rscale,
+        'vel.x0': 0.0,  # Assume centered initially
+        'vel.y0': 0.0,
     }
 
 
@@ -202,19 +193,8 @@ def estimate_intensity_params(
     """
     Estimate intensity model parameters from TNG intensity map.
 
-    Assumes map is already normalized to unit total flux.
-
-    Parameters
-    ----------
-    intensity_map : np.ndarray
-        Normalized TNG intensity map.
-    image_pars : ImagePars
-        Image parameters.
-
-    Returns
-    -------
-    dict
-        Estimated parameters: flux, int_rscale
+    Assumes map is already normalized to unit total flux. Returns dotted
+    SourceModel keys under broadband band ``'r'``.
     """
     # For normalized intensity maps (sum=1), the exponential model flux parameter
     # needs to be ~0.01 to give similar total flux (model sum = flux * 100)
@@ -225,11 +205,11 @@ def estimate_intensity_params(
     total = intensity_map.sum()
     if total <= 0:
         return {
-            'flux': flux,
-            'int_rscale': 0.5,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'r.flux': flux,
+            'r.rscale': 0.5,
+            'r.h_over_r': 0.1,
+            'r.x0': 0.0,
+            'r.y0': 0.0,
         }
 
     cumsum = np.cumsum(np.sort(intensity_map.ravel())[::-1])
@@ -240,17 +220,17 @@ def estimate_intensity_params(
     half_light_radius_arcsec = half_light_radius_pix * image_pars.pixel_scale
 
     # For exponential profile, half-light radius ≈ 1.68 * scale_length
-    int_rscale = half_light_radius_arcsec / 1.68
+    rscale = half_light_radius_arcsec / 1.68
 
     # Ensure reasonable bounds
-    int_rscale = max(0.1, min(3.0, int_rscale))
+    rscale = max(0.1, min(3.0, rscale))
 
     return {
-        'flux': flux,
-        'int_rscale': int_rscale,
-        'int_h_over_r': 0.1,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'r.flux': flux,
+        'r.rscale': rscale,
+        'r.h_over_r': 0.1,
+        'r.x0': 0.0,
+        'r.y0': 0.0,
     }
 
 
@@ -285,13 +265,11 @@ def create_tng_joint_inference_task(
     InferenceTask
         Configured task ready for sampling.
     """
-    # Create joint model with OffsetVelocityModel to allow centroid offsets
-    vel_model = OffsetVelocityModel()
-    int_model = InclinedExponentialModel()
-    joint_model = KLModel(
-        velocity_model=vel_model,
-        intensity_model=int_model,
-        shared_pars={'cosi', 'theta_int', 'g1', 'g2'},
+    # SourceModel with OffsetVelocityModel + broadband band 'r' (matches
+    # TNGRenderConfig(band='r')).
+    source = SourceModel(
+        velocity_model=OffsetVelocityModel(),
+        broadband_models={'r': InclinedExponentialModel()},
     )
 
     # FOV for offset prior bounds
@@ -302,27 +280,27 @@ def create_tng_joint_inference_task(
     # This allows exploration since TNG doesn't match analytic models exactly
     prior_spec = {
         # Velocity params - wide priors
-        'v0': Gaussian(true_pars.get('v0', 0.0), 30.0),  # Wide Gaussian
-        'vcirc': TruncatedNormal(
-            true_pars.get('vcirc', 150.0), 100.0, 30, 500
+        'vel.v0': Gaussian(true_pars.get('vel.v0', 0.0), 30.0),  # Wide Gaussian
+        'vel.vcirc': TruncatedNormal(
+            true_pars.get('vel.vcirc', 150.0), 100.0, 30, 500
         ),  # Very wide
-        'vel_rscale': TruncatedNormal(true_pars.get('vel_rscale', 0.5), 0.5, 0.05, 3.0),
-        'vel_x0': TruncatedNormal(
-            true_pars.get('vel_x0', 0.0), 0.5, -offset_bound, offset_bound
+        'vel.rscale': TruncatedNormal(true_pars.get('vel.rscale', 0.5), 0.5, 0.05, 3.0),
+        'vel.x0': TruncatedNormal(
+            true_pars.get('vel.x0', 0.0), 0.5, -offset_bound, offset_bound
         ),
-        'vel_y0': TruncatedNormal(
-            true_pars.get('vel_y0', 0.0), 0.5, -offset_bound, offset_bound
+        'vel.y0': TruncatedNormal(
+            true_pars.get('vel.y0', 0.0), 0.5, -offset_bound, offset_bound
         ),
-        # Intensity params - wide priors
+        # Intensity params - wide priors (band 'r')
         # After normalization, flux ~0.01 gives unit integrated flux in model
-        'flux': TruncatedNormal(true_pars.get('flux', 0.01), 0.02, 0.001, 0.1),
-        'int_rscale': TruncatedNormal(true_pars.get('int_rscale', 0.5), 0.5, 0.05, 3.0),
-        'int_h_over_r': 0.1,  # Fixed
-        'int_x0': TruncatedNormal(
-            true_pars.get('int_x0', 0.0), 0.5, -offset_bound, offset_bound
+        'r.flux': TruncatedNormal(true_pars.get('r.flux', 0.01), 0.02, 0.001, 0.1),
+        'r.rscale': TruncatedNormal(true_pars.get('r.rscale', 0.5), 0.5, 0.05, 3.0),
+        'r.h_over_r': 0.1,  # Fixed
+        'r.x0': TruncatedNormal(
+            true_pars.get('r.x0', 0.0), 0.5, -offset_bound, offset_bound
         ),
-        'int_y0': TruncatedNormal(
-            true_pars.get('int_y0', 0.0), 0.5, -offset_bound, offset_bound
+        'r.y0': TruncatedNormal(
+            true_pars.get('r.y0', 0.0), 0.5, -offset_bound, offset_bound
         ),
         # Shared geometric params - centered on known TNG values
         'cosi': TruncatedNormal(true_pars['cosi'], 0.2, 0.01, 0.99),
@@ -339,16 +317,18 @@ def create_tng_joint_inference_task(
 
     priors = PriorDict(prior_spec)
 
-    # Create task using factory method
-    task = InferenceTask.from_joint_model(
-        model=joint_model,
-        priors=priors,
-        data_vel=data_vel,
-        data_int=data_int,
-        variance_vel=var_vel,
-        variance_int=var_int,
-        image_pars_vel=image_pars_vel,
-        image_pars_int=image_pars_int,
+    img_obs = build_image_obs(
+        image_pars_int,
+        data=data_int,
+        variance=var_int,
+        broadband_key='r',
+    )
+    vel_obs = build_velocity_obs(image_pars_vel, data=data_vel, variance=var_vel)
+    task = InferenceTask.from_obs(
+        source,
+        priors,
+        velocity_obs=vel_obs,
+        image_obs={'r': img_obs},
     )
 
     return task
@@ -372,24 +352,17 @@ def evaluate_model_at_map(
     image_pars_int: ImagePars,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Evaluate model at MAP parameters.
+    Evaluate SourceModel at MAP parameters.
 
     Returns velocity and intensity model predictions.
     """
-    # Build full parameter dict (sampled + fixed)
     full_pars = {**task.fixed_params, **map_pars}
 
-    # Evaluate velocity model
-    vel_model = task.model.velocity_model
-    vel_pars = {k: full_pars[k] for k in vel_model.PARAMETER_NAMES}
-    theta_vel = jnp.array([vel_pars[k] for k in vel_model.PARAMETER_NAMES])
-    model_vel = vel_model.render(theta_vel, 'image', image_pars_vel)
-
-    # Evaluate intensity model
-    int_model = task.model.intensity_model
-    int_pars = {k: full_pars[k] for k in int_model.PARAMETER_NAMES}
-    theta_int = jnp.array([int_pars[k] for k in int_model.PARAMETER_NAMES])
-    model_int = int_model.render(theta_int, 'image', image_pars_int)
+    source = task.model  # SourceModel
+    obs_vel = build_velocity_obs(image_pars_vel)
+    obs_int = build_image_obs(image_pars_int, broadband_key='r')
+    model_vel = source.render_velocity(full_pars, obs_vel)
+    model_int = source.render_broadband(full_pars, obs_int, 'r')
 
     return model_vel, model_int
 
@@ -473,11 +446,13 @@ def run_tng_sampling_test(
         f'Geometric params: cosi={true_pars["cosi"]:.3f}, theta_int={true_pars["theta_int"]:.3f}'
     )
     print(
-        f'Estimated velocity: v0={vel_params["v0"]:.1f}, vcirc={vel_params["vcirc"]:.1f}, '
-        f'vel_rscale={vel_params["vel_rscale"]:.2f}'
+        f'Estimated velocity: v0={vel_params["vel.v0"]:.1f}, '
+        f'vcirc={vel_params["vel.vcirc"]:.1f}, '
+        f'rscale={vel_params["vel.rscale"]:.2f}'
     )
     print(
-        f'Estimated intensity: flux={int_params["flux"]:.2f}, int_rscale={int_params["int_rscale"]:.2f}'
+        f'Estimated intensity: flux={int_params["r.flux"]:.2f}, '
+        f'rscale={int_params["r.rscale"]:.2f}'
     )
     print(f'Variance (mean): vel={var_vel_mean:.2e}, int={var_int_mean:.2e}')
 
@@ -615,10 +590,13 @@ class TestTNGNativeSampling:
         galaxy = tng_data.get_galaxy(subhalo_id=subhalo_id)
         gen = TNGDataVectorGenerator(galaxy)
 
-        # Extract native orientation as "true" geometric parameters
+        # Extract native orientation as "true" geometric parameters.
+        # Wrap native_pa_rad into [0, 2pi) so TruncatedNormal(low=0, high=2pi)
+        # accepts it (some TNG SubhaloIDs return negative PA angles).
+        native_pa_wrapped = float(gen.native_pa_rad) % (2 * np.pi)
         true_pars = {
             'cosi': gen.native_cosi,
-            'theta_int': gen.native_pa_rad,
+            'theta_int': native_pa_wrapped,
             'g1': 0.0,
             'g2': 0.0,
         }
@@ -627,7 +605,11 @@ class TestTNGNativeSampling:
             f'\nNative orientation: inc={gen.native_inclination_deg:.1f}°, '
             f'PA={gen.native_pa_deg:.1f}°'
         )
-        print(f'  -> cosi={gen.native_cosi:.3f}, theta_int={gen.native_pa_rad:.3f} rad')
+        print(
+            f'  -> cosi={gen.native_cosi:.3f}, '
+            f'theta_int={native_pa_wrapped:.3f} rad '
+            f'(native={gen.native_pa_rad:.3f} wrapped to [0, 2pi))'
+        )
 
         # Create render config for native orientation
         config = TNGRenderConfig(

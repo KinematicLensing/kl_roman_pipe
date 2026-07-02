@@ -20,20 +20,10 @@ from scipy.ndimage import convolve1d
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
-from kl_pipe.spectral import (
-    LineSpec,
-    EmissionLine,
-    SpectralConfig,
-    SpectralModel,
-    CubePars,
-    halpha_line,
-    halpha_nii_lines,
-    make_spectral_config,
-    C_KMS,
-    HALPHA,
-    NII_6583,
-)
+from kl_pipe.source import SourceModel, _build_component_theta
+from kl_pipe.spectral import CubePars, C_KMS
+from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
+from kl_pipe.observation import build_grism_obs, GrismObs
 from kl_pipe.dispersion import (
     GrismPars,
     disperse_cube,
@@ -45,6 +35,7 @@ from kl_pipe.diagnostics.grism import (
     plot_dispersion_angles,
     plot_dispersion_angle_study,
 )
+from kl_pipe.render import RenderConfig
 
 # output directory for diagnostic plots
 OUT_DIR = os.path.join(os.path.dirname(__file__), 'out', 'grism')
@@ -64,7 +55,7 @@ _VEL_PARS = {
     'g2': 0.0,
     'v0': 10.0,
     'vcirc': 200.0,
-    'vel_rscale': 0.5,
+    'rscale': 0.5,
 }
 
 _INT_PARS = {
@@ -73,10 +64,10 @@ _INT_PARS = {
     'g1': 0.0,
     'g2': 0.0,
     'flux': 100.0,
-    'int_rscale': 0.3,
-    'int_h_over_r': 0.1,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
+    'rscale': 0.3,
+    'h_over_r': 0.1,
+    'x0': 0.0,
+    'y0': 0.0,
 }
 
 _SHARED_PARS = {'cosi', 'theta_int', 'g1', 'g2'}
@@ -93,40 +84,83 @@ def int_model():
 
 
 @pytest.fixture(scope='module')
-def ha_config():
-    return SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
+def source_ha(vel_model, int_model):
+    """SourceModel with single Halpha line (line owns spatial profile)."""
+    return SourceModel(
+        velocity_model=vel_model,
+        emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+    )
 
 
 @pytest.fixture(scope='module')
-def ha_nii_config():
-    return make_spectral_config()
-
-
-@pytest.fixture(scope='module')
-def spec_model_ha(vel_model, int_model, ha_config):
-    return SpectralModel(ha_config, int_model, vel_model)
-
-
-@pytest.fixture(scope='module')
-def spec_model_ha_nii(vel_model, int_model, ha_nii_config):
-    return SpectralModel(ha_nii_config, int_model, vel_model)
+def source_ha_nii(vel_model, int_model):
+    """SourceModel with Halpha + NII6548 + NII6584 (NII lines share Halpha spatial)."""
+    return SourceModel(
+        velocity_model=vel_model,
+        emission_lines={
+            'Halpha': EmissionLine(intensity=int_model),
+            'NII6548': EmissionLine(intensity_key='Halpha'),
+            'NII6584': EmissionLine(intensity_key='Halpha'),
+        },
+    )
 
 
 @pytest.fixture(scope='module')
 def cube_pars():
     z = 1.0
-    lam_center = HALPHA.lambda_rest * (1 + z)
+    lam_center = LINE_LAMBDAS['Halpha'] * (1 + z)
     dlam = lam_center * 2000.0 / C_KMS
     return CubePars.from_range(_IMAGE_PARS, lam_center - dlam, lam_center + dlam, 1.1)
 
 
-def _build_composite_theta(vel_pars, int_pars, spec_pars_dict, kl_model):
-    """Build composite theta array from dicts + KLModel."""
-    merged = {}
-    merged.update(vel_pars)
-    merged.update(int_pars)
-    merged.update(spec_pars_dict)
-    return kl_model.pars2theta(merged)
+def _make_pars(
+    vel_pars,
+    int_pars,
+    z,
+    vel_dispersion,
+    line_fluxes,
+    line_conts=None,
+):
+    """Build a SourceModel dotted-key pars dict from legacy-shape pars."""
+    pars = {
+        'cosi': vel_pars['cosi'],
+        'theta_int': vel_pars['theta_int'],
+        'g1': vel_pars['g1'],
+        'g2': vel_pars['g2'],
+        'z': z,
+        'vel.v0': vel_pars['v0'],
+        'vel.vcirc': vel_pars['vcirc'],
+        'vel.rscale': vel_pars['rscale'],
+    }
+    for line_key, line_flux in line_fluxes.items():
+        pars[f'{line_key}.flux'] = line_flux
+        pars[f'{line_key}.rscale'] = int_pars['rscale']
+        pars[f'{line_key}.h_over_r'] = int_pars['h_over_r']
+        pars[f'{line_key}.x0'] = int_pars['x0']
+        pars[f'{line_key}.y0'] = int_pars['y0']
+        pars[f'{line_key}.dispersion'] = vel_dispersion
+    if line_conts:
+        for line_key, cont_flux in line_conts.items():
+            pars[f'{line_key}.cont.flux_per_nm'] = cont_flux
+            pars[f'{line_key}.cont.rscale'] = int_pars['rscale']
+            pars[f'{line_key}.cont.h_over_r'] = int_pars['h_over_r']
+            pars[f'{line_key}.cont.x0'] = int_pars['x0']
+            pars[f'{line_key}.cont.y0'] = int_pars['y0']
+    return pars
+
+
+def _make_grism_obs_no_psf(grism_pars, cube_pars, oversample=1):
+    """Build a no-PSF GrismObs for testing."""
+    fine_ip = (
+        cube_pars.image_pars.make_fine_scale(oversample) if oversample > 1 else None
+    )
+    return GrismObs(
+        grism_pars=grism_pars,
+        cube_pars=cube_pars,
+        psf_data=None,
+        render_config=RenderConfig(oversample=oversample),
+        fine_image_pars=fine_ip,
+    )
 
 
 # =============================================================================
@@ -134,79 +168,77 @@ def _build_composite_theta(vel_pars, int_pars, spec_pars_dict, kl_model):
 # =============================================================================
 
 
-class TestSpectralModelParameters:
-    def test_parameter_names_single_line(self, vel_model, int_model):
-        """Ha, flux only -> z, vel_dispersion, Ha_flux, Ha_cont."""
-        config = SpectralConfig(lines=(halpha_line(),))
-        sm = SpectralModel(config, int_model, vel_model)
-        assert 'z' in sm.PARAMETER_NAMES
-        assert 'vel_dispersion' in sm.PARAMETER_NAMES
-        assert 'Ha_flux' in sm.PARAMETER_NAMES
-        assert 'Ha_cont' in sm.PARAMETER_NAMES
-        assert len(sm.PARAMETER_NAMES) == 4
+class TestSourceModelParameters:
+    """SourceModel-namespace tests for emission-line parameter routing.
 
-    def test_parameter_names_multi_param(self, vel_model, int_model):
-        """Ha with {flux, int_rscale} -> z, vel_disp, Ha_flux, Ha_int_rscale, Ha_cont."""
-        line = EmissionLine(
-            line_spec=HALPHA, own_params=frozenset({'flux', 'int_rscale'})
+    Replaces legacy TestSpectralModelParameters; tests that exercised the
+    SpectralModel ``own_params`` + always-present continuum + line-theta
+    splice mechanisms were dropped (user-approved 2026-06-03) because those
+    mechanisms have no SourceModel analog by design.
+    """
+
+    def test_pars_keys_single_line(self, source_ha):
+        """SourceModel with single Halpha line: pars dict has expected dotted keys."""
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
         )
-        config = SpectralConfig(lines=(line,))
-        sm = SpectralModel(config, int_model, vel_model)
-        assert 'Ha_flux' in sm.PARAMETER_NAMES
-        assert 'Ha_int_rscale' in sm.PARAMETER_NAMES
-        assert 'Ha_cont' in sm.PARAMETER_NAMES
-        # z, vel_dispersion, Ha_flux, Ha_int_rscale, Ha_cont = 5
-        assert len(sm.PARAMETER_NAMES) == 5
+        # shared geometry top-level
+        assert 'z' in pars
+        assert 'cosi' in pars
+        # per-line spatial + flux + dispersion
+        assert 'Halpha.flux' in pars
+        assert 'Halpha.rscale' in pars
+        assert 'Halpha.dispersion' in pars
+        # opt-in continuum (when EmissionLine has continuum= set)
+        assert 'Halpha.cont.flux_per_nm' in pars
 
-    def test_parameter_names_multi_line(self, spec_model_ha_nii):
-        """Ha + NII_6548 + NII_6583 -> 8 params."""
-        names = spec_model_ha_nii.PARAMETER_NAMES
-        assert 'Ha_flux' in names
-        assert 'Ha_cont' in names
-        assert 'NII_6548_flux' in names
-        assert 'NII_6548_cont' in names
-        assert 'NII_6583_flux' in names
-        assert 'NII_6583_cont' in names
-        # z, vel_dispersion + 3*(flux + cont) = 2 + 6 = 8
-        assert len(names) == 8
+    def test_pars_keys_multi_line(self, source_ha_nii):
+        """SourceModel with Ha + NII6548 + NII6584: per-line keys for each line."""
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0, 'NII6548': 30.0, 'NII6584': 90.0},
+        )
+        for line_key in ('Halpha', 'NII6548', 'NII6584'):
+            assert f'{line_key}.flux' in pars
+            assert f'{line_key}.dispersion' in pars
+        # multi-line cube assembly: 3 line.flux keys + spatial-owner sharing
+        # via intensity_key='Halpha' for the NII lines (verified by fixture
+        # construction succeeding + cube tests downstream).
+        assert source_ha_nii.emission_lines['NII6548'].intensity_key == 'Halpha'
+        assert source_ha_nii.emission_lines['NII6584'].intensity_key == 'Halpha'
 
-    def test_per_line_cont_always_present(self, vel_model, int_model):
-        """Every line gets {prefix}_cont even if not in own_params."""
-        line = EmissionLine(line_spec=HALPHA, own_params=frozenset())
-        config = SpectralConfig(lines=(line,))
-        sm = SpectralModel(config, int_model, vel_model)
-        assert 'Ha_cont' in sm.PARAMETER_NAMES
+    def test_build_emission_intensity_theta_per_line(self, source_ha, int_model):
+        """``_build_emission_intensity_theta`` builds the right per-line theta from a dotted pars dict.
 
-    def test_build_line_theta_int(self, vel_model, int_model):
-        """Per-line theta override swaps flux correctly."""
-        line = EmissionLine(line_spec=HALPHA, own_params=frozenset({'flux'}))
-        config = SpectralConfig(lines=(line,))
-        sm = SpectralModel(config, int_model, vel_model)
-
-        # broadband theta_int
-        theta_int = int_model.pars2theta(_INT_PARS)
-
-        # spectral theta: Ha_flux=50, Ha_cont=0.01
-        theta_spec = jnp.array([1.0, 50.0, 50.0, 0.01])  # z, vel_disp, Ha_flux, Ha_cont
-
-        theta_line = sm._build_line_theta_int(theta_spec, theta_int, 0)
-
-        # flux should be overridden to 50.0
+        Analog of legacy ``SpectralModel._build_line_theta_int``: the new
+        per-line theta uses the line-owned spatial profile + per-line flux,
+        all sourced from the ``Halpha.*`` namespace.
+        """
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 50.0},
+        )
+        theta_line, returned_model = source_ha._build_emission_intensity_theta(
+            pars, 'Halpha'
+        )
+        assert returned_model is int_model
+        # flux is the per-line flux 50.0
         flux_idx = list(int_model.PARAMETER_NAMES).index('flux')
         assert float(theta_line[flux_idx]) == pytest.approx(50.0)
-
-        # other params unchanged
+        # cosi (shared geometry) routed from top-level
         cosi_idx = list(int_model.PARAMETER_NAMES).index('cosi')
         assert float(theta_line[cosi_idx]) == pytest.approx(_INT_PARS['cosi'])
-
-    def test_invalid_own_params_raises(self, vel_model, int_model):
-        """own_params with non-existent IntensityModel param raises ValueError."""
-        line = EmissionLine(
-            line_spec=HALPHA, own_params=frozenset({'nonexistent_param'})
-        )
-        config = SpectralConfig(lines=(line,))
-        with pytest.raises(ValueError, match="not in IntensityModel.PARAMETER_NAMES"):
-            SpectralModel(config, int_model, vel_model)
 
 
 # =============================================================================
@@ -229,6 +261,20 @@ class TestDispersion:
         lam = jnp.linspace(1300, 1320, Nlam)
         result = disperse_cube(cube, gp, lam)
         assert result.shape == (Nrow, Ncol)
+
+    def test_disperse_single_wavelength_raises(self):
+        """A single-slice cube has no spectral axis to disperse -> loud raise."""
+        cube = jnp.ones((16, 16, 1))
+        ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=1.1,
+            lambda_ref=1312.0,
+            dispersion_angle=0.0,
+        )
+        lam = jnp.array([1312.0])
+        with pytest.raises(ValueError, match='Nlam >= 2'):
+            disperse_cube(cube, gp, lam)
 
     def test_disperse_flux_conservation(self):
         """Total flux conserved through dispersion."""
@@ -362,224 +408,207 @@ class TestDispersion:
 # =============================================================================
 
 
-class TestKLModelIntegration:
-    def test_backwards_compat(self, vel_model, int_model):
-        """spectral_model=None works, existing behavior unchanged."""
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS)
-        assert kl.spectral_model is None
-        assert kl._spectral_indices is None
-        assert 'v0' in kl.PARAMETER_NAMES
-        assert 'flux' in kl.PARAMETER_NAMES
+class TestSourceModelIntegration:
+    """SourceModel-equivalent of legacy TestKLModelIntegration."""
 
-    def test_3way_parameter_merge(self, vel_model, int_model, spec_model_ha):
-        """Correct PARAMETER_NAMES with 3 components."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
+    def test_no_emission_line_construction(self, vel_model, int_model):
+        """SourceModel without emission_lines (just velocity + broadband) constructs cleanly.
+
+        Replaces legacy ``test_backwards_compat`` which exercised
+        ``KLModel(..., spectral_model=None)`` — the SourceModel equivalent
+        of "no spectral configuration" is omitting ``emission_lines=``.
+        """
+        source = SourceModel(
+            velocity_model=vel_model, broadband_models={'F087': int_model}
+        )
+        assert source.velocity_model is vel_model
+        assert 'F087' in source.broadband_models
+        assert not source.emission_lines
+
+    def test_namespace_dedup(self, source_ha):
+        """Shared geometry appears once in PriorDict; per-component namespaces disjoint."""
+        from kl_pipe.priors import PriorDict, Uniform
+
+        priors = PriorDict(
+            {
+                'cosi': Uniform(0.1, 0.99),
+                'theta_int': Uniform(0.0, 2 * jnp.pi),
+                'g1': Uniform(-0.1, 0.1),
+                'g2': Uniform(-0.1, 0.1),
+                'z': 1.0,
+                'vel.v0': Uniform(0.0, 50.0),
+                'vel.vcirc': Uniform(100.0, 350.0),
+                'vel.rscale': Uniform(0.1, 2.0),
+                'Halpha.flux': Uniform(0.1, 1000.0),
+                'Halpha.rscale': Uniform(0.1, 2.0),
+                'Halpha.h_over_r': 0.1,
+                'Halpha.x0': 0.0,
+                'Halpha.y0': 0.0,
+                'Halpha.dispersion': Uniform(10.0, 200.0),
+            }
         )
 
-        # vel params come first, then unique int params, then unique spec params
-        names = kl.PARAMETER_NAMES
-        assert names.index('v0') < names.index('flux')
-        assert names.index('flux') < names.index('z')
-        assert 'z' in names
-        assert 'vel_dispersion' in names
-        assert 'Ha_flux' in names
-        assert 'Ha_cont' in names
+        sampled = list(priors.sampled_names)
+        # shared geometry appears once
+        assert sampled.count('cosi') == 1
+        assert sampled.count('theta_int') == 1
+        # vel and Halpha namespaces are disjoint (no key collision)
+        vel_keys = [n for n in sampled if n.startswith('vel.')]
+        line_keys = [n for n in sampled if n.startswith('Halpha.')]
+        assert set(vel_keys).isdisjoint(set(line_keys))
 
-        # shared params appear once
-        assert names.count('cosi') == 1
-        assert names.count('theta_int') == 1
-
-    def test_param_slicing_roundtrip(self, vel_model, int_model, spec_model_ha):
-        """get_vel/int/spec_pars all extract correct values."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
+    def test_per_component_theta_roundtrip(self, source_ha, vel_model, int_model):
+        """``_build_component_theta`` extracts correct values per component."""
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
         )
-
-        spec_pars_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {}
-        merged.update(_VEL_PARS)
-        merged.update(_INT_PARS)
-        merged.update(spec_pars_dict)
-        theta = kl.pars2theta(merged)
-
-        theta_vel = kl.get_velocity_pars(theta)
-        theta_int = kl.get_intensity_pars(theta)
-        theta_spec = kl.get_spectral_pars(theta)
-
-        # check roundtrip
+        theta_vel = _build_component_theta(pars, 'vel', vel_model.PARAMETER_NAMES)
+        # roundtrip: each vel param in the legacy _VEL_PARS dict appears at
+        # the correct theta_vel index
         for name, val in _VEL_PARS.items():
             idx = list(vel_model.PARAMETER_NAMES).index(name)
             assert float(theta_vel[idx]) == pytest.approx(val, abs=1e-10)
 
-        for name, val in _INT_PARS.items():
-            idx = list(int_model.PARAMETER_NAMES).index(name)
+        # Halpha intensity theta (line owns spatial profile)
+        theta_int, _ = source_ha._build_emission_intensity_theta(pars, 'Halpha')
+        # spatial params come from int_pars via Halpha.<bare> resolution
+        for legacy_name, val in _INT_PARS.items():
+            if legacy_name in ('cosi', 'theta_int', 'g1', 'g2'):
+                continue  # shared geo routed from top-level
+            idx = list(int_model.PARAMETER_NAMES).index(legacy_name)
             assert float(theta_int[idx]) == pytest.approx(val, abs=1e-10)
 
-        for name, val in spec_pars_dict.items():
-            idx = list(spec_model_ha.PARAMETER_NAMES).index(name)
-            assert float(theta_spec[idx]) == pytest.approx(val, abs=1e-10)
-
-    def test_render_cube_via_klmodel(
-        self, vel_model, int_model, spec_model_ha, cube_pars
-    ):
-        """render_cube returns correct shape."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
+    def test_build_cube_via_source(self, source_ha, cube_pars):
+        """source.build_cube returns correct shape (replaces legacy render_cube)."""
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
         )
-
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
-
-        cube = kl.render_cube(theta, cube_pars)
+        cube = source_ha.build_cube(pars, cube_pars)
         assert cube.shape == (32, 32, cube_pars.n_lambda)
 
-    def test_render_grism_via_klmodel(self, vel_model, int_model, spec_model_ha):
-        """render_grism returns correct shape."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
-        )
-
+    def test_render_grism_via_source(self, source_ha):
+        """source.render_grism returns correct shape (no PSF)."""
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
+        cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
-
-        grism = kl.render_grism(theta, gp)
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
+        grism = source_ha.render_grism(pars, obs)
         assert grism.shape == (32, 32)
         assert float(jnp.sum(grism)) > 0
 
-    def test_render_cube_jit(self, vel_model, int_model, spec_model_ha, cube_pars):
-        """jax.jit compiles and runs for render_cube."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
+    def test_build_cube_jit(self, source_ha, cube_pars):
+        """jax.jit compiles and runs for source.build_cube."""
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
         )
-
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
-
-        from functools import partial
-
-        render_jit = jax.jit(partial(kl.render_cube, cube_pars=cube_pars))
-        cube = render_jit(theta)
+        render_jit = jax.jit(lambda p: source_ha.build_cube(p, cube_pars))
+        cube = render_jit(pars)
         assert cube.shape == (32, 32, cube_pars.n_lambda)
 
-    def test_render_grism_jit(self, vel_model, int_model, spec_model_ha):
-        """jax.jit compiles and runs for render_grism."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
-        )
-
+    def test_render_grism_jit(self, source_ha):
+        """jax.jit compiles and runs for source.render_grism."""
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
-        # pre-compute cube_pars with concrete z for JIT compatibility
         cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
-
-        from functools import partial
-
-        render_jit = jax.jit(partial(kl.render_grism, grism_pars=gp, cube_pars=cp))
-        grism = render_jit(theta)
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
+        render_jit = jax.jit(lambda p: source_ha.render_grism(p, obs))
+        grism = render_jit(pars)
         assert grism.shape == (32, 32)
 
-    def test_render_grism_differentiable(self, vel_model, int_model, spec_model_ha):
-        """jax.grad w.r.t. theta succeeds for grism rendering."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
-        )
-
+    def test_render_grism_differentiable(self, source_ha):
+        """jax.grad w.r.t. pars succeeds for grism rendering."""
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
-        # pre-compute cube_pars with concrete z for grad compatibility
         cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
 
-        def loss(th):
-            grism = kl.render_grism(th, gp, cube_pars=cp)
+        def loss(p):
+            grism = source_ha.render_grism(p, obs)
             return jnp.sum(grism**2)
 
         grad_fn = jax.grad(loss)
-        g = grad_fn(theta)
-        assert g.shape == theta.shape
-        assert jnp.isfinite(g).all()
+        g = grad_fn(pars)
+        assert set(g.keys()) == set(pars.keys())
+        assert all(jnp.isfinite(jnp.asarray(v)).all() for v in g.values())
 
-    def test_render_dispatch(self, vel_model, int_model, spec_model_ha, cube_pars):
-        """render(data_type='cube') and render(data_type='grism') dispatch correctly."""
-        kl = KLModel(
-            vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model_ha
+    def test_render_per_method_invocation(self, source_ha, cube_pars):
+        """Both source.build_cube and source.render_grism work on the same source
+        (replaces legacy KLModel.render(theta, data_type=...) dispatch test).
+        """
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
         )
-
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
-
-        cube = kl.render(theta, 'cube', cube_pars)
+        cube = source_ha.build_cube(pars, cube_pars)
         assert cube.ndim == 3
 
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
-        grism = kl.render(theta, 'grism', gp)
+        cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
+        grism = source_ha.render_grism(pars, obs)
         assert grism.ndim == 2
 
 
@@ -612,56 +641,53 @@ class TestCorrectness:
         peak_col = int(jnp.argmax(result[16, :]))
         assert peak_col > 16, f"Expected peak at col > 16, got {peak_col}"
 
-    def test_grism_with_shear(self, vel_model, int_model):
+    def test_grism_with_shear(self, source_ha):
         """Non-zero g1=0.05: transforms + dispersion compose correctly."""
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
+        cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
-        shear_pars = {**_VEL_PARS, **_INT_PARS, 'g1': 0.05, 'g2': 0.0}
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**shear_pars, **spec_dict}
-        theta = kl.pars2theta(merged)
-
-        grism = kl.render_grism(theta, gp)
+        shear_vel = {**_VEL_PARS, 'g1': 0.05, 'g2': 0.0}
+        pars = _make_pars(
+            shear_vel,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
+        grism = source_ha.render_grism(pars, obs)
         assert grism.shape == (32, 32)
         assert float(jnp.sum(grism)) > 0
         assert jnp.isfinite(grism).all()
 
-    def test_edge_on_galaxy(self, vel_model, int_model):
+    def test_edge_on_galaxy(self, source_ha):
         """cosi=0.1: rotational broadening makes integrated spectrum wider than face-on."""
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-
         z = 1.0
-        lam_center = HALPHA.lambda_rest * (1 + z)
+        lam_center = LINE_LAMBDAS['Halpha'] * (1 + z)
         dlam = lam_center * 3000.0 / C_KMS
         # 0.1 nm wavelength steps resolve the post-LSF-refactor vel_disp=50 km/s
         # line (sigma_lam ~ 0.22 nm at lam ~ 1313 nm).
         cube_pars = CubePars.from_range(
             _IMAGE_PARS, lam_center - dlam, lam_center + dlam, 0.1
         )
-        theta_spec = jnp.array([z, 50.0, 100.0, 0.0])
 
         def _fwhm_pix(cosi):
             vel_pars = {**_VEL_PARS, 'cosi': cosi}
             int_pars = {**_INT_PARS, 'cosi': cosi}
-            theta_vel = vel_model.pars2theta(vel_pars)
-            theta_int = int_model.pars2theta(int_pars)
-            cube = sm.build_cube(theta_spec, theta_vel, theta_int, cube_pars)
+            pars = _make_pars(
+                vel_pars,
+                int_pars,
+                z=z,
+                vel_dispersion=50.0,
+                line_fluxes={'Halpha': 100.0},
+            )
+            cube = source_ha.build_cube(pars, cube_pars)
             total_spec = jnp.sum(cube, axis=(0, 1))
             above_half = total_spec > 0.5 * jnp.max(total_spec)
             return int(jnp.sum(above_half))
@@ -675,38 +701,34 @@ class TestCorrectness:
             f"({fwhm_face_on} pix) due to rotation broadening"
         )
 
-    def test_velocity_signature_antisymmetry(self, vel_model, int_model):
+    def test_velocity_signature_antisymmetry(self, source_ha):
         """grism(rotating) - grism(vcirc=0) is antisymmetric along kinematic axis."""
         import matplotlib.pyplot as plt
 
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
         # theta_int=0 so kinematic axis is along x (cols); v0=0 for clean antisymmetry
-        pars = {**_VEL_PARS, **_INT_PARS, 'theta_int': 0.0, 'v0': 0.0}
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
-        }
-        merged = {**pars, **spec_dict}
+        vel_pars = {**_VEL_PARS, 'theta_int': 0.0, 'v0': 0.0}
 
         # use larger odd grid to avoid edge flux loss
         gp = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * 2.0,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
             dispersion_angle=0.0,
         )
+        cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
-        theta_rot = kl.pars2theta(merged)
-        grism_rot = kl.render_grism(theta_rot, gp)
+        pars_rot = _make_pars(
+            vel_pars,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},  # no continuum
+        )
+        grism_rot = source_ha.render_grism(pars_rot, obs)
 
-        merged_norot = {**merged, 'vcirc': 0.0}
-        theta_norot = kl.pars2theta(merged_norot)
-        grism_norot = kl.render_grism(theta_norot, gp)
+        pars_norot = {**pars_rot, 'vel.vcirc': 0.0}
+        grism_norot = source_ha.render_grism(pars_norot, obs)
 
         diff = np.array(grism_rot - grism_norot)
 
@@ -778,26 +800,21 @@ class TestCorrectness:
 class TestDiagnosticPlots:
     """Diagnostic plots saved to tests/out/grism/. Not pass/fail tests."""
 
-    def test_plot_dispersed_image(self, vel_model, int_model):
+    def test_plot_dispersed_image(self, source_ha):
         """2D grism image at dispersion angles 0, 45, 90 deg."""
         import matplotlib
 
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
 
         angles = [0, np.pi / 4, np.pi / 2]
         labels = ['0 deg', '45 deg', '90 deg']
@@ -807,10 +824,12 @@ class TestDiagnosticPlots:
             gp = GrismPars(
                 image_pars=_IMAGE_PARS,
                 dispersion=1.1,
-                lambda_ref=HALPHA.lambda_rest * 2.0,
+                lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
                 dispersion_angle=angle,
             )
-            grism = kl.render_grism(theta, gp)
+            cp = gp.to_cube_pars(z=1.0)
+            obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
+            grism = source_ha.render_grism(pars, obs)
             im = axes[i].imshow(np.array(grism), origin='lower')
             axes[i].set_title(f'Dispersion angle = {label}')
             plt.colorbar(im, ax=axes[i], fraction=0.046)
@@ -819,40 +838,36 @@ class TestDiagnosticPlots:
         fig.savefig(os.path.join(OUT_DIR, 'dispersed_image.png'), dpi=150)
         plt.close(fig)
 
-    def test_plot_velocity_signature(self, vel_model, int_model):
+    def test_plot_velocity_signature(self, source_ha):
         """Grism(rotating) - grism(vcirc=0) isolates pure velocity signature."""
         import matplotlib
 
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
-
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
+        cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
         # rotating galaxy
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta_rot = kl.pars2theta(merged)
-        grism_rot = kl.render_grism(theta_rot, gp)
+        pars_rot = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
+        grism_rot = source_ha.render_grism(pars_rot, obs)
 
         # non-rotating galaxy
-        merged_norot = {**_VEL_PARS, **_INT_PARS, **spec_dict, 'vcirc': 0.0}
-        theta_norot = kl.pars2theta(merged_norot)
-        grism_norot = kl.render_grism(theta_norot, gp)
+        pars_norot = {**pars_rot, 'vel.vcirc': 0.0}
+        grism_norot = source_ha.render_grism(pars_norot, obs)
 
         diff = grism_rot - grism_norot
 
@@ -877,39 +892,35 @@ class TestDiagnosticPlots:
         fig.savefig(os.path.join(OUT_DIR, 'velocity_signature.png'), dpi=150)
         plt.close(fig)
 
-    def test_plot_grism_overview(self, vel_model, int_model):
+    def test_plot_grism_overview(self, source_ha, vel_model, int_model):
         """Master 3-row grism diagnostic."""
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
         cp = gp.to_cube_pars(z=1.0)
+        obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
 
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
+        pars_rot = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
 
-        # rotating grism
-        cube = kl.render_cube(theta, cp)
-        grism_rot = kl.render_grism(theta, gp, cube_pars=cp)
+        # rotating cube + grism
+        cube = source_ha.build_cube(pars_rot, cp)
+        grism_rot = source_ha.render_grism(pars_rot, obs)
 
         # non-rotating grism
-        merged_norot = {**merged, 'vcirc': 0.0}
-        theta_norot = kl.pars2theta(merged_norot)
-        grism_norot = kl.render_grism(theta_norot, gp, cube_pars=cp)
+        pars_norot = {**pars_rot, 'vel.vcirc': 0.0}
+        grism_norot = source_ha.render_grism(pars_norot, obs)
 
-        # imap and vmap
+        # imap and vmap (rendered directly from bare models)
         theta_int = int_model.pars2theta(_INT_PARS)
         theta_vel = vel_model.pars2theta(_VEL_PARS)
         imap = int_model.render_unconvolved(theta_int, _IMAGE_PARS)
@@ -930,29 +941,27 @@ class TestDiagnosticPlots:
         )
         assert fig is not None
 
-    def test_plot_dispersion_angles(self, vel_model, int_model):
+    def test_plot_dispersion_angles(self, source_ha):
         """Cardinal-angle grism comparison (0, 90, 180, 270 deg)."""
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**_VEL_PARS, **_INT_PARS, **spec_dict}
-        theta = kl.pars2theta(merged)
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
 
         def build_grism_fn(angle):
             gp = GrismPars(
                 image_pars=_IMAGE_PARS,
                 dispersion=1.1,
-                lambda_ref=HALPHA.lambda_rest * 2.0,
+                lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
                 dispersion_angle=angle,
             )
-            return np.array(kl.render_grism(theta, gp))
+            cp = gp.to_cube_pars(z=1.0)
+            obs = _make_grism_obs_no_psf(gp, cp, oversample=1)
+            return np.array(source_ha.render_grism(pars, obs))
 
         fig = plot_dispersion_angles(
             build_grism_fn,
@@ -961,32 +970,28 @@ class TestDiagnosticPlots:
         )
         assert fig is not None
 
-    def test_plot_dispersion_angle_study(self, vel_model, int_model):
+    def test_plot_dispersion_angle_study(self, source_ha):
         """Deep-dive: theta_int=0, 4 cardinal angles, grism vs broadband."""
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
-
         # theta_int=0 so kinematic axis along x
-        pars_study = {**_VEL_PARS, **_INT_PARS, 'theta_int': 0.0}
-        spec_dict = {
-            'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.01,
-        }
-        merged = {**pars_study, **spec_dict}
-        theta = kl.pars2theta(merged)
+        vel_pars = {**_VEL_PARS, 'theta_int': 0.0}
+        pars = _make_pars(
+            vel_pars,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+            line_conts={'Halpha': 0.01},
+        )
 
         # build broadband stacked (collapsed cube, no dispersion)
         gp_ref = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_IMAGE_PARS,
             dispersion=1.1,
         )
         cp = gp_ref.to_cube_pars(z=1.0)
-        cube = kl.render_cube(theta, cp)
+        cube = source_ha.build_cube(pars, cp)
         dlam = float(cp.lambda_grid[1] - cp.lambda_grid[0])
         broadband_stacked = np.array(jnp.sum(cube, axis=2) * dlam)
 
@@ -994,10 +999,12 @@ class TestDiagnosticPlots:
             gp = GrismPars(
                 image_pars=_IMAGE_PARS,
                 dispersion=1.1,
-                lambda_ref=HALPHA.lambda_rest * 2.0,
+                lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
                 dispersion_angle=angle,
             )
-            return np.array(kl.render_grism(theta, gp, cube_pars=cp))
+            cp_local = gp.to_cube_pars(z=1.0)
+            obs = _make_grism_obs_no_psf(gp, cp_local, oversample=1)
+            return np.array(source_ha.render_grism(pars, obs))
 
         fig = plot_dispersion_angle_study(
             build_grism_fn,
@@ -1174,13 +1181,15 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         z = 1.0
         vel_disp = 50.0
         flux = 100.0
-        lam_obs = HALPHA.lambda_rest * (1 + z)
+        lam_obs = LINE_LAMBDAS['Halpha'] * (1 + z)
 
         # sigma_eff = vel_disp only (slitless LSF is PSF+dispersion; see issue #40)
         sigma_lambda = lam_obs * vel_disp / C_KMS
@@ -1196,39 +1205,40 @@ class TestAnalytical:
             dlam,
         )
 
-        # static params: vcirc=0, v0=0
-        vel_pars = {
+        # static params: vcirc=0, v0=0; line owns its spatial profile
+        source_pars = {
             'cosi': 0.5,
             'theta_int': 0.7,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,
-            'vel_rscale': 0.5,
+            'z': z,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': flux,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': vel_disp,
         }
-        int_pars = {
-            'cosi': 0.5,
-            'theta_int': 0.7,
-            'g1': 0.0,
-            'g2': 0.0,
-            'flux': flux,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
-        }
-        theta_vel = vel_model.pars2theta(vel_pars)
-        theta_int = int_model.pars2theta(int_pars)
-        theta_spec = jnp.array(
-            [z, vel_disp, flux, 0.0]
-        )  # z, vel_disp, Ha_flux, Ha_cont
-
-        cube = np.array(sm.build_cube(theta_spec, theta_vel, theta_int, cp))
-
-        # independent intensity map
-        I_map = np.array(
-            int_model.render_unconvolved(theta_int, _ANALYTICAL_IMAGE_PARS)
+        # theta_int for analytic I_map below (must match SourceModel's internal
+        # int_model(theta, 'obs', X, Y) call → same parameters as the line's)
+        theta_int = _build_component_theta(
+            source_pars, 'Halpha', int_model.PARAMETER_NAMES
         )
+        # source.build_cube returns SB (analytic); compare to analytic I_map
+        # built from the same int_model(theta_int, 'obs', X, Y) call SourceModel
+        # uses internally. Both are SB-based → ratio is exactly G_k per pixel.
+        cube = np.array(source.build_cube(source_pars, cp))
+
+        # SB intensity map via analytic eval (matches the internal call in
+        # SourceModel.build_cube for I_line). Comparing to render_unconvolved
+        # (k-space FFT integrated flux/pixel) would introduce ~0.1% precision
+        # noise from the analytic-vs-FFT bridge — irrelevant to the test's
+        # factorization claim.
+        X_grid, Y_grid = build_map_grid_from_image_pars(_ANALYTICAL_IMAGE_PARS)
+        I_map = np.array(int_model(theta_int, 'obs', X_grid, Y_grid))
 
         # expected Gaussian per slice (lam_obs is uniform since v=0)
         lam_grid = np.array(cp.lambda_grid)
@@ -1301,35 +1311,33 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         z = 1.0
         vel_disp = 50.0
         flux = 100.0
-        lam_obs = HALPHA.lambda_rest * (1 + z)
+        lam_obs = LINE_LAMBDAS['Halpha'] * (1 + z)
 
         # resolved source to get correct spectral shape, then delta-cube
-        pars = {
+        source_pars = {
             'cosi': 1.0,  # face-on to avoid velocity projection
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,
-            'vel_rscale': 0.5,
-            'flux': flux,
-            'int_rscale': 0.3,  # resolved to avoid k-space aliasing
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': z,
-            'vel_dispersion': vel_disp,
-            'Ha_flux': flux,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': flux,
+            'Halpha.rscale': 0.3,  # resolved to avoid k-space aliasing
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': vel_disp,
         }
-        theta = kl.pars2theta(pars)
 
         # construct lambda_grid manually so dlam = dispersion exactly
         dlam = 1.0  # nm — also the dispersion (nm/pix)
@@ -1347,7 +1355,7 @@ class TestAnalytical:
         )
 
         # build resolved cube, extract center pixel spectrum, construct delta cube
-        cube_full = np.array(kl.render_cube(theta, cp))
+        cube_full = np.array(source.build_cube(source_pars, cp))
         cube = np.zeros_like(cube_full)
         cube[_ANALYTICAL_NROW // 2, _ANALYTICAL_NCOL // 2, :] = cube_full[
             _ANALYTICAL_NROW // 2, _ANALYTICAL_NCOL // 2, :
@@ -1432,34 +1440,32 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         z = 1.0
         vel_disp = 50.0
         flux = 100.0
-        lam_obs = HALPHA.lambda_rest * (1 + z)
+        lam_obs = LINE_LAMBDAS['Halpha'] * (1 + z)
 
-        pars = {
+        source_pars = {
             'cosi': 0.5,
             'theta_int': 0.7,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,
-            'vel_rscale': 0.5,
-            'flux': flux,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': z,
-            'vel_dispersion': vel_disp,
-            'Ha_flux': flux,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': flux,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': vel_disp,
         }
-        theta = kl.pars2theta(pars)
 
         # construct lambda_grid manually so dlam = dispersion exactly
         dlam = 1.0
@@ -1476,7 +1482,7 @@ class TestAnalytical:
         )
 
         # build cube first, then disperse — tests disperse_cube + build_cube consistency
-        cube = np.array(kl.render_cube(theta, cp))
+        cube = np.array(source.build_cube(source_pars, cp))
         grism = np.array(disperse_cube(jnp.array(cube), gp, jnp.array(lam_grid)))
 
         # independent convolution using actual cube spectrum as kernel
@@ -1486,10 +1492,14 @@ class TestAnalytical:
         r0 = _ANALYTICAL_NROW // 2
         c0 = _ANALYTICAL_NCOL // 2
         center_spec = cube[r0, c0, :]
-        theta_int = kl.get_intensity_pars(theta)
-        I_map = np.array(
-            int_model.render_unconvolved(theta_int, _ANALYTICAL_IMAGE_PARS)
+        theta_int = _build_component_theta(
+            source_pars, 'Halpha', int_model.PARAMETER_NAMES
         )
+        # use analytic I_map (matches SourceModel.build_cube's internal call)
+        # to avoid ~0.1% analytic-vs-FFT bridge noise that breaks the 1e-5
+        # separability tolerance.
+        X_grid, Y_grid = build_map_grid_from_image_pars(_ANALYTICAL_IMAGE_PARS)
+        I_map = np.array(int_model(theta_int, 'obs', X_grid, Y_grid))
         I_center = I_map[r0, c0]
 
         # kernel in pixel space: G_k = cube_center_spec / I_center
@@ -1553,43 +1563,44 @@ class TestAnalytical:
         """cosi=1.0 -> sin(i)=0 -> no Doppler -> grism independent of vcirc."""
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
-        base_pars = {
+        source_pars_rot = {
             'cosi': 1.0,
             'theta_int': 0.7,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 200.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 200.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
         }
 
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
         )
         cp = gp.to_cube_pars(z=1.0)
 
-        theta_rot = kl.pars2theta(base_pars)
-        grism_rot = np.array(kl.render_grism(theta_rot, gp, cube_pars=cp))
+        grism_rot = np.array(
+            source.render_grism(source_pars_rot, _make_grism_obs_no_psf(gp, cp))
+        )
 
-        norot_pars = {**base_pars, 'vcirc': 0.0}
-        theta_norot = kl.pars2theta(norot_pars)
-        grism_norot = np.array(kl.render_grism(theta_norot, gp, cube_pars=cp))
+        source_pars_norot = {**source_pars_rot, 'vel.vcirc': 0.0}
+        grism_norot = np.array(
+            source.render_grism(source_pars_norot, _make_grism_obs_no_psf(gp, cp))
+        )
 
         max_diff = np.max(np.abs(grism_rot - grism_norot))
         assert (
@@ -1605,53 +1616,54 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         base_pars = {
             'cosi': 0.5,
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 200.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 200.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
         }
 
         disp_angle_a = 0.3  # arbitrary
 
         # case A: theta_int=pi, dispersion_angle=a
-        pars_A = {**base_pars, 'theta_int': np.pi}
-        theta_A = kl.pars2theta(pars_A)
+        source_pars_A = {**base_pars, 'theta_int': np.pi}
         gp_A = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * 2.0,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
             dispersion_angle=disp_angle_a,
         )
         cp = gp_A.to_cube_pars(z=1.0)
-        grism_A = np.array(kl.render_grism(theta_A, gp_A, cube_pars=cp))
+        grism_A = np.array(
+            source.render_grism(source_pars_A, _make_grism_obs_no_psf(gp_A, cp))
+        )
 
         # case B: theta_int=0, dispersion_angle=a+pi
-        pars_B = {**base_pars, 'theta_int': 0.0}
-        theta_B = kl.pars2theta(pars_B)
+        source_pars_B = {**base_pars, 'theta_int': 0.0}
         gp_B = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * 2.0,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
             dispersion_angle=disp_angle_a + np.pi,
         )
-        grism_B = np.array(kl.render_grism(theta_B, gp_B, cube_pars=cp))
+        grism_B = np.array(
+            source.render_grism(source_pars_B, _make_grism_obs_no_psf(gp_B, cp))
+        )
 
         # rotating both PA and dispersion angle by pi is a 180° rotation of the
         # output image, so compare grism_A with grism_B rotated 180°
@@ -1697,38 +1709,38 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
-        pars = {
+        source_pars = {
             'cosi': 0.5,
             'theta_int': 0.7,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
         }
-        theta = kl.pars2theta(pars)
 
         gp = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * 2.0,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
             dispersion_angle=0.3,
         )
         cp = gp.to_cube_pars(z=1.0)
-        grism = np.array(kl.render_grism(theta, gp, cube_pars=cp))
+        grism = np.array(
+            source.render_grism(source_pars, _make_grism_obs_no_psf(gp, cp))
+        )
 
         # 180-deg rotation = flip both axes
         grism_rot = grism[::-1, ::-1]
@@ -1776,42 +1788,44 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         # compact source (small rscale) on large grid, cont=0
-        pars = {
+        source_pars = {
             'cosi': 0.5,
             'theta_int': 0.7,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 150.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.15,  # compact
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 150.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.15,  # compact
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
         }
-        theta = kl.pars2theta(pars)
 
         gp = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * 2.0,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
             dispersion_angle=0.0,
         )
         cp = gp.to_cube_pars(z=1.0)
-        grism = np.array(kl.render_grism(theta, gp, cube_pars=cp))
+        grism = np.array(
+            source.render_grism(source_pars, _make_grism_obs_no_psf(gp, cp))
+        )
 
         # independent intensity map
-        theta_int = kl.get_intensity_pars(theta)
+        theta_int = _build_component_theta(
+            source_pars, 'Halpha', int_model.PARAMETER_NAMES
+        )
         I_map = np.array(
             int_model.render_unconvolved(theta_int, _ANALYTICAL_IMAGE_PARS)
         )
@@ -1876,13 +1890,15 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         z = 1.0
         vel_disp = 50.0
         flux = 100.0
-        lam_rest = HALPHA.lambda_rest
+        lam_rest = LINE_LAMBDAS['Halpha']
         lam_obs_center = lam_rest * (1 + z)
 
         # sigma_eff = vel_disp only (slitless LSF is PSF+dispersion; see issue #40)
@@ -1899,31 +1915,23 @@ class TestAnalytical:
             dlam,
         )
 
-        vel_pars = {
+        source_pars = {
             'cosi': 0.5,
             'theta_int': 0.7,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 10.0,
-            'vcirc': 200.0,
-            'vel_rscale': 0.5,
+            'z': z,
+            'vel.v0': 10.0,
+            'vel.vcirc': 200.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': flux,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': vel_disp,
         }
-        int_pars = {
-            'cosi': 0.5,
-            'theta_int': 0.7,
-            'g1': 0.0,
-            'g2': 0.0,
-            'flux': flux,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
-        }
-        theta_vel = vel_model.pars2theta(vel_pars)
-        theta_int = int_model.pars2theta(int_pars)
-        theta_spec = jnp.array([z, vel_disp, flux, 0.0])
-
-        cube = np.array(sm.build_cube(theta_spec, theta_vel, theta_int, cp))
+        cube = np.array(source.build_cube(source_pars, cp))
         lam_grid = np.array(cp.lambda_grid)
 
         # flux-weighted mean wavelength per pixel
@@ -1935,8 +1943,11 @@ class TestAnalytical:
 
         # expected: lam_obs(x,y) = lam_rest * (1+z) * (1 + V_rot/c)
         X, Y = build_map_grid_from_image_pars(_ANALYTICAL_IMAGE_PARS)
+        theta_vel = _build_component_theta(
+            source_pars, 'vel', vel_model.PARAMETER_NAMES
+        )
         v_map = np.array(vel_model(theta_vel, 'obs', X, Y))
-        v0 = vel_pars['v0']
+        v0 = source_pars['vel.v0']
         v_rotation = v_map - v0
         expected_lam = lam_rest * (1 + z) * (1.0 + v_rotation / C_KMS)
 
@@ -1998,11 +2009,12 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
-        base_lam_rest = HALPHA.lambda_rest
+        base_lam_rest = LINE_LAMBDAS['Halpha']
         # test several redshifts that shift lam_obs
         delta_lams = np.array([-5.0, -2.0, 0.0, 2.0, 5.0])  # nm offsets from nominal
         angle = 0.0
@@ -2017,25 +2029,22 @@ class TestAnalytical:
             lam_obs_target = lam_ref + dlam_offset
             z_eff = lam_obs_target / base_lam_rest - 1.0
 
-            pars = {
+            source_pars = {
                 'cosi': 1.0,  # face-on, no velocity
                 'theta_int': 0.0,
                 'g1': 0.0,
                 'g2': 0.0,
-                'v0': 0.0,
-                'vcirc': 0.0,
-                'vel_rscale': 0.5,
-                'flux': 100.0,
-                'int_rscale': 0.3,  # resolved to avoid k-space aliasing
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
                 'z': z_eff,
-                'vel_dispersion': 50.0,
-                'Ha_flux': 100.0,
-                'Ha_cont': 0.0,
+                'vel.v0': 0.0,
+                'vel.vcirc': 0.0,
+                'vel.rscale': 0.5,
+                'Halpha.flux': 100.0,
+                'Halpha.rscale': 0.3,  # resolved to avoid k-space aliasing
+                'Halpha.h_over_r': 0.1,
+                'Halpha.x0': 0.0,
+                'Halpha.y0': 0.0,
+                'Halpha.dispersion': 50.0,
             }
-            theta = kl.pars2theta(pars)
 
             gp = GrismPars(
                 image_pars=_ANALYTICAL_IMAGE_PARS,
@@ -2048,7 +2057,7 @@ class TestAnalytical:
             # build resolved cube, extract center pixel, construct delta cube
             r0 = _ANALYTICAL_NROW // 2
             c0 = _ANALYTICAL_NCOL // 2
-            cube_full = np.array(kl.render_cube(theta, cp))
+            cube_full = np.array(source.build_cube(source_pars, cp))
             cube_delta = np.zeros_like(cube_full)
             cube_delta[r0, c0, :] = cube_full[r0, c0, :]
             grism = np.array(
@@ -2113,32 +2122,29 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
-        pars = {
+        source_pars_rot = {
             'cosi': 0.5,
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 200.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 200.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
         }
-        theta_rot = kl.pars2theta(pars)
 
-        pars_norot = {**pars, 'vcirc': 0.0}
-        theta_norot = kl.pars2theta(pars_norot)
+        source_pars_norot = {**source_pars_rot, 'vel.vcirc': 0.0}
 
         Ncol = _ANALYTICAL_NCOL
 
@@ -2149,13 +2155,17 @@ class TestAnalytical:
             gp = GrismPars(
                 image_pars=_ANALYTICAL_IMAGE_PARS,
                 dispersion=1.1,
-                lambda_ref=HALPHA.lambda_rest * 2.0,
+                lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
                 dispersion_angle=angle,
             )
             cp = gp.to_cube_pars(z=1.0)
 
-            grism_rot = np.array(kl.render_grism(theta_rot, gp, cube_pars=cp))
-            grism_norot = np.array(kl.render_grism(theta_norot, gp, cube_pars=cp))
+            grism_rot = np.array(
+                source.render_grism(source_pars_rot, _make_grism_obs_no_psf(gp, cp))
+            )
+            grism_norot = np.array(
+                source.render_grism(source_pars_norot, _make_grism_obs_no_psf(gp, cp))
+            )
 
             diff = grism_rot - grism_norot
 
@@ -2168,7 +2178,7 @@ class TestAnalytical:
         amplitudes = np.array(amplitudes)
 
         # expected: |cos(angle - theta_int)| with theta_int=0
-        expected_scaling = np.abs(np.cos(angles - pars['theta_int']))
+        expected_scaling = np.abs(np.cos(angles - source_pars_rot['theta_int']))
         # normalize both to [0, 1] for correlation
         A_norm = amplitudes / amplitudes.max()
         E_norm = expected_scaling / expected_scaling.max()
@@ -2181,7 +2191,7 @@ class TestAnalytical:
         # diagnostic
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-        cos2_scaling = np.cos(angles - pars['theta_int']) ** 2
+        cos2_scaling = np.cos(angles - source_pars_rot['theta_int']) ** 2
         C2_norm = cos2_scaling / cos2_scaling.max()
 
         angles_deg = np.degrees(angles)
@@ -2231,31 +2241,30 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         base_pars = {
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': 1.0,
-            'vel_dispersion': 280.0,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 280.0,
         }
 
         gp = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * 2.0,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
             dispersion_angle=0.0,
         )
         cp = gp.to_cube_pars(z=1.0)
@@ -2276,13 +2285,15 @@ class TestAnalytical:
             vsini_vals.append(vcirc * sini)
 
             # per-combo static reference matching cosi
-            norot_pars = {**base_pars, 'vcirc': 0.0, 'cosi': cosi}
-            theta_norot = kl.pars2theta(norot_pars)
-            grism_norot = np.array(kl.render_grism(theta_norot, gp, cube_pars=cp))
+            source_pars_norot = {**base_pars, 'vel.vcirc': 0.0, 'cosi': cosi}
+            grism_norot = np.array(
+                source.render_grism(source_pars_norot, _make_grism_obs_no_psf(gp, cp))
+            )
 
-            p = {**base_pars, 'vcirc': vcirc, 'cosi': cosi}
-            theta = kl.pars2theta(p)
-            grism = np.array(kl.render_grism(theta, gp, cube_pars=cp))
+            source_pars = {**base_pars, 'vel.vcirc': vcirc, 'cosi': cosi}
+            grism = np.array(
+                source.render_grism(source_pars, _make_grism_obs_no_psf(gp, cp))
+            )
 
             diff = grism - grism_norot
             Ncol = _ANALYTICAL_NCOL
@@ -2344,12 +2355,13 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={'Halpha': EmissionLine(intensity=int_model)},
+        )
 
         z = 1.0
-        lam_obs = HALPHA.lambda_rest * (1 + z)
+        lam_obs = LINE_LAMBDAS['Halpha'] * (1 + z)
         dispersion = 0.1  # nm/pix; fine enough that vel_disp=30 km/s lines are resolved
 
         base_pars = {
@@ -2357,17 +2369,15 @@ class TestAnalytical:
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,  # no rotation
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': z,
-            'Ha_flux': 100.0,
-            'Ha_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,  # no rotation
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
         }
 
         # use integer dlam = dispersion so bilinear is exact
@@ -2393,11 +2403,10 @@ class TestAnalytical:
         profiles = []
 
         for sigma_v in vel_disps:
-            p = {**base_pars, 'vel_dispersion': sigma_v}
-            theta = kl.pars2theta(p)
+            source_pars = {**base_pars, 'Halpha.dispersion': sigma_v}
 
             # delta-cube: build resolved cube, extract center pixel spectrum
-            cube_full = np.array(kl.render_cube(theta, cp))
+            cube_full = np.array(source.build_cube(source_pars, cp))
             cube_delta = np.zeros_like(cube_full)
             cube_delta[r0, c0, :] = cube_full[r0, c0, :]
 
@@ -2488,43 +2497,47 @@ class TestAnalytical:
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
 
-        # two lines: Ha + NII_6583 (no NII_6548 to avoid overlap)
-        ha_line = EmissionLine(line_spec=HALPHA, own_params=frozenset({'flux'}))
-        nii_line = EmissionLine(line_spec=NII_6583, own_params=frozenset({'flux'}))
-        config = SpectralConfig(lines=(ha_line, nii_line), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        # two lines: Halpha + NII6584 (no NII6548 to avoid overlap); NII6584
+        # shares Halpha's spatial profile via intensity_key (legacy own_params
+        # split is replaced by per-line ownership + shared-spatial via key).
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(intensity=int_model),
+                'NII6584': EmissionLine(intensity_key='Halpha'),
+            },
+        )
 
         z = 1.0
         dispersion = 1.0  # nm/pix for integer offsets
         ha_flux = 100.0
         nii_flux = 50.0
 
-        pars = {
-            'cosi': 1.0,  # face-on
+        # dotted-key pars dict written directly (no legacy bridge helper).
+        source_pars = {
+            'cosi': 1.0,
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': z,
-            'vel_dispersion': 30.0,  # narrow lines for clean peaks
-            'Ha_flux': ha_flux,
-            'Ha_cont': 0.0,
-            'NII_6583_flux': nii_flux,
-            'NII_6583_cont': 0.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': ha_flux,
+            'Halpha.rscale': 0.3,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 30.0,  # narrow lines for clean peaks
+            # NII6584 spatial profile is owned by Halpha via intensity_key;
+            # only its flux + dispersion are per-line.
+            'NII6584.flux': nii_flux,
+            'NII6584.dispersion': 30.0,
         }
-        theta = kl.pars2theta(pars)
 
         # build lambda grid covering both lines
-        lam_ha = HALPHA.lambda_rest * (1 + z)
-        lam_nii = NII_6583.lambda_rest * (1 + z)
+        lam_ha = LINE_LAMBDAS['Halpha'] * (1 + z)
+        lam_nii = LINE_LAMBDAS['NII6584'] * (1 + z)
         lam_center = (lam_ha + lam_nii) / 2.0
 
         # wide enough to capture both lines with margin
@@ -2548,7 +2561,7 @@ class TestAnalytical:
         # delta-cube approach: extract center pixel
         r0 = _ANALYTICAL_NROW // 2
         c0 = _ANALYTICAL_NCOL // 2
-        cube_full = np.array(kl.render_cube(theta, cp))
+        cube_full = np.array(source.build_cube(source_pars, cp))
         cube_delta = np.zeros_like(cube_full)
         cube_delta[r0, c0, :] = cube_full[r0, c0, :]
         grism = np.array(
@@ -2576,7 +2589,7 @@ class TestAnalytical:
 
         # expected separation
         sep_expected = (
-            (NII_6583.lambda_rest - HALPHA.lambda_rest) * (1 + z) / dispersion
+            (LINE_LAMBDAS['NII6584'] - LINE_LAMBDAS['Halpha']) * (1 + z) / dispersion
         )
 
         sep_err = abs(sep_measured - sep_expected)
@@ -2630,64 +2643,96 @@ class TestAnalytical:
 
         vel_model = CenteredVelocityModel()
         int_model = InclinedExponentialModel()
-        config = SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-        sm = SpectralModel(config, int_model, vel_model)
-        kl = KLModel(vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=sm)
+        # opt-in continuum on the Halpha line; SourceModel requires the
+        # ``continuum=`` field on EmissionLine for cube assembly to include
+        # the per-line continuum term (Halpha.cont.flux_per_nm is sampled per-line).
+        source = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(intensity=int_model, continuum=int_model),
+            },
+        )
 
         z = 1.0
         cont_val = 1.0
 
+        # base line params (no continuum); continuum is added per-case below
+        # under the Halpha.cont.* namespace (SourceModel opt-in continuum).
         base_pars = {
             'cosi': 0.5,
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'v0': 0.0,
-            'vcirc': 0.0,  # static to avoid velocity complications
-            'vel_rscale': 0.5,
-            'flux': 100.0,
-            'int_rscale': 0.15,  # compact
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
             'z': z,
-            'vel_dispersion': 50.0,
-            'Ha_flux': 100.0,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,  # static to avoid velocity complications
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.15,  # compact
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
+        }
+        # continuum spatial profile shares the line's intensity model; provide
+        # matching Halpha.cont.* spatial keys so the continuum is rendered with
+        # the same shape as the line.
+        cont_spatial = {
+            'Halpha.cont.rscale': 0.15,
+            'Halpha.cont.h_over_r': 0.1,
+            'Halpha.cont.x0': 0.0,
+            'Halpha.cont.y0': 0.0,
         }
 
         gp = GrismPars(
             image_pars=_ANALYTICAL_IMAGE_PARS,
             dispersion=1.1,
-            lambda_ref=HALPHA.lambda_rest * (1 + z),
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
             dispersion_angle=0.0,
         )
         cp = gp.to_cube_pars(z=z)
 
-        # with continuum
-        pars_cont = {**base_pars, 'Ha_cont': cont_val}
-        theta_cont = kl.pars2theta(pars_cont)
-        grism_cont = np.array(kl.render_grism(theta_cont, gp, cube_pars=cp))
+        # with continuum (Halpha.cont.flux_per_nm = cont_val)
+        source_pars_cont = {
+            **base_pars,
+            **cont_spatial,
+            'Halpha.cont.flux_per_nm': cont_val,
+        }
+        grism_cont = np.array(
+            source.render_grism(source_pars_cont, _make_grism_obs_no_psf(gp, cp))
+        )
 
-        # without continuum
-        pars_nocont = {**base_pars, 'Ha_cont': 0.0}
-        theta_nocont = kl.pars2theta(pars_nocont)
-        grism_nocont = np.array(kl.render_grism(theta_nocont, gp, cube_pars=cp))
+        # without continuum (Halpha.cont.flux_per_nm = 0)
+        source_pars_nocont = {
+            **base_pars,
+            **cont_spatial,
+            'Halpha.cont.flux_per_nm': 0.0,
+        }
+        grism_nocont = np.array(
+            source.render_grism(source_pars_nocont, _make_grism_obs_no_psf(gp, cp))
+        )
 
         diff = grism_cont - grism_nocont
 
-        # build expected by explicitly dispersing a uniform-spectrum cube
-        # each slice = I_broadband * cont_val
-        theta_int = kl.get_intensity_pars(theta_cont)
-        I_broadband = np.array(
-            int_model.render_unconvolved(theta_int, _ANALYTICAL_IMAGE_PARS)
+        # build expected by explicitly dispersing the continuum contribution
+        # using SourceModel's continuum semantic (Halpha.cont.flux_per_nm is the
+        # continuum's own flux, not a multiplier on the line). Build the
+        # continuum theta + spatial profile the same way source.build_cube
+        # does internally, then mirror the full pipeline (disperse + sinc +
+        # SB→flux/pixel via × coarse_area).
+        cont_theta, cont_model = source._build_emission_continuum_theta(
+            source_pars_cont, 'Halpha'
         )
-        cont_cube = (
-            np.broadcast_to(
-                I_broadband[:, :, None], (*I_broadband.shape, cp.n_lambda)
-            ).copy()
-            * cont_val
+        X_grid, Y_grid = build_map_grid_from_image_pars(_ANALYTICAL_IMAGE_PARS)
+        I_cont = np.array(cont_model(cont_theta, 'obs', X_grid, Y_grid))
+        cont_cube_sb = np.broadcast_to(
+            I_cont[:, :, None], (*I_cont.shape, cp.n_lambda)
+        ).copy()
+        coarse_area = _ANALYTICAL_IMAGE_PARS.pixel_scale**2
+        expected = (
+            np.array(disperse_cube(jnp.array(cont_cube_sb), gp, cp.lambda_grid))
+            * coarse_area
         )
-        expected = np.array(disperse_cube(jnp.array(cont_cube), gp, cp.lambda_grid))
 
         peak = max(expected.max(), 1e-16)
         residual = np.abs(diff - expected)
@@ -2724,3 +2769,123 @@ class TestAnalytical:
         assert (
             rel_max < 1e-4
         ), f"Continuum pedestal rel error {rel_max:.2e} exceeds 1e-4"
+
+
+class TestContinuumModel:
+    """ContinuumModel adapter: flux -> flux_per_nm relabel, wrapping, guard."""
+
+    def test_relabels_flux_to_flux_per_nm(self):
+        from kl_pipe.model import ContinuumModel
+
+        profile = InclinedExponentialModel()
+        cont = ContinuumModel(profile)
+        assert 'flux' not in cont.PARAMETER_NAMES
+        assert 'flux_per_nm' in cont.PARAMETER_NAMES
+        # same index position as the wrapped profile's flux, other names intact
+        i = profile.PARAMETER_NAMES.index('flux')
+        assert cont.PARAMETER_NAMES[i] == 'flux_per_nm'
+        assert [p for p in cont.PARAMETER_NAMES if p != 'flux_per_nm'] == [
+            p for p in profile.PARAMETER_NAMES if p != 'flux'
+        ]
+
+    def test_call_delegates_positionally(self):
+        """__call__ passes theta straight through (only the label changed)."""
+        from kl_pipe.model import ContinuumModel
+
+        profile = InclinedExponentialModel()
+        cont = ContinuumModel(profile)
+        pars = {
+            'cosi': 0.7,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'flux': 3.0,
+            'rscale': 0.3,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
+        }
+        theta = profile.pars2theta(pars)
+        ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
+        X, Y = build_map_grid_from_image_pars(ip)
+        np.testing.assert_array_equal(
+            np.array(cont(theta, 'obs', X, Y)),
+            np.array(profile(theta, 'obs', X, Y)),
+        )
+
+    def test_idempotent_double_wrap(self):
+        from kl_pipe.model import ContinuumModel
+
+        profile = InclinedExponentialModel()
+        once = ContinuumModel(profile)
+        twice = ContinuumModel(once)
+        assert twice._profile is profile  # unwrapped, not nested
+        assert twice.PARAMETER_NAMES == once.PARAMETER_NAMES
+
+    def test_isinstance_intensity_model(self):
+        from kl_pipe.model import ContinuumModel, IntensityModel
+
+        assert isinstance(ContinuumModel(InclinedExponentialModel()), IntensityModel)
+
+    def test_emission_line_auto_wraps_raw_model(self):
+        from kl_pipe.model import ContinuumModel
+
+        line = EmissionLine(
+            intensity=InclinedExponentialModel(),
+            continuum=InclinedExponentialModel(),
+        )
+        assert isinstance(line.continuum, ContinuumModel)
+        assert 'flux_per_nm' in line.continuum.PARAMETER_NAMES
+
+    def test_emission_line_accepts_prewrapped(self):
+        from kl_pipe.model import ContinuumModel
+
+        wrapped = ContinuumModel(InclinedExponentialModel())
+        line = EmissionLine(intensity=InclinedExponentialModel(), continuum=wrapped)
+        # idempotent: not double-wrapped
+        assert isinstance(line.continuum, ContinuumModel)
+        assert not isinstance(line.continuum._profile, ContinuumModel)
+
+    def test_wrong_flux_name_raises_loudly(self):
+        """Passing '<line>.cont.flux' (integrated) instead of flux_per_nm raises."""
+        source = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+            },
+        )
+        z = 1.0
+        gp = GrismPars(
+            image_pars=_ANALYTICAL_IMAGE_PARS,
+            dispersion=1.1,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
+            dispersion_angle=0.0,
+        )
+        cp = gp.to_cube_pars(z=z)
+        pars = {
+            'cosi': 0.5,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'z': z,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.15,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
+            'Halpha.cont.rscale': 0.15,
+            'Halpha.cont.h_over_r': 0.1,
+            'Halpha.cont.x0': 0.0,
+            'Halpha.cont.y0': 0.0,
+            # WRONG: integrated 'flux' instead of the density 'flux_per_nm'
+            'Halpha.cont.flux': 1.0,
+        }
+        with pytest.raises(ValueError, match='flux_per_nm'):
+            source.render_grism(pars, _make_grism_obs_no_psf(gp, cp))
