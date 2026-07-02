@@ -135,6 +135,32 @@ def test_spergel_theta_roundtrip():
     assert len(theta) == 10
 
 
+@pytest.mark.parametrize("render_method", ['render_image', 'render_unconvolved'])
+def test_spergel_unphysical_nu_raises(render_method):
+    """nu <= -1 must raise on BOTH render paths (render_unconvolved is the
+    cube-assembly path that previously bypassed the render_image check)."""
+    model = InclinedSpergelModel()
+    ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
+    pars = {
+        'cosi': 0.7,
+        'theta_int': 0.0,
+        'g1': 0.0,
+        'g2': 0.0,
+        'flux': 1.0,
+        'rscale': 0.3,
+        'h_over_r': 0.1,
+        'nu': -1.5,
+        'x0': 0.0,
+        'y0': 0.0,
+    }
+    theta = InclinedSpergelModel.pars2theta(pars)
+    with pytest.raises(ValueError, match='unphysical'):
+        if render_method == 'render_image':
+            model.render_image(theta, image_pars=ip)
+        else:
+            model.render_unconvolved(theta, ip)
+
+
 def test_devaucouleurs_model_instantiation(basic_meta_pars):
     """Test InclinedDeVaucouleursModel: 9 params, no nu."""
     model = InclinedDeVaucouleursModel(meta_pars=basic_meta_pars)

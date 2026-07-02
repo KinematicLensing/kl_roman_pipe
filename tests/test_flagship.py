@@ -27,7 +27,7 @@ Sample space (17-dim):
 - Emission line:   Halpha.flux, Halpha.rscale, Halpha.x0, Halpha.y0,
                    Halpha.dispersion                          (h_over_r fixed)
 - Continuum under line:
-                   Halpha.cont.flux                           (others fixed to line spatial truth)
+                   Halpha.cont.flux_per_nm                           (others fixed to line spatial truth)
 The continuum is intentionally non-zero so the flat continuum trace is
 visible above the noise floor in the dispersed grism image.
 
@@ -189,7 +189,7 @@ def _true_pars_dotted() -> Dict[str, float]:
         # spatial truth; only the continuum flux is sampled. The continuum
         # produces a flat trace across the dispersed grism image visible above
         # the noise floor at this SNR.
-        'Halpha.cont.flux': 25.0,
+        'Halpha.cont.flux_per_nm': 25.0,
         'Halpha.cont.rscale': 0.25,
         'Halpha.cont.h_over_r': 0.1,
         'Halpha.cont.x0': 0.0,
@@ -233,7 +233,7 @@ def _flagship_priors(true: Dict[str, float]) -> PriorDict:
             # Continuum under Halpha (only flux sampled; spatial profile fixed
             # to line spatial truth so the inference doesn't have to also solve
             # a continuum-line spatial degeneracy at this SNR).
-            'Halpha.cont.flux': TruncatedNormal(25.0, 15.0, 0.0, 200.0),
+            'Halpha.cont.flux_per_nm': TruncatedNormal(25.0, 15.0, 0.0, 200.0),
             'Halpha.cont.rscale': true['Halpha.cont.rscale'],
             'Halpha.cont.h_over_r': true['Halpha.cont.h_over_r'],
             'Halpha.cont.x0': true['Halpha.cont.x0'],

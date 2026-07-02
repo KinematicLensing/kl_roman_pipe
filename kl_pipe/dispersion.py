@@ -187,11 +187,15 @@ def disperse_cube(
     if throughput is None:
         throughput = jnp.ones(Nlam)
 
-    # delta_lambda for integration (nm per wavelength pixel)
-    if Nlam >= 2:
-        dlam = jnp.abs(lambda_grid[1] - lambda_grid[0])
-    else:
-        dlam = 1.0
+    # delta_lambda for integration (nm per wavelength pixel). A single-slice
+    # cube carries no spectral information to disperse; refuse loudly rather
+    # than silently integrating with an arbitrary dlam=1 nm.
+    if Nlam < 2:
+        raise ValueError(
+            f"disperse_cube requires Nlam >= 2 (got Nlam={Nlam}); a "
+            f"single-wavelength cube has no spectral axis to disperse."
+        )
+    dlam = jnp.abs(lambda_grid[1] - lambda_grid[0])
 
     # accumulate dispersed image
     dispersed = jnp.zeros((Nrow, Ncol))

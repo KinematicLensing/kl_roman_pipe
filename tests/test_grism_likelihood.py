@@ -16,7 +16,7 @@ The smoke recovery test fixes most parameters and optimizes over a small subset
 to confirm end-to-end inference works. It is not a tight tolerance gate.
 
 Continuum coverage uses ``EmissionLine(continuum=...)`` with
-``Halpha.cont.flux=0.05`` fixed. The continuum's spatial parameters are fixed
+``Halpha.cont.flux_per_nm=0.05`` fixed. The continuum's spatial parameters are fixed
 equal to the line's own spatial parameters (i.e. the continuum and the line
 share a single spatial profile in this test).
 """
@@ -90,7 +90,7 @@ _TRUE_PARS = {
     'Halpha.y0': 0.0,
     'Halpha.dispersion': 50.0,
     # Halpha continuum (spatial pars fixed = line spatial pars)
-    'Halpha.cont.flux': 0.05,
+    'Halpha.cont.flux_per_nm': 0.05,
     'Halpha.cont.rscale': 0.3,
     'Halpha.cont.h_over_r': 0.15,
     'Halpha.cont.x0': 0.0,

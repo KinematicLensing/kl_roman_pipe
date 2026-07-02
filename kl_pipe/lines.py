@@ -77,12 +77,15 @@ class EmissionLine:
         ``<line>.flux`` is still per-line.
     continuum : IntensityModel, optional
         Optional stellar continuum at this line's wavelength. Adds a
-        broadband-like component under the line in cube assembly.
-        Mutually exclusive with ``continuum_key``.
+        broadband-like component under the line in cube assembly. A raw
+        ``IntensityModel`` is auto-wrapped in ``ContinuumModel``, exposing its
+        amplitude as the spectral density ``<line>.cont.flux_per_nm``
+        [flux/arcsec^2/nm] rather than an integrated ``flux``. Mutually
+        exclusive with ``continuum_key``.
     continuum_key : str, optional
         Reference to another emission line's ``continuum``. Same sharing
         semantics as ``intensity_key`` but for the continuum component.
-        ``<line>.cont.flux`` is still per-line.
+        ``<line>.cont.flux_per_nm`` is still per-line.
     dispersion_key : str, optional
         Reference to another emission line's intrinsic kinematic
         velocity dispersion. When set, this line's dispersion is read
@@ -116,6 +119,13 @@ class EmissionLine:
                 "EmissionLine: at most one of 'continuum' or 'continuum_key' "
                 "may be set"
             )
+        # wrap a raw IntensityModel continuum in ContinuumModel so its amplitude
+        # is exposed as the density parameter '<line>.cont.flux_per_nm'.
+        # Idempotent: a pre-wrapped ContinuumModel passes through unchanged.
+        if self.continuum is not None:
+            from kl_pipe.model import ContinuumModel
+
+            self.continuum = ContinuumModel(self.continuum)
         # dispersion_key cross-reference is validated by SourceModel,
         # since it needs the full emission_lines dict to check.
 

@@ -565,8 +565,10 @@ class InferenceTask:
         early-warmup transient. See
         ``experiments/sweverett/flagship_speedup`` for the validating study.
 
-        The optimizer uses the prior bounds (``get_bounds``), so iterates stay
-        in-support; the Hessian is taken at the interior MAP.
+        The optimizer runs unbounded in scaled coordinates (``theta = loc +
+        scale * u``); out-of-support iterates receive ``-inf`` log-posterior
+        from the prior, which acts as a soft barrier keeping the converged MAP
+        in-support. The Hessian is taken at that MAP.
 
         Parameters
         ----------

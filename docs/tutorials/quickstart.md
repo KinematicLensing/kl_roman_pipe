@@ -108,7 +108,7 @@ tells the source which component a parameter belongs to:
 | `vel.<name>` | velocity-model parameter | `vel.vcirc`, `vel.rscale`, `vel.v0` |
 | `<band>.<name>` | broadband intensity parameter | `F087.flux`, `F087.rscale` |
 | `<line>.<name>` | emission-line parameter | `Halpha.flux`, `Halpha.dispersion` |
-| `<line>.cont.<name>` | continuum under a line | `Halpha.cont.flux` |
+| `<line>.cont.<name>` | continuum under a line | `Halpha.cont.flux_per_nm` |
 
 The geometric parameters (`cosi`, `theta_int`, `g1`, `g2`) are shared: there is
 one inclination, one position angle, one shear for the whole galaxy, common to
@@ -655,7 +655,7 @@ roman_truth = {
     'Halpha.x0': 0.0,
     'Halpha.y0': 0.0,
     'Halpha.dispersion': 50.0,
-    'Halpha.cont.flux': 25.0,
+    'Halpha.cont.flux_per_nm': 25.0,
     'Halpha.cont.rscale': 0.25,
     'Halpha.cont.h_over_r': 0.1,
     'Halpha.cont.x0': 0.0,
@@ -724,7 +724,7 @@ roman_priors = PriorDict({
     'Halpha.x0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
     'Halpha.y0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
     'Halpha.dispersion': TruncatedNormal(50.0, 20.0, 5.0, 150.0),
-    'Halpha.cont.flux': TruncatedNormal(25.0, 15.0, 0.0, 200.0),
+    'Halpha.cont.flux_per_nm': TruncatedNormal(25.0, 15.0, 0.0, 200.0),
     'Halpha.cont.rscale': roman_truth['Halpha.cont.rscale'],   # fixed to line truth
     'Halpha.cont.h_over_r': roman_truth['Halpha.cont.h_over_r'],
     'Halpha.cont.x0': roman_truth['Halpha.cont.x0'],

@@ -55,6 +55,50 @@ def gaussian_psf():
 
 
 # ==============================================================================
+# Array validation (shared across all three builders)
+# ==============================================================================
+
+
+class TestObsArrayValidation:
+    """Loud validation of data/variance/mask in the obs builders."""
+
+    def test_negative_variance_raises(self, image_pars, data_16):
+        bad = jnp.ones((16, 16)) * 0.01
+        bad = bad.at[0, 0].set(-1.0)
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_image_obs(image_pars, data=data_16, variance=bad)
+
+    def test_zero_variance_raises(self, image_pars, data_16):
+        bad = jnp.zeros((16, 16))
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_image_obs(image_pars, data=data_16, variance=bad)
+
+    def test_scalar_variance_ok(self, image_pars, data_16):
+        # scalar variance is allowed and broadcasts; only positivity checked
+        obs = build_image_obs(image_pars, data=data_16, variance=0.01)
+        assert obs.variance is not None
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_image_obs(image_pars, data=data_16, variance=0.0)
+
+    def test_variance_shape_mismatch_raises(self, image_pars, data_16):
+        with pytest.raises(ValueError, match='variance shape'):
+            build_image_obs(image_pars, data=data_16, variance=jnp.ones((8, 8)) * 0.01)
+
+    def test_mask_shape_mismatch_raises(self, image_pars, data_16, variance_16):
+        with pytest.raises(ValueError, match='mask shape'):
+            build_image_obs(
+                image_pars,
+                data=data_16,
+                variance=variance_16,
+                mask=jnp.ones((8, 8), dtype=bool),
+            )
+
+    def test_velocity_builder_validates(self, image_pars, data_16):
+        with pytest.raises(ValueError, match='variance must be strictly positive'):
+            build_velocity_obs(image_pars, data=data_16, variance=jnp.zeros((16, 16)))
+
+
+# ==============================================================================
 # ImageObs factory tests
 # ==============================================================================
 

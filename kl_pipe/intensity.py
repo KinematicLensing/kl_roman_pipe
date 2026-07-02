@@ -7,7 +7,25 @@ from scipy.special import kve as scipy_kve
 from typing import Dict, List, Optional, Set
 
 from kl_pipe.model import IntensityModel
-from kl_pipe.transformation import obs2cen, cen2source, source2gal
+from kl_pipe.transformation import obs2cen, cen2source, source2gal, COSI_FLOOR
+
+
+def _require_finite_maxk_cosi(cosi: float, model_name: str) -> None:
+    """Raise if cosi is too edge-on for finite intensity-FT grid sizing.
+
+    The inclined-profile FT extends along the compressed ky axis by a factor
+    1/cosi, so ``maxk`` diverges as cosi -> 0. Clamping cosi here (as the
+    surface-brightness 1/cosi term is clamped in ``IntensityModel.__call__``)
+    would silently undersize the k-grid and alias the render, so we raise
+    loudly instead. Requires ``cosi > COSI_FLOOR``.
+    """
+    if cosi <= COSI_FLOOR:
+        raise ValueError(
+            f"{model_name}.maxk: cosi={cosi:g} <= COSI_FLOOR={COSI_FLOOR:g} "
+            f"(edge-on); the inclined-disk FT diverges along ky as 1/cosi, so "
+            f"grid sizing is undefined. Use a strictly positive cosi lower bound "
+            f"(e.g. the recommended Uniform(0.05, 0.99)) for intensity rendering."
+        )
 
 
 # default number of Gauss-Legendre quadrature points for LOS integration
@@ -1194,6 +1212,7 @@ class InclinedExponentialModel(IntensityModel):
         """
         rscale = params['rscale']
         cosi = params['cosi']
+        _require_finite_maxk_cosi(cosi, type(self).__name__)
         return np.sqrt(threshold ** (-2.0 / 3.0) - 1.0) / (rscale * cosi)
 
     def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
@@ -1714,6 +1733,7 @@ class InclinedSpergelModel(IntensityModel):
         rscale = params['rscale']
         nu = params['nu']
         cosi = params['cosi']
+        _require_finite_maxk_cosi(cosi, type(self).__name__)
         return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
 
     def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
@@ -1728,11 +1748,28 @@ class InclinedSpergelModel(IntensityModel):
         hlr = rscale
         return np.pi / (_STEPK_MIN_HLR * hlr)
 
+    def _check_nu_physical(self, theta) -> None:
+        """Raise if nu <= -1 when theta is concrete (skipped under JIT trace).
+
+        ``nu <= -1`` makes the Spergel profile non-integrable and drives
+        ``gammaln(nu+1) -> inf`` in the flux norm, silently corrupting flux.
+        Called by every render entry point (``render_image`` and the
+        cube-assembly path ``render_unconvolved``).
+        """
+        if not isinstance(theta, jax.core.Tracer):
+            nu = float(theta[self.PARAMETER_NAMES.index('nu')])
+            if nu <= -1.0:
+                raise ValueError(
+                    f"nu={nu} <= -1 is unphysical (Spergel profile has "
+                    f"infinite spatial extent). Valid range: nu > -1."
+                )
+
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
         For use by cube assembly — fast, anti-aliased, no PSF.
         """
+        self._check_nu_physical(theta)
         return self._render_kspace(
             theta,
             image_pars.Nrow,
@@ -1950,14 +1987,7 @@ class InclinedSpergelModel(IntensityModel):
         jnp.ndarray, shape (Nrow, Ncol)
             Image in flux per pixel.
         """
-        # validate nu when theta is concrete (not inside JIT trace)
-        if not isinstance(theta, jax.core.Tracer):
-            nu = float(theta[self.PARAMETER_NAMES.index('nu')])
-            if nu <= -1.0:
-                raise ValueError(
-                    f"nu={nu} <= -1 is unphysical (Spergel profile has "
-                    f"infinite spatial extent). Valid range: nu > -1."
-                )
+        self._check_nu_physical(theta)
         return _kspace_render_image(
             self, theta, image_pars, plane, X, Y, oversample, obs=obs, **kwargs
         )
@@ -2067,6 +2097,7 @@ class InclinedDeVaucouleursModel(IntensityModel):
         rscale = params['rscale']
         cosi = params['cosi']
         nu = self._fixed_nu
+        _require_finite_maxk_cosi(cosi, type(self).__name__)
         return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
 
     def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
@@ -2400,6 +2431,7 @@ class InclinedSersicModel(IntensityModel):
         hlr = params['hlr']
         n = params['n_sersic']
         cosi = params['cosi']
+        _require_finite_maxk_cosi(cosi, type(self).__name__)
 
         # emulator works in dimensionless k_dim = k_physical * R_e
         # for inclined case along ky: k_dim_eff = k_physical * R_e * cosi

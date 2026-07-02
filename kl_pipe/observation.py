@@ -515,6 +515,45 @@ jax.tree_util.register_pytree_node(GrismObs, _grism_obs_flatten, _grism_obs_unfl
 # ============================================================================
 
 
+def _cast_and_validate_obs_arrays(data, variance, mask):
+    """Cast data/variance/mask to JAX arrays and validate loudly.
+
+    Checks performed eagerly at construction (not inside JIT):
+    - ``variance`` is strictly positive everywhere. A zero/negative entry
+      yields inf/NaN in the Gaussian log-likelihood, and a zero even on a
+      masked-out pixel still poisons reverse-mode gradients through the
+      ``jnp.where`` in ``_gaussian_log_likelihood``.
+    - array ``variance`` and ``mask`` shapes match the data shape (a mismatch
+      would otherwise surface only as a cryptic broadcast error inside the
+      JITed likelihood). Scalar variance is allowed and broadcasts.
+
+    Grism data is dispersed (shape differs from ``image_pars``), so shapes are
+    cross-checked against ``data`` only, never against the grid.
+    """
+    if data is not None:
+        data = jnp.asarray(data)
+    if variance is not None:
+        variance = jnp.asarray(variance)
+        if not bool(jnp.all(variance > 0)):
+            raise ValueError(
+                "variance must be strictly positive everywhere; found "
+                "non-positive entries (zero/negative variance yields inf/NaN "
+                "in the Gaussian log-likelihood and NaN gradients)."
+            )
+        if data is not None and variance.ndim > 0 and variance.shape != data.shape:
+            raise ValueError(
+                f"variance shape {variance.shape} does not match data shape "
+                f"{data.shape} (a scalar variance is allowed and broadcasts)."
+            )
+    if mask is not None:
+        mask = jnp.asarray(mask, dtype=bool)
+        if data is not None and mask.shape != data.shape:
+            raise ValueError(
+                f"mask shape {mask.shape} does not match data shape {data.shape}."
+            )
+    return data, variance, mask
+
+
 def build_image_obs(
     image_pars: ImagePars,
     *,
@@ -610,12 +649,7 @@ def build_image_obs(
         fine_image_pars = image_pars.make_fine_scale(oversample)
         fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
 
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
+    data, variance, mask = _cast_and_validate_obs_arrays(data, variance, mask)
 
     obs = ImageObs(
         image_pars=image_pars,
@@ -757,12 +791,7 @@ def build_velocity_obs(
         fine_image_pars = image_pars.make_fine_scale(oversample)
         fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
 
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
+    data, variance, mask = _cast_and_validate_obs_arrays(data, variance, mask)
     if flux_theta is not None:
         flux_theta = jnp.asarray(flux_theta)
 
@@ -860,12 +889,7 @@ def build_grism_obs(
         KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
         pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
 
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
+    data, variance, mask = _cast_and_validate_obs_arrays(data, variance, mask)
 
     obs = GrismObs(
         grism_pars=grism_pars,

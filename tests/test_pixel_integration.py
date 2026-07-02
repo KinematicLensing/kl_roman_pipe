@@ -28,9 +28,11 @@ from kl_pipe.pixel import PixelResponse, BoxPixel, _PIXEL_RESPONSE_UNSET
 from kl_pipe.intensity import (
     InclinedExponentialModel,
     InclinedSpergelModel,
+    InclinedDeVaucouleursModel,
     InclinedSersicModel,
     _kspace_render_core,
 )
+from kl_pipe.transformation import COSI_FLOOR
 from kl_pipe.render import (
     RenderConfig,
     compute_effective_maxk,
@@ -464,6 +466,29 @@ class TestMaxkStepk:
         model = InclinedExponentialModel()
         with pytest.raises(KeyError, match='cosi'):
             model.maxk({'rscale': 0.3})
+
+    def test_maxk_raises_at_edge_on_cosi(self):
+        """Edge-on cosi (<= COSI_FLOOR) must raise loudly, not return inf.
+
+        The inclined-disk FT diverges along ky as 1/cosi; clamping would
+        silently undersize the grid and alias the render, so maxk raises.
+        Covers all four intensity models that carry the 1/cosi divergence.
+        """
+        cases = [
+            (InclinedExponentialModel(), {'rscale': 0.3}),
+            (InclinedSpergelModel(), {'rscale': 0.3, 'nu': 0.5}),
+            (InclinedDeVaucouleursModel(), {'rscale': 0.3}),
+            (InclinedSersicModel(), {'hlr': 0.5, 'n_sersic': 2.0}),
+        ]
+        for model, base in cases:
+            name = type(model).__name__
+            # cosi exactly at the floor and below both raise
+            for bad_cosi in (0.0, COSI_FLOOR, COSI_FLOOR / 2):
+                with pytest.raises(ValueError, match='cosi'):
+                    model.maxk({**base, 'cosi': bad_cosi})
+            # strictly above the floor is finite (regression guard)
+            maxk = model.maxk({**base, 'cosi': 0.05})
+            assert np.isfinite(maxk) and maxk > 0, f"{name} maxk should be finite"
 
     def test_stepk_exponential(self):
         model = InclinedExponentialModel()

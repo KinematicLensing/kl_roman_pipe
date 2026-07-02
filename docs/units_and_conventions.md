@@ -34,11 +34,49 @@ continuous representations stay in SB.
 | `VelocityModel.render_image(theta, obs=obs)` | km/s per coarse pixel | Intensive; flux-weighted PSF convolution preserves km/s units. |
 | `SourceModel.render_broadband(pars, obs, band_key)` | flux per coarse pixel | Dispatches to `IntensityModel.render_image`; same convention. |
 | `SourceModel.render_velocity(pars, obs)` | km/s per coarse pixel | Dispatches to `VelocityModel.render_image`. |
-| `SourceModel.build_cube(pars, cube_pars, ...)` | SB per arcsec² per nm | Intermediate; cube voxel = `I(x, y) × G(λ; x, y)` with `I` in SB and `G` in 1/nm. |
+| `SourceModel.build_cube(pars, cube_pars, ...)` | SB per arcsec² per nm | Intermediate; cube voxel = line term `I_line(x, y) × G(λ; x, y)` (SB × 1/nm) plus continuum term `I_cont(x, y)` (already SB/nm — see below). |
 | `kl_pipe.dispersion.disperse_cube(cube, grism_pars, lambda_grid, oversample)` | SB per arcsec² | Sums `cube × throughput × dlam` over wavelength; output is wavelength-integrated SB. |
 | `kl_pipe.grism._apply_post_dispersion_pixel_response(...)` | flux per coarse pixel | Bins fine SB to coarse and multiplies by `coarse_ps²` to convert SB → flux per coarse pixel. |
 | `SourceModel.render_grism(pars, obs, ...)` | flux per coarse pixel | Final dispersed grism observable. |
 | `KLModel.render_grism(theta, obs)` | flux per coarse pixel | Legacy path; same convention. |
+
+## Emission line flux vs continuum flux density (cube assembly)
+
+The cube voxel is a surface-brightness spectral density, `[flux / arcsec² / nm]`
+(SB/nm). `build_cube` sums a line term and a continuum term, both in SB/nm. They
+carry different front-end units because a line flux and a continuum density are
+physically different quantities: a line has a finite integrated flux, a flat
+continuum has none (it diverges over infinite λ) and is instead specified per unit
+wavelength.
+
+Emission line: `<line>.flux` is an integrated flux `[flux]`. Two normalizations
+turn it into an SB/nm voxel:
+
+```
+<line>.flux  [flux]
+   ÷ spatial profile   (∫∫ I dx dy = flux  ⇒  I carries 1/arcsec²)
+I_line(x,y)  [flux/arcsec²] = SB
+   × G(λ)               (∫ G dλ = 1        ⇒  G carries 1/nm)
+I_line·G(λ)  [flux/arcsec²/nm] = SB/nm
+```
+
+`G(λ) = (1/(σ√2π))·exp(...)` is the normalized line-spread kernel. Integrating the
+voxel back over λ (`disperse_cube` does this via `× dlam` then summing) and over
+space recovers `<line>.flux`. Discretization caveat: `∫G dλ = 1` holds only if the
+wavelength grid resolves `σ_λ`. For Roman, ~50 km/s dispersion at λ_obs ≈ 1310 nm
+gives `σ_λ ≈ 0.2 nm`, comparable to a coarse channel; `build_cube`'s
+`spectral_oversample` sub-binning keeps the normalization accurate. This is an
+accuracy concern, separate from units.
+
+Continuum: `<line>.cont.flux_per_nm` is a spectral density `[flux/nm]`. The
+intensity profile is linear in its amplitude, so feeding a `[flux/nm]` amplitude
+yields `[flux/nm/arcsec²]` = SB/nm directly, with no extra per-nm factor (an added
+`/nm` would double-count). `ContinuumModel` (in `model.py`) wraps a raw
+`IntensityModel` and relabels its `flux` parameter to `flux_per_nm` so the density
+is explicit in the dotted-key namespace. `EmissionLine` auto-wraps a raw continuum
+model; passing the integrated name `<line>.cont.flux` raises. Floats carry no units
+at runtime, so the name and that guard are what enforce the distinction; profile
+linearity propagates it.
 
 ## SB ↔ flux conversion shorthand
 
