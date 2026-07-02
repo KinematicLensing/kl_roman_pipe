@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from kl_pipe.spectral import CubePars
 
 from kl_pipe.parameters import ImagePars
+from kl_pipe.constants import C_KMS
 
 
 @dataclass(frozen=True)
@@ -101,9 +102,8 @@ class GrismPars:
         lam_max_line = max(lam_obs)
 
         # velocity window in wavelength units
-        c_kms = 299792.458
         lam_center = 0.5 * (lam_min_line + lam_max_line)
-        dlam_vel = lam_center * velocity_window_kms / c_kms
+        dlam_vel = lam_center * velocity_window_kms / C_KMS
 
         lam_min = lam_min_line - dlam_vel
         lam_max = lam_max_line + dlam_vel

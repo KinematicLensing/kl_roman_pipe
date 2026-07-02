@@ -2725,9 +2725,8 @@ class _ComponentMapping:
 
 
 def _rename_param(name: str, prefix: str) -> str:
-    """Rename a component param: strip int_ prefix, prepend component prefix."""
-    base = name[4:] if name.startswith('int_') else name
-    return f'{prefix}_{base}'
+    """Rename a component param by prepending the component prefix."""
+    return f'{prefix}_{name}'
 
 
 class CompositeIntensityModel(IntensityModel):

@@ -10,9 +10,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from kl_pipe.plotting import MidpointNormalize
-
-# speed of light in km/s
-_C_KMS = 299792.458
+from kl_pipe.constants import C_KMS as _C_KMS
 
 
 def plot_datacube_overview(

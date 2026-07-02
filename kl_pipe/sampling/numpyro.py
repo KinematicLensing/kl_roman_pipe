@@ -537,13 +537,14 @@ class NumpyroSampler(Sampler):
         n_total_samples = self.config.n_samples * self.config.n_chains
         samples_list = []
         for name in self.task.sampled_names:
-            if name in samples_dict:
-                samples_list.append(np.array(samples_dict[name]).flatten())
-            else:
-                # Fallback: compute from z samples
-                z_samples = np.array(samples_dict[f"_z_{name}"]).flatten()
-                loc, scale = self._reparam_scales[name]
-                samples_list.append(loc + scale * z_samples)
+            # the model registers a deterministic site (physical space) for
+            # every sampled name, so it is always present; assert rather than
+            # silently reconstructing from the _z_ latents.
+            assert name in samples_dict, (
+                f"expected deterministic site '{name}' missing from numpyro "
+                f"samples; model construction changed?"
+            )
+            samples_list.append(np.array(samples_dict[name]).flatten())
 
         samples = np.column_stack(samples_list)
 

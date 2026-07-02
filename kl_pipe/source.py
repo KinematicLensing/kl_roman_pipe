@@ -38,8 +38,7 @@ if TYPE_CHECKING:
     from kl_pipe.observation import GrismObs, ImageObs, VelocityObs
     from kl_pipe.spectral import CubePars
 
-# speed of light, km/s
-_C_KMS = 299792.458
+from kl_pipe.constants import C_KMS as _C_KMS  # noqa: E402
 
 
 # ===========================================================================

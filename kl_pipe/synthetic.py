@@ -51,12 +51,12 @@ Generate synthetic intensity data:
 import numpy as np
 import jax.numpy as jnp
 import galsim as gs
-from abc import ABC, abstractmethod
 from typing import Tuple, Dict, Optional
 from scipy.special import gamma
 
 from kl_pipe.parameters import ImagePars
 from kl_pipe.pixel import BoxPixel, _PIXEL_RESPONSE_UNSET
+from kl_pipe.constants import C_KMS
 from kl_pipe.utils import build_map_grid_from_image_pars
 
 # Required parameters for each model type
@@ -209,7 +209,10 @@ def generate_arctan_velocity_2d(
 
 # TODO: when we're ready to test more complex velocity models
 def generate_arctan_velocity_3d():
-    pass
+    raise NotImplementedError(
+        "generate_arctan_velocity_3d is a placeholder for a future 3D arctan "
+        "velocity generator; not yet implemented."
+    )
 
 
 # ==============================================================================
@@ -883,68 +886,6 @@ def _generate_spergel_galsim(
 # ==============================================================================
 
 
-class SyntheticObservation(ABC):
-    """
-    Base class for synthetic observations.
-
-    Provides structure for generating synthetic data with known true parameters,
-    adding noise, and storing results for testing and validation.
-
-    Parameters
-    ----------
-    true_params : dict
-        Dictionary of true model parameters.
-    seed : int, optional
-        Random seed for reproducibility.
-
-    Attributes
-    ----------
-    true_params : dict
-        True parameters used to generate data.
-    X, Y : ndarray or None
-        Coordinate grids from the most recent call to generate().
-        These are updated each time generate() is called with new grids.
-    data_true : ndarray or None
-        Noiseless synthetic data from most recent generation.
-    data_noisy : ndarray or None
-        Noisy synthetic data from most recent generation.
-    variance : float or None
-        Noise variance from most recent generation.
-    """
-
-    def __init__(self, true_params: Dict[str, float], seed: Optional[int] = None):
-        self.true_params = true_params
-        self.seed = seed
-
-        # storage for last generated data
-        self.data_true = None
-        self.data_noisy = None
-        self.variance = None
-
-    @abstractmethod
-    def generate(
-        self, X: np.ndarray, Y: np.ndarray, snr: float, seed: Optional[int] = None
-    ) -> np.ndarray:
-        """
-        Generate synthetic data on specified grid with noise.
-
-        Parameters
-        ----------
-        X, Y : ndarray
-            Coordinate grids.
-        snr : float
-            Target signal-to-noise ratio (total S/N).
-        seed : int, optional
-            Random seed for noise generation. If None, uses self.seed.
-
-        Returns
-        -------
-        ndarray
-            Noisy synthetic data.
-        """
-        pass
-
-
 class SyntheticVelocity:
     """
     Synthetic velocity field observations.
@@ -1228,8 +1169,6 @@ def generate_datacube_3d(
         ``spatial_oversample == 1``; ``(Nrow*N, Ncol*N, Nlambda)`` when
         ``spatial_oversample == N > 1``.
     """
-    C_KMS = 299792.458
-
     z = spectral_pars['z']
     vel_disp = spectral_pars['vel_dispersion']
     lines = spectral_pars['lines']
@@ -1367,7 +1306,6 @@ def generate_grism_2d(
         lines = spectral_pars['lines']
         lam_obs = [l['lambda_rest'] * (1.0 + z) for l in lines]
         lam_center = 0.5 * (min(lam_obs) + max(lam_obs))
-        C_KMS = 299792.458
         vel_window = grism_pars.get('velocity_window_kms', 3000.0)
         dlam_vel = lam_center * vel_window / C_KMS
         lam_min = min(lam_obs) - dlam_vel
