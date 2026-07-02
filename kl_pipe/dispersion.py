@@ -197,7 +197,12 @@ def disperse_cube(
         )
     dlam = jnp.abs(lambda_grid[1] - lambda_grid[0])
 
-    # accumulate dispersed image
+    # accumulate dispersed image. The sequential per-slice loop is intentional:
+    # restructuring it as vmap/scan (same algorithm) cut compile ~10x but
+    # regressed runtime ~2.5x on CPU (benchmarked), and inference is
+    # runtime-dominated. This is a CPU result for same-algorithm variants; a
+    # precomputed fixed-dispersion operator and GPU execution are untested and
+    # could differ.
     dispersed = jnp.zeros((Nrow, Ncol))
 
     for k in range(Nlam):

@@ -42,7 +42,6 @@ from kl_pipe.sampling import (
 from kl_pipe.sampling.numpyro import (
     NumpyroSampler,
     compute_reparam_scales,
-    compute_empirical_scales,
 )
 from kl_pipe.utils import get_test_dir
 
@@ -273,7 +272,7 @@ class TestReparameterization:
         )
 
         sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
+        scales = sampler._compute_reparam_scales()
 
         for name in task.sampled_names:
             loc, scale = scales[name]
@@ -294,7 +293,7 @@ class TestReparameterization:
         )
 
         sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
+        scales = sampler._compute_reparam_scales()
 
         # Check that vel.vcirc uses its prior params
         loc, scale = scales['vel.vcirc']
@@ -328,7 +327,7 @@ class TestGradientScaling:
         # Get prior-based scales
         config = NumpyroSamplerConfig(reparam_strategy=ReparamStrategy.PRIOR)
         sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
+        scales = sampler._compute_reparam_scales()
 
         # Build function that computes log_posterior in z-space
         log_posterior_fn = task.get_log_posterior_fn()
@@ -392,54 +391,6 @@ class TestGradientScaling:
         assert (
             ratio < 5000
         ), f"Gradient ratio {ratio:.0f} too large - reparameterization not working"
-
-    @pytest.mark.slow
-    def test_empirical_reparam_improves_gradient_ratio(
-        self, joint_model_task, output_dir
-    ):
-        """Empirical reparameterization should reduce gradient ratio vs prior-based."""
-        task, true_pars = joint_model_task
-
-        # Get empirical scales (short preconditioning run)
-        config = NumpyroSamplerConfig(reparam_strategy=ReparamStrategy.EMPIRICAL)
-        sampler = NumpyroSampler(task, config)
-        scales = sampler._compute_reparam_scales(random.PRNGKey(0))
-
-        log_posterior_fn = task.get_log_posterior_fn()
-
-        def log_prob_z(z_dict):
-            theta_physical = []
-            for name in task.sampled_names:
-                loc, scale = scales[name]
-                z = z_dict[name]
-                theta_physical.append(loc + scale * z)
-            theta = jnp.stack(theta_physical)
-            return log_posterior_fn(theta)
-
-        z_true = {}
-        for name in task.sampled_names:
-            loc, scale = scales[name]
-            theta_true = true_pars[name]
-            z_true[name] = jnp.array((theta_true - loc) / scale)
-
-        grad_fn = jax.grad(log_prob_z)
-        grads = grad_fn(z_true)
-        grad_mags = {name: float(jnp.abs(grads[name])) for name in task.sampled_names}
-
-        max_grad = max(grad_mags.values())
-        min_grad = min(grad_mags.values())
-        ratio = max_grad / min_grad if min_grad > 0 else float('inf')
-
-        log_path = output_dir / "gradient_scaling_empirical.txt"
-        with open(log_path, 'w') as f:
-            f.write("Gradient Scaling Test (Empirical Z-space)\n")
-            f.write("=" * 60 + "\n\n")
-            for name, mag in sorted(grad_mags.items()):
-                f.write(f"{name:15s}: |∂log_p/∂z| = {mag:.4e}\n")
-            f.write(f"\nMax/Min ratio: {ratio:.2f}\n")
-
-        # empirical reparam should do better than prior-based
-        assert ratio < 1500, f"Empirical gradient ratio {ratio:.0f} still too large"
 
 
 # ==============================================================================
@@ -559,7 +510,6 @@ class TestNumpyroJointModel:
             n_warmup=500,
             n_chains=1,
             dense_mass=True,
-            reparam_strategy=ReparamStrategy.EMPIRICAL,
             seed=42,
             progress=False,
         )
@@ -605,7 +555,6 @@ class TestNumpyroJointModel:
             n_warmup=500,
             n_chains=1,
             dense_mass=True,
-            reparam_strategy=ReparamStrategy.EMPIRICAL,
             seed=42,
             progress=False,
         )
@@ -642,7 +591,6 @@ class TestNumpyroJointModel:
             n_warmup=500,
             n_chains=1,
             dense_mass=True,
-            reparam_strategy=ReparamStrategy.EMPIRICAL,
             seed=42,
             progress=False,
         )

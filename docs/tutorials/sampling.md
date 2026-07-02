@@ -201,9 +201,10 @@ print("divergences:", result_numpyro.diagnostics.get('n_divergences', 0))
 ### Reparameterization strategies
 
 `reparam_strategy` controls the Z-score scaling: `'prior'` (default, uses prior
-mean/std), `'empirical'` (a short warmup estimates posterior scales; more robust,
-slower), or `'none'` (sample in physical space; only if parameters are already
-well-scaled). Set it on `NumpyroSamplerConfig(reparam_strategy=...)`.
+mean/std) or `'none'` (sample in physical space; only if parameters are already
+well-scaled). Set it on `NumpyroSamplerConfig(reparam_strategy=...)`. For
+posterior-informed conditioning (a MAP-based mass matrix that also captures
+parameter correlations), use `InferenceTask.laplace_preconditioner` instead.
 
 ---
 
@@ -521,7 +522,7 @@ Decision shortcuts: need evidence -> nautilus; joint / production -> numpyro
 | Problem | Likely cause | Fix |
 |---|---|---|
 | Poor mixing (emcee) | too few walkers / degenerate posterior | `n_walkers` > 4x n_params |
-| Divergences (numpyro) | stiff geometry | `reparam_strategy='empirical'`; raise `target_accept_prob` to 0.9 |
+| Divergences (numpyro) | stiff geometry | `InferenceTask.laplace_preconditioner`; raise `target_accept_prob` to 0.9 |
 | High R-hat | not converged | more warmup / samples; check multimodality |
 | Zero variance (blackjax) | gradient collapse on joint models | use numpyro |
 | Low ESS | strong correlations | `dense_mass=True`; or the Laplace preconditioner |

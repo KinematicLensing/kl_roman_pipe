@@ -212,8 +212,7 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `dense_mass` | `bool` | `True` | Dense vs diagonal mass matrix |
 | `max_tree_depth` | `int` | `10` | Max NUTS tree depth |
 | `target_accept_prob` | `float` | `0.8` | In (0, 1) |
-| `reparam_strategy` | `ReparamStrategy` | `PRIOR` | `'none'`, `'prior'`, `'empirical'` |
-| `empirical_warmup_frac` | `float` | `0.1` | Fraction of warmup for empirical |
+| `reparam_strategy` | `ReparamStrategy` | `PRIOR` | `'none'`, `'prior'` |
 | `chain_method` | `str` | `'sequential'` | `'sequential'`, `'parallel'`, `'vectorized'` |
 | `save_warmup` | `bool` | `False` | Save warmup samples |
 | `save_mass_matrix` | `bool` | `False` | Save adapted inverse mass matrix |
@@ -225,7 +224,9 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 |-------|-------------|
 | `NONE` | Sample in physical space (no transform) |
 | `PRIOR` | Z-score using prior mean/std (default, fast) |
-| `EMPIRICAL` | Estimate scales from short warmup (slower, robust) |
+
+For posterior-informed conditioning (a MAP-based mass matrix capturing parameter
+correlations), use `InferenceTask.laplace_preconditioner` instead of a reparam strategy.
 
 ---
 
