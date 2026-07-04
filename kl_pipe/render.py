@@ -58,13 +58,20 @@ class RenderConfig:
         ``SourceModel.build_cube`` / ``render_grism``. Default 15; the
         former default of 5 was found to produce parameter bias 5-25x
         ``sigma_Fisher`` at SNR=10000 for spectrally-sensitive params
-        (see ``experiments/sweverett/spectral_osf_convergence/`` and
-        ``docs/oversampling_convergence.md``). osf=15 reduces that to
+        (see ``docs/oversampling_convergence.md``). osf=15 reduces that to
         ~sigma_Fisher; cube-pixel convergence at osf=15 vs osf=25 is
         <1e-3. Cost scales linearly with osf. Only consulted when the
-        obs (or render_grism caller) does not pass an explicit value.
-        Applies to grism obs only; ignored for image/velocity obs that
-        carry RenderConfig.
+        obs (or render_grism caller) does not pass an explicit value,
+        and only when ``spectral_method='oversample'``. Applies to
+        grism obs only; ignored for image/velocity obs that carry
+        RenderConfig.
+    spectral_method : str
+        Spectral bin-integration method for cube assembly: ``'erf'``
+        (default; exact analytic Gaussian bin integrals, no spectral
+        discretization error, ``spectral_oversample`` ignored) or
+        ``'oversample'`` (midpoint fine-grid sampling controlled by
+        ``spectral_oversample``; retained for convergence/comparison
+        studies). Applies to grism obs only.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -78,8 +85,16 @@ class RenderConfig:
     folding_threshold: float = 5e-3
     maxk_threshold: float = 1e-3
     spectral_oversample: int = 15
+    spectral_method: str = 'erf'
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
+
+    def __post_init__(self):
+        if self.spectral_method not in ('erf', 'oversample'):
+            raise ValueError(
+                f"spectral_method must be 'erf' or 'oversample', got "
+                f"{self.spectral_method!r}"
+            )
 
     @classmethod
     def for_model(
@@ -296,8 +311,10 @@ class RenderConfig:
         parts = [
             f'oversample={self.oversample}',
             f'pad_factor={self.pad_factor}',
-            f'spectral_oversample={self.spectral_oversample}',
+            f'spectral_method={self.spectral_method}',
         ]
+        if self.spectral_method == 'oversample':
+            parts.append(f'spectral_oversample={self.spectral_oversample}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -318,6 +335,7 @@ def _render_config_flatten(rc):
         rc.folding_threshold,
         rc.maxk_threshold,
         rc.spectral_oversample,
+        rc.spectral_method,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -330,8 +348,9 @@ def _render_config_unflatten(aux, children):
         folding_threshold=aux[2],
         maxk_threshold=aux[3],
         spectral_oversample=aux[4],
-        effective_maxk=aux[5],
-        stepk=aux[6],
+        spectral_method=aux[5],
+        effective_maxk=aux[6],
+        stepk=aux[7],
     )
 
 

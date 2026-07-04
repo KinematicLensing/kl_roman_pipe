@@ -570,14 +570,23 @@ class TestCorrectness:
             line_fluxes={'Halpha': 100.0},
         )
 
-        # truth at oversample=25
-        cube_truth = source_ha.build_cube(pars, cube_pars, spectral_oversample=25)
+        # truth at oversample=25 (explicit spectral_method: this test
+        # validates the midpoint-oversampling path's convergence; the
+        # default method is now 'erf', which ignores osf entirely)
+        cube_truth = source_ha.build_cube(
+            pars, cube_pars, spectral_oversample=25, spectral_method='oversample'
+        )
 
         sweep = list(range(3, 22, 2))  # odd osfs 3..21 (10 points)
         errors = {}
         cubes = {}
         for osf in sweep:
-            cube_test = source_ha.build_cube(pars, cube_pars, spectral_oversample=osf)
+            cube_test = source_ha.build_cube(
+                pars,
+                cube_pars,
+                spectral_oversample=osf,
+                spectral_method='oversample',
+            )
             cubes[osf] = cube_test
 
             max_err = float(

@@ -202,6 +202,7 @@ class SourceModel:
         obs: 'GrismObs',
         plane: str = 'obs',
         spectral_oversample: int | None = None,
+        spectral_method: str | None = None,
     ) -> jnp.ndarray:
         """Render the dispersed 2D grism image.
 
@@ -225,19 +226,29 @@ class SourceModel:
         Parameters
         ----------
         spectral_oversample : int, optional
-            Wavelength sub-bin count for cube assembly. When ``None``
-            (default), reads ``obs.spectral_oversample`` (which itself
-            reads from ``obs.render_config.spectral_oversample``,
-            default 5). Pass an explicit value only to override the
-            obs-recorded setting (e.g., convergence tests).
+            Wavelength sub-bin count for cube assembly (only used by
+            ``spectral_method='oversample'``). When ``None`` (default),
+            reads ``obs.spectral_oversample`` (which itself reads from
+            ``obs.render_config.spectral_oversample``, default 15). Pass
+            an explicit value only to override the obs-recorded setting
+            (e.g., convergence tests).
+        spectral_method : str, optional
+            Spectral bin-integration method for ``build_cube``: ``'erf'``
+            (exact, default) or ``'oversample'``. When ``None``
+            (default), reads ``obs.spectral_method`` (canonical source
+            ``obs.render_config.spectral_method``). Pass an explicit
+            value only to override (e.g., method-comparison tests).
         """
         from kl_pipe.dispersion import disperse_cube
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.spectral import CubePars
 
-        # resolve spectral_oversample: explicit kwarg wins, else read from obs
+        # resolve spectral_oversample / spectral_method: explicit kwarg
+        # wins, else read from obs
         if spectral_oversample is None:
             spectral_oversample = obs.spectral_oversample
+        if spectral_method is None:
+            spectral_method = obs.spectral_method
 
         # build_cube spatial grid: fine when oversampling is active
         if obs.psf_data is not None and obs.oversample > 1:
@@ -255,6 +266,7 @@ class SourceModel:
             spectral_oversample=spectral_oversample,
             plane=plane,
             image_rotation=image_rotation,
+            spectral_method=spectral_method,
         )
 
         # per-slice PSF convolution (vmap over wavelength), bin=False keeps fine
@@ -340,6 +352,7 @@ class SourceModel:
         spectral_oversample: int = 15,
         plane: str = 'obs',
         image_rotation: float = 0.0,
+        spectral_method: str = 'erf',
     ) -> jnp.ndarray:
         """Build the intrinsic 3D datacube ``C(x, y, lambda)`` (no PSF).
 
@@ -348,9 +361,22 @@ class SourceModel:
         owning line's spatial/continuum/dispersion data, applies the
         celestial-to-detector rotation, evaluates the per-line intensity
         and (optional) continuum spatial profiles on the cube spatial
-        grid, and accumulates the Gaussian-broadened line + flat-near-line
-        continuum contributions onto a wavelength-oversampled fine grid
-        before binning to the coarse output cube.
+        grid, and accumulates the Gaussian-broadened line +
+        flat-near-line continuum contributions into the coarse output
+        cube. The spectral integral over each coarse wavelength bin is
+        computed by one of two selectable methods (``spectral_method``):
+
+        - ``'erf'`` (default): exact analytic bin integral of the
+          per-pixel Gaussian line kernel via the error function
+          evaluated at the ``Nlambda + 1`` bin edges. Exact for the
+          Gaussian kernel (no spectral discretization error);
+          ``spectral_oversample`` is ignored.
+        - ``'oversample'``: midpoint sampling on a fine grid of
+          ``spectral_oversample`` sub-bins per coarse bin, mean-binned
+          to coarse. Midpoint quadrature carries an
+          ``O(spectral_oversample**-2)`` systematic error (~5e-4
+          relative at the default 15 for Roman-like line widths);
+          retained for convergence/comparison studies.
 
         Parameters
         ----------
@@ -361,9 +387,10 @@ class SourceModel:
             and all per-component intensity / continuum params.
         cube_pars : CubePars
             Spatial grid (``image_pars``) + wavelength array.
-        spectral_oversample : int, default 5
+        spectral_oversample : int, default 15
             Number of fine wavelength sub-bins per coarse lambda pixel.
-            Set to 1 for no spectral oversampling.
+            Only consulted when ``spectral_method='oversample'``; set to
+            1 for center-point sampling with no oversampling.
         plane : str, default 'obs'
             Coordinate plane for velocity + intensity evaluation.
         image_rotation : float, default 0.0
@@ -372,6 +399,9 @@ class SourceModel:
             into the detector-frame thetas the model classes expect.
             ``render_grism`` derives this from ``obs.grism_pars.image_pars.wcs``
             via ``image_rotation_from_wcs`` before passing it through.
+        spectral_method : str, default 'erf'
+            Spectral bin-integration method, ``'erf'`` or
+            ``'oversample'`` (see above).
 
         Returns
         -------
@@ -404,22 +434,45 @@ class SourceModel:
         theta_vel = _apply_obs_rotation(theta_vel, vm.PARAMETER_NAMES, image_rotation)
         v_los = vm(theta_vel, plane, X, Y)
 
-        # build the fine wavelength grid
+        if spectral_method not in ('erf', 'oversample'):
+            raise ValueError(
+                f"spectral_method must be 'erf' or 'oversample', got "
+                f"{spectral_method!r}"
+            )
+
+        # spectral grids per method
         lambda_coarse = cube_pars.lambda_grid
         n_lam = len(lambda_coarse)
-        osf = spectral_oversample
-        if osf > 1 and n_lam >= 2:
-            dl = lambda_coarse[1] - lambda_coarse[0]
-            half = dl / 2.0
-            fine_offsets = jnp.linspace(-half + half / osf, half - half / osf, osf)
-            lambda_fine = (lambda_coarse[:, None] + fine_offsets[None, :]).reshape(-1)
-        else:
-            lambda_fine = lambda_coarse
-            osf = 1
-
-        n_fine = len(lambda_fine)
         Nrow, Ncol = cube_pars.spatial_shape
-        cube_fine = jnp.zeros((Nrow, Ncol, n_fine))
+
+        if spectral_method == 'erf':
+            if n_lam < 2:
+                raise ValueError(
+                    "spectral_method='erf' requires Nlambda >= 2 to define "
+                    f"bin edges (got Nlambda={n_lam}); use "
+                    "spectral_method='oversample' for single-slice cubes "
+                    "(center-point sampling)."
+                )
+            # coarse bin edges: centers +/- dl/2, shape (n_lam + 1,)
+            dl = lambda_coarse[1] - lambda_coarse[0]
+            bin_edges = jnp.concatenate(
+                [lambda_coarse - dl / 2.0, lambda_coarse[-1:] + dl / 2.0]
+            )
+            cube_fine = jnp.zeros((Nrow, Ncol, n_lam))
+        else:
+            # build the fine wavelength grid (midpoint sub-bins)
+            osf = spectral_oversample
+            if osf > 1 and n_lam >= 2:
+                dl = lambda_coarse[1] - lambda_coarse[0]
+                half = dl / 2.0
+                fine_offsets = jnp.linspace(-half + half / osf, half - half / osf, osf)
+                lambda_fine = (lambda_coarse[:, None] + fine_offsets[None, :]).reshape(
+                    -1
+                )
+            else:
+                lambda_fine = lambda_coarse
+                osf = 1
+            cube_fine = jnp.zeros((Nrow, Ncol, len(lambda_fine)))
 
         # accumulate emission line contributions
         for line_key, line in self.emission_lines.items():
@@ -441,13 +494,25 @@ class SourceModel:
             sigma_kms = pars[f'{disp_owner}.dispersion']
             sigma_lambda = lam_obs * sigma_kms / _C_KMS  # (Nrow, Ncol)
 
-            # normalized Gaussian line kernel, shape (Nrow, Ncol, n_fine)
-            dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
-            sig = sigma_lambda[:, :, None]
-            gauss = (1.0 / (sig * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(
-                -0.5 * (dlam / sig) ** 2
-            )
-            cube_fine = cube_fine + I_line[:, :, None] * gauss
+            if spectral_method == 'erf':
+                # exact bin-averaged Gaussian kernel [1/nm]: the Gaussian
+                # CDF differenced at the coarse bin edges, divided by the
+                # bin width. Matches the oversample path's mean-of-samples
+                # convention exactly in the osf -> inf limit.
+                u = (bin_edges[None, None, :] - lam_obs[:, :, None]) / (
+                    sigma_lambda[:, :, None] * jnp.sqrt(2.0)
+                )
+                cdf = 0.5 * (1.0 + jax.scipy.special.erf(u))
+                kernel = (cdf[:, :, 1:] - cdf[:, :, :-1]) / dl
+            else:
+                # midpoint-sampled normalized Gaussian, shape
+                # (Nrow, Ncol, n_fine)
+                dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
+                sig = sigma_lambda[:, :, None]
+                kernel = (1.0 / (sig * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(
+                    -0.5 * (dlam / sig) ** 2
+                )
+            cube_fine = cube_fine + I_line[:, :, None] * kernel
 
             # optional stellar continuum near this line (flat in wavelength)
             cont_theta, cont_model = self._build_emission_continuum_theta(
@@ -466,8 +531,8 @@ class SourceModel:
                 I_cont = cont_model(cont_theta, plane, X, Y)
                 cube_fine = cube_fine + I_cont[:, :, None]
 
-        # bin fine to coarse
-        if osf > 1 and n_lam >= 2:
+        # bin fine to coarse (oversample path only; erf accumulates coarse)
+        if spectral_method == 'oversample' and osf > 1 and n_lam >= 2:
             cube = cube_fine.reshape(Nrow, Ncol, n_lam, osf).mean(axis=-1)
         else:
             cube = cube_fine

@@ -306,6 +306,15 @@ class GrismObs:
             else 15
         )
 
+    @property
+    def spectral_method(self) -> str:
+        """Spectral bin-integration method; canonical source is render_config.spectral_method."""
+        return (
+            self.render_config.spectral_method
+            if self.render_config is not None
+            else 'erf'
+        )
+
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
         """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
 

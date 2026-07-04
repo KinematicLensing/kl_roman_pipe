@@ -193,7 +193,7 @@ class NumpyroSampler(Sampler):
 
     Laplace preconditioning (opt-in) -- ~2x faster warmup on correlated joint
     posteriors by initializing NUTS at the MAP with a fixed inverse-Hessian
-    mass matrix (see experiments/sweverett/flagship_speedup):
+    mass matrix:
 
     >>> # config flag: sampler computes the MAP + Hessian internally
     >>> config = NumpyroSamplerConfig(precondition='laplace', n_warmup=100)
@@ -598,9 +598,8 @@ class NumpyroSampler(Sampler):
         that as a FIXED mass matrix, initialized at the MAP. This skips the
         expensive early-warmup transient (an identity-metric chain climbing
         from scratch) and the dense-mass adaptation cost. ~2x faster than
-        adapted dense mass with better convergence on the flagship; see
-        ``experiments/sweverett/flagship_speedup``. The standard model-based
-        ``run`` path is untouched.
+        adapted dense mass with better convergence on the flagship joint
+        test. The standard model-based ``run`` path is untouched.
         """
         from numpyro.infer import MCMC, NUTS
 

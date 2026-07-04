@@ -310,7 +310,7 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # Laplace preconditioning (opt-in). 'none' = standard model-based NUTS
     # (unchanged). 'laplace' = find MAP + regularized inverse Hessian, use as a
     # fixed NUTS mass matrix initialized at the MAP, skipping the expensive
-    # early-warmup transient. See experiments/sweverett/flagship_speedup.
+    # early-warmup transient (~2x faster warmup on correlated posteriors).
     precondition: str = 'none'
     n_map_starts: int = 4
 

@@ -129,23 +129,30 @@ erf_grad_bench/, flagship config, cube stage only):
 - Speed vs osf=15 as-is: only 1.1-1.3x (forward 5.8 vs 5.2 ms; grad ~28 vs
   ~35 ms) -- the naive >=2x hypothesis REFUTED; XLA CPU erf kernel cost
   dominates (76% of erf variant).
-- HEADLINE SURPRISE -- osf=15 GRADIENTS ARE BADLY WRONG: jax.grad of a
-  per-voxel (chi2-like) loss through build_cube at osf=15 has 77-111% rel
-  error vs an osf=1601 reference for kinematically central params
-  (Halpha.dispersion 99.9%, vcirc 99.3%, z 98.4%, rscale 97.8%, cosi 77.2%)
-  including SIGN FLIPS (g2, Halpha.x0). AD == FD at every osf (not an
-  autodiff bug): fixed-node midpoint quadrature differentiated w.r.t. a
-  continuous theta-dependent line shift (lam_obs) aliases -- gradient error
-  is 100-1000x the value error (~5e-4). Reaching <1% grad error needs
-  osf~201-401, where erf wins 7-19x in BOTH forward and grad. erf grads
-  match the osf=1601 reference to ~9e-5.
-- Interpretation guardrail: HMC targets the discretized density
-  self-consistently (FD==AD), so osf=15 runs sample *that* surface
-  correctly; but the surface's gradient landscape is rough vs the ideal.
-  UNTESTED new hypothesis: this degrades NUTS adaptation/ESS (and possibly
-  posterior fidelity at fine scales) in flagship-scale grism fits.
-  Follow-up experiment required (see TODO); user physics interpretation
-  needed before changing any default.
+- INITIAL "gradient pathology" claim, CORRECTED after script verification
+  (2026-07-04): the agent's 77-111%-error / sign-flip numbers came from
+  comparing chi2 gradients AT THE TRUTH POINT with mock data generated
+  from the osf=15 model itself -- there both gradient vectors are
+  near-zero (noise- and discretization-offset-dominated), so relative
+  errors between them are not a valid "gradient wrongness" metric, and
+  the "needs osf~201-401" figure inherits the same artifact. AD == FD
+  (autodiff is fine). What the experiment DOES validly show: the osf=15
+  and converged surfaces have slightly displaced optima (detectable
+  against 1%-noise data), and erf gradients match the converged reference
+  to ~9e-5.
+- The REAL osf failure mode (verified, tests/test_spectral_methods.py
+  washboard diagnostic): for NARROW lines, sigma_lambda < fine sub-bin
+  (dispersion < ~17 km/s at osf=15; the flagship prior extends to 5 km/s),
+  midpoint sampling under-resolves the line: VALUE error reaches ~5% of
+  the peak voxel (measured at 10 km/s) oscillating with lam_obs at the
+  fine-bin period, and gradients ripple accordingly. At the 50 km/s
+  fiducial the error is the smooth ~5e-4 Euler-Maclaurin edge term --
+  benign per-fit, but a coherent systematic across an ensemble (relevant
+  at the m~1e-3 bias level when data comes from a different renderer).
+  erf eliminates the entire axis (exact for every line width).
+- MCMC-level impact of osf=15 vs erf: still UNTESTED (deferred with the
+  flagship-run moratorium); the narrow-line value error is now the
+  motivated mechanism, not "wrong gradients" generically.
 
 ### A3. Single model-space cube for all roll angles
 DECISION (user, 2026-07-02): approved direction ("quite like").

@@ -4,6 +4,15 @@ This document records the convergence behavior of the two oversampling
 knobs in the rendering pipeline. Both control how a continuous integral
 is discretized; both have a default that trades accuracy for cost.
 
+> **2026-07-04 update:** spectral bin integration now defaults to the exact
+> `spectral_method='erf'` path (analytic Gaussian bin integrals via the error
+> function; no spectral discretization error, `spectral_oversample` ignored).
+> Everything below about `spectral_oversample` applies only to the retained
+> `spectral_method='oversample'` comparison path, which additionally
+> **under-resolves narrow lines** (σ_λ below one fine sub-bin, i.e.
+> dispersion ≲ 17 km/s at osf=15: ~5% voxel value error measured at
+> 10 km/s — see `tests/test_spectral_methods.py`).
+
 | Knob | Where | Default | Convergence test | Production-bias anchor |
 |---|---|---:|---|---|
 | **Spatial `oversample`** | `RenderConfig.oversample` | auto-derived per priors (typically 1-9) | `tests/test_psf.py::test_oversample_convergence` | (covered by convergence test) |

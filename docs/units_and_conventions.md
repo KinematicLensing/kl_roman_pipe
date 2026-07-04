@@ -62,11 +62,14 @@ I_line·G(λ)  [flux/arcsec²/nm] = SB/nm
 
 `G(λ) = (1/(σ√2π))·exp(...)` is the normalized line-spread kernel. Integrating the
 voxel back over λ (`disperse_cube` does this via `× dlam` then summing) and over
-space recovers `<line>.flux`. Discretization caveat: `∫G dλ = 1` holds only if the
-wavelength grid resolves `σ_λ`. For Roman, ~50 km/s dispersion at λ_obs ≈ 1310 nm
-gives `σ_λ ≈ 0.2 nm`, comparable to a coarse channel; `build_cube`'s
-`spectral_oversample` sub-binning keeps the normalization accurate. This is an
-accuracy concern, separate from units.
+space recovers `<line>.flux`. The stored voxel is the **bin average** of `G` over
+each coarse channel. With the default `spectral_method='erf'` this bin average is
+computed exactly (Gaussian CDF differenced at the channel edges), so `Σ_bins × dλ
+= 1` holds for any line width covered by the wavelength window. The retained
+`spectral_method='oversample'` path approximates it by midpoint sub-sampling
+(`spectral_oversample` sub-bins/channel) and requires the fine grid to resolve
+`σ_λ`; it under-resolves narrow lines (dispersion ≲ 17 km/s at osf=15). This is
+an accuracy concern, separate from units.
 
 Continuum: `<line>.cont.flux_per_nm` is a spectral density `[flux/nm]`. The
 intensity profile is linear in its amplitude, so feeding a `[flux/nm]` amplitude

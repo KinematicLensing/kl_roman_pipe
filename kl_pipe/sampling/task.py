@@ -562,8 +562,8 @@ class InferenceTask:
         then the Hessian of the negative log-posterior there is regularized
         (eigenvalue floor) and inverted to serve as a NUTS mass matrix. Lets
         warmup begin near-optimally conditioned, skipping the expensive
-        early-warmup transient. See
-        ``experiments/sweverett/flagship_speedup`` for the validating study.
+        early-warmup transient (~2x faster warmup measured on correlated
+        joint posteriors).
 
         The optimizer runs unbounded in scaled coordinates (``theta = loc +
         scale * u``); out-of-support iterates receive ``-inf`` log-posterior
@@ -727,6 +727,7 @@ class InferenceTask:
         velocity_obs: Optional['VelocityObs'] = None,
         meta_pars: Optional[Dict] = None,
         spectral_oversample: Optional[int] = None,
+        spectral_method: Optional[str] = None,
     ) -> 'InferenceTask':
         """Unified SourceModel inference factory.
 
@@ -767,11 +768,18 @@ class InferenceTask:
         meta_pars : dict, optional
             User metadata.
         spectral_oversample : int, optional
-            Wavelength sub-bin count for cube assembly. When ``None``
-            (default), reads from each grism obs's
-            ``render_config.spectral_oversample`` (default 5); raises if
-            multiple grism obs disagree. Pass an explicit value only to
-            override the obs-recorded settings uniformly.
+            Wavelength sub-bin count for cube assembly (only used when
+            the resolved ``spectral_method`` is ``'oversample'``). When
+            ``None`` (default), reads from each grism obs's
+            ``render_config.spectral_oversample`` (default 15); raises
+            if multiple grism obs disagree. Pass an explicit value only
+            to override the obs-recorded settings uniformly.
+        spectral_method : str, optional
+            Spectral bin-integration method, ``'erf'`` (exact, default)
+            or ``'oversample'``. When ``None`` (default), reads from
+            each grism obs's ``render_config.spectral_method``; raises
+            if multiple grism obs disagree. Pass an explicit value only
+            to override uniformly.
         """
         from kl_pipe.likelihood import create_jitted_likelihood_from_obs
         from kl_pipe.source import SourceModel
@@ -903,6 +911,19 @@ class InferenceTask:
         elif spectral_oversample is None:
             spectral_oversample = 15  # unused (no grism), but pass a concrete int
 
+        # resolve spectral_method the same way (every roll must agree)
+        if spectral_method is None and grism_obs:
+            methods = {k: o.spectral_method for k, o in grism_obs.items()}
+            unique_methods = set(methods.values())
+            if len(unique_methods) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched spectral_method {methods}; "
+                    f"pass spectral_method=... explicitly to override"
+                )
+            spectral_method = unique_methods.pop()
+        elif spectral_method is None:
+            spectral_method = 'erf'  # unused (no grism), but pass a concrete str
+
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,
             sampled_names,
@@ -911,6 +932,7 @@ class InferenceTask:
             grism_obs=grism_obs,
             velocity_obs=velocity_obs,
             spectral_oversample=spectral_oversample,
+            spectral_method=spectral_method,
         )
 
         return cls(
