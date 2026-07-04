@@ -126,11 +126,25 @@ def disperse_cube(
     grism_pars: GrismPars,
     lambda_grid: jnp.ndarray,
     oversample: int = 1,
+    image_rotation: float = 0.0,
 ) -> jnp.ndarray:
     """Project 3D datacube onto 2D dispersed grism image.
 
     Uses pull-semantics map_coordinates: [Y - dy, X - dx] shifts content
     by (+dy, +dx). Fully differentiable via JAX bilinear interpolation.
+
+    When ``image_rotation`` is nonzero, the input cube is interpreted as
+    celestial-frame (built with ``image_rotation=0``) and the roll rotation
+    is fused into the sampling coordinates: each slice is sampled at
+    ``R(-phi) . (q - s_k - c) + c`` (Cartesian components; ``c`` = stamp
+    center, ``s_k`` = detector-frame dispersion shift), so the output is
+    the detector-frame dispersed image with dispersion along the detector
+    axis set by ``dispersion_angle_detector``. This is an exact change of
+    variables from rotating model parameters into the detector frame before
+    cube assembly; only the bilinear interpolation error differs (rotated
+    sample coordinates are fractional in both axes). Costs zero extra
+    interpolation passes. Sign convention matches
+    ``coordinates.rotate_position`` (celestial-to-detector).
 
     The input cube may be at fine spatial resolution (post-PSF,
     pre-pixel-response). When ``oversample > 1``, the cube spatial shape
@@ -156,6 +170,11 @@ def disperse_cube(
         Spatial oversampling factor of the input cube relative to
         ``grism_pars.image_pars``. Pixel offsets are scaled by this
         factor so wavelength shifts map correctly into the fine grid.
+    image_rotation : float, default 0.0
+        Celestial-to-detector rotation (radians) fused into the sampling
+        coordinates (shared-cube pathway). ``0.0`` reproduces the classic
+        detector-frame dispersion exactly. Must be a static Python float
+        (read from frozen obs aux), not a traced value.
 
     Returns
     -------
@@ -205,13 +224,33 @@ def disperse_cube(
     # could differ.
     dispersed = jnp.zeros((Nrow, Ncol))
 
+    # rotation center: stamp center in pixel indices, matching the
+    # centered-grid convention of build_map_grid_from_image_pars
+    # (x = cols, y = rows, center at (N - 1) / 2)
+    c_row = (Nrow - 1) / 2.0
+    c_col = (Ncol - 1) / 2.0
+    cos_r = jnp.cos(image_rotation)
+    sin_r = jnp.sin(image_rotation)
+
     for k in range(Nlam):
         offset_k = pixel_offsets[k]
         dx_k = offset_k * cos_a  # shift along x (cols)
         dy_k = offset_k * sin_a  # shift along y (rows)
 
-        # pull semantics: sample source at (Y - dy, X - dx)
-        coords = jnp.array([Y_base - dy_k, X_base - dx_k])
+        if image_rotation == 0.0:
+            # pull semantics: sample source at (Y - dy, X - dx)
+            coords = jnp.array([Y_base - dy_k, X_base - dx_k])
+        else:
+            # shared-cube pathway: rotate the pull coordinates about the
+            # stamp center into the celestial frame, x_cel = R(-phi) x_det
+            u = X_base - dx_k - c_col
+            v = Y_base - dy_k - c_row
+            coords = jnp.array(
+                [
+                    c_row + sin_r * u + cos_r * v,
+                    c_col + cos_r * u - sin_r * v,
+                ]
+            )
 
         shifted = jax.scipy.ndimage.map_coordinates(
             cube[:, :, k], coords, order=1, mode='constant', cval=0.0
