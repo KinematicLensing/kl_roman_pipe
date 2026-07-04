@@ -268,37 +268,44 @@ $\delta R^2_{\rm psf} / R^2_{\rm psf} \simeq 2\,\delta\lambda/\lambda$.
 An unmodeled fractional PSF second-moment error $\epsilon$ propagates to a
 multiplicative shear-type bias of order
 $m \sim \epsilon \cdot R^2_{\rm psf}/R^2_{\rm gal}$
-(standard PSF-dilution scaling). With flagship-like numbers ---
-$\sigma_{\rm psf} \approx 0.076''$ (FWHM $0.18''$), $r_{\rm gal} \approx
-0.3''$, so $R^2_{\rm psf}/R^2_{\rm gal} \approx 0.06$ --- and
-$\lambda_0 = 1313$\,nm at $z=1$:
+(standard PSF-dilution scaling).
+
+This was measured directly (2026-07-04) with monochromatic
+\code{galsim.roman.getPSF} adaptive moments (SCA 1, cross-checked SCA 9/18
+and \code{pupil\_bin} 1 vs 4; script and log in
+\code{experiments/sweverett/production\_speedups/psf\_lambda\_variation/}).
+Measured $\sigma_{\rm psf}(1313\,{\rm nm}) = 0.0457''$; the fractional size
+scaling matches naive $\delta\lambda/\lambda$ diffraction scaling to
+$<1\%$, monotonic, with no aberration surprises; ellipticity changes are
+$|\delta e_{1,2}| \le 5\times10^{-5}$ everywhere. Implied $m$ below uses
+$r_{\rm gal} = 0.3''$ (conservative; $0.5''$ is $\sim3\times$ smaller):
 
 \begin{center}
 \begin{tabular}{lccc}
 \toprule
-window & $\delta\lambda$ & $\delta R^2/R^2$ & implied $m$ \\
+window & $\delta\lambda$ & measured $|\delta\sigma/\sigma|$ & implied $m$ \\
 \midrule
-single velocity-broadened line & $\pm1$\,nm & $1.5\times10^{-3}$ & $\sim1\times10^{-4}$ \\
-H$\alpha$+[NII] blend span & $\pm2.5$\,nm & $3.8\times10^{-3}$ & $\sim2\times10^{-4}$ \\
-full modeled cube window & $\pm13$\,nm & $2.0\times10^{-2}$ & $\sim1.3\times10^{-3}$ \\
+single velocity-broadened line & $\pm1$\,nm & $7.6\times10^{-4}$ & $3.5\times10^{-5}$ \\
+H$\alpha$+[NII] blend span & $\pm2.5$\,nm & $1.9\times10^{-3}$ & $8.8\times10^{-5}$ \\
+full modeled cube window & $\pm13.5$\,nm & $1.02\times10^{-2}$ & $4.7\times10^{-4}$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Three observations. (i) Per-line constancy is safe by a wide margin: an
-implied $m \sim 10^{-4}$ sits far below the paper's ``reasonable
+Three observations. (i) Per-line constancy is safe by a wide margin:
+$m \sim 3\times10^{-5}$ sits far below the paper's ``reasonable
 performance'' bar and below the $0.1\sigma$ parameter-shift criterion for
 any realistic per-galaxy posterior. (ii) Constancy across the \emph{full}
-cube window (relevant to the continuum, which spans all slices) is marginal
-at the $10^{-3}$ level --- this bounds the pre-existing issue-\#51
-approximation, not anything introduced by the fast path, but it sharpens the
-case for the per-line generalization when requirement-level bias control is
-eventually attempted. (iii) For the paper's self-consistent mocks
-(fit model $\equiv$ truth model, same PSF assumption on both sides) the bias
-is identically zero by construction; the numbers above bound
-model-adequacy for real data. An empirical check of the diffraction-limited
-scaling against \code{galsim.roman.getPSF} adaptive moments is recorded in
-\code{experiments/sweverett/production\_speedups/psf\_lambda\_variation/}.
+cube window (relevant to the continuum, which spans all slices) is the
+dominant term at $m \sim 5\times10^{-4}$ --- still sub-$10^{-3}$, and it
+bounds the pre-existing issue-\#51 approximation, not anything introduced by
+the fast path; it sharpens the case for the per-line generalization when
+requirement-level bias control is eventually attempted, and deserves a
+proper WL-formalism treatment (beyond this order-of-magnitude scaling) if
+that window ever becomes the operative one. (iii) For the paper's
+self-consistent mocks (fit model $\equiv$ truth model, same PSF assumption
+on both sides) the bias is identically zero by construction; the numbers
+above bound model-adequacy for real data.
 
 \section{Implementation corollary: the fast path is nearly free}
 \label{sec:impl}
