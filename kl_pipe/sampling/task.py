@@ -729,6 +729,7 @@ class InferenceTask:
         spectral_oversample: Optional[int] = None,
         spectral_method: Optional[str] = None,
         psf_mode: Optional[str] = None,
+        cube_mode: Optional[str] = None,
     ) -> 'InferenceTask':
         """Unified SourceModel inference factory.
 
@@ -788,6 +789,16 @@ class InferenceTask:
             grism obs's ``render_config.psf_mode``; raises if multiple
             grism obs disagree. Pass an explicit value only to override
             uniformly.
+        cube_mode : str, optional
+            Cube-sharing strategy across grism obs, ``'shared'``
+            (default; cube-compatible obs render from one celestial-frame
+            cube -- multi-obs groups require
+            ``psf_mode='post_dispersion'`` and pure-rotation WCSs, loud
+            errors otherwise) or ``'per_roll'`` (reference path; every
+            obs rebuilds its own detector-frame cube). When ``None``
+            (default), reads from each grism obs's
+            ``render_config.cube_mode``; raises if multiple grism obs
+            disagree. Pass an explicit value only to override uniformly.
         """
         from kl_pipe.likelihood import create_jitted_likelihood_from_obs
         from kl_pipe.source import SourceModel
@@ -945,6 +956,19 @@ class InferenceTask:
         elif psf_mode is None:
             psf_mode = 'post_dispersion'  # unused (no grism); concrete str
 
+        # resolve cube_mode the same way (every roll must agree)
+        if cube_mode is None and grism_obs:
+            cmodes = {k: o.cube_mode for k, o in grism_obs.items()}
+            unique_cmodes = set(cmodes.values())
+            if len(unique_cmodes) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched cube_mode {cmodes}; "
+                    f"pass cube_mode=... explicitly to override"
+                )
+            cube_mode = unique_cmodes.pop()
+        elif cube_mode is None:
+            cube_mode = 'shared'  # unused (no grism); concrete str
+
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,
             sampled_names,
@@ -955,6 +979,7 @@ class InferenceTask:
             spectral_oversample=spectral_oversample,
             spectral_method=spectral_method,
             psf_mode=psf_mode,
+            cube_mode=cube_mode,
         )
 
         return cls(

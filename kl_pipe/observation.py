@@ -15,10 +15,11 @@ Factory functions replace the old Model.configure_psf() family.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from scipy.fft import next_fast_len
 
 if TYPE_CHECKING:
@@ -322,6 +323,13 @@ class GrismObs:
             self.render_config.psf_mode
             if self.render_config is not None
             else 'post_dispersion'
+        )
+
+    @property
+    def cube_mode(self) -> str:
+        """Cube-sharing strategy; canonical source is render_config.cube_mode."""
+        return (
+            self.render_config.cube_mode if self.render_config is not None else 'shared'
         )
 
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
@@ -946,3 +954,173 @@ def build_grism_obs(
     if rc_was_default:
         object.__setattr__(obs, '_rc_was_default', True)
     return obs
+
+
+# ============================================================================
+# Shared-cube grouping (A3): group grism obs that can share one celestial cube
+# ============================================================================
+
+
+#: relative tolerance below which two unequal lambda grids are treated as
+#: accidental float drift (loud error) rather than intentionally distinct
+#: line windows, which differ by many orders of magnitude more
+_LAMBDA_NEAR_MISS_RTOL = 1e-9
+
+
+def group_grism_obs_by_cube_compat(
+    grism_obs: Dict[str, 'GrismObs'],
+) -> List[Dict[str, 'GrismObs']]:
+    """Group grism observations that can share one celestial-frame cube.
+
+    Two obs are cube-compatible when their unconvolved model cubes are
+    identical by construction: same wavelength grid, same spatial shape and
+    pixel scale, same oversample factor, and same spectral method. The obs
+    WCS rotation, data, variance, mask, and PSF are deliberately excluded:
+    the roll rotation is fused into the dispersion sampling and the PSF is
+    applied per-roll after dispersion, so neither touches the shared cube.
+
+    Different emission-line complexes have wavelength grids that differ by
+    far more than float noise and simply form separate groups (each gets
+    its own shared cube) -- that is correct behavior, not an error. Grids
+    that are unequal but agree to within ``_LAMBDA_NEAR_MISS_RTOL`` are
+    almost certainly meant to be identical (per-roll construction drift)
+    and raise loudly instead of silently falling back to per-roll cubes.
+
+    Parameters
+    ----------
+    grism_obs : dict[str, GrismObs]
+        Per-roll grism observations keyed by name.
+
+    Returns
+    -------
+    list[dict[str, GrismObs]]
+        Groups (insertion-ordered); singleton groups are common and valid.
+    """
+    groups: List[Dict[str, 'GrismObs']] = []
+    group_reps: List['GrismObs'] = []
+
+    for key, obs in grism_obs.items():
+        placed = False
+        for group, rep in zip(groups, group_reps):
+            if _cube_compatible(obs, rep):
+                group[key] = obs
+                placed = True
+                break
+        if not placed:
+            # near-miss check against every existing representative
+            for rep_group, rep in zip(groups, group_reps):
+                _check_lambda_near_miss(obs, rep, key, next(iter(rep_group)))
+            groups.append({key: obs})
+            group_reps.append(obs)
+    return groups
+
+
+def _cube_compatible(a: 'GrismObs', b: 'GrismObs') -> bool:
+    """True when two grism obs can share one celestial-frame cube."""
+    ip_a, ip_b = a.grism_pars.image_pars, b.grism_pars.image_pars
+    if (ip_a.Nrow, ip_a.Ncol) != (ip_b.Nrow, ip_b.Ncol):
+        return False
+    if ip_a.pixel_scale != ip_b.pixel_scale:
+        return False
+    if a.oversample != b.oversample:
+        return False
+    if a.spectral_method != b.spectral_method:
+        return False
+    if a.spectral_oversample != b.spectral_oversample:
+        return False
+    lam_a = np.asarray(a.cube_pars.lambda_grid)
+    lam_b = np.asarray(b.cube_pars.lambda_grid)
+    return lam_a.shape == lam_b.shape and bool((lam_a == lam_b).all())
+
+
+def _check_lambda_near_miss(
+    obs: 'GrismObs', rep: 'GrismObs', obs_key: str, rep_key: str
+) -> None:
+    """Raise when two incompatible obs have suspiciously close lambda grids."""
+    lam_a = np.asarray(obs.cube_pars.lambda_grid)
+    lam_b = np.asarray(rep.cube_pars.lambda_grid)
+    if lam_a.shape != lam_b.shape:
+        return
+    if (lam_a == lam_b).all():
+        return  # identical grids; incompatibility is elsewhere (shape/os/...)
+    rel = np.max(np.abs(lam_a - lam_b) / np.maximum(np.abs(lam_b), 1e-300))
+    if rel < _LAMBDA_NEAR_MISS_RTOL:
+        raise ValueError(
+            f"grism obs '{obs_key}' and '{rep_key}' have wavelength grids "
+            f"that differ by max rel {rel:.2e} (< {_LAMBDA_NEAR_MISS_RTOL}) "
+            f"-- almost certainly accidental float drift in per-roll "
+            f"construction. Build all rolls of a line complex with an "
+            f"identical lambda grid (or set cube_mode='per_roll' to disable "
+            f"sharing)."
+        )
+
+
+def validate_shared_cube_group(obs_group: Dict[str, 'GrismObs'], psf_mode: str) -> None:
+    """Loud-error guards for a multi-obs shared-cube group.
+
+    Raises
+    ------
+    ValueError
+        If psf_mode is not 'post_dispersion' (the shared celestial cube is
+        unconvolved; per-slice convolution requires detector-frame cubes),
+        if any obs WCS carries a parity flip (a flip is not a rotation and
+        cannot be fused into the dispersion sampling), or if PSF presence
+        is mixed across the group (fine/coarse cube grids would differ).
+    """
+    from kl_pipe.coordinates import wcs_is_flipped
+
+    if len(obs_group) < 2:
+        return
+    keys = list(obs_group)
+    if psf_mode != 'post_dispersion':
+        raise ValueError(
+            f"cube_mode='shared' with multiple grism obs {keys} requires "
+            f"psf_mode='post_dispersion' (got {psf_mode!r}): the shared "
+            f"celestial-frame cube is unconvolved, and per-slice "
+            f"convolution needs a detector-frame cube per roll. Use "
+            f"cube_mode='per_roll' for the per_slice reference path."
+        )
+    for key, obs in obs_group.items():
+        wcs = obs.grism_pars.image_pars.wcs
+        if wcs is not None and wcs_is_flipped(wcs):
+            raise ValueError(
+                f"grism obs '{key}' has a parity-flipped WCS (det(PC) < 0); "
+                f"a flip is not a rotation and is not supported by the "
+                f"shared-cube pathway. Use cube_mode='per_roll'."
+            )
+    psf_presence = {key: obs.psf_data is not None for key, obs in obs_group.items()}
+    if len(set(psf_presence.values())) > 1:
+        raise ValueError(
+            f"shared-cube group has mixed PSF presence {psf_presence}; all "
+            f"obs must have a PSF or none (the cube's fine/coarse spatial "
+            f"grid depends on it)."
+        )
+
+
+def build_group_dispersion_operators(
+    obs_group: Dict[str, 'GrismObs'],
+) -> Dict[str, object]:
+    """Precompute the per-obs dispersion operators for a shared-cube group.
+
+    The shared cube is anchored in the FIRST obs's detector frame, so each
+    operator carries the RELATIVE rotation ``rot_obs - rot_anchor`` (zero
+    for the anchor: no rotational resampling for that roll). Operators are
+    model- and galaxy-independent; build once per group at likelihood
+    construction and reuse across every likelihood evaluation (and across
+    galaxies sharing the grid/wavelength configuration).
+    """
+    from kl_pipe.coordinates import image_rotation_from_wcs
+    from kl_pipe.dispersion import precompute_dispersion_operator
+
+    first = next(iter(obs_group.values()))
+    rot_anchor = image_rotation_from_wcs(first.grism_pars.image_pars.wcs)
+    operators = {}
+    for key, obs in obs_group.items():
+        rot = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
+        operators[key] = precompute_dispersion_operator(
+            obs.grism_pars,
+            obs.cube_pars.lambda_grid,
+            oversample=obs.oversample,
+            image_rotation=rot - rot_anchor,
+        )
+    return operators

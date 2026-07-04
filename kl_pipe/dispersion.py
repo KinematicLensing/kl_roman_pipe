@@ -287,3 +287,188 @@ def build_grism_pars_for_line(
 
 # need jax import for map_coordinates
 import jax
+
+
+# ============================================================================
+# Precomputed dispersion operator (shared-cube pathway)
+# ============================================================================
+#
+# Dispersion + roll rotation + interpolation form a FIXED linear map on the
+# cube: the sampling coordinates depend only on static geometry (grism pars,
+# wavelength grid, oversample, relative roll rotation), never on model
+# parameters. Materializing that map as one sparse matrix per roll replaces
+# the per-slice interpolation loop with a single matvec whose backward pass
+# is the exact transpose. Measured (2026-07-04, M3 Max fp64, 32x32/os=3/
+# Nlam=25, 4 rolls): 2.9x faster gradient than the per-roll path, vs 1.2x
+# for the fused bilinear loop; bit-identical to running the interpolation
+# directly.
+#
+# Interpolation is Catmull-Rom cubic (Keys a=-0.5). Bilinear sub-pixel
+# smoothing at rotated sample coordinates biases inclination-like posterior
+# modes at the 0.35-sigma level in tight-posterior tests; cubic measures at
+# the per-roll accuracy floor (Fisher-projected shift 0.005 sigma, MCMC
+# -0.006 sigma). See docs/plans/PRODUCTION_SPEEDUPS.md Sec 2/A3.
+
+
+def _catmull_rom_weights(f: np.ndarray) -> np.ndarray:
+    """Keys cubic-convolution weights (a=-0.5) for taps at offsets
+    (-1, 0, +1, +2) around the floor of the sample coordinate.
+
+    ``f`` is the fractional part in [0, 1). Weights sum to 1 exactly for
+    any f (partition of unity), so flux normalization is preserved.
+    """
+    a = -0.5
+    t0, t1, t2, t3 = 1.0 + f, f, 1.0 - f, 2.0 - f
+    return np.stack(
+        [
+            a * t0**3 - 5 * a * t0**2 + 8 * a * t0 - 4 * a,
+            (a + 2) * t1**3 - (a + 3) * t1**2 + 1.0,
+            (a + 2) * t2**3 - (a + 3) * t2**2 + 1.0,
+            a * t3**3 - 5 * a * t3**2 + 8 * a * t3 - 4 * a,
+        ]
+    )
+
+
+def precompute_dispersion_operator(
+    grism_pars: GrismPars,
+    lambda_grid,
+    oversample: int = 1,
+    image_rotation: float = 0.0,
+    interp: str = 'cubic',
+):
+    """Build the sparse linear operator mapping a (possibly rotated) cube
+    to the detector-frame dispersed image.
+
+    The operator ``L`` satisfies
+    ``dispersed.ravel() = L @ jnp.transpose(cube, (2, 0, 1)).ravel()``
+    (wavelength-major cube flattening); apply via
+    ``apply_dispersion_operator``. Rows are detector fine pixels; columns
+    are (wavelength slice, cube fine pixel); entries are interpolation
+    weights x throughput x dlam. Sample coordinates follow the same
+    geometry as ``disperse_cube(image_rotation=...)``: pull semantics,
+    rotation about the stamp center, cval=0 outside the cube (taps
+    falling outside get weight zero).
+
+    ``image_rotation`` here is the rotation between the frame the cube
+    was BUILT in and this observation's detector frame (for a shared cube
+    anchored at a reference roll: ``rot_obs - rot_anchor``).
+
+    Construction is host-side numpy (static geometry) and is intended to
+    run once per (roll, grid config) at task/likelihood construction; the
+    operator is model- and galaxy-independent, so one operator serves
+    every galaxy sharing the configuration.
+
+    Parameters
+    ----------
+    grism_pars : GrismPars
+        Dispersion parameters; ``dispersion`` in nm per COARSE pixel.
+    lambda_grid : array
+        Wavelength grid (nm), shape (Nlambda,).
+    oversample : int
+        Spatial oversampling of the cube grid relative to
+        ``grism_pars.image_pars``.
+    image_rotation : float
+        Cube-frame-to-detector rotation (radians), fused into the sample
+        coordinates. Static Python float.
+    interp : str
+        Interpolation kernel. Only ``'cubic'`` (Catmull-Rom) is
+        supported: bilinear sub-pixel smoothing measurably biases
+        inclination-like posterior modes (see module note).
+
+    Returns
+    -------
+    jax.experimental.sparse.BCOO
+        Shape ``(Nrow*Ncol, Nrow*Ncol*Nlambda)`` (fine pixels).
+    """
+    from jax.experimental import sparse as jsparse
+
+    if interp != 'cubic':
+        raise ValueError(
+            f"precompute_dispersion_operator supports interp='cubic' only "
+            f"(got {interp!r}); bilinear sub-pixel smoothing biases "
+            f"inclination-like posterior modes (measured 0.35 sigma in "
+            f"tight-posterior tests). Use disperse_cube for the loop path."
+        )
+    lambda_grid = np.asarray(lambda_grid)
+    Nlam = lambda_grid.shape[0]
+    if Nlam < 2:
+        raise ValueError(
+            f"precompute_dispersion_operator requires Nlam >= 2 (got {Nlam})"
+        )
+    Nrow = grism_pars.image_pars.Nrow * oversample
+    Ncol = grism_pars.image_pars.Ncol * oversample
+
+    pixel_offsets = (
+        (lambda_grid - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
+    )
+    angle = grism_pars.dispersion_angle_detector
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    throughput = grism_pars.throughput
+    if throughput is None:
+        throughput = np.ones(Nlam)
+    else:
+        throughput = np.asarray(throughput)
+    dlam = float(abs(lambda_grid[1] - lambda_grid[0]))
+
+    rows_grid, cols_grid = np.mgrid[0:Nrow, 0:Ncol].astype(np.float64)
+    c_row, c_col = (Nrow - 1) / 2.0, (Ncol - 1) / 2.0
+    cos_r, sin_r = np.cos(image_rotation), np.sin(image_rotation)
+
+    npix = Nrow * Ncol
+    out_rows, in_cols, weights = [], [], []
+    row_index = np.arange(npix)
+    for k in range(Nlam):
+        dx_k = pixel_offsets[k] * cos_a
+        dy_k = pixel_offsets[k] * sin_a
+        # rotated pull coordinates about the stamp center (matches
+        # disperse_cube's image_rotation branch)
+        u = cols_grid - dx_k - c_col
+        v = rows_grid - dy_k - c_row
+        row_s = c_row + sin_r * u + cos_r * v
+        col_s = c_col + cos_r * u - sin_r * v
+
+        i0 = np.floor(row_s)
+        j0 = np.floor(col_s)
+        w_row = _catmull_rom_weights(row_s - i0)  # (4, Nrow, Ncol)
+        w_col = _catmull_rom_weights(col_s - j0)
+        scale = throughput[k] * dlam
+        for di in range(4):
+            ii = i0.astype(np.int64) + (di - 1)
+            valid_i = (ii >= 0) & (ii < Nrow)
+            for dj in range(4):
+                jj = j0.astype(np.int64) + (dj - 1)
+                valid = valid_i & (jj >= 0) & (jj < Ncol)
+                w = w_row[di] * w_col[dj] * scale
+                w = np.where(valid, w, 0.0).ravel()
+                keep = w != 0.0
+                if not keep.any():
+                    continue
+                flat_in = (
+                    k * npix
+                    + np.clip(ii, 0, Nrow - 1) * Ncol
+                    + np.clip(jj, 0, Ncol - 1)
+                ).ravel()
+                out_rows.append(row_index[keep])
+                in_cols.append(flat_in[keep])
+                weights.append(w[keep])
+
+    data = jnp.asarray(np.concatenate(weights))
+    coords = jnp.asarray(
+        np.stack([np.concatenate(out_rows), np.concatenate(in_cols)], axis=1).astype(
+            np.int32
+        )
+    )
+    return jsparse.BCOO((data, coords), shape=(npix, npix * Nlam))
+
+
+def apply_dispersion_operator(operator, cube: jnp.ndarray) -> jnp.ndarray:
+    """Apply a precomputed dispersion operator to a cube.
+
+    ``cube`` has shape (Nrow, Ncol, Nlambda) (fine pixels); returns the
+    detector-frame dispersed image, shape (Nrow, Ncol). Linear in the
+    cube with constant coefficients, so the autodiff backward pass is the
+    exact operator transpose.
+    """
+    Nrow, Ncol, _ = cube.shape
+    flat = jnp.transpose(cube, (2, 0, 1)).ravel()
+    return (operator @ flat).reshape(Nrow, Ncol)

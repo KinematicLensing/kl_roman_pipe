@@ -343,6 +343,156 @@ class SourceModel:
             obs.grism_pars.image_pars.pixel_scale,
         )
 
+    def render_grism_group(
+        self,
+        pars: dict,
+        obs_group: dict,
+        plane: str = 'obs',
+        spectral_oversample: int | None = None,
+        spectral_method: str | None = None,
+        psf_mode: str | None = None,
+        operators: dict | None = None,
+    ) -> dict:
+        """Render a group of cube-compatible grism observations from ONE
+        shared cube (the A3 pathway).
+
+        The unconvolved cube is roll-independent physics: LOS velocity is a
+        scalar field on the sky and all model parameters are celestial-
+        frame. The cube is built in the FIRST obs's detector frame (the
+        anchor roll -- exact parameter-level rotation, and that roll needs
+        no rotational resampling); every obs is then dispersed by a
+        precomputed sparse operator that fuses dispersion, the RELATIVE
+        roll rotation, and Catmull-Rom cubic interpolation into a single
+        matvec (``dispersion.precompute_dispersion_operator``). Bilinear
+        resampling is deliberately NOT used here: its sub-pixel smoothing
+        biases inclination-like posterior modes at the 0.35-sigma level in
+        tight-posterior tests, while cubic measures at the per-roll
+        accuracy floor (Fisher-projected shift 0.005 sigma). The
+        detector-frame PSF + pixel response then apply per obs. PSFs MAY
+        differ across the group (per-detector-position kernels are free);
+        wavelength grids, spatial grids, oversample, and spectral method
+        must be identical (see
+        ``observation.group_grism_obs_by_cube_compat``).
+
+        Parameters
+        ----------
+        pars : dict
+            Celestial-frame parameter dict (dotted SourceModel keys).
+        obs_group : dict[str, GrismObs]
+            Cube-compatible observations keyed by roll name; the FIRST
+            entry defines the anchor frame. Multi-obs groups require
+            ``psf_mode='post_dispersion'`` (the shared cube is unconvolved)
+            and pure-rotation WCSs; violations raise via
+            ``observation.validate_shared_cube_group``.
+        plane, spectral_oversample, spectral_method, psf_mode
+            As in ``render_grism``; resolved from the first obs when None
+            (the group is validated homogeneous in these).
+        operators : dict[str, BCOO], optional
+            Precomputed dispersion operators keyed like ``obs_group``
+            (from ``observation.build_group_dispersion_operators``). When
+            None they are built here -- fine for one-off rendering; for
+            inference the likelihood factory builds them once.
+
+        Returns
+        -------
+        dict[str, jnp.ndarray]
+            Dispersed detector-frame images keyed like ``obs_group``.
+        """
+        from kl_pipe.dispersion import apply_dispersion_operator
+        from kl_pipe.grism import _apply_post_dispersion_pixel_response
+        from kl_pipe.observation import (
+            build_group_dispersion_operators,
+            group_grism_obs_by_cube_compat,
+            validate_shared_cube_group,
+        )
+        from kl_pipe.spectral import CubePars
+
+        if not obs_group:
+            raise ValueError("render_grism_group requires a non-empty obs_group")
+
+        groups = group_grism_obs_by_cube_compat(obs_group)
+        if len(groups) > 1:
+            raise ValueError(
+                f"obs_group is not cube-compatible: it splits into "
+                f"{[list(g) for g in groups]}. All obs must share identical "
+                f"wavelength grid, spatial grid, oversample, and spectral "
+                f"method; render incompatible groups separately."
+            )
+
+        first = next(iter(obs_group.values()))
+        if spectral_oversample is None:
+            spectral_oversample = first.spectral_oversample
+        if spectral_method is None:
+            spectral_method = first.spectral_method
+        if psf_mode is None:
+            psf_mode = first.psf_mode
+        if psf_mode not in ('post_dispersion', 'per_slice'):
+            raise ValueError(
+                f"psf_mode must be 'post_dispersion' or 'per_slice', got "
+                f"{psf_mode!r}"
+            )
+        validate_shared_cube_group(obs_group, psf_mode)
+
+        # single-obs group: the per-obs path is identical and supports the
+        # per_slice reference mode too
+        if len(obs_group) == 1:
+            (key,) = obs_group
+            return {
+                key: self.render_grism(
+                    pars,
+                    obs_group[key],
+                    plane=plane,
+                    spectral_oversample=spectral_oversample,
+                    spectral_method=spectral_method,
+                    psf_mode=psf_mode,
+                )
+            }
+
+        # shared cube built ONCE in the anchor (first) obs's detector
+        # frame: exact parameter-level rotation, and the anchor roll needs
+        # no rotational resampling. Fine spatial grid when PSF +
+        # oversampling are active (validated homogeneous across the group).
+        anchor_rotation = image_rotation_from_wcs(first.grism_pars.image_pars.wcs)
+        if first.psf_data is not None and first.oversample > 1:
+            build_cube_pars = CubePars(
+                image_pars=first.fine_image_pars,
+                lambda_grid=first.cube_pars.lambda_grid,
+            )
+        else:
+            build_cube_pars = first.cube_pars
+
+        cube = self.build_cube(
+            pars,
+            build_cube_pars,
+            spectral_oversample=spectral_oversample,
+            plane=plane,
+            image_rotation=anchor_rotation,
+            spectral_method=spectral_method,
+        )
+
+        if operators is None:
+            operators = build_group_dispersion_operators(obs_group)
+
+        out = {}
+        for key, obs in obs_group.items():
+            dispersed = apply_dispersion_operator(operators[key], cube)
+            if obs.psf_data is not None:
+                from kl_pipe.psf import convolve_fft
+
+                dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+            coarse_shape = (
+                obs.grism_pars.image_pars.Nrow,
+                obs.grism_pars.image_pars.Ncol,
+            )
+            out[key] = _apply_post_dispersion_pixel_response(
+                dispersed,
+                obs.pixel_response_fft,
+                coarse_shape,
+                obs.oversample,
+                obs.grism_pars.image_pars.pixel_scale,
+            )
+        return out
+
     def render_velocity(
         self,
         pars: dict,

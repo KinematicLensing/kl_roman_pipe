@@ -81,6 +81,15 @@ class RenderConfig:
         ``'per_slice'`` (convolve every wavelength slice before
         dispersion; the general reference path, required for future
         wavelength-dependent PSFs). Applies to grism obs only.
+    cube_mode : str
+        Cube-sharing strategy across grism observations of the same
+        emission-line complex (roll angles): ``'shared'`` (default; build
+        one celestial-frame cube per compatible group, fuse each obs's
+        roll rotation into the dispersion sampling — exact change of
+        variables, requires ``psf_mode='post_dispersion'`` for multi-obs
+        groups) or ``'per_roll'`` (reference path; every obs rebuilds its
+        own detector-frame cube with rotated parameters). Applies to
+        grism obs only.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -96,6 +105,7 @@ class RenderConfig:
     spectral_oversample: int = 15
     spectral_method: str = 'erf'
     psf_mode: str = 'post_dispersion'
+    cube_mode: str = 'shared'
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
 
@@ -109,6 +119,10 @@ class RenderConfig:
             raise ValueError(
                 f"psf_mode must be 'post_dispersion' or 'per_slice', got "
                 f"{self.psf_mode!r}"
+            )
+        if self.cube_mode not in ('shared', 'per_roll'):
+            raise ValueError(
+                f"cube_mode must be 'shared' or 'per_roll', got " f"{self.cube_mode!r}"
             )
 
     @classmethod
@@ -332,6 +346,8 @@ class RenderConfig:
             parts.append(f'spectral_oversample={self.spectral_oversample}')
         if self.psf_mode != 'post_dispersion':
             parts.append(f'psf_mode={self.psf_mode}')
+        if self.cube_mode != 'shared':
+            parts.append(f'cube_mode={self.cube_mode}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -354,6 +370,7 @@ def _render_config_flatten(rc):
         rc.spectral_oversample,
         rc.spectral_method,
         rc.psf_mode,
+        rc.cube_mode,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -368,8 +385,9 @@ def _render_config_unflatten(aux, children):
         spectral_oversample=aux[4],
         spectral_method=aux[5],
         psf_mode=aux[6],
-        effective_maxk=aux[7],
-        stepk=aux[8],
+        cube_mode=aux[7],
+        effective_maxk=aux[8],
+        stepk=aux[9],
     )
 
 

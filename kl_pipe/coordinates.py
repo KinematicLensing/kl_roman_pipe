@@ -68,6 +68,23 @@ def image_rotation_from_wcs(wcs: 'WCS') -> float:
     return theta
 
 
+def wcs_is_flipped(wcs: 'WCS') -> bool:
+    """True when the WCS PC/CD matrix has negative determinant (a parity
+    flip / mirroring).
+
+    A flip is NOT a rotation: ``image_rotation_from_wcs`` absorbs it by
+    adding pi (the kl-tools OrientedAngle convention), which is only
+    meaningful for spin-2 / axis-like quantities. Pathways that rotate
+    positions or sampling grids (e.g. the shared-cube grism path) must
+    reject flipped WCSs loudly instead.
+    """
+    if wcs.wcs.has_pc():
+        R = wcs.wcs.get_pc()
+    else:
+        R = wcs.wcs.get_cd()
+    return bool(np.linalg.det(R) < 0)
+
+
 def rotate_shear(g1, g2, phi) -> Tuple:
     """Spin-2 rotation of shear components by ``phi`` radians.
 
