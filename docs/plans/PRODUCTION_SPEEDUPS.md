@@ -85,6 +85,24 @@ justification before implementation. Two separable claims to nail down:
 Expected gain: grism leg 9.8 -> ~6 ms (1.6x); larger under grad; compounds
 with A3 (per-roll cost collapses).
 
+Implementation constraints (user, 2026-07-04): the per-slice convolution
+pathway is KEPT as the general path (future lambda-varying PSFs); the shortcut
+is an opt-in/configurable fast path. Justification deliverable = LaTeX
+derivation document + empirical equivalence tests.
+
+Edge-tolerance choice (agent, 2026-07-04, user may override): tie the
+equivalence-test tolerance to `folding_threshold` rather than an ad-hoc
+absolute flux fraction. Rationale: the commutation discrepancy is confined to
+within one PSF support of the stamp boundary and is proportional to the
+profile flux near that boundary -- the SAME flux class that
+`folding_threshold` (default 5e-3) already budgets for k-space aliasing in
+RenderConfig grid sizing. Tying to it (i) makes the new error provably the
+same order as an error the pipeline already tolerates, (ii) auto-tightens if
+a user requests higher rendering accuracy, (iii) avoids inventing a second
+independent accuracy knob. Tradeoff: an absolute flux-fraction bound would be
+simpler to state and independent of render settings, but is arbitrary and can
+silently diverge from the actual rendering accuracy regime.
+
 ### A2. erf-exact spectral integration (attacks the 58%)
 Issue #52 prototype (`experiments/sweverett/erf_spectral_integration/`):
 replace the dense Gaussian exp over 375 fine-lambda points per spatial pixel
@@ -99,6 +117,10 @@ MUST re-benchmark under grad (and later GPU) before accepting the old verdict.
 Numerics change slightly (more accurate): expect small shifts in
 grism/datacube test expectations; any tolerance change needs explicit user
 sign-off per project rules.
+
+Implementation constraint (user, 2026-07-04): do NOT remove the
+spectral-oversampling pathway even if erf wins -- keep both selectable for
+comparison tests; a default change requires user sign-off.
 
 ### A3. Single model-space cube for all roll angles
 DECISION (user, 2026-07-02): approved direction ("quite like").
@@ -293,6 +315,35 @@ only.
 9. Chains: keep full sampler chains until very confident; reduced storage only
    for full-scale paper-plot runs.
 
+2026-07-04 (user):
+10. PSF lambda-dependence: PSF IS lambda-dependent physically; the question is
+    only whether constancy across a SINGLE line matters at the ~0.1 sigma
+    parameter-shift level (doubted; estimate from basic physics). The current
+    per-slice-convolution pathway must be KEPT (not removed) when the A1
+    shortcut lands, so lambda-varying PSFs can be implemented later. Shortcut
+    = fast path; per-slice = general path.
+11. A1 justification: empirical tests PLUS a LaTeX document deriving and
+    proving the commutation mathematically.
+12. A2 erf: pursue; do NOT remove the spectral-oversampling pathway even if
+    slower/worse -- keep both for comparison tests; default may change later
+    with user sign-off.
+13. fp32: implement as a high-level configuration choice (user-selectable per
+    tolerance needs). Required documentation of impact: (a) pixel-level
+    residuals vs GalSim for common cases; (b) likelihood-slice deltas;
+    (c) posterior differences (bias, sigma, MAP deltas) on the seeded flagship
+    test. Thresholds decided later; target at least < 0.1 sigma on shear.
+14. A1 edge tolerance: agent chooses the most-justified option now (chosen:
+    tie to folding_threshold -- see A1 section rationale), user may swap
+    later. Do not delay initial work on this.
+15. SU budgets: out of scope for now; focus on speedups + implementations for
+    the user to test.
+16. max_tree_depth: no user intuition; decide via ESS/wallclock A/B when the
+    batched path exists.
+17. Chain storage: no format preference; pick for disk/I-O efficiency. No
+    significant quota constraints. (Chosen: one compressed .npz per fit,
+    directory-sharded, + a single parquet summary table per ensemble; no new
+    heavy deps, streamable, trivially restartable.)
+
 ## 7. TODO (rank-ordered)
 
 - [ ] A1 justification: derivation note + PSF-vs-lambda variation quantified
@@ -318,15 +369,12 @@ only.
 
 ## 8. Open questions
 
-1. fp32 sampler A/B thresholds: adopt |dmu| < 0.1 sigma + width within 5%?
-2. A1 edge-effect tolerance: absolute flux fraction at stamp edge, or tie to
-   folding_threshold?
-3. Vista pilot scope: how many SUs authorized for the first benchmark week?
-4. Chunked NUTS trajectory cap: max_tree_depth=8 default for batched runs OK,
-   given flagship currently uses default 10? (Affects sampling quality --
-   needs A/B on ESS.)
-5. Storage format for full chains at 1e4 fits (npz shards vs parquet vs
-   zarr)? ~13-50 GB total -- any TACC $WORK/$SCRATCH constraint?
+(1-5 of 2026-07-02 resolved -- see decisions 13-17.)
+1. fp32 exact thresholds: deferred until the impact documentation (decision
+   13 a/b/c) exists; floor = < 0.1 sigma on shear.
+2. max_tree_depth for batched runs: decide via ESS/wallclock A/B (decision 16).
+3. Lambda-varying PSF API shape (per-slice PSF list? callable psf(lambda)?)
+   -- design when the general path is revisited; A1 must not preclude it.
 
 ## 9. Pointers
 
