@@ -115,6 +115,7 @@ def _log_likelihood_grism_source(
     fixed_pars: dict,
     spectral_oversample: int = 15,
     spectral_method: str = 'erf',
+    psf_mode: str = 'post_dispersion',
 ) -> float:
     """SourceModel grism log-likelihood for one dispersed observation."""
     pars = _build_pars_dict(theta_sampled, sampled_names, fixed_pars)
@@ -123,6 +124,7 @@ def _log_likelihood_grism_source(
         obs,
         spectral_oversample=spectral_oversample,
         spectral_method=spectral_method,
+        psf_mode=psf_mode,
     )
     return _gaussian_log_likelihood(obs.data, model_img, obs.variance, obs.mask)
 
@@ -150,6 +152,7 @@ def _log_likelihood_total_source(
     fixed_pars: dict,
     spectral_oversample: int = 15,
     spectral_method: str = 'erf',
+    psf_mode: str = 'post_dispersion',
 ) -> float:
     """Dispatch sum over all populated channels for SourceModel inference.
 
@@ -175,6 +178,7 @@ def _log_likelihood_total_source(
                 fixed_pars,
                 spectral_oversample=spectral_oversample,
                 spectral_method=spectral_method,
+                psf_mode=psf_mode,
             )
     if velocity_obs is not None:
         log_l = log_l + _log_likelihood_velocity_source(
@@ -193,6 +197,7 @@ def create_jitted_likelihood_from_obs(
     velocity_obs=None,
     spectral_oversample: int = 15,
     spectral_method: str = 'erf',
+    psf_mode: str = 'post_dispersion',
 ) -> Callable[[jnp.ndarray], float]:
     """JIT-compiled total log-likelihood for SourceModel-based inference.
 
@@ -212,5 +217,6 @@ def create_jitted_likelihood_from_obs(
             fixed_pars=fixed_pars,
             spectral_oversample=spectral_oversample,
             spectral_method=spectral_method,
+            psf_mode=psf_mode,
         )
     )

@@ -72,6 +72,15 @@ class RenderConfig:
         ``'oversample'`` (midpoint fine-grid sampling controlled by
         ``spectral_oversample``; retained for convergence/comparison
         studies). Applies to grism obs only.
+    psf_mode : str
+        Where the (wavelength-independent) PSF convolution is applied in
+        the grism pathway: ``'post_dispersion'`` (default; disperse the
+        raw cube, then one exact padded convolution of the 2D dispersed
+        image — mathematically identical up to bounded stamp-boundary
+        truncation terms) or
+        ``'per_slice'`` (convolve every wavelength slice before
+        dispersion; the general reference path, required for future
+        wavelength-dependent PSFs). Applies to grism obs only.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -86,6 +95,7 @@ class RenderConfig:
     maxk_threshold: float = 1e-3
     spectral_oversample: int = 15
     spectral_method: str = 'erf'
+    psf_mode: str = 'post_dispersion'
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
 
@@ -94,6 +104,11 @@ class RenderConfig:
             raise ValueError(
                 f"spectral_method must be 'erf' or 'oversample', got "
                 f"{self.spectral_method!r}"
+            )
+        if self.psf_mode not in ('post_dispersion', 'per_slice'):
+            raise ValueError(
+                f"psf_mode must be 'post_dispersion' or 'per_slice', got "
+                f"{self.psf_mode!r}"
             )
 
     @classmethod
@@ -315,6 +330,8 @@ class RenderConfig:
         ]
         if self.spectral_method == 'oversample':
             parts.append(f'spectral_oversample={self.spectral_oversample}')
+        if self.psf_mode != 'post_dispersion':
+            parts.append(f'psf_mode={self.psf_mode}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -336,6 +353,7 @@ def _render_config_flatten(rc):
         rc.maxk_threshold,
         rc.spectral_oversample,
         rc.spectral_method,
+        rc.psf_mode,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -349,8 +367,9 @@ def _render_config_unflatten(aux, children):
         maxk_threshold=aux[3],
         spectral_oversample=aux[4],
         spectral_method=aux[5],
-        effective_maxk=aux[6],
-        stepk=aux[7],
+        psf_mode=aux[6],
+        effective_maxk=aux[7],
+        stepk=aux[8],
     )
 
 

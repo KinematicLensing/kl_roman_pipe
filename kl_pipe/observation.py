@@ -315,6 +315,15 @@ class GrismObs:
             else 'erf'
         )
 
+    @property
+    def psf_mode(self) -> str:
+        """Grism PSF pathway; canonical source is render_config.psf_mode."""
+        return (
+            self.render_config.psf_mode
+            if self.render_config is not None
+            else 'post_dispersion'
+        )
+
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
         """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
 

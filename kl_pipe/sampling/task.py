@@ -728,6 +728,7 @@ class InferenceTask:
         meta_pars: Optional[Dict] = None,
         spectral_oversample: Optional[int] = None,
         spectral_method: Optional[str] = None,
+        psf_mode: Optional[str] = None,
     ) -> 'InferenceTask':
         """Unified SourceModel inference factory.
 
@@ -780,6 +781,13 @@ class InferenceTask:
             each grism obs's ``render_config.spectral_method``; raises
             if multiple grism obs disagree. Pass an explicit value only
             to override uniformly.
+        psf_mode : str, optional
+            Grism PSF pathway, ``'post_dispersion'`` (single convolution
+            of the dispersed image; default) or ``'per_slice'``
+            (reference path). When ``None`` (default), reads from each
+            grism obs's ``render_config.psf_mode``; raises if multiple
+            grism obs disagree. Pass an explicit value only to override
+            uniformly.
         """
         from kl_pipe.likelihood import create_jitted_likelihood_from_obs
         from kl_pipe.source import SourceModel
@@ -924,6 +932,19 @@ class InferenceTask:
         elif spectral_method is None:
             spectral_method = 'erf'  # unused (no grism), but pass a concrete str
 
+        # resolve psf_mode the same way (every roll must agree)
+        if psf_mode is None and grism_obs:
+            modes = {k: o.psf_mode for k, o in grism_obs.items()}
+            unique_modes = set(modes.values())
+            if len(unique_modes) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched psf_mode {modes}; "
+                    f"pass psf_mode=... explicitly to override"
+                )
+            psf_mode = unique_modes.pop()
+        elif psf_mode is None:
+            psf_mode = 'post_dispersion'  # unused (no grism); concrete str
+
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,
             sampled_names,
@@ -933,6 +954,7 @@ class InferenceTask:
             velocity_obs=velocity_obs,
             spectral_oversample=spectral_oversample,
             spectral_method=spectral_method,
+            psf_mode=psf_mode,
         )
 
         return cls(

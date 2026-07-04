@@ -203,6 +203,7 @@ class SourceModel:
         plane: str = 'obs',
         spectral_oversample: int | None = None,
         spectral_method: str | None = None,
+        psf_mode: str | None = None,
     ) -> jnp.ndarray:
         """Render the dispersed 2D grism image.
 
@@ -211,17 +212,24 @@ class SourceModel:
              scale when ``obs.oversample > 1``), deriving the celestial-
              to-detector rotation from ``obs.grism_pars.image_pars.wcs``
              to thread celestial-frame priors into detector-frame thetas.
-          2. Per-slice PSF convolution via ``vmap`` over wavelength, with
-             ``bin=False`` so the cube stays at fine resolution.
+          2. PSF convolution, placement set by ``psf_mode``:
+             ``'post_dispersion'`` (default) disperses the raw cube and
+             convolves the 2D dispersed image once (exact padded linear
+             convolution); ``'per_slice'`` convolves every wavelength
+             slice before dispersion via ``vmap``. For a shared
+             wavelength-independent PSF the two are mathematically
+             identical up to stamp-boundary truncation terms bounded by
+             the ``folding_threshold`` flux class. Both use
+             ``bin=False`` so images stay at fine resolution.
           3. Disperse via ``disperse_cube`` (existing kl_pipe.dispersion).
           4. Apply the precomputed BoxPixel sinc + sum-bin to coarse
              detector pixels at the 2D output.
 
         .. note::
-           Step 2 applies a **single shared** PSF (``obs.psf_data``) to
-           every wavelength slice. Per-line / wavelength-dependent PSFs
-           and per-line sub-cubes are tracked as an open architectural
-           item — see issue #51. Deferred past Phase 3.
+           Both modes apply a **single shared** PSF (``obs.psf_data``).
+           Per-line / wavelength-dependent PSFs require ``'per_slice'``
+           (or per-line sub-cubes) and are tracked as an open
+           architectural item — see issue #51. Deferred past Phase 3.
 
         Parameters
         ----------
@@ -238,17 +246,30 @@ class SourceModel:
             (default), reads ``obs.spectral_method`` (canonical source
             ``obs.render_config.spectral_method``). Pass an explicit
             value only to override (e.g., method-comparison tests).
+        psf_mode : str, optional
+            PSF pathway: ``'post_dispersion'`` (single convolution of
+            the dispersed image; default) or ``'per_slice'`` (reference
+            path). When ``None`` (default), reads ``obs.psf_mode``
+            (canonical source ``obs.render_config.psf_mode``). Pass an
+            explicit value only to override (e.g., equivalence tests).
         """
         from kl_pipe.dispersion import disperse_cube
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.spectral import CubePars
 
-        # resolve spectral_oversample / spectral_method: explicit kwarg
-        # wins, else read from obs
+        # resolve spectral_oversample / spectral_method / psf_mode:
+        # explicit kwarg wins, else read from obs
         if spectral_oversample is None:
             spectral_oversample = obs.spectral_oversample
         if spectral_method is None:
             spectral_method = obs.spectral_method
+        if psf_mode is None:
+            psf_mode = obs.psf_mode
+        if psf_mode not in ('post_dispersion', 'per_slice'):
+            raise ValueError(
+                f"psf_mode must be 'post_dispersion' or 'per_slice', got "
+                f"{psf_mode!r}"
+            )
 
         # build_cube spatial grid: fine when oversampling is active
         if obs.psf_data is not None and obs.oversample > 1:
@@ -269,8 +290,10 @@ class SourceModel:
             spectral_method=spectral_method,
         )
 
-        # per-slice PSF convolution (vmap over wavelength), bin=False keeps fine
-        if obs.psf_data is not None:
+        # per-slice PSF convolution (vmap over wavelength), bin=False keeps
+        # fine. The general/reference path; required for future
+        # wavelength-dependent PSFs (issue #51).
+        if obs.psf_data is not None and psf_mode == 'per_slice':
             from kl_pipe.psf import convolve_fft
 
             cube_transposed = jnp.moveaxis(cube, -1, 0)
@@ -286,6 +309,16 @@ class SourceModel:
             obs.cube_pars.lambda_grid,
             oversample=obs.oversample,
         )
+
+        # post-dispersion PSF convolution: one exact padded linear
+        # convolution of the dispersed image replaces the 2*Nlambda
+        # per-slice FFTs (a shared PSF commutes with per-slice uniform
+        # shifts and their weighted sum). The unit-sum kernel preserves
+        # SB units.
+        if obs.psf_data is not None and psf_mode == 'post_dispersion':
+            from kl_pipe.psf import convolve_fft
+
+            dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
 
         # post-dispersion BoxPixel sinc + SB→flux/pixel conversion
         coarse_shape = (
