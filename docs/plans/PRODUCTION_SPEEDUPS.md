@@ -385,12 +385,17 @@ only.
       section: 45x accuracy win, 1.1-1.3x vs osf=15 as-is, 7-19x vs the
       osf~201-401 actually needed for correct gradients; osf=15 gradient
       pathology discovered).
-- [ ] A2-FOLLOW-UP (elevated priority): quantify the osf=15 gradient
-      pathology's effect on full MCMC -- seeded flagship NUTS with osf=15 vs
-      erf vs osf=201: posterior means/widths (esp. shear), ESS, divergences,
-      step-size/mass adaptation. Decides whether erf is a CORRECTNESS fix,
-      not just a speedup.
-- [ ] A1+A2 implementation behind equivalence tests; re-profile.
+- [x] A2 IMPLEMENTED as default (f8eb3d0): spectral_method='erf' throughout
+      (RenderConfig -> obs -> render_grism/build_cube -> likelihood -> task);
+      'oversample' retained + explicitly selectable; 13 tests incl. washboard
+      visual diagnostic (tests/test_spectral_methods.py); test-basic 820 pass.
+- [ ] A2-FOLLOW-UP (deferred w/ flagship-run moratorium; GPU first): seeded
+      flagship NUTS erf vs osf=15 A/B -- posterior deltas (esp. shear), ESS,
+      divergences. Motivated mechanism = narrow-line value error, NOT the
+      retracted "wrong gradients" claim.
+- [ ] A1 implementation behind equivalence tests (proof doc exists;
+      per-slice path stays as the general/lambda-varying-PSF path);
+      re-profile flagship after.
 - [ ] A3 shared-cube-across-rolls refactor (move image_rotation to the
       dispersion step) + equivalence test vs per-roll path.
 - [ ] B: RenderConfig pinning + data-as-argument likelihood refactor
