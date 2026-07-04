@@ -187,15 +187,91 @@ erf_grad_bench/, flagship config, cube stage only):
 
 ### A3. Single model-space cube for all roll angles
 DECISION (user, 2026-07-02): approved direction ("quite like").
-`_log_likelihood_total_source` (`likelihood.py:161-170`) currently re-renders
-the full cube per roll; the intrinsic (celestial-frame) cube is identical
-across rolls -- only per-obs image_rotation + dispersion direction differ.
-Build once, disperse per roll. At 4 rolls: ~4x on the cube-build cost; with A1
-the per-roll increment drops to disperse + 1 conv + pixel bin (~0.5 ms).
-Refactor note: image_rotation is currently threaded into build_cube per obs
-(`source.py:251,404,428`) -- rotation must move to the per-roll dispersion
-step (or the shared cube built in a common frame). Requires an equivalence
-test vs the current per-roll path.
+DESIGN GRILLED + SIGNED OFF (user, 2026-07-04): full decision record below
+(decisions 21-27). Implementation in progress this session.
+
+**Backward-pass profile (2026-07-04, M3 Max fp64, 30 reps, perturbed-theta
+eval; `experiments/sweverett/production_speedups/profile_backward_split.py`):**
+
+| leg (1 roll, post_dispersion) | grad ms | share |
+|---|---|---|
+| build_cube | 28.2 | ~81% |
+| disperse | 2.8 | ~8% |
+| post-disp PSF conv | 1.6 | ~4% |
+| pixel-response + chi2 | 2.5 | ~7% |
+
+4-roll grad scales 3.99x (136.8 vs 34.3 ms); posterior grad ~= grism chi2
+grad (broadband+prior negligible). **A3 ceiling (shared-cube timing sim,
+real rotated-WCS obs at 0/45/90/135 deg): 2.06x on the 4-roll gradient**
+(136.8 -> 66.4 ms), 3.40x forward -- NOT the naive ~4x: the shared cube's
+backward accumulates 4 cotangent cubes (96x96x50 fp64) and loses XLA fusion
+(~11 ms). Post-A3, build_cube's own backward (~28 ms) is ~60% of the 4-roll
+gradient -- the next native lever lives INSIDE build_cube backward (erf bin
+integral + intensity/velocity eval chain), not disperse/PSF.
+
+**Mechanism (fused rotated sampling).** Sky fixed; detector rotates per roll;
+Roman disperses along det +x always (`dispersion_angle_detector=0`, roll in
+obs WCS). The unconvolved cube C(x_sky, y_sky, lambda) is roll-independent
+by physics (LOS velocity is a scalar field on the sky; PA/shear/centroid are
+sky-frame). Exact change of variables:
+
+    dispersed_det_r(x) = sum_k C_sky(R_r (x - s_k)) T_k dlam,  s_k = det +x shift
+
+`disperse_cube` already does one bilinear map_coordinates per lambda-slice at
+`[Y-dy_k, X-dx_k]` -- rotating those pull-coordinates about the stamp center
+costs ZERO extra interpolation passes and lands output directly in det frame.
+Rejected alternatives: rotate dispersed 2D image (+1 interp pass/roll),
+rotate cube slices (+Nlam passes/roll).
+
+**PSF.** The det-frame PSF never touches the shared cube: A1's
+post-dispersion convolution applies per roll, per obs kernel (PSFs MAY
+differ across rolls -- sharing unaffected). Shared path REQUIRES
+psf_mode='post_dispersion'; per_slice + shared group raises loudly.
+Static-PSF validity remains per emission-line complex only (issue #51;
+close blends like [NII]+Halpha in one window are fine). Near-term workflow:
+one line complex per fit, combine posteriors post hoc (divide out shared-
+param prior N-1 times). Designated issue-51 resolution path (deferred,
+A3-compatible): per-line sub-cube dispersion + per-line static kernels
+summed pre-pixel-response (A1 proof already has the per-line
+generalization); full-bandpass continuum w/ continuously varying PSF is the
+only genuinely long-term case.
+
+**x0/y0.** Sky-frame convention: `_apply_obs_rotation` currently rotates
+theta_int + (g1,g2) but NOT (x0,y0) -- physically wrong at rotation != 0
+(a fixed sky offset appears rotated in each roll's det frame); latent
+because all current usage has rotation=0. Pre-A3 fix commits the rotation;
+shared path then agrees by construction (offset baked into sky cube).
+Per-exposure astrometric nuisance offsets (det-frame delta_e) DEFERRED:
+Roman per-exposure residuals ~mas vs 110 mas pixels; if ever needed they
+compose as a translation of the sampling coords -- zero cube rebuild, +2
+params/exposure. Open science question: quantify residual vs shear-bias
+budget before survey scale.
+
+**API.** User contract unchanged: pass more grism obs to
+`InferenceTask.from_obs(grism_obs={...})` like broadband. New public
+`SourceModel.render_grism_group(pars, obs_group) -> dict`: build sky cube
+once, per roll rotated-disperse + PSF + pixel response. from_obs groups
+grism obs by cube-compat key (identical lambda_grid + shape/scale +
+oversample + spectral_method; WCS rotation/data/variance/PSF excluded);
+different lines -> different groups -> own cubes (correct, not an error).
+`render_grism(pars, obs)` untouched as single-obs/reference path.
+Knob: `RenderConfig.cube_mode` = 'shared' (default) | 'per_roll' (reference),
+mirroring spectral_method/psf_mode plumbing.
+
+**Guards (all loudly unit-tested):** per_slice + shared group; flipped WCS
+(det(PC) < 0 -- parity is not a rotation; image_rotation_from_wcs's +pi
+convention is unsound for it); near-miss lambda grids (same shape, tiny rel
+diff -> "float drift? make identical"); cube_mode mismatch across a group.
+
+**Tolerance model (two terms, both measure-then-freeze per A1 protocol):**
+(i) rotated-corner/edge truncation -- C x folding_threshold budget, C frozen
+after measuring the A/B grid; (ii) bilinear interpolation error at rotated
+(both-axes-fractional) coords -- NOT folding-bounded; separate
+convergence-vs-oversample test, tolerance frozen at production oversample=3.
+Gradient equivalence on vector norms at perturbed theta (both A1 traps
+apply). Padding: implement UNPADDED first, measure 45-deg worst case, add
+sky-grid padding only if the budget is exceeded (minimal sufficient
+complexity).
 
 ### A4. Precomputed fixed-dispersion gather operator (GPU enabler)
 The 25-iter Python disperse loop's geometry (pixel offsets, dx/dy) is static
@@ -424,6 +500,34 @@ only.
     wallclock) until GPU-era hardware -- battery constraints. Validation
     via likelihood slices / optimizer / minimal-sampler configs is fine;
     flagship-depth runs are not.
+21. (2026-07-04, user, A3 grill) Mechanism: fuse the roll rotation into
+    disperse_cube's pull-coordinates (sample sky-frame cube at
+    R(x - s_k)); output directly det-frame with dispersion along det +x.
+    Requires rock-solid unit tests + visual diagnostics: regression vs
+    current path first, standalone multi-roll-of-one-sky-model
+    verification by the end.
+22. (2026-07-04, user, A3 grill) Shared lambda grid: all rolls of a group
+    must have identical CubePars ("no easy way otherwise"); enforce loudly.
+23. (2026-07-04, user, A3 grill) x0/y0 are sky-frame; commit the pre-A3
+    _apply_obs_rotation fix rotating them. Short term: single sky-frame
+    offset models static astrometric error in all cutouts; per-exposure
+    det-frame nuisances acknowledged as a possible long-term need
+    (extension path recorded in A3 section, composes w/o cube rebuild).
+24. (2026-07-04, user, A3 grill) API: keep the broadband-like contract --
+    "just pass more grism obs"; sharing is an invisible internal
+    optimization (render_grism_group + from_obs auto-grouping).
+25. (2026-07-04, user, A3 grill) per_slice psf_mode with a shared group:
+    loud error. cube_mode default = 'shared'. WCS/rotation guards at
+    author's discretion but all rigorously unit-tested.
+26. (2026-07-04, user, A3 grill) Multi-line static-PSF limitation (issue
+    #51) stays out of A3 scope: near-term = one line complex per fit,
+    combine chains post hoc; tutorial/docs warning REQUIRED at the
+    end-of-branch doc pass (TODO Sec 7). Per-line post-dispersion kernels
+    recorded as the designated future resolution.
+27. (2026-07-04, user, A3 grill) Tolerances: A1-style measure-then-freeze;
+    two-term budget (truncation C x folding_threshold + interpolation
+    convergence-vs-oversample). Implement unpadded first; padding only if
+    the measured 45-deg budget demands it.
 
 ## 7. TODO (rank-ordered)
 
@@ -449,10 +553,21 @@ only.
       the general/lambda-varying-PSF path); re-profiled. See A1 section
       IMPLEMENTED block: primal 1.94x, grad 1.08x -- grad bottleneck is
       build_cube/disperse backward, raising A3's priority.
-- [ ] A3 shared-cube-across-rolls refactor (move image_rotation to the
-      dispersion step) + equivalence test vs per-roll path. NOW THE TOP
-      Tier-A lever for sampler wallclock (see A1 measured-gain note); also
-      profile the build_cube/disperse BACKWARD pass split first.
+- [x] Backward-pass profile split (2026-07-04; see A3 section): build_cube
+      backward = ~81% of grism grad; 4-roll scales 3.99x; A3 measured
+      ceiling 2.06x on 4-roll grad (cotangent-accumulation overhead eats
+      the naive 4x). Next post-A3 native lever = build_cube backward.
+- [ ] A3 shared-cube-across-rolls refactor: design GRILLED + signed off
+      (decisions 21-27; full record in A3 section). Implementation in
+      progress: pre-A3 x0/y0 rotation fix -> disperse_cube rotation kwarg
+      -> RenderConfig.cube_mode -> render_grism_group + from_obs grouping
+      -> two-term-tolerance equivalence/gradient/posterior tests + visual
+      diagnostics -> re-profile.
+- [ ] A3-FOLLOW-UP (end-of-branch doc pass, DO NOT FORGET): tutorial +
+      docs warning that the static-PSF grism pathway is valid per emission
+      line complex only (issue #51); recommended workflow for now = separate
+      per-line posterior fits, combine chains post hoc (divide out the
+      shared-param prior N-1 times when multiplying posteriors).
 - [ ] (DEFERRED, decision 19 -- revisit at ~30M scale) B: RenderConfig
       pinning + data-as-argument likelihood refactor
       (potential_fn(theta, data)); kill per-galaxy recompilation.
