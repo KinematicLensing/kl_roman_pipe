@@ -103,6 +103,37 @@ independent accuracy knob. Tradeoff: an absolute flux-fraction bound would be
 simpler to state and independent of render settings, but is arbitrary and can
 silently diverge from the actual rendering accuracy regime.
 
+IMPLEMENTED (2026-07-04), user sign-off after independent cross-check of the
+derivation (agent audit vs code + numerical verification with real pipeline
+operators: interior-source A/B 5e-5 L1/Ftot; theta-gradient agreement ~2e-5).
+- `RenderConfig.psf_mode`: 'post_dispersion' (DEFAULT) | 'per_slice'
+  (reference path, retained for future lambda-varying PSFs + verification).
+  Threads RenderConfig -> GrismObs -> render_grism -> likelihood ->
+  InferenceTask.from_obs (per-roll mismatch guard), mirroring spectral_method.
+- Variant: SEPARATE exact padded convolution of the dispersed image via the
+  existing `convolve_fft` (sinc pixel-response pass untouched) -- 4 FFTs/roll
+  vs 52, deliberately isolating the commutation change; full fusion into the
+  sinc pass (2 FFTs) remains an optional micro-opt gated on the
+  circular-vs-linear check (proof doc Sec 5).
+- Validation protocol (proof doc Sec 6) executed: (1) image A/B grid
+  (angles 0/30/90, FWHM 0.11/0.18/0.30, high-shift, high-velocity,
+  continuum): measured C in [0.03, 1.33] (worst = high-shift stress, line
+  near stamp edge); frozen C=2.0 in `tests/test_grism_psf_mode.py`;
+  (2) gradient equivalence: max 1.4e-3 rel (frozen 5e-3); (3) seeded
+  posterior A/B (SNR~50, 4 params, 300+300 NUTS, single roll 24x24): mean
+  shifts cosi 0.003 / g1 0.070 / g2 0.006 / vcirc 0.018 sigma, widths within
+  12%, divergences 1 vs 2 -- flagship-depth A/B deferred to GPU era per
+  short-run constraint; (4) per_slice path asserted bit-identical to the
+  manually-spelled pre-refactor chain.
+- MEASURED GAIN (32x32/os=3/Nlam=25, single-roll grism chi2, M3 Max fp64):
+  forward 7.15 -> 3.68 ms (1.94x); grad 24.7 -> 22.9 ms (1.08x ONLY).
+  The backward pass is dominated by build_cube + disperse backward, not the
+  per-slice PSF FFTs, so A1's NUTS-wallclock win is ~8% at this config
+  despite the ~2x primal win. The "kills 45%" expectation was a
+  primal-leg statement. CONSEQUENCE: A3 (share cube across rolls) and the
+  cube/disperse backward path are now the dominant Tier-A levers for
+  sampler wallclock.
+
 ### A2. erf-exact spectral integration (attacks the 58%)
 Issue #52 prototype (`experiments/sweverett/erf_spectral_integration/`):
 replace the dense Gaussian exp over 375 fine-lambda points per spatial pixel
@@ -375,12 +406,33 @@ only.
     significant quota constraints. (Chosen: one compressed .npz per fit,
     directory-sharded, + a single parquet summary table per ensemble; no new
     heavy deps, streamable, trivially restartable.)
+18. (2026-07-04, user) A1 SIGNED OFF after independent cross-check of the
+    derivation; implement with post-dispersion convolution as DEFAULT,
+    per-slice retained (future evolving PSF + verification), with clear unit
+    tests + visual diagnostics. Agent choices accepted by default (user AFK
+    at ask): variant = separate padded conv (not fused into sinc pass);
+    knob = `RenderConfig.psf_mode` ('post_dispersion'|'per_slice').
+19. (2026-07-04, user) B keystone (data-as-argument likelihood) DEFERRED:
+    near-term target is per-galaxy end-to-end sampler wallclock (local +
+    single CPU/GPU node), not batched mass-fitting. Per-galaxy compile
+    (~seconds) is acceptable at the 1e2-1e4 fit scale; galaxies are not
+    guaranteed shape/config-uniform anyway. Revisit for the ~30M-scale
+    production runs. (Supporting measurement: single fit is not helped by
+    multi-core CPU -- node throughput = N independent fits in parallel,
+    which needs no batching refactor.)
+20. (2026-07-04, user) Local run budget: SHORT runs only (<5-10 min
+    wallclock) until GPU-era hardware -- battery constraints. Validation
+    via likelihood slices / optimizer / minimal-sampler configs is fine;
+    flagship-depth runs are not.
 
 ## 7. TODO (rank-ordered)
 
-- [ ] A1 justification: derivation note + PSF-vs-lambda variation quantified
+- [x] A1 justification: derivation note + PSF-vs-lambda variation quantified
       over the line window (galsim.roman getPSF moments); equivalence-test
-      spec w/ tolerances BEFORE implementation.
+      spec w/ tolerances BEFORE implementation. (Proof doc committed;
+      independent cross-check 2026-07-04: math CONFIRMED, 3 doc corrections
+      applied -- pad-size figure, kernel-negativity caveat, m-estimate
+      convention note; streamlined-argument section added.)
 - [x] A2 re-benchmark erf integration under jax.grad (2026-07-04; see A2
       section: 45x accuracy win, 1.1-1.3x vs osf=15 as-is, 7-19x vs the
       osf~201-401 actually needed for correct gradients; osf=15 gradient
@@ -393,12 +445,16 @@ only.
       flagship NUTS erf vs osf=15 A/B -- posterior deltas (esp. shear), ESS,
       divergences. Motivated mechanism = narrow-line value error, NOT the
       retracted "wrong gradients" claim.
-- [ ] A1 implementation behind equivalence tests (proof doc exists;
-      per-slice path stays as the general/lambda-varying-PSF path);
-      re-profile flagship after.
+- [x] A1 implementation behind equivalence tests (per-slice path stays as
+      the general/lambda-varying-PSF path); re-profiled. See A1 section
+      IMPLEMENTED block: primal 1.94x, grad 1.08x -- grad bottleneck is
+      build_cube/disperse backward, raising A3's priority.
 - [ ] A3 shared-cube-across-rolls refactor (move image_rotation to the
-      dispersion step) + equivalence test vs per-roll path.
-- [ ] B: RenderConfig pinning + data-as-argument likelihood refactor
+      dispersion step) + equivalence test vs per-roll path. NOW THE TOP
+      Tier-A lever for sampler wallclock (see A1 measured-gain note); also
+      profile the build_cube/disperse BACKWARD pass split first.
+- [ ] (DEFERRED, decision 19 -- revisit at ~30M scale) B: RenderConfig
+      pinning + data-as-argument likelihood refactor
       (potential_fn(theta, data)); kill per-galaxy recompilation.
 - [ ] B: Vista smoke test (NGC container, flagship fit, fp64) -> reduced
       benchmark matrix -> update COMPUTE.md numbers.
