@@ -122,6 +122,31 @@ Implementation constraint (user, 2026-07-04): do NOT remove the
 spectral-oversampling pathway even if erf wins -- keep both selectable for
 comparison tests; a default change requires user sign-off.
 
+BENCHMARK RESULT (2026-07-04, experiments/sweverett/production_speedups/
+erf_grad_bench/, flagship config, cube stage only):
+- Accuracy: erf ~45x more accurate than osf=15 vs an osf=101 reference
+  (1.1e-5 vs 5e-4 max rel err; similar at a high-velocity-gradient point).
+- Speed vs osf=15 as-is: only 1.1-1.3x (forward 5.8 vs 5.2 ms; grad ~28 vs
+  ~35 ms) -- the naive >=2x hypothesis REFUTED; XLA CPU erf kernel cost
+  dominates (76% of erf variant).
+- HEADLINE SURPRISE -- osf=15 GRADIENTS ARE BADLY WRONG: jax.grad of a
+  per-voxel (chi2-like) loss through build_cube at osf=15 has 77-111% rel
+  error vs an osf=1601 reference for kinematically central params
+  (Halpha.dispersion 99.9%, vcirc 99.3%, z 98.4%, rscale 97.8%, cosi 77.2%)
+  including SIGN FLIPS (g2, Halpha.x0). AD == FD at every osf (not an
+  autodiff bug): fixed-node midpoint quadrature differentiated w.r.t. a
+  continuous theta-dependent line shift (lam_obs) aliases -- gradient error
+  is 100-1000x the value error (~5e-4). Reaching <1% grad error needs
+  osf~201-401, where erf wins 7-19x in BOTH forward and grad. erf grads
+  match the osf=1601 reference to ~9e-5.
+- Interpretation guardrail: HMC targets the discretized density
+  self-consistently (FD==AD), so osf=15 runs sample *that* surface
+  correctly; but the surface's gradient landscape is rough vs the ideal.
+  UNTESTED new hypothesis: this degrades NUTS adaptation/ESS (and possibly
+  posterior fidelity at fine scales) in flagship-scale grism fits.
+  Follow-up experiment required (see TODO); user physics interpretation
+  needed before changing any default.
+
 ### A3. Single model-space cube for all roll angles
 DECISION (user, 2026-07-02): approved direction ("quite like").
 `_log_likelihood_total_source` (`likelihood.py:161-170`) currently re-renders
@@ -349,9 +374,15 @@ only.
 - [ ] A1 justification: derivation note + PSF-vs-lambda variation quantified
       over the line window (galsim.roman getPSF moments); equivalence-test
       spec w/ tolerances BEFORE implementation.
-- [ ] A2 re-benchmark erf integration under jax.grad (forward-only "speed
-      neutral" verdict is stale); adopt if it wins; test-expectation changes
-      need explicit sign-off.
+- [x] A2 re-benchmark erf integration under jax.grad (2026-07-04; see A2
+      section: 45x accuracy win, 1.1-1.3x vs osf=15 as-is, 7-19x vs the
+      osf~201-401 actually needed for correct gradients; osf=15 gradient
+      pathology discovered).
+- [ ] A2-FOLLOW-UP (elevated priority): quantify the osf=15 gradient
+      pathology's effect on full MCMC -- seeded flagship NUTS with osf=15 vs
+      erf vs osf=201: posterior means/widths (esp. shear), ESS, divergences,
+      step-size/mass adaptation. Decides whether erf is a CORRECTNESS fix,
+      not just a speedup.
 - [ ] A1+A2 implementation behind equivalence tests; re-profile.
 - [ ] A3 shared-cube-across-rolls refactor (move image_rotation to the
       dispersion step) + equivalence test vs per-roll path.
