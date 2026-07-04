@@ -470,11 +470,21 @@ class TestDiagnostics:
 
         fig, axes = plt.subplots(2, 3, figsize=(15, 9))
         for ax, img, title in [
-            (axes[0, 0], img_a, "per_slice (reference path)"),
-            (axes[0, 1], img_b, "post_dispersion (default)"),
+            (
+                axes[0, 0],
+                img_a,
+                "PSF applied to every cube slice,\nTHEN dispersed"
+                " (psf_mode='per_slice',\nthe reference pathway)",
+            ),
+            (
+                axes[0, 1],
+                img_b,
+                "cube dispersed first, then ONE PSF\nconvolution of the 2D"
+                " image\n(psf_mode='post_dispersion', the default)",
+            ),
         ]:
             im = ax.imshow(img, origin='lower')
-            ax.set_title(title)
+            ax.set_title(title, fontsize=10)
             fig.colorbar(im, ax=ax, fraction=0.046)
         diff = img_b - img_a
         dmax = float(np.abs(diff).max())
@@ -482,8 +492,12 @@ class TestDiagnostics:
             diff, origin='lower', cmap='RdBu_r', vmin=-dmax, vmax=dmax
         )
         axes[0, 2].set_title(
-            f"difference (peak {np.abs(diff).max():.2e} vs "
-            f"image peak {img_a.max():.2e})"
+            "difference between the two pathways\n"
+            f"(largest pixel {np.abs(diff).max():.2e}, i.e. "
+            f"{np.abs(diff).max() / img_a.max():.1e} of the image peak;\n"
+            "concentrated at stamp edges, where the two orderings\n"
+            "truncate off-stamp flux differently)",
+            fontsize=10,
         )
         fig.colorbar(im, ax=axes[0, 2], fraction=0.046)
 
@@ -493,13 +507,22 @@ class TestDiagnostics:
             _C_EQUIV * _FOLDING_THRESHOLD,
             color='crimson',
             ls='--',
-            label=f'test bound C*f_t = {_C_EQUIV * _FOLDING_THRESHOLD:.1e}',
+            label=(
+                'maximum allowed difference\n'
+                f'(2 x folding_threshold = {_C_EQUIV * _FOLDING_THRESHOLD:.0e})'
+            ),
         )
         ax.set_xticks(range(len(labels)))
         ax.set_xticklabels(labels, rotation=30, ha='right', fontsize=8)
-        ax.set_ylabel('L1(A-B) / F_tot')
+        ax.set_ylabel(
+            'summed |per_slice - post_dispersion|\nas a fraction of total flux'
+        )
         ax.set_yscale('log')
-        ax.set_title('A/B error across the validation grid')
+        ax.set_title(
+            'measured pathway difference per test configuration,\n'
+            'vs the allowed stamp-boundary flux budget',
+            fontsize=10,
+        )
         ax.legend(fontsize=8)
 
         # timing: forward + gradient through a chi2, both paths
@@ -536,30 +559,40 @@ class TestDiagnostics:
         ax.set_xticklabels([r[0] for r in rows])
         ax.set_ylabel('ms per call (jitted)')
         ax.set_title(
-            'chi2 timing: post_dispersion replaces 2*Nlambda per-slice\n'
-            'FFTs with one padded convolution of the dispersed image'
+            'speed: one convolution of the dispersed image\n'
+            'replaces 25 per-slice convolutions',
+            fontsize=10,
         )
         ax.legend(fontsize=8)
         axes[1, 2].axis('off')
         axes[1, 2].text(
             0.05,
             0.5,
-            "psf_mode='post_dispersion' (default):\n"
-            "disperse raw cube, then ONE exact padded\n"
-            "PSF convolution of the 2D dispersed image.\n\n"
-            "psf_mode='per_slice' (reference):\n"
-            "convolve all wavelength slices, then disperse.\n\n"
-            "Identical for a shared PSF up to stamp-boundary\n"
-            "truncation terms (folding_threshold flux class).",
+            "WHAT THIS FIGURE TESTS\n\n"
+            "The grism model must blur the galaxy by the\n"
+            "PSF. Because the PSF is the same at every\n"
+            "wavelength, blurring each of the 25 cube\n"
+            "slices before dispersing them (per_slice)\n"
+            "gives the same image as dispersing first and\n"
+            "blurring the summed 2D image once\n"
+            "(post_dispersion) -- except for flux within a\n"
+            "PSF width of the stamp edge, which the two\n"
+            "orderings clip slightly differently. That\n"
+            "leftover difference must stay below the\n"
+            "off-stamp flux budget the user already\n"
+            "accepts via folding_threshold (bottom left).",
             fontsize=9,
             family='monospace',
             va='center',
         )
 
         fig.suptitle(
-            'Grism PSF pathway: per_slice vs post_dispersion '
-            f'(24x24 grid, oversample=3, {len(obs.cube_pars.lambda_grid)} channels)',
-            fontsize=12,
+            'Grism PSF placement: blur every cube slice then disperse'
+            " (psf_mode='per_slice')\nvs disperse then blur once"
+            " (psf_mode='post_dispersion', new default) -- "
+            f'24x24 grid, oversample=3, '
+            f'{len(obs.cube_pars.lambda_grid)} wavelength channels',
+            fontsize=11,
         )
         fig.tight_layout(rect=(0, 0, 1, 0.95))
         out_png = os.path.join(OUT_DIR, 'psf_mode_comparison.png')
