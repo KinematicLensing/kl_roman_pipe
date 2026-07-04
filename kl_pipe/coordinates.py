@@ -19,6 +19,8 @@ Sign convention:
   ``OrientedAngle._sky2cartesian``).
 - ``(g1_det, g2_det) = rotate_shear(g1_cel, g2_cel, image_rotation)``; shear
   is a spin-2 quantity that rotates by ``2 * image_rotation``.
+- ``(x_det, y_det) = rotate_position(x_cel, y_cel, image_rotation)``;
+  positions are spin-1 (component rotation by ``image_rotation``).
 """
 
 from __future__ import annotations
@@ -96,3 +98,36 @@ def rotate_shear(g1, g2, phi) -> Tuple:
     g1_rot = g1 * c + g2 * s
     g2_rot = -g1 * s + g2 * c
     return g1_rot, g2_rot
+
+
+def rotate_position(x, y, phi) -> Tuple:
+    """Spin-1 rotation of position components by ``phi`` radians.
+
+    A position vector fixed on the sky has detector-frame components
+    rotated by the celestial-to-detector angle: a direction at celestial
+    angle ``alpha`` appears at ``alpha - phi`` in the detector frame,
+    consistent with ``theta_int_det = theta_int_cel - phi`` and the spin-2
+    ``rotate_shear``.
+
+    .. math::
+        x' = x \\cos(\\phi) + y \\sin(\\phi)
+        y' = -x \\sin(\\phi) + y \\cos(\\phi)
+
+    JAX-traceable: all inputs may be JAX scalars or arrays.
+
+    Parameters
+    ----------
+    x, y : float or jnp.ndarray
+        Celestial-frame position components.
+    phi : float or jnp.ndarray
+        Rotation angle in radians (celestial-to-detector, i.e. the obs's
+        ``image_rotation``).
+
+    Returns
+    -------
+    (x_rot, y_rot) : tuple of same type as inputs
+        Detector-frame position components.
+    """
+    c = jnp.cos(phi)
+    s = jnp.sin(phi)
+    return x * c + y * s, -x * s + y * c

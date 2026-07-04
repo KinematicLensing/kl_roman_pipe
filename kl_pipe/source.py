@@ -30,7 +30,11 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp  # noqa: E402
 
-from kl_pipe.coordinates import image_rotation_from_wcs, rotate_shear  # noqa: E402
+from kl_pipe.coordinates import (  # noqa: E402
+    image_rotation_from_wcs,
+    rotate_position,
+    rotate_shear,
+)
 from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
 
 if TYPE_CHECKING:
@@ -103,12 +107,14 @@ def _apply_obs_rotation(
     param_names: Tuple[str, ...],
     image_rotation: float,
 ) -> jnp.ndarray:
-    """Rotate celestial-frame ``theta_int`` + ``(g1, g2)`` into the obs's
-    detector frame.
+    """Rotate celestial-frame ``theta_int`` + ``(g1, g2)`` + ``(x0, y0)``
+    into the obs's detector frame.
 
     Sign convention matches ``OrientedAngle._sky2cartesian`` from kl-tools:
     ``theta_int_det = theta_int_celestial - image_rotation``. Shear rotates
-    spin-2 by ``2 * image_rotation`` via ``coordinates.rotate_shear``.
+    spin-2 by ``2 * image_rotation`` via ``coordinates.rotate_shear``;
+    centroid offsets rotate spin-1 via ``coordinates.rotate_position`` (a
+    fixed sky position appears rotated in each roll's detector frame).
 
     ``image_rotation`` is read from frozen obs aux (a Python float). If it is
     exactly zero (default-WCS path), the rotation step is skipped at trace
@@ -123,6 +129,10 @@ def _apply_obs_rotation(
         ig1, ig2 = param_names.index('g1'), param_names.index('g2')
         g1d, g2d = rotate_shear(theta[ig1], theta[ig2], image_rotation)
         theta = theta.at[ig1].set(g1d).at[ig2].set(g2d)
+    if 'x0' in param_names and 'y0' in param_names:
+        ix, iy = param_names.index('x0'), param_names.index('y0')
+        x0d, y0d = rotate_position(theta[ix], theta[iy], image_rotation)
+        theta = theta.at[ix].set(x0d).at[iy].set(y0d)
     return theta
 
 
