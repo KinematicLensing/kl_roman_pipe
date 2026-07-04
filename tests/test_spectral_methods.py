@@ -320,7 +320,7 @@ class TestPlumbing:
 
 
 # =============================================================================
-# Visual diagnostics: accuracy + gradient washboard + timing
+# Visual diagnostics: accuracy, narrow-line sampling error, timing
 # =============================================================================
 
 
@@ -328,15 +328,19 @@ class TestDiagnostics:
     def test_spectral_methods_diagnostics(self, source_ha, cube_pars):
         """4-panel diagnostic + timing CSV comparing methods.
 
-        (a) voxel spectrum at the peak pixel: erf vs osf=15 vs osf=801,
-            with residual panel;
-        (b) 'washboard': single-voxel value error and its AD gradient vs a
-            fine v0 scan -- visualizes the midpoint path's sampling ripple
-            (period = one fine sub-bin, ~16.7 km/s at osf=15) that
-            contaminates gradients while values look fine;
-        (c) midpoint convergence toward erf with an O(osf^-2) guide;
-        (d) forward + grad timing bars (small-grid config; NOT flagship
-            numbers).
+        (a) peak-pixel spectrum: erf vs osf=15 overlaid on the converged
+            osf=801 reference, with each method's error on a twin axis;
+        (b) narrow-line scan: osf=15 voxel VALUE error as the Doppler
+            line center (via systemic v0) slides across the wavelength
+            grid -- the error oscillates with period one fine sub-bin
+            (~16.7 km/s) because the fixed sampling comb under-resolves a
+            narrow (10 km/s) line; erf is exact at every shift;
+        (c) same scan, the voxel's v0-GRADIENT: osf=15 inherits spurious
+            oscillations on top of the exact smooth erf curve;
+        (d) midpoint error vs erf -> 0 as O(osf^-2), confirming erf is
+            the osf -> inf limit.
+        Also writes a forward/grad timing CSV (small-grid config; NOT
+        flagship numbers).
         """
         import csv
         import time
@@ -381,20 +385,24 @@ class TestDiagnostics:
             alpha=0.4,
             label='erf - ref',
         )
-        axr.set_ylabel('residual')
+        axr.set_ylabel('method - reference (pale curves)')
         ax.set_xlabel('lambda [nm]')
         ax.set_ylabel('SB density [flux/arcsec^2/nm]')
-        ax.set_title(f'peak-pixel spectrum (iy,ix)=({iy},{ix})')
+        ax.set_title(
+            f'(a) spectrum at brightest pixel ({iy},{ix}), 50 km/s line:\n'
+            'both methods track the converged reference'
+        )
         ax.legend(loc='upper left', fontsize=8)
         axr.legend(loc='upper right', fontsize=8)
 
-        # (b) washboard: value error + gradient vs fine v0 scan. Uses a
-        # NARROW line (10 km/s, sigma_lambda ~ 0.044 nm < fine sub-bin
-        # 0.073 nm): the midpoint path's sampling ripple only appears
-        # when the line is spectrally under-resolved by the fine grid; at
-        # the 50 km/s fiducial (3 samples/sigma) only the smooth O(Delta^2)
-        # quadrature error remains. The flagship dispersion prior extends
-        # to 5 km/s, so this regime is reachable in production.
+        # (b) narrow-line scan: value error vs line-center position. Uses
+        # a NARROW line (10 km/s, sigma_lambda ~ 0.044 nm < fine sub-bin
+        # 0.073 nm): the midpoint comb under-resolves the line, so the
+        # error oscillates as the Doppler-shifted center slides across
+        # sub-bins; at the 50 km/s fiducial (3 samples/sigma) only the
+        # smooth O(Delta^2) quadrature error remains. The flagship
+        # dispersion prior extends to 5 km/s, so this regime is reachable
+        # in production.
         ax = axes[0, 1]
         il = int(np.argmax(cube_ref_np[iy, ix]))
         fine_bin_kms = C_KMS * (_DISPERSION_NM / 15) / _LAM_CENTER  # ~16.7
@@ -418,15 +426,22 @@ class TestDiagnostics:
 
         ax.plot(v0_scan, val_err / float(voxel_erf(10.0)), 'b-')
         ax.axvline(10.0, color='gray', ls=':', alpha=0.5)
-        ax.set_xlabel('v0 [km/s]')
-        ax.set_ylabel('(osf=15 - erf) / erf voxel value')
-        ax.set_title(f'value washboard (fine sub-bin = {fine_bin_kms:.1f} km/s period)')
+        ax.set_xlabel('systemic velocity v0 [km/s] (shifts the line center)')
+        ax.set_ylabel('osf=15 fractional voxel error\n(erf = 0 by construction)')
+        ax.set_title(
+            '(b) narrow 10 km/s line: osf=15 VALUE error oscillates as the\n'
+            f'line center crosses fine sub-bins (one sub-bin = '
+            f'{fine_bin_kms:.1f} km/s)'
+        )
         axg = axes[1, 0]
-        axg.plot(v0_scan, grad_erf, 'g-', label='erf d(voxel)/dv0')
-        axg.plot(v0_scan, grad_15, 'r-', alpha=0.7, label='osf=15 d(voxel)/dv0')
-        axg.set_xlabel('v0 [km/s]')
-        axg.set_ylabel('d(voxel)/d v0')
-        axg.set_title('gradient washboard: smooth (erf) vs rippled (osf=15)')
+        axg.plot(v0_scan, grad_erf, 'g-', label='erf (exact, smooth)')
+        axg.plot(v0_scan, grad_15, 'r-', alpha=0.7, label='osf=15 (sampling artifacts)')
+        axg.set_xlabel('systemic velocity v0 [km/s]')
+        axg.set_ylabel('d(voxel value)/d v0')
+        axg.set_title(
+            '(c) same scan, voxel gradient wrt v0: osf=15 adds spurious\n'
+            'wiggles + amplitude error on top of the exact erf curve'
+        )
         axg.legend(fontsize=8)
 
         # (c) convergence + (d) timing share the last panel via inset table
@@ -436,15 +451,24 @@ class TestDiagnostics:
             _max_rel_err(build(_BASE_PARS, 'oversample', o), cube_erf)
             for o in osf_sweep
         ]
-        ax.loglog(osf_sweep, errs, 'bo-', label='osf vs erf (max rel)')
+        ax.loglog(osf_sweep, errs, 'bo-', label='midpoint cube vs erf cube')
         guide = errs[2] * (np.array(osf_sweep) / 15.0) ** -2
         ax.loglog(osf_sweep, guide, 'k:', alpha=0.6, label=r'$O(osf^{-2})$ guide')
-        ax.set_xlabel('spectral_oversample')
-        ax.set_ylabel('max rel err vs erf-exact')
-        ax.set_title('midpoint convergence to erf')
+        ax.set_xlabel('spectral_oversample (midpoint sub-bins per channel)')
+        ax.set_ylabel('max relative cube difference')
+        ax.set_title(
+            '(d) midpoint method converges to the erf cube as osf grows:\n'
+            'erf is the exact osf -> inf limit, at no extra cost'
+        )
         ax.legend(fontsize=8)
 
-        fig.tight_layout()
+        fig.suptitle(
+            'Spectral bin integration: erf (exact analytic, DEFAULT) vs midpoint '
+            f'oversampling\n24x24 grid, {n_lam} channels; panels (b),(c) use a '
+            'narrow 10 km/s line that the osf=15 fine grid under-resolves',
+            fontsize=11,
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
         out_png = os.path.join(OUT_DIR, 'spectral_methods_comparison.png')
         fig.savefig(out_png, dpi=130)
         plt.close(fig)
@@ -490,7 +514,7 @@ class TestDiagnostics:
 
         assert os.path.exists(out_png)
         assert os.path.exists(out_csv)
-        # the washboard must actually demonstrate the effect: the osf=15
+        # the narrow-line scan must actually demonstrate the effect: the osf=15
         # gradient ripple around the smooth erf gradient should dominate
         # the erf gradient's own variation across one fine sub-bin
         ripple = np.abs(grad_15 - grad_erf).max()
@@ -504,11 +528,11 @@ class TestDiagnostics:
         narrow_rel_err = np.abs(val_err).max() / float(voxel_erf(10.0))
         assert narrow_rel_err > 1e-3, (
             f"expected >0.1% osf=15 value error for the narrow line, got "
-            f"{narrow_rel_err:.2e} -- washboard no longer demonstrates the "
+            f"{narrow_rel_err:.2e} -- the scan no longer demonstrates the "
             f"under-resolved regime"
         )
         print(
-            f"washboard (dispersion={narrow_kms} km/s): osf=15 max value "
+            f"narrow-line scan (dispersion={narrow_kms} km/s): osf=15 max value "
             f"err = {narrow_rel_err:.2%} of peak voxel; max |grad ripple| "
             f"= {ripple:.3e} (erf grad scale {smooth_scale:.3e}); "
             f"plots: {out_png}"
