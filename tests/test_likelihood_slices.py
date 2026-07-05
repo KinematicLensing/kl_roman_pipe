@@ -2497,7 +2497,19 @@ def test_recover_joint_phot_grism_base(snr, test_config):
     )
 
     # --- Synthetic grism image (render via SourceModel, add Gaussian noise) ---
-    grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf)
+    # Explicit oversample=5 on BOTH the data render and the fit obs: the
+    # builder default (5) and the priors-derived rc (3 here) differ, and a
+    # likelihood-slice test requires data and likelihood to share one
+    # forward pathway. The center-sample pixel readout has genuine
+    # O(oversample^-2) convergence (os3-vs-os5 renders differ by ~0.3% of
+    # peak), which shifts spectral/velocity slice minima by ~1% at
+    # SNR=1e4; the pre-fix mean-bin readout masked the mismatch by
+    # smoothing both pathways identically.
+    from kl_pipe.render import RenderConfig as _RC
+
+    grism_obs_clean = build_grism_obs(
+        grism_pars, z=Z, psf=psf, render_config=_RC(oversample=5)
+    )
     clean_grism = np.asarray(source.render_grism(pars_dotted, grism_obs_clean))
     signal_power = float(np.sum(clean_grism**2))
     variance_grism = signal_power / snr**2
@@ -2520,6 +2532,7 @@ def test_recover_joint_phot_grism_base(snr, test_config):
         psf=psf,
         data=jnp.asarray(data_grism_noisy),
         variance=float(variance_grism),
+        render_config=_RC(oversample=5),  # match the data pathway (see above)
     )
 
     # --- Data-vector diagnostics: one panel per channel ---

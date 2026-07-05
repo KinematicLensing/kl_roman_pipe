@@ -968,7 +968,18 @@ class TestFisherGate:
         shift = -(J^T W J)^-1 J^T W (model - data), in units of the
         Fisher sigma. This is the metric that exposed the bilinear
         pathway bias (0.35 sigma where image-level L1 and moments looked
-        benign); cubic measured 0.005 sigma. Gate frozen at 0.05."""
+        benign); cubic measured 0.005 sigma. Gate frozen at 0.05.
+
+        The shared-pathway shift is gated DIFFERENTIALLY against the
+        per-roll baseline at the same oversample: after the pixel-readout
+        fix (2734f4a) the fit renders (os=3) carry a genuine common-mode
+        oversample-discretization offset vs the os=9 truth (cosi -0.36
+        sigma at this SNR-50 two-roll config) that the pre-fix mean-bin
+        readout averaged away (it faked os-convergence: os3-vs-os9
+        renders differed by 0.01% of peak pre-fix vs 0.37% post-fix,
+        converging O(os^-2)). That common-mode term is the SAME for both
+        pathways -- not a shared-cube effect -- and is frozen separately
+        below so it cannot silently grow."""
         params = ('cosi', 'g1', 'g2', 'vel.vcirc')
         angles = {'roll0': 0.0, 'roll45': np.pi / 4}
         obs_fit = {k: _make_rotated_obs(phi) for k, phi in angles.items()}
@@ -1009,10 +1020,25 @@ class TestFisherGate:
             dtheta = -Finv @ (weight * (J.T @ delta))
             shifts[mode] = np.asarray(dtheta / sigmas)
 
+        # common-mode os=3-vs-os=9 discretization: frozen two-sided so a
+        # regression (bigger) or a silent pathway change (smaller) trips.
+        # measured post-2734f4a: cosi -0.355 sigma (largest param).
+        worst_common = float(np.max(np.abs(shifts['per_roll'])))
+        assert 0.2 < worst_common < 0.5, (
+            f"common-mode oversample-discretization shift {worst_common:.3f} "
+            f"sigma left the frozen (0.2, 0.5) window (measured 0.355 after "
+            f"the pixel-readout fix). Re-measure and re-freeze consciously; "
+            f"do not widen to silence."
+        )
+
         for i, name in enumerate(params):
-            assert abs(shifts['shared'][i]) < _FISHER_SHIFT_SIGMA, (
-                f"{name}: Fisher-projected shift {shifts['shared'][i]:+.3f} "
-                f"sigma (per_roll baseline {shifts['per_roll'][i]:+.3f})"
+            assert (
+                abs(shifts['shared'][i] - shifts['per_roll'][i]) < _FISHER_SHIFT_SIGMA
+            ), (
+                f"{name}: shared-pathway differential shift "
+                f"{shifts['shared'][i] - shifts['per_roll'][i]:+.3f} sigma "
+                f"(shared {shifts['shared'][i]:+.3f}, "
+                f"per_roll baseline {shifts['per_roll'][i]:+.3f})"
             )
             # the shared pathway must not add bias beyond the per-roll
             # path's own discretization floor

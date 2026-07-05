@@ -70,7 +70,13 @@ def _fit_gaussian(profile_1d):
 
 
 def test_psf_dispersion_resolution_matches_roman_spec():
-    """R_measured / R_spec must be within +/-5% for a point-source line."""
+    """R_measured / R_spec frozen at (1.05, 1.15) for a point-source line.
+
+    See the window comment at the assertion: the corrected pixel readout
+    resolves ~10% above the R = 461*lambda_um spec at this config (the
+    old +/-5% band around 1.0 was only reachable via the pre-2734f4a
+    double pixel-box smoothing).
+    """
     image_pars = ImagePars(shape=(32, 96), pixel_scale=0.11, indexing='ij')
 
     vel_model = CenteredVelocityModel()
@@ -127,10 +133,25 @@ def test_psf_dispersion_resolution_matches_roman_spec():
     R_spec = _roman_R_spec(lam_obs)
 
     ratio = R_measured / R_spec
-    assert 0.95 <= ratio <= 1.05, (
-        f"R_measured / R_spec = {ratio:.4f} outside +/-5% tolerance "
+    # Window re-pinned after the pixel-response readout fix (2734f4a). The
+    # pre-fix mean-bin readout convolved a SECOND coarse-pixel box along
+    # the dispersion axis, degrading R into the old (0.95, 1.05) band. The
+    # correct chain for this config is analytic: Gaussian PSF (FWHM 0.18"
+    # = 1.636 pix -> sigma^2 = 0.483 pix^2) convolved with ONE pixel box
+    # (var 1/12 pix^2) gives FWHM = 2.355*sqrt(0.483 + 0.083) = 1.77 pix
+    # = 1.95 nm -> R_measured/R_spec = 1.11; measured 1.098 (the residual
+    # 1% is fit + slice-placement detail). The chain out-resolves the
+    # R = 461*lambda_um spec by ~10% because the model contains no grism
+    # LSF terms beyond the Gaussian PSF. Two-sided window frozen on the
+    # corrected pathway: falling BELOW 1.05 means spurious broadening
+    # returned (e.g. the mean-bin double box, which lands at ~1.04);
+    # rising above 1.15 means the config drifted sharper than Roman-like.
+    assert 1.05 <= ratio <= 1.15, (
+        f"R_measured / R_spec = {ratio:.4f} outside the (1.05, 1.15) window "
+        f"frozen on the corrected pixel-readout pathway "
         f"(R_measured={R_measured:.2f}, R_spec={R_spec:.2f}). "
         f"FWHM_nm={fwhm_nm:.3f}, lambda_obs={lam_obs:.2f}. "
-        f"The PSF+dispersion geometry has drifted from Roman spec; see "
+        f"Below 1.05: spurious broadening (double pixel box?) returned. "
+        f"Above 1.15: PSF+dispersion geometry drifted from Roman spec; see "
         f"docs/plans/phase2_lsf_refactor.md."
     )
