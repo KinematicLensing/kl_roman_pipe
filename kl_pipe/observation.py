@@ -957,7 +957,7 @@ def build_grism_obs(
 
 
 # ============================================================================
-# Shared-cube grouping (A3): group grism obs that can share one celestial cube
+# Shared-cube grouping: group grism obs that can share one model cube
 # ============================================================================
 
 

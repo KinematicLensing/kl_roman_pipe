@@ -1,4 +1,4 @@
-"""Tests for the A3 shared-cube-across-rolls pathway.
+"""Tests for the shared-cube-across-rolls grism pathway.
 
 Covers, bottom-up:
 - ``disperse_cube(image_rotation=...)``: fused rotated sampling. Sign and
@@ -166,12 +166,14 @@ class TestDisperseCubeRotationKwarg:
 # fusing dispersion + relative roll rotation + Catmull-Rom CUBIC
 # interpolation. Bilinear resampling is deliberately excluded: its
 # sub-pixel smoothing biased inclination-like posterior modes at 0.35
-# sigma in tight-posterior tests (2026-07-04 investigation; padding and
-# k-space MTF compensation were measured and REJECTED -- see
-# PRODUCTION_SPEEDUPS.md A3). Cubic measures at the per-roll accuracy
-# floor (Fisher-projected shift 0.005 sigma, MCMC-confirmed).
+# sigma in tight-posterior tests (2026-07-04 investigation; grid padding
+# and k-space mean-transfer-function compensation were measured and
+# REJECTED -- padding does not touch the posterior-relevant mode, the
+# deconvolution overcorrects ~2x). Cubic measures at the per-roll
+# accuracy floor (Fisher-projected shift 0.005 sigma, MCMC-confirmed).
 #
-# Protocol (A1-style measure-then-freeze):
+# Protocol (measure-then-freeze: every frozen constant below carries
+# its measured value in a comment at the assert):
 #   - anchor roll + 90-deg multiples: no rotational resampling error; the
 #     residual is cubic-x vs bilinear-x dispersion interpolation only.
 #   - arbitrary angles: residual is dominated by rotated-corner truncation
@@ -233,7 +235,7 @@ _L1_CANONICAL = 7e-3
 _L1_STRESS = 1.6e-2
 # gradient A/B, vector norm at O(1) off-truth point: measured 2.2e-4 with
 # the cubic operator (bilinear measured 1.66e-2 and biased cosi at 0.35
-# sigma -- see PRODUCTION_SPEEDUPS.md A3); frozen 1e-3 (~4.5x margin)
+# sigma, which is why it was rejected); frozen 1e-3 (~4.5x margin)
 _GRAD_AB_RTOL = 1e-3
 # shared-path AD-vs-FD self-consistency: measured 3.5e-5; frozen 1e-3
 _GRAD_SELF_RTOL = 1e-3

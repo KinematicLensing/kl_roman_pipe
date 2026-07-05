@@ -307,7 +307,9 @@ import jax
 # smoothing at rotated sample coordinates biases inclination-like posterior
 # modes at the 0.35-sigma level in tight-posterior tests; cubic measures at
 # the per-roll accuracy floor (Fisher-projected shift 0.005 sigma, MCMC
-# -0.006 sigma). See docs/plans/PRODUCTION_SPEEDUPS.md Sec 2/A3.
+# -0.006 sigma). Grid padding and mean-transfer-function deconvolution were
+# measured and rejected as alternatives (the former does not touch the
+# posterior-relevant mode; the latter overcorrects ~2x).
 
 
 def _catmull_rom_weights(f: np.ndarray) -> np.ndarray:

@@ -354,7 +354,7 @@ class SourceModel:
         operators: dict | None = None,
     ) -> dict:
         """Render a group of cube-compatible grism observations from ONE
-        shared cube (the A3 pathway).
+        shared cube.
 
         The unconvolved cube is roll-independent physics: LOS velocity is a
         scalar field on the sky and all model parameters are celestial-
