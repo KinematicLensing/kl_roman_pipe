@@ -51,6 +51,80 @@ preconditioner took 42.5 -> 8.5 min with zero forward-model changes), so
 per-eval FLOP wins do not convert 1:1 at flagship scale. They dominate at
 production scale (4 rolls, 2 bands, [NII] blend => FLOPs up ~5x) and on GPU.
 
+### 1.1 Post-A1/A2/A3 re-profile (2026-07-04, same machine, shipped defaults)
+
+Two canonical configs (user decision 2026-07-04): Q = quick-dev (1 band,
+1 roll, Halpha, Nlam 25 -- exactly the flagship task; the common
+dev/testing/paper regime) and P = production (2 bands, 4 rolls at
+0/45/90/135 deg, Halpha+[NII] doublet via intensity_key/dispersion_key
+sharing, API-default blend window Nlam 32, 22 sampled params).
+
+Posterior grad (min-of-30, sampler-relevant):
+
+| config | primal ms | grad ms | notes |
+|---|---:|---:|---|
+| Q | 5.4 | 33.6 | grad/primal 6.2x |
+| P shared (default) | 16.6 | 78.2 | vs per_roll: 3.58x faster grad |
+| P per_roll (reference) | 28.2 | 280.0 | ~70 ms/roll = cube 60 + tail 11 |
+| P-wide (Nlam 45) | 19.5 | 79.2 | Nlam slope ~0.08 ms/slice (shared) |
+
+Corrected backward split, P shared (prefix ablation with sum-of-squares
+reductions; legs sum to the end-to-end grad):
+
+| leg | grad ms | share |
+|---|---:|---|
+| build_cube backward | 60.3 | 77% |
+| 4x operator matvec transpose | 13.8 | 18% (3.5/roll) |
+| 4x post-dispersion PSF conv | 3.9 | 5% (1.0/roll) |
+| pixresp + chi2 + broadband(2) + prior | ~3.2 | 4% |
+
+Key facts (supersede the Sec 1 table's per-leg shares):
+
+- METHODOLOGY WARNING: gradient prefix ablation with plain sum() over a
+  LINEAR tail is invalid -- the cotangent of a sum is constant, so XLA
+  constant-folds the transpose of every trailing linear op (operator
+  matvec, PSF FFT, disperse) out of the timed graph. All prefix
+  reductions must be nonlinear (sum(x^2)). The 2026-07-04 pre-A3 leg
+  table (profile_backward_split.py) has this flaw in its P_b/P_c legs
+  and also flattered build_cube backward (36 ms under a constant
+  cotangent vs 60 ms under a realistic dense one); its chi2-terminated
+  totals were valid. Leg-level numbers finer than prefix-endpoint
+  differences remain XLA-fusion-dependent (one negative leg persists in
+  the per-roll chain); trust endpoint differences.
+- build_cube backward is now ~77% of the P-shared posterior grad, and
+  the n_quad sweep pins it almost entirely on the INTENSITY SPATIAL
+  EVALS: `_DEFAULT_N_QUAD = 200` Gauss-Legendre LOS points per
+  InclinedExponential eval (per line + continuum, on the 96x96 fine
+  grid) -- a PR #20 (2026-02) default never revisited. Q posterior grad
+  vs n_quad: 200 -> 32.6 ms, 100 -> 20.8, 50 -> 15.3, 20 -> 11.4
+  (2.9x), 10 -> 10.2. Image-level max-rel error vs n=200 (grism, at a
+  perturbed theta / at cosi=0.06 edge-on stress): n=100:
+  2.5e-7/1.2e-5; n=50: 2.0e-6/2.4e-4; n=20: 1.5e-4/7.0e-4; n=10:
+  3.8e-2/1.4e-2 (unusable). Broadband renders are k-space and exactly
+  n_quad-independent. => n_quad 20-50 is the sweet spot pending a
+  Fisher-projection gate (the A3 instrument) over the prior range.
+- intensity_key sharing does NOT dedupe spatial evals: P evaluates the
+  same Halpha spatial profile 3x (Halpha + 2 NII, identical spatial
+  theta, flux-only differences) + continuum. Profiles are linear in
+  flux => evaluate the owner once, scale per line. Exact algebraic win,
+  no accuracy gate needed; removes ~half of P's build_cube intensity
+  cost on top of the n_quad win.
+- disperse_cube (map_coordinates) backward is ~19 ms/roll -- 5.4x the
+  operator transpose (3.5 ms/roll). This, not cube sharing alone, is
+  most of A3's per-roll win. Forward is reversed: matvec ~2.8 ms/roll
+  vs map_coordinates ~0.3 ms/roll. Net on value_and_grad the operator
+  singleton ~ties the per-roll path at 1 roll (fwd loss ~= grad win),
+  so the singleton fallback stays as-is on CPU; revisit on GPU.
+- Roll scaling under shared mode is nearly flat (74 -> 79 ms grad for
+  1 -> 4 rolls); extra rolls cost ~4 ms/roll grad. Nlam scaling in
+  shared mode is ~free (0.08 ms/slice): window width and modest line
+  blends are not cost drivers post-A3.
+- API gap found: build_grism_obs hard-codes to_cube_pars(z) (Halpha-only
+  window); multi-line windows need dataclasses.replace of obs.cube_pars.
+  Fix when the multi-line workflow is productized.
+- Scripts + JSON (untracked): profile_post_a3.py,
+  profile_post_a3_fix.py, results_post_a3*.json (same dir as above).
+
 ---
 
 ## 2. Grism forward-model speedups (Tier A -- do first; helps every platform)
@@ -335,6 +409,68 @@ cubic interpolation into one BCOO matvec turned out to be a CPU win too
 (the matvec backward is a transpose matmul vs 25 scatter passes) -- the
 "negligible CPU win" prediction was wrong once the loop-vs-matmul
 structure change is included. The per-roll path still uses the loop.
+
+### A5. Intensity spatial-eval overhaul (from the Sec 1.1 re-profile)
+
+Two sub-items; experiment record
+`experiments/sweverett/production_speedups/a5_los_eval/` (+ Fisher gate
+results JSON).
+
+**A5a. intensity_key/continuum_key spatial-eval dedupe -- IMPLEMENTED
+(2026-07-04).** build_cube evaluates each spatial owner once at UNIT
+amplitude and scales per line (profiles are linear in flux /
+flux_per_nm; enforced by _build_split_owner_theta's contract). Exact
+algebra -- no accuracy gate needed; pinned by TestIntensityDedupe in
+test_datacube.py (shared-key == independent-models to rtol 1e-12,
+end-to-end flux linearity, grad flow). Measured: P production posterior
+grad 78.2 -> 42.4 ms (1.84x); Q unchanged (no sharing).
+
+- LATENT BUG found+fixed by the new tests: _build_split_owner_theta
+  special-cased only 'flux', so continuum_key sharing read the OWNER's
+  flux_per_nm and ignored the line's own amplitude (violating the
+  documented "amplitude is per-line" contract). No numerical
+  continuum_key test existed before. Fix: amplitude match on
+  ('flux', 'flux_per_nm').
+
+**A5b. LOS quadrature replacement (tanh substitution) -- GATED, pending
+implementation decision.** _DEFAULT_N_QUAD=200 Gauss-Legendre over a
+truncated +/-5 h_z/cosi window (with a cosi clip at 0.1) is bespoke:
+GalSim's InclinedExponential has is_analytic_x=False (never evaluates
+real-space; analytic-k+FFT is its only route). Substituting
+t = tanh(z/h_z) absorbs the sech^2 vertical profile EXACTLY (dt =
+sech^2 du); the remaining integrand is the smooth radial factor along
+the warped LOS: no window, no truncation, no clip. Findings
+(fp64-verified, 96x96 fine grid):
+
+| variant | isolated eval grad | Fisher gate (4 anchors, <0.05 sigma) |
+|---|---:|---|
+| GL-200 (current) | 15.0 ms | PASS everywhere (worst 0.010) |
+| GL-32 | 1.9 ms | FAIL at cosi=0.08 (0.080) |
+| TANH-32 | 0.76 ms | PASS everywhere (worst 0.005) |
+| TANH-24 | 0.73 ms | PASS everywhere (worst 0.017) |
+| TANH-8 | 0.54 ms | FAIL at cosi=0.08 (0.254) |
+| KSPACE (analytic-FT slices) | 1.11 ms | PASS everywhere (worst 0.026) |
+
+- Current GL-200 image-level worst-case is only ~6e-4 over a plausible
+  parameter range (thick/large disks) -- "200 = converged" is false in
+  general, though posterior-safe per the gate.
+- LATENT MODEL ERROR: the GL cosi clip loses up to 0.9% of total flux
+  near edge-on (cosi=0.06) vs the true integral -- inside the flagship
+  prior support (floor 0.05). TANH eliminates it. Sub-gate at flagship
+  SNR (clipzone anchor GL-200 shift 0.010 sigma) but a real bias term
+  for ensemble stacking; document or fix via TANH adoption.
+- KSPACE point-sampling has huge max-rel error at compact rscale
+  (cusp aliasing, up to 0.44) yet PASSES the Fisher gate -- another
+  demonstration that image-level L-inf is not posterior-relevant. Not
+  pursued (grid coupling, aliasing risk at small sources); tanh
+  dominates it anyway.
+- Thin-disk regime: GL cannot resolve sech^2 when h_z -> 0 (existing
+  test tolerance 300% for h_over_r<=0.01!); tanh handles arbitrary
+  thinness exactly -> those test tolerances can TIGHTEN after adoption.
+- METHODOLOGY: the first accuracy sweep silently ran fp32 -- importing
+  only kl_pipe.intensity does NOT trigger the package x64 enable
+  (that lives in coordinates/source/lines imports). Standalone scripts
+  must set jax_enable_x64 explicitly.
 
 ---
 
