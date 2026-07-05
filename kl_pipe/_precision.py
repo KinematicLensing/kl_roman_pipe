@@ -64,10 +64,18 @@ def ensure_precision() -> None:
     kl_pipe behavior). With ``KLPIPE_FP32`` truthy, leave JAX at its native
     float32 default. Only the first call does anything, so a later call
     can never override the env-var choice made at first import.
+
+    In BOTH modes the default matmul precision is pinned to ``'highest'``:
+    on NVIDIA Ampere+ GPUs JAX otherwise executes float32 matmuls on
+    tensorfloat32 tensor cores (10-bit mantissa) -- a silent precision
+    downgrade far below IEEE float32. The pin is a no-op on CPU and for
+    float64 operands; it only forbids the tf32 shortcut for float32
+    matmuls, which is exactly the case KLPIPE_FP32 opts into.
     """
     global _configured
     if _configured:
         return
     if not fp32_requested():
         jax.config.update('jax_enable_x64', True)
+    jax.config.update('jax_default_matmul_precision', 'highest')
     _configured = True

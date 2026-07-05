@@ -98,6 +98,52 @@ class TestInvalidValue:
         assert 'KLPIPE_FP32' in result.stderr
 
 
+class TestMatmulPrecision:
+    def test_matmul_precision_pinned_highest(self):
+        """ensure_precision pins matmul precision to 'highest' (forbids the
+        silent tf32 tensor-core downgrade of float32 matmuls on GPU)."""
+        import jax
+
+        import kl_pipe  # noqa: F401
+
+        assert str(jax.config.jax_default_matmul_precision) == 'highest'
+
+    def test_matmul_precision_pinned_under_fp32(self):
+        result = _run_python(
+            "import kl_pipe; import jax; "
+            "print(jax.config.jax_default_matmul_precision)",
+            extra_env={'KLPIPE_FP32': '1'},
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == 'highest'
+
+
+class TestConftestRespectsPrecision:
+    """tests/conftest.py must defer to ensure_precision, never force x64.
+
+    Guards the historical footgun: a hard-coded x64 override in conftest
+    silently turned intended-fp32 pytest runs into fp64 ones.
+    """
+
+    def test_conftest_import_honors_fp32(self):
+        result = _run_python(
+            "import tests.conftest; import jax.numpy as jnp; "
+            "print(jnp.asarray(1.0).dtype)",
+            extra_env={'KLPIPE_FP32': '1'},
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == 'float32'
+
+    def test_conftest_import_default_is_float64(self):
+        result = _run_python(
+            "import tests.conftest; import jax.numpy as jnp; "
+            "print(jnp.asarray(1.0).dtype)",
+            extra_env={'KLPIPE_FP32': ''},
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == 'float64'
+
+
 class TestIdempotence:
     def test_ensure_precision_repeat_call_is_noop(self):
         """Repeat ensure_precision() calls never flip the configured mode."""

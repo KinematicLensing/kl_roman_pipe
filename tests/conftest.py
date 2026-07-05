@@ -8,10 +8,27 @@ This module provides:
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
+from kl_pipe._precision import ensure_precision
+
+# precision comes from the central kl_pipe configuration (float64 default,
+# KLPIPE_FP32=1 opts the whole test run into float32). Never force x64 here:
+# a hard-coded override silently turns intended-fp32 runs into fp64 ones.
+ensure_precision()
 
 import pytest
 import warnings
+
+
+def pytest_report_header(config):
+    """Make the active float precision visible in every pytest log."""
+    import jax.numpy as jnp
+
+    dtype = jnp.asarray(1.0).dtype
+    return (
+        f"kl_pipe precision: {dtype} (jax_enable_x64={jax.config.jax_enable_x64}, "
+        f"matmul_precision={jax.config.jax_default_matmul_precision})"
+    )
+
 
 from galsim.errors import GalSimFFTSizeWarning
 
