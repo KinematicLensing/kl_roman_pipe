@@ -242,7 +242,14 @@ class TestPosteriorEquivalence:
         20%. Data is generated with the LEGENDRE (old default) source so
         the A/B measures the default switch against prior behavior.
         Screening config (24x24, 4 sampled params, 1 chain), mirroring
-        the psf_mode protocol test."""
+        the psf_mode protocol test.
+
+        Sample count is sized to the gate: at 300 samples the per-param
+        MC error on a mean shift is ~0.06 sigma, and a 4-seed sweep
+        showed the worst-of-4-params statistic crosses the 0.1 gate on
+        ~half of seeds with NO code change at all. 1500 samples brings
+        the per-param MC error to ~0.027 sigma so a gate crossing
+        indicates a real quadrature difference, not sampler noise."""
         import galsim
 
         from kl_pipe.dispersion import GrismPars
@@ -328,7 +335,7 @@ class TestPosteriorEquivalence:
             }
         )
         config = NumpyroSamplerConfig(
-            n_samples=300, n_warmup=300, n_chains=1, seed=42, progress=False
+            n_samples=1500, n_warmup=300, n_chains=1, seed=42, progress=False
         )
 
         results = {}
