@@ -29,7 +29,18 @@ def _require_finite_maxk_cosi(cosi: float, model_name: str) -> None:
 
 
 # default number of Gauss-Legendre quadrature points for LOS integration
+# on the truncated +/-5 h_z/cosi window (los_quadrature='legendre',
+# retained as the convergence/reference path)
 _DEFAULT_N_QUAD = 200
+
+# default node count for the tanh-substituted LOS quadrature
+# (los_quadrature='tanh', the default): t = tanh(z/h_z) absorbs the sech^2
+# vertical profile into the integration measure exactly, so only the smooth
+# radial factor is quadratured. 32 nodes measure at 0.005 sigma worst-case
+# Fisher-projected posterior shift (gate 0.05) across truth / inclined-large /
+# face-on-compact / near-edge-on anchors at flagship SNR, ~20x cheaper
+# gradient than the 200-point legendre window.
+_DEFAULT_N_TANH = 32
 
 # following GalSim convention (GSParams.stepk_minimum_hlr default)
 _STEPK_MIN_HLR = 5
@@ -956,6 +967,115 @@ def _inclined_sech2_los_integrate(
     return jnp.sum(integrand * w, axis=-1)
 
 
+def _inclined_sech2_los_integrate_tanh(
+    rho0,
+    radial_fn,
+    h_z,
+    cosi,
+    sini,
+    xp,
+    yp,
+    u_nodes,
+    t_weights,
+):
+    """Tanh-substituted LOS integration: radial_fn(R) x sech^2(z/h_z).
+
+    Substituting u = z/h_z then t = tanh(u) gives dt = sech^2(u) du -- the
+    vertical profile is absorbed into the integration measure EXACTLY, and
+    the full infinite line of sight maps onto t in (-1, 1):
+
+        I = (rho0 h_z / cosi) * int_{-1}^{1} radial_fn(R(atanh t)) dt
+
+    Only the smooth radial factor is left to Gauss-Legendre, so ~32 nodes
+    match what the windowed 200-point rule achieves. Unlike the windowed
+    rule there is no truncation and no cosi clip in the geometry: near
+    edge-on this computes the true integral (the +/-5 h_z window with its
+    cosi floor of 0.1 loses up to ~0.9% of total flux at cosi ~ 0.06).
+
+    Parameters
+    ----------
+    u_nodes : jnp.ndarray
+        atanh of the Gauss-Legendre nodes on (-1, 1), i.e. z/h_z samples.
+    t_weights : jnp.ndarray
+        Gauss-Legendre weights on (-1, 1).
+
+    Other parameters as in ``_inclined_sech2_los_integrate``.
+    """
+    # floor far below any physical prior (cosi >= 0.05); guards only the
+    # exact cosi = 0 division, not a model approximation like the windowed
+    # rule's 0.1 clip
+    c = jnp.maximum(cosi, 1e-3)
+
+    # LOS coordinate at each node: z = u h_z, ell = (z + yp sini) / cosi
+    ell = (u_nodes * h_z + yp[..., None] * sini) / c
+    y_disk = yp[..., None] * cosi + ell * sini
+    R = jnp.sqrt(xp[..., None] ** 2 + y_disk**2)
+
+    return (rho0 * h_z / c) * jnp.sum(radial_fn(R) * t_weights, axis=-1)
+
+
+def _init_los_quadrature(model, n_quad, los_quadrature):
+    """Shared __init__ plumbing: validate the mode and precompute nodes.
+
+    Sets ``_los_quadrature``, ``_n_quad``, and the node/weight arrays for
+    the selected rule ('tanh' default; 'legendre' is the windowed
+    reference rule). The tanh default node count is per-class
+    (``_default_n_tanh``): 32 suffices for the smooth exponential radial
+    factor; the cuspy Sersic/Spergel family needs 256 to be strictly more
+    accurate than the old 200-point windowed rule (whose de Vaucouleurs
+    max-rel error was already ~0.1 -- NO generic 1D quadrature fully
+    converges on that cusp; pixel-accurate bulges belong to the k-space
+    path).
+    """
+    if los_quadrature not in ('tanh', 'legendre'):
+        raise ValueError(
+            f"los_quadrature must be 'tanh' or 'legendre', got " f"{los_quadrature!r}"
+        )
+    model._los_quadrature = los_quadrature
+    if los_quadrature == 'tanh':
+        n = (
+            n_quad
+            if n_quad is not None
+            else getattr(model, '_default_n_tanh', _DEFAULT_N_TANH)
+        )
+        t_nodes, weights = np.polynomial.legendre.leggauss(n)
+        model._u_nodes = jnp.array(np.arctanh(t_nodes))
+        model._t_weights = jnp.array(weights)
+    else:
+        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        model._gl_nodes = jnp.array(nodes)
+        model._gl_weights = jnp.array(weights)
+    model._n_quad = n
+
+
+def _dispatch_los_integrate(model, rho0, radial_fn, h_z, cosi, sini, xp, yp):
+    """Route to the model's configured LOS quadrature rule."""
+    if model._los_quadrature == 'tanh':
+        return _inclined_sech2_los_integrate_tanh(
+            rho0,
+            radial_fn,
+            h_z,
+            cosi,
+            sini,
+            xp,
+            yp,
+            model._u_nodes,
+            model._t_weights,
+        )
+    return _inclined_sech2_los_integrate(
+        rho0,
+        radial_fn,
+        h_z,
+        cosi,
+        sini,
+        xp,
+        yp,
+        model._gl_nodes,
+        model._gl_weights,
+    )
+
+
 def _spergel_los_integrate(
     flux,
     rscale,
@@ -965,17 +1085,18 @@ def _spergel_los_integrate(
     sini,
     xp,
     yp,
-    gl_nodes,
-    gl_weights,
+    model,
 ):
     """3D LOS integration with Spergel radial + sech² vertical.
 
-    Thin wrapper around ``_inclined_sech2_los_integrate`` with Spergel-specific
-    normalization and radial profile.
+    Thin wrapper around ``_dispatch_los_integrate`` with Spergel-specific
+    normalization and radial profile; the quadrature rule comes from the
+    model's ``los_quadrature`` setting.
     """
     h_z = h_over_r * rscale
     rho0 = flux / (2.0 * h_z * _spergel_norm_2d(rscale, nu))
-    return _inclined_sech2_los_integrate(
+    return _dispatch_los_integrate(
+        model,
         rho0,
         lambda R: _spergel_radial(R, nu, rscale),
         h_z,
@@ -983,8 +1104,6 @@ def _spergel_los_integrate(
         sini,
         xp,
         yp,
-        gl_nodes,
-        gl_weights,
     )
 
 
@@ -1179,13 +1298,9 @@ class InclinedExponentialModel(IntensityModel):
     # 2x squashes periodic boundary wrap-around (e.g. 0.7% → 0.005%)
     _kspace_pad_factor = 2
 
-    def __init__(self, meta_pars=None, n_quad=None):
+    def __init__(self, meta_pars=None, n_quad=None, los_quadrature='tanh'):
         super().__init__(meta_pars)
-        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
-        self._n_quad = n
-        nodes, weights = np.polynomial.legendre.leggauss(n)
-        self._gl_nodes = jnp.array(nodes)
-        self._gl_weights = jnp.array(weights)
+        _init_los_quadrature(self, n_quad, los_quadrature)
 
     @property
     def name(self) -> str:
@@ -1324,7 +1439,8 @@ class InclinedExponentialModel(IntensityModel):
         # rho0 = flux / (4 * pi * h_z * r_s^2)
         rho0 = flux / (4.0 * jnp.pi * h_z * rscale**2)
 
-        return _inclined_sech2_los_integrate(
+        return _dispatch_los_integrate(
+            self,
             rho0,
             lambda R: jnp.exp(-R / rscale),
             h_z,
@@ -1332,8 +1448,6 @@ class InclinedExponentialModel(IntensityModel):
             sini,
             xp,
             yp,
-            self._gl_nodes,
-            self._gl_weights,
         )
 
     def _render_kspace(
@@ -1672,13 +1786,13 @@ class InclinedSpergelModel(IntensityModel):
 
     _kspace_pad_factor = 2
 
-    def __init__(self, meta_pars=None, n_quad=None):
+    # cuspy radial profile: 256 tanh nodes needed to beat the old windowed
+    # 200-point rule on every metric (see _init_los_quadrature docstring)
+    _default_n_tanh = 256
+
+    def __init__(self, meta_pars=None, n_quad=None, los_quadrature='tanh'):
         super().__init__(meta_pars)
-        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
-        self._n_quad = n
-        nodes, weights = np.polynomial.legendre.leggauss(n)
-        self._gl_nodes = jnp.array(nodes)
-        self._gl_weights = jnp.array(weights)
+        _init_los_quadrature(self, n_quad, los_quadrature)
 
     @property
     def name(self) -> str:
@@ -1863,8 +1977,7 @@ class InclinedSpergelModel(IntensityModel):
             sini,
             xp,
             yp,
-            self._gl_nodes,
-            self._gl_weights,
+            self,
         )
 
     def _render_kspace(
@@ -2045,13 +2158,13 @@ class InclinedDeVaucouleursModel(IntensityModel):
     _kspace_pad_factor = 2
     _fixed_nu = _DEVAUCOULEURS_NU
 
-    def __init__(self, meta_pars=None, n_quad=None):
+    # cuspy radial profile: 256 tanh nodes needed to beat the old windowed
+    # 200-point rule on every metric (see _init_los_quadrature docstring)
+    _default_n_tanh = 256
+
+    def __init__(self, meta_pars=None, n_quad=None, los_quadrature='tanh'):
         super().__init__(meta_pars)
-        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
-        self._n_quad = n
-        nodes, weights = np.polynomial.legendre.leggauss(n)
-        self._gl_nodes = jnp.array(nodes)
-        self._gl_weights = jnp.array(weights)
+        _init_los_quadrature(self, n_quad, los_quadrature)
 
     @property
     def name(self) -> str:
@@ -2188,8 +2301,7 @@ class InclinedDeVaucouleursModel(IntensityModel):
             sini,
             xp,
             yp,
-            self._gl_nodes,
-            self._gl_weights,
+            self,
         )
 
     def _render_kspace(
@@ -2388,13 +2500,13 @@ class InclinedSersicModel(IntensityModel):
 
     _kspace_pad_factor = 2
 
-    def __init__(self, meta_pars=None, n_quad=None):
+    # cuspy radial profile: 256 tanh nodes needed to beat the old windowed
+    # 200-point rule on every metric (see _init_los_quadrature docstring)
+    _default_n_tanh = 256
+
+    def __init__(self, meta_pars=None, n_quad=None, los_quadrature='tanh'):
         super().__init__(meta_pars)
-        n = n_quad if n_quad is not None else _DEFAULT_N_QUAD
-        self._n_quad = n
-        nodes, weights = np.polynomial.legendre.leggauss(n)
-        self._gl_nodes = jnp.array(nodes)
-        self._gl_weights = jnp.array(weights)
+        _init_los_quadrature(self, n_quad, los_quadrature)
 
     @property
     def name(self) -> str:
@@ -2553,7 +2665,8 @@ class InclinedSersicModel(IntensityModel):
         rho0 = flux / (2.0 * h_z * _sersic_norm_2d(hlr, n))
         bn = _sersic_bn(n)
 
-        return _inclined_sech2_los_integrate(
+        return _dispatch_los_integrate(
+            self,
             rho0,
             lambda R: jnp.exp(-bn * (R / hlr) ** (1.0 / n)),
             h_z,
@@ -2561,8 +2674,6 @@ class InclinedSersicModel(IntensityModel):
             sini,
             xp,
             yp,
-            self._gl_nodes,
-            self._gl_weights,
         )
 
     def _render_kspace(
@@ -3065,6 +3176,8 @@ class BulgeDiskModel(CompositeIntensityModel):
         shared_centroids: bool = False,
         shear_bulge: bool = True,
         meta_pars: dict = None,
+        n_quad: int = None,
+        los_quadrature: str = 'tanh',
     ):
         shared = {'cosi', 'theta_int', 'g1', 'g2'}
         if shared_centroids:
@@ -3079,9 +3192,14 @@ class BulgeDiskModel(CompositeIntensityModel):
 
         super().__init__(
             components=[
-                ComponentSpec(InclinedExponentialModel(), prefix='disk'),
                 ComponentSpec(
-                    InclinedSersicModel(),
+                    InclinedExponentialModel(
+                        n_quad=n_quad, los_quadrature=los_quadrature
+                    ),
+                    prefix='disk',
+                ),
+                ComponentSpec(
+                    InclinedSersicModel(n_quad=n_quad, los_quadrature=los_quadrature),
                     prefix='bulge',
                     fixed_params=bulge_fixed,
                 ),

@@ -522,14 +522,15 @@ def test_galsim_regression_call(
     residual = np.abs(np.array(our_image) - gs_sb)
     max_frac_residual = np.max(residual) / peak
 
-    # tolerance depends on quadrature resolution:
-    # face-on: no LOS integration -> exact match
-    # inclined: 60-pt GL quadrature resolves sech² well for moderate h/r
-    # thin disk: sech² peak narrower than GL node spacing -> large errors
+    # face-on: no LOS integration -> near-exact match. All other cases:
+    # the tanh-substituted quadrature handles arbitrary thinness exactly
+    # (sech^2 absorbed into the measure), so thin disks need no special
+    # tolerance -- TIGHTENED 2026-07-04 from 3.0 (the windowed
+    # Gauss-Legendre rule could not resolve sech^2 peaks narrower than
+    # its node spacing). Measured under tanh: <= 6.7e-3 for every
+    # parametrized case, limited by GalSim's own rendering accuracy.
     if cosi >= 0.99:
         tol = 1e-2
-    elif h_over_r <= 0.01:
-        tol = 3.0
     else:
         tol = 0.02
 
