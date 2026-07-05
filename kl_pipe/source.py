@@ -667,6 +667,23 @@ class SourceModel:
                 osf = 1
             cube_fine = jnp.zeros((Nrow, Ncol, len(lambda_fine)))
 
+        # Spatial evals are the dominant forward-model cost (LOS quadrature
+        # per pixel), and all intensity models are linear in their amplitude
+        # parameter. Lines sharing a spatial owner (intensity_key /
+        # continuum_key) differ from the owner ONLY in amplitude (enforced
+        # by _build_split_owner_theta), so evaluate each owner's profile
+        # once at unit amplitude and scale per line -- exact, and avoids
+        # re-running the quadrature per sharing line.
+        unit_eval_cache: dict = {}
+
+        def _amplitude_scaled_eval(owner_key, theta_c, model, amp_name):
+            amp_idx = model.PARAMETER_NAMES.index(amp_name)
+            amplitude = theta_c[amp_idx]
+            if owner_key not in unit_eval_cache:
+                theta_unit = theta_c.at[amp_idx].set(1.0)
+                unit_eval_cache[owner_key] = model(theta_unit, plane, X, Y)
+            return amplitude * unit_eval_cache[owner_key]
+
         # accumulate emission line contributions
         for line_key, line in self.emission_lines.items():
             # spatial intensity (resolving intensity_key)
@@ -674,7 +691,12 @@ class SourceModel:
             theta_int = _apply_obs_rotation(
                 theta_int, int_model.PARAMETER_NAMES, image_rotation
             )
-            I_line = int_model(theta_int, plane, X, Y)
+            int_owner = (
+                line.intensity_key if line.intensity_key is not None else line_key
+            )
+            I_line = _amplitude_scaled_eval(
+                f'int:{int_owner}', theta_int, int_model, 'flux'
+            )
 
             # Doppler-shifted observed wavelength per pixel (full LOS v_los
             # includes systemic v0 + rotation contribution).
@@ -721,7 +743,12 @@ class SourceModel:
                 # SB/nm -- matching the line term's SB/nm voxel. No extra
                 # per-nm factor needed (that is carried by the parameter's
                 # units, enforced by the flux_per_nm name + the guard below).
-                I_cont = cont_model(cont_theta, plane, X, Y)
+                cont_owner = (
+                    line.continuum_key if line.continuum_key is not None else line_key
+                )
+                I_cont = _amplitude_scaled_eval(
+                    f'cont:{cont_owner}', cont_theta, cont_model, 'flux_per_nm'
+                )
                 cube_fine = cube_fine + I_cont[:, :, None]
 
         # bin fine to coarse (oversample path only; erf accumulates coarse)
@@ -830,8 +857,9 @@ class SourceModel:
         for p in model.PARAMETER_NAMES:
             # amplitude is per-line: 'flux' for emission-line intensity,
             # 'flux_per_nm' for a ContinuumModel (its relabel of 'flux').
-            # Matching only 'flux' silently read the OWNER's amplitude for
-            # continuum_key sharing, ignoring the line's own value.
+            # Matching only 'flux' here silently read the OWNER's amplitude
+            # for continuum_key sharing (latent bug found 2026-07-04: no
+            # numerical continuum_key test existed).
             if p in ('flux', 'flux_per_nm'):
                 values.append(_lookup_param(pars, own_prefix, p))
             else:
