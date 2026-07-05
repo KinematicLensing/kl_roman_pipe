@@ -75,6 +75,7 @@ class GrismPars:
         velocity_window_kms: float = 3000.0,
         n_lambda: int = None,
         line_lambdas_rest: tuple = None,
+        slice_width_kms: float = None,
     ) -> 'CubePars':
         """Build CubePars centered on the emission line complex at redshift z.
 
@@ -85,11 +86,17 @@ class GrismPars:
         velocity_window_kms : float
             Half-width of velocity window in km/s. Default 3000.
         n_lambda : int, optional
-            Number of wavelength pixels. If None, computed from velocity window
-            and dispersion.
+            Number of wavelength pixels. If None (and ``slice_width_kms``
+            is None), sized so slices are ~1 dispersion pixel apart --
+            fine for exploration, too coarse for production fits (see
+            ``build_grism_obs``).
         line_lambdas_rest : tuple of float, optional
             Rest-frame wavelengths (nm) of lines to cover. If None, uses
             H-alpha (656.28 nm).
+        slice_width_kms : float, optional
+            Wavelength slice width in velocity units (km/s). Mutually
+            exclusive with ``n_lambda``; see ``build_grism_obs`` for the
+            sizing rule.
         """
         from kl_pipe.spectral import CubePars
 
@@ -107,6 +114,18 @@ class GrismPars:
 
         lam_min = lam_min_line - dlam_vel
         lam_max = lam_max_line + dlam_vel
+
+        if slice_width_kms is not None:
+            if n_lambda is not None:
+                raise ValueError(
+                    "pass either n_lambda or slice_width_kms, not both "
+                    f"(got n_lambda={n_lambda}, slice_width_kms={slice_width_kms})"
+                )
+            if slice_width_kms <= 0:
+                raise ValueError(f"slice_width_kms must be > 0, got {slice_width_kms}")
+            dlam_slice = lam_center * slice_width_kms / C_KMS
+            n_lambda = int(np.ceil((lam_max - lam_min) / dlam_slice)) + 1
+            n_lambda = max(n_lambda, 3)
 
         if n_lambda is None:
             n_lambda = int(np.ceil((lam_max - lam_min) / self.dispersion)) + 1
@@ -218,6 +237,13 @@ def disperse_cube(
         )
     dlam = jnp.abs(lambda_grid[1] - lambda_grid[0])
 
+    # trapezoid endpoint weights: the boundary slices are the edges of the
+    # integration window, not interior samples, so they contribute half a
+    # dlam each. This removes the rectangle-rule flux excess on the smooth
+    # continuum; the emission-line term is unaffected (integrated exactly
+    # per bin and zero at the window edges).
+    quad_weight = jnp.ones(Nlam).at[0].set(0.5).at[-1].set(0.5)
+
     # accumulate dispersed image. The sequential per-slice loop is intentional:
     # restructuring it as vmap/scan (same algorithm) cut compile ~10x but
     # regressed runtime ~2.5x on CPU (benchmarked), and inference is
@@ -258,7 +284,7 @@ def disperse_cube(
             cube[:, :, k], coords, order=1, mode='constant', cval=0.0
         )
 
-        dispersed = dispersed + shifted * throughput[k] * dlam
+        dispersed = dispersed + shifted * throughput[k] * dlam * quad_weight[k]
 
     return dispersed
 
@@ -414,6 +440,12 @@ def precompute_dispersion_operator(
         throughput = np.asarray(throughput)
     dlam = float(abs(lambda_grid[1] - lambda_grid[0]))
 
+    # trapezoid endpoint weights, matching disperse_cube (edge slices count
+    # half a dlam); the two dispersal pathways must stay quadrature-identical
+    quad_weight = np.ones(Nlam)
+    quad_weight[0] = 0.5
+    quad_weight[-1] = 0.5
+
     rows_grid, cols_grid = np.mgrid[0:Nrow, 0:Ncol].astype(np.float64)
     c_row, c_col = (Nrow - 1) / 2.0, (Ncol - 1) / 2.0
     cos_r, sin_r = np.cos(image_rotation), np.sin(image_rotation)
@@ -435,7 +467,7 @@ def precompute_dispersion_operator(
         j0 = np.floor(col_s)
         w_row = _catmull_rom_weights(row_s - i0)  # (4, Nrow, Ncol)
         w_col = _catmull_rom_weights(col_s - j0)
-        scale = throughput[k] * dlam
+        scale = throughput[k] * dlam * quad_weight[k]
         for di in range(4):
             ii = i0.astype(np.int64) + (di - 1)
             valid_i = (ii >= 0) & (ii < Nrow)

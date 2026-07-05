@@ -174,9 +174,11 @@ def _check_source_priors_fit_obs(
             )
             return obs.with_render_config(derived_rc)
 
-        # explicit user rc: validate against priors, raise on mismatch
+        # explicit user rc: validate against the aliasing requirement only
+        # (min_oversample=1); the accuracy floor applies to auto-derived
+        # configs, while an explicit rc is an informed speed choice
         priors_rc = build_grism_render_config(
-            source, priors, obs.grism_pars, psf=obs.psf
+            source, priors, obs.grism_pars, psf=obs.psf, min_oversample=1
         )
         if priors_rc.oversample > rc_obs.oversample:
             raise ValueError(

@@ -878,6 +878,7 @@ def build_grism_obs(
     render_config: Optional[RenderConfig] = None,
     velocity_window_kms: float = 3000.0,
     n_lambda: Optional[int] = None,
+    slice_width_kms: Optional[float] = None,
 ) -> GrismObs:
     """Build grism observation.
 
@@ -911,17 +912,19 @@ def build_grism_obs(
         to ``grism_pars.to_cube_pars``. Default 3000.
     n_lambda : int, optional
         Wavelength slice count, passed to ``grism_pars.to_cube_pars``.
-        When None (default), sized so slices are ~1 dispersion pixel
-        apart. WARNING: the default under-resolves spatially-varying
-        Doppler shifts (a real rotation curve) -- slice spacing is ~250
-        km/s at Roman-like configs, quantizing the dispersed position of
-        velocity structure by up to half a slice (measured ~5% of peak at
-        the flagship config) and carrying an O(dlam) continuum flux
-        excess (~+3%). Size ``n_lambda`` so the slice width in velocity
-        units is a small fraction of the prior-maximal LOS velocity span
-        when sub-percent grism accuracy is required; cost scales with
-        ``n_lambda`` (see tests/test_pixel_readout.py entanglement
-        canary).
+        When neither this nor ``slice_width_kms`` is given, slices are
+        sized ~1 dispersion pixel apart (~250 km/s at Roman-like
+        configs). That default is fine for exploration but too coarse
+        for production: each slice is dispersed rigidly to one detector
+        offset, so the dispersed position of velocity structure is
+        quantized at the slice width. Cost scales linearly with the
+        slice count.
+    slice_width_kms : float, optional
+        Preferred way to size the grid: the slice width in velocity
+        units. Choose a small fraction (roughly 1/20 to 1/30) of the
+        largest line-of-sight velocity span the priors allow -- about 40
+        km/s for vcirc priors reaching ~300 km/s, 60-80 km/s for
+        exploration. Mutually exclusive with ``n_lambda``.
     """
     rc_was_default = render_config is None
     if rc_was_default:
@@ -929,7 +932,10 @@ def build_grism_obs(
     oversample = render_config.oversample  # canonical
 
     cube_pars = grism_pars.to_cube_pars(
-        z, velocity_window_kms=velocity_window_kms, n_lambda=n_lambda
+        z,
+        velocity_window_kms=velocity_window_kms,
+        n_lambda=n_lambda,
+        slice_width_kms=slice_width_kms,
     )
 
     psf_data = None

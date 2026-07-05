@@ -267,6 +267,7 @@ class RenderConfig:
         psf=None,
         folding_threshold: float = 5e-3,
         maxk_threshold: float = 1e-3,
+        min_oversample: int = 5,
     ) -> 'RenderConfig':
         """Compute worst-case ``RenderConfig`` for one emission line's grism
         cube fine-grid sizing.
@@ -338,7 +339,14 @@ class RenderConfig:
         except (KeyError, NotImplementedError):
             stepk = np.pi / (5.0 * coarse_pixel_scale)  # fallback
 
-        oversample = _oversample_from_maxk(eff_maxk, coarse_pixel_scale)
+        # the bandwidth bound only controls aliasing. Dispersal
+        # interpolation and the pixel readout carry a separate grid
+        # discretization error that measurably biases inferred parameters
+        # at oversample 3, so the derived value is floored (default 5).
+        # Callers preferring speed can pass an explicit RenderConfig.
+        oversample = max(
+            min_oversample, _oversample_from_maxk(eff_maxk, coarse_pixel_scale)
+        )
 
         return cls(
             oversample=oversample,
@@ -793,6 +801,7 @@ def build_grism_render_config(
     psf=None,
     folding_threshold: float = 5e-3,
     maxk_threshold: float = 1e-3,
+    min_oversample: int = 5,
 ) -> RenderConfig:
     """Worst-case ``RenderConfig`` for a ``GrismObs`` cube.
 
@@ -824,6 +833,9 @@ def build_grism_render_config(
         ``compute_effective_maxk_grism``.
     folding_threshold, maxk_threshold : float
         Passed through to ``RenderConfig.for_grism_priors``.
+    min_oversample : int
+        Accuracy floor on the derived oversample (default 5); see
+        ``RenderConfig.for_grism_priors``.
 
     Returns
     -------
@@ -894,6 +906,7 @@ def build_grism_render_config(
             psf=psf,
             folding_threshold=folding_threshold,
             maxk_threshold=maxk_threshold,
+            min_oversample=min_oversample,
         )
         if worst_rc is None or rc.oversample > worst_rc.oversample:
             worst_rc = rc

@@ -1,24 +1,22 @@
 """
 Enforcement tests for the post-dispersion pixel-response readout.
 
-The coarse-pixel BoxPixel sinc applied on the fine k-grid IS the
-coarse-pixel integration: after the IFFT each fine cell holds the
-coarse-box-averaged SB centered on that cell, and the readout must SAMPLE
+The coarse-pixel BoxPixel sinc applied on the fine k-grid performs the
+full pixel integration: after the IFFT each fine cell holds the
+coarse-box-averaged SB centered on that cell, so the readout samples
 that field at each coarse pixel center (the center fine cell of each
 oversample block; exact for odd oversample). Mean-binning the block
-instead convolves the already box-averaged field with a second
-coarse-pixel-wide box: peaks of compact sources come out several percent
-low while total flux is exactly conserved. That historical bug is pinned
-by the canary test below so the fix can never silently regress.
+instead applies a second box convolution: peaks of compact sources come
+out several percent low while total flux is exactly conserved. That
+historical bug is pinned by a dedicated test below so the fix can
+never silently regress.
 
-Also enforced here: the grism wavelength-grid (n_lambda) velocity-
-entanglement resolution canary. The `to_cube_pars` default spaces slices
-by ~1 dispersion pixel (~250 km/s at the flagship config), which
-quantizes the dispersed POSITION of spatially-varying Doppler shifts by
-up to half a bin. The canary freezes the measured deviation of the
-current default against a refined wavelength grid, so any silent change
-to the default (better or worse) trips a test and forces a conscious
-re-measure.
+Also enforced here: the wavelength-grid resolution pin. The default
+grid spaces slices ~1 dispersion pixel apart, which quantizes the
+dispersed position of spatially-varying Doppler shifts. The test
+freezes the measured deviation of the default against a refined grid, so
+any silent change to the default (better or worse) fails a test and
+forces a conscious re-measure.
 """
 
 import numpy as np
@@ -146,7 +144,7 @@ class TestValidation:
             )
 
 
-class TestMeanBinCanary:
+class TestMeanBinReadoutBug:
     """Pin the historical bug: mean-bin readout is >1% wrong on compact
     sources while conserving flux exactly.
 
@@ -166,7 +164,7 @@ class TestMeanBinCanary:
 
     def test_old_readout_differs_from_closed_form(self):
         # measured: -6.9% peak error at sigma=0.08 (compact vs the 0.11"
-        # pixel), flux conserved to <2e-7. The canary asserts >1%.
+        # pixel), flux conserved to <2e-7. This test asserts >1%.
         sb, prf, exact = _gaussian_setup(oversample=3, sigma=0.08)
         old = np.asarray(
             self._old_mean_bin_readout(
@@ -183,23 +181,24 @@ class TestMeanBinCanary:
         assert abs(old.sum() / exact.sum() - 1.0) < 1e-5
 
 
-class TestEntanglementCanary:
-    """Freeze the CURRENT default n_lambda's velocity-entanglement error.
+class TestDefaultWavelengthGridDeviation:
+    """Freeze the default wavelength grid's velocity-entanglement error.
 
     A rotating disk maps different sky regions to different Doppler
-    shifts; slices ~1 dispersion pixel apart (~250 km/s at this config)
-    quantize the dispersed position of that structure. Measured deviation
-    of the default wavelength grid vs a refined one (n_lambda=251, where
-    the render is converged to ~0.3%): max|diff|/peak 5.3%, total-flux
-    ratio 1.029 (the flux term is an O(dlam) wavelength-quadrature error
-    on the CONTINUUM, also resolved by refining). Frozen as a two-sided
-    window: a
-    silent change to the `to_cube_pars` default (better OR worse) trips
-    this test and must be consciously re-frozen with new measurements.
+    shifts. Because each wavelength slice is dispersed rigidly to one
+    detector offset, the coarse default grid quantizes the dispersed
+    position of that velocity structure. The windows below pin the
+    measured deviation of the default grid from a refined one
+    (n_lambda=251), two-sided, so any silent change to the default or to
+    the wavelength quadrature -- better or worse -- fails here and must
+    be consciously re-frozen.
     """
 
-    DEV_WINDOW = (0.03, 0.08)  # max|diff|/peak, measured 0.0533
-    FLUX_WINDOW = (1.015, 1.045)  # flux ratio default/refined, measured 1.0294
+    # measured 0.026 with trapezoid endpoint weights (0.053 before them)
+    DEV_WINDOW = (0.015, 0.04)  # max|diff|/peak vs refined grid
+    # measured 0.9997 (1.029 before trapezoid weights); sized so a
+    # doubled quadrature residual trips
+    FLUX_WINDOW = (0.9995, 1.0002)  # total-flux ratio vs refined grid
 
     @pytest.fixture(scope='class')
     def renders(self):

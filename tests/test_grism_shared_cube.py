@@ -737,8 +737,14 @@ class TestPosteriorEquivalence:
     def test_seeded_posterior_ab(self, source_ha):
         """Seeded NUTS on identical 2-roll data (0 and 45 deg) through
         shared vs per_roll cube modes: posterior means shift < 0.1 sigma,
-        widths within 20%, divergences not degraded. Screening depth
-        (300+300, 1 chain), not flagship depth."""
+        widths within 20%, divergences not degraded.
+
+        Sample count is sized to the gate, as in the quadrature A/B in
+        test_los_quadrature.py: at 300 samples the per-parameter Monte
+        Carlo error on a mean shift is ~0.06 sigma, so the worst-of-4
+        statistic crosses 0.1 on many seeds with no physics change at
+        all. 1500 samples brings the Monte Carlo error to ~0.027 sigma,
+        so a crossing indicates a real pathway difference."""
         import csv
 
         from kl_pipe.sampling import build_sampler
@@ -767,7 +773,7 @@ class TestPosteriorEquivalence:
             {**sampled, **{k: v for k, v in _BASE_PARS.items() if k not in sampled}}
         )
         config = NumpyroSamplerConfig(
-            n_samples=300, n_warmup=300, n_chains=1, seed=42, progress=False
+            n_samples=1500, n_warmup=300, n_chains=1, seed=42, progress=False
         )
 
         results = {}
@@ -869,6 +875,9 @@ class TestDispersionOperator:
                 a * t3**3 - 5 * a * t3**2 + 8 * a * t3 - 4 * a,
             )
 
+        # trapezoid endpoint weights, matching the production quadrature
+        quad_w = jnp.ones(Nlam).at[0].set(0.5).at[-1].set(0.5)
+
         out = jnp.zeros((Nrow, Ncol))
         for k in range(Nlam):
             u = Xb - offsets[k] - c_col
@@ -889,7 +898,7 @@ class TestDispersionOperator:
                     acc = acc + jnp.where(
                         vi & vj, wr[di] * wc[dj] * cube[iic, jjc, k], 0.0
                     )
-            out = out + acc * dlam
+            out = out + acc * dlam * quad_w[k]
         return out
 
     @pytest.mark.parametrize('phi_deg', [0.0, 27.0, 45.0, 90.0])
@@ -919,8 +928,8 @@ class TestDispersionOperator:
 
     def test_flux_normalization(self):
         """Catmull-Rom weights are a partition of unity: a constant cube
-        disperses to (constant x Nlam x dlam) wherever all taps are
-        in-bounds."""
+        disperses to (constant x window width) wherever all taps are
+        in-bounds -- the trapezoid weights sum to Nlam - 1."""
         from kl_pipe.dispersion import (
             apply_dispersion_operator,
             precompute_dispersion_operator,
@@ -938,7 +947,7 @@ class TestDispersionOperator:
         out = apply_dispersion_operator(op, jnp.ones((24, 24, 3)))
         dlam = float(lam[1] - lam[0])
         # central pixels: all taps in-bounds for the small shifts here
-        assert np.asarray(out)[8:16, 8:16] == pytest.approx(3 * dlam, rel=1e-12)
+        assert np.asarray(out)[8:16, 8:16] == pytest.approx(2 * dlam, rel=1e-12)
 
     def test_bilinear_interp_rejected(self):
         from kl_pipe.dispersion import precompute_dispersion_operator
@@ -970,16 +979,13 @@ class TestFisherGate:
         pathway bias (0.35 sigma where image-level L1 and moments looked
         benign); cubic measured 0.005 sigma. Gate frozen at 0.05.
 
-        The shared-pathway shift is gated DIFFERENTIALLY against the
-        per-roll baseline at the same oversample: after the pixel-readout
-        fix (2734f4a) the fit renders (os=3) carry a genuine common-mode
-        oversample-discretization offset vs the os=9 truth (cosi -0.36
-        sigma at this SNR-50 two-roll config) that the pre-fix mean-bin
-        readout averaged away (it faked os-convergence: os3-vs-os9
-        renders differed by 0.01% of peak pre-fix vs 0.37% post-fix,
-        converging O(os^-2)). That common-mode term is the SAME for both
-        pathways -- not a shared-cube effect -- and is frozen separately
-        below so it cannot silently grow."""
+        The shared-pathway shift is gated differentially against the
+        per-roll baseline at the same oversample: both pathways carry the
+        same oversample-discretization offset relative to the oversample=9
+        truth (a real effect of the low-oversample fit grid, not a
+        shared-cube effect), so only their difference measures what the
+        shared pathway adds. The common-mode offset itself is frozen in a
+        separate window below so it cannot silently grow."""
         params = ('cosi', 'g1', 'g2', 'vel.vcirc')
         angles = {'roll0': 0.0, 'roll45': np.pi / 4}
         obs_fit = {k: _make_rotated_obs(phi) for k, phi in angles.items()}
@@ -1020,15 +1026,14 @@ class TestFisherGate:
             dtheta = -Finv @ (weight * (J.T @ delta))
             shifts[mode] = np.asarray(dtheta / sigmas)
 
-        # common-mode os=3-vs-os=9 discretization: frozen two-sided so a
-        # regression (bigger) or a silent pathway change (smaller) trips.
-        # measured post-2734f4a: cosi -0.355 sigma (largest param).
+        # the oversample=3-vs-9 discretization offset common to both
+        # pathways, frozen two-sided (measured 0.355 sigma, worst = cosi)
+        # so a regression or a silent pathway change both trip
         worst_common = float(np.max(np.abs(shifts['per_roll'])))
         assert 0.2 < worst_common < 0.5, (
             f"common-mode oversample-discretization shift {worst_common:.3f} "
-            f"sigma left the frozen (0.2, 0.5) window (measured 0.355 after "
-            f"the pixel-readout fix). Re-measure and re-freeze consciously; "
-            f"do not widen to silence."
+            f"sigma left the frozen (0.2, 0.5) window (measured 0.355). "
+            f"Re-measure and re-freeze consciously; do not widen to silence."
         )
 
         for i, name in enumerate(params):
