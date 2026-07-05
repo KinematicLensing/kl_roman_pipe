@@ -2497,14 +2497,9 @@ def test_recover_joint_phot_grism_base(snr, test_config):
     )
 
     # --- Synthetic grism image (render via SourceModel, add Gaussian noise) ---
-    # Explicit oversample=5 on BOTH the data render and the fit obs: the
-    # builder default (5) and the priors-derived rc (3 here) differ, and a
-    # likelihood-slice test requires data and likelihood to share one
-    # forward pathway. The center-sample pixel readout has genuine
-    # O(oversample^-2) convergence (os3-vs-os5 renders differ by ~0.3% of
-    # peak), which shifts spectral/velocity slice minima by ~1% at
-    # SNR=1e4; the pre-fix mean-bin readout masked the mismatch by
-    # smoothing both pathways identically.
+    # a likelihood-slice test requires data and fit to share one forward
+    # pathway, so pin the same oversample on both (the builder default and
+    # the priors-derived render config can differ)
     from kl_pipe.render import RenderConfig as _RC
 
     grism_obs_clean = build_grism_obs(

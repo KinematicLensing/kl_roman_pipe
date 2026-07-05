@@ -22,7 +22,7 @@ the reference implementation currently supports; see
    demonstrated-achievable accuracy, not default behavior. kl_pipe's
    *default*-``n_lambda`` regression (under-resolving the spatially-varying
    Doppler field, ~6.4% max|diff|/peak vs a refined grid) is already pinned
-   in-suite by ``tests/test_pixel_readout.py::TestEntanglementCanary`` and
+   in-suite by ``tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation`` and
    is NOT re-tested here.
 
 All tolerances are measure-then-freeze (repo convention: measured value
@@ -149,7 +149,7 @@ class TestGalSimReferenceGate:
 
     def test_static_scene(self):
         # vcirc=0: v_los is spatially uniform (=v0), so the velocity-
-        # entanglement pathway (test_pixel_readout.py canary) does not
+        # entanglement pathway (pinned in test_pixel_readout.py) does not
         # apply; default n_lambda is used. Measured (2026-07-05, float64,
         # this gate, oversample=5): max|diff|/peak=1.678%,
         # mean|diff|/peak=0.060%. Floor is dominated by disperse_cube's
@@ -174,7 +174,7 @@ class TestGalSimReferenceGate:
         # n_lambda=251 is a caller-tuned refinement of the wavelength grid
         # (kl_pipe's *default* n_lambda under-resolves this case; that
         # regression is pinned separately by
-        # test_pixel_readout.py::TestEntanglementCanary, not here).
+        # test_pixel_readout.py::TestDefaultWavelengthGridDeviation, not here).
         # Measured (2026-07-05, float64, this gate, oversample=5,
         # n_v=64, pts_per_sigma=20): max|diff|/peak=0.534%,
         # mean|diff|/peak=0.030% -- reproduces the promotion audit

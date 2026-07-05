@@ -10,7 +10,7 @@ along the line of sight. Two selectable rules (``los_quadrature``):
 - 'legendre' (reference): the original 200-point Gauss-Legendre rule on a
   truncated +/-5 h_z / max(cosi, 0.1) window. Retained for convergence
   comparisons; its window/clip construction loses flux near edge-on (a
-  KNOWN model approximation, pinned by a canary below).
+  known model approximation, pinned by a test below).
 
 Every tolerance is measure-then-freeze: the comment carries the measured
 value (2026-07-04, fp64, 48x48 @ 0.1"/pix) and the frozen bound gives
@@ -112,7 +112,7 @@ def test_exponential_edge_on_self_convergence(grid):
         assert err < 5e-3, f"cosi={cosi}: tanh self-convergence {err:.2e}"
 
 
-def test_windowed_rule_edge_on_flux_canary(grid):
+def test_windowed_rule_edge_on_flux_pinned(grid):
     """CANARY: the legendre reference path's +/-5 h_z window with its
     cosi clip at 0.1 loses flux near edge-on relative to the true
     integral -- a KNOWN, documented model approximation (measured
@@ -247,7 +247,7 @@ class TestPosteriorEquivalence:
         Sample count is sized to the gate: at 300 samples the per-param
         MC error on a mean shift is ~0.06 sigma, and a 4-seed sweep
         showed the worst-of-4-params statistic crosses the 0.1 gate on
-        ~half of seeds with NO code change at all. 1500 samples brings
+        ~half of seeds with no code change at all. 1500 samples brings
         the per-param MC error to ~0.027 sigma so a gate crossing
         indicates a real quadrature difference, not sampler noise."""
         import galsim

@@ -130,7 +130,7 @@ The per-line parameters live under the line's namespace (`Halpha.flux`,
 `Halpha.rscale`, ..., `Halpha.dispersion`); the intrinsic line width in the cube
 is `Halpha.dispersion` only. The slitless instrumental LSF is produced
 downstream by the PSF-per-slice + dispersion geometry, not a separate term;
-`tests/test_lsf_gate.py` checks the resulting resolution against the Roman spec
+`tests/test_spectral_resolution.py` checks the resulting resolution against the Roman spec
 `R = 461 * lambda_um`.
 
 ---

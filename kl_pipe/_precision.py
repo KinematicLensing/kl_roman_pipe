@@ -65,12 +65,11 @@ def ensure_precision() -> None:
     float32 default. Only the first call does anything, so a later call
     can never override the env-var choice made at first import.
 
-    In BOTH modes the default matmul precision is pinned to ``'highest'``:
+    In both modes the default matmul precision is pinned to ``'highest'``:
     on NVIDIA Ampere+ GPUs JAX otherwise executes float32 matmuls on
-    tensorfloat32 tensor cores (10-bit mantissa) -- a silent precision
-    downgrade far below IEEE float32. The pin is a no-op on CPU and for
-    float64 operands; it only forbids the tf32 shortcut for float32
-    matmuls, which is exactly the case KLPIPE_FP32 opts into.
+    tensorfloat32 tensor cores (10-bit mantissa), a silent precision
+    downgrade far below true float32. The pin is a no-op on CPU and for
+    float64 operands.
     """
     global _configured
     if _configured:

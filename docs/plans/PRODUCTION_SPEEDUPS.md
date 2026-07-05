@@ -827,6 +827,63 @@ only.
 - [ ] Ensemble driver + calibration module (paper P0; STRATEGY.md Sec 10) --
       design batch-first: consumes the data-as-argument API from day one.
 
+### Added 2026-07-05 (post pixel-readout fix and accuracy audit)
+
+- [x] fp32 control: KLPIPE_FP32 binary toggle (fp64 default); matmul
+      precision pinned 'highest' in both modes (forbids the silent tf32
+      downgrade on Ampere+ GPUs); conftest defers to the central
+      precision hook so fp32 pytest runs are real. Mixed mode (fp32
+      compute + fp64 chi2 sums) rejected: the sum is not the weak link.
+- [x] Chain-method auto-dispatch: config default None resolves to
+      'parallel' on CPU (KLPIPE_CPU_DEVICES sets the device count) and
+      'vectorized' on GPU; explicit choice always wins.
+- [x] Trapezoid endpoint weights in both dispersal paths; removes the
+      rectangle-rule continuum flux excess at zero cost.
+- [x] Inference grism oversample floored at 5 (auto-derived configs);
+      explicit render configs remain a caller speed choice.
+- [x] slice_width_kms sizing knob on build_grism_obs / to_cube_pars.
+- [x] GalSim chromatic reference gate (tests/test_galsim_reference.py,
+      basic tier) -- independent pixel-level check of dispersed renders.
+- [ ] Wavelength-grid production rule: slice_width_kms=40 (n~151) for
+      production fits, 60-80 (n~101) for exploration; measured grad cost
+      2.0x/3.2x/6.1x at 101/151/251 slices vs the ~25-slice default.
+      Follow-up: make the safe grid the default via priors-aware sizing
+      in InferenceTask.from_obs (mirror the render-config pattern);
+      requires first sweeping test fixtures to explicit cheap grids so
+      suite runtime does not triple.
+- [ ] Two-tier wavelength grid experiment: dense slices over the line's
+      velocity span, coarse over the continuum wings (~75% of a uniform
+      grid is spent on smooth continuum). Candidate 2-3x cost cut at
+      production accuracy; needs per-slice dlam weights in disperse_cube
+      and the dispersion operator.
+- [ ] Structural fix candidate: disperse the line analytically (per
+      spaxel, an erf profile along the dispersion axis; the wavelength
+      grid then only serves the continuum). Design doc first. Note: the
+      sub-bin moment/dipole correction was tried and refuted
+      (experiments/sweverett/moment_dispersal/) -- iso-cost grid
+      refinement wins 4-30x; do not revisit on CPU.
+- [ ] Ensemble shear-floor test: one instrument gates both fp32 adoption
+      and the oversample choice (coherent render deltas vs the 1e-3/1e-4
+      shear stacking targets).
+- [ ] Vista runs: verify chain-method auto-dispatch resolves
+      'vectorized' on GPU (kit SETUP.md step); fp32 pass with the matmul
+      pin; re-benchmark the CPU-negative variants (BCOO vs streaming,
+      remat, vectorized chains).
+- [ ] Vista env: aarch64 conda-lock in flight (user); conda-lock.yml is
+      currently deleted in the working tree and the makefile platform
+      list edited -- finish or restore before committing.
+- [ ] geko cross-validation renders: kl_pipe set stale (pixel-readout
+      fix), geko set absent locally, so that suite currently skips
+      entirely. Regenerate both when geko comparisons become relevant;
+      not gating.
+- [ ] Rendering test-coverage gaps (docs/validation/
+      rendering_test_coverage.md): sheared grism scenes have no
+      independent cross-check; GrismPars.throughput has no test at all;
+      continuum dispersal has no external reference. Extend the GalSim
+      reference gate scenes.
+- [ ] Cross-day seeded-NUTS drift (0.131 vs 0.163 same seed/commit):
+      within-day A/B protocol only; investigate only if it hits a gate.
+
 ## 8. Open questions
 
 (1-5 of 2026-07-02 resolved -- see decisions 13-17.)

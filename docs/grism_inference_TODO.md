@@ -27,7 +27,7 @@
 - ✓ Delete `roman_grism_R`, `SpectralConfig.lsf_mode`, `SpectralConfig.R_func`, `convolve_spectral` stub.
 - ✓ Mirror change in numpy reference `kl_pipe/synthetic.py:generate_datacube_3d`.
 - ✓ `vel_dispersion` recoverable in grism likelihood slice + smoke recovery tests.
-- ✓ `tests/test_lsf_gate.py` codifies the empirical gate: PSF+dispersion alone reproduces Roman `R = 461·λ_μm` within ±5%.
+- ✓ `tests/test_spectral_resolution.py` codifies the empirical gate: PSF+dispersion alone reproduces Roman `R = 461·λ_μm` within ±5%.
 
 Empirical evidence drove the refactor: see `experiments/sweverett/lsf_gate_test/`. PSF+dispersion alone gives `R_measured/R_spec = 1.035` at λ_obs ≈ 1.30 μm; σ_inst-active broadened the detector FWHM by 48% on top — classic double-counting signature.
 

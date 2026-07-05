@@ -78,7 +78,7 @@ kl_pipe's *default*-`n_lambda` regression on the dynamic case (under-
 resolving the spatially-varying Doppler field: max|diff|/peak jumps from
 0.53% at `n_lambda=251` to ~6.4% at the default) is intentionally **not**
 re-tested here -- it is already pinned in-suite by
-`tests/test_pixel_readout.py::TestEntanglementCanary`, which freezes the
+`tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation`, which freezes the
 measured default-vs-refined deviation window so a silent change (better or
 worse) trips a test.
 
@@ -128,7 +128,7 @@ comfortably under it (0.34-0.40%).
    sampling the coarse-pixel-aligned fine center, an unintended second box
    convolution. Biased compact-source peaks low by several percent while
    conserving flux exactly (which is why flux-only checks never caught
-   it). Pinned by `tests/test_pixel_readout.py::TestMeanBinCanary`.
+   it). Pinned by `tests/test_pixel_readout.py::TestMeanBinReadoutBug`.
 2. **Open limitation, not a bug**: `GrismPars.to_cube_pars`'s default
    `n_lambda` spaces wavelength slices by ~1 dispersion pixel. For a
    spatially uniform velocity this is fine (erf-exact per-bin amplitude
@@ -141,7 +141,7 @@ comfortably under it (0.34-0.40%).
    comparable to or smaller than one dispersion pixel's velocity width
    should pass an explicit finer `n_lambda`. Pinned (as a frozen deviation
    window, not a pass/fail correctness gate) by
-   `tests/test_pixel_readout.py::TestEntanglementCanary`.
+   `tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation`.
 
 ## Superseded document
 

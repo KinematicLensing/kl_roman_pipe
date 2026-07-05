@@ -31,16 +31,14 @@ def _apply_post_dispersion_pixel_response(
        (``GrismObs.pixel_response_fft``) -- only when ``oversample > 1``;
        at ``oversample == 1`` the input is already at coarse detector
        resolution and no fine-grid sinc is required. The sinc has the
-       COARSE pixel side, so after the IFFT each fine cell holds the
-       coarse-box-AVERAGED SB centered on that cell -- the sinc alone
-       performs the full coarse-pixel integration.
-    2. Reads out by SAMPLING the box-averaged field at each coarse pixel
-       center: the center fine cell of every N×N block, which for odd N
-       lies exactly on the coarse pixel center. The readout is a sample,
-       not an average -- mean-binning the block would convolve the already
-       box-averaged field with a second coarse-pixel-wide box, biasing
-       peaks of compact sources low by several percent while conserving
-       flux.
+       coarse pixel side, so after the IFFT each fine cell holds the
+       coarse-box-averaged SB centered on that cell -- the sinc alone
+       performs the full pixel integration.
+    2. Reads out by sampling that field at each coarse pixel center (the
+       center fine cell of every N×N block; exact for odd N). The readout
+       is a sample, not an average -- mean-binning the block would apply
+       a second box convolution, biasing peaks of compact sources low
+       while conserving flux.
     3. Multiplies by ``coarse_pixel_scale**2`` to convert SB (per arcsec²)
        to flux per coarse pixel. See ``docs/units_and_conventions.md``.
 

@@ -970,14 +970,10 @@ class TestPostDispersionPixelResponsePrecompute:
     def _inline_apply_post_dispersion(dispersed, coarse_image_pars, oversample):
         """Reference: rebuild fine k-grid + BoxPixel sinc inline, SB->flux.
 
-        Mimics the pre-3301d3a path with no precompute. Mirrors the
-        production function's readout: the coarse-pixel sinc IS the pixel
-        integration, so the box-averaged SB is SAMPLED at the center fine
-        cell of each block (odd oversample), then multiplied by coarse_area
-        to convert to flux per coarse pixel. (Pre-2734f4a this reference
-        mean-binned the block instead, mirroring the double-convolution bug
-        fixed in the production function; updated together with the fix so
-        the test keeps pinning precompute-vs-inline sinc equivalence.)
+        Mirrors the production readout with no precompute: coarse-pixel
+        sinc, then sample the box-averaged SB at the center fine cell of
+        each block and convert to flux per coarse pixel. Pins the
+        precompute-vs-inline sinc equivalence.
         """
         coarse_ps = coarse_image_pars.pixel_scale
         coarse_area = coarse_ps * coarse_ps
@@ -1056,20 +1052,13 @@ class TestPostDispersionPixelResponsePrecompute:
         )
 
     def test_grid_alignment_uses_coarse_pixel_scale(self, cube_pars):
-        """Sinc must use the COARSE pixel_scale (detector), not the fine one.
+        """Sinc must use the coarse (detector) pixel scale, not the fine one.
 
-        A regression that grabs ``fine_ps`` for the BoxPixel arg would
-        integrate a fine-pixel-wide box (nearly a point sample) instead of
-        the coarse detector pixel. We pin the choice by comparing the
-        precompute against a deliberate ``BoxPixel(fine_ps)`` rebuild with
-        the SAME center-sample readout and asserting they disagree strongly
-        on a compact Gaussian (box average < point sample at the peak).
-
-        (Pre-2734f4a this test used white noise + mean-bin readout; with
-        the fixed center-sample readout, mean-binning a noise field happens
-        to approximate the coarse-box average too, so noise no longer
-        discriminates the pixel-scale choice -- a compact smooth source
-        does.)
+        A regression that used the fine pixel scale would apply a nearly
+        point-sample box instead of the detector pixel. We pin the choice
+        by rebuilding the sinc with the wrong (fine) scale and asserting
+        the two readouts disagree strongly on a compact Gaussian, where
+        the box average at the peak is far below a point sample.
         """
         oversample = 5
         obs = self._build_grism_obs_via_factory(cube_pars, oversample)

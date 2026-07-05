@@ -178,7 +178,7 @@ class SourceModel:
         * If ``continuum_key`` is set, the referenced line must have
           a ``continuum`` set (otherwise there is nothing to share).
         * If ``dispersion_key`` is set, it must reference an existing
-          line key, and that line must NOT itself reference dispersion
+          line key, and that line must not itself reference dispersion
           via its own ``dispersion_key`` (no chained sharing).
         * If ``lambda_rest`` is None, the line's name must be in
           ``LINE_LAMBDAS``; resolved automatically.
@@ -373,10 +373,10 @@ class SourceModel:
         frame. The cube is built in the FIRST obs's detector frame (the
         anchor roll -- exact parameter-level rotation, and that roll needs
         no rotational resampling); every obs is then dispersed by a
-        precomputed sparse operator that fuses dispersion, the RELATIVE
+        precomputed sparse operator that fuses dispersion, the relative
         roll rotation, and Catmull-Rom cubic interpolation into a single
         matvec (``dispersion.precompute_dispersion_operator``). Bilinear
-        resampling is deliberately NOT used here: its sub-pixel smoothing
+        resampling is deliberately not used here: its sub-pixel smoothing
         biases inclination-like posterior modes at the 0.35-sigma level in
         tight-posterior tests, while cubic measures at the per-roll
         accuracy floor (Fisher-projected shift 0.005 sigma). The
@@ -729,7 +729,7 @@ class SourceModel:
         # Spatial evals are the dominant forward-model cost (LOS quadrature
         # per pixel), and all intensity models are linear in their amplitude
         # parameter. Lines sharing a spatial owner (intensity_key /
-        # continuum_key) differ from the owner ONLY in amplitude (enforced
+        # continuum_key) differ from the owner only in amplitude (enforced
         # by _build_split_owner_theta), so evaluate each owner's profile
         # once at unit amplitude and scale per line -- exact, and avoids
         # re-running the quadrature per sharing line.
