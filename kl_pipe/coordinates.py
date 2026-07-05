@@ -27,9 +27,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Tuple
 
-import jax
+from kl_pipe._precision import ensure_precision
 
-jax.config.update("jax_enable_x64", True)
+ensure_precision()
 
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402

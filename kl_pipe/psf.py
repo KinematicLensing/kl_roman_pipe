@@ -6,9 +6,10 @@ to model-rendered images. PSF kernels are pre-computed from GalSim GSObjects
 and stored as FFT-ready arrays for efficient repeated convolution during
 likelihood evaluation.
 
-Requires JAX float64 mode: ``jax.config.update("jax_enable_x64", True)``
-must be called before any PSF operations. This is enforced at PSFData
-creation time.
+Requires JAX float64 mode (enabled automatically on ``kl_pipe`` import
+unless ``KLPIPE_FP32`` opts into float32; see ``kl_pipe._precision``).
+Enforced at PSFData creation time: missing x64 raises unless float32 mode
+was explicitly requested.
 
 Key functions:
 - precompute_psf_fft: GSObject -> PSFData (one-time setup)
@@ -28,6 +29,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from scipy.fft import next_fast_len
+
+from kl_pipe._precision import fp32_requested
 
 if TYPE_CHECKING:
     import galsim
@@ -255,10 +258,14 @@ def precompute_psf_fft(
     PSFData
         Pre-computed PSF data for use with convolve_fft.
     """
-    if not jax.config.jax_enable_x64:
+    # x64 is required unless float32 mode was explicitly requested via
+    # KLPIPE_FP32; a missing x64 without that opt-in means precision
+    # configuration was bypassed and must fail loudly.
+    if not jax.config.jax_enable_x64 and not fp32_requested():
         raise ValueError(
             "JAX float64 mode required for PSF convolution. "
-            "Call jax.config.update('jax_enable_x64', True) before using PSF functions."
+            "Call jax.config.update('jax_enable_x64', True) before using PSF "
+            "functions, or set KLPIPE_FP32=1 to opt into float32."
         )
 
     if oversample < 1 or oversample % 2 == 0:

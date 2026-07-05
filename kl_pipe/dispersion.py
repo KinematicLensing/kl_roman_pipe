@@ -197,9 +197,10 @@ def disperse_cube(
     cos_a = jnp.cos(angle)
     sin_a = jnp.sin(angle)
 
-    # base pixel coordinates
-    rows = jnp.arange(Nrow, dtype=jnp.float64)
-    cols = jnp.arange(Ncol, dtype=jnp.float64)
+    # base pixel coordinates (default float dtype: float64 under x64,
+    # float32 under KLPIPE_FP32 -- avoids downcast warnings in fp32 mode)
+    rows = jnp.arange(Nrow, dtype=float)
+    cols = jnp.arange(Ncol, dtype=float)
     Y_base, X_base = jnp.meshgrid(rows, cols, indexing='ij')
 
     # throughput

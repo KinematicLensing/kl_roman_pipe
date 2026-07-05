@@ -26,7 +26,9 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
+from kl_pipe._precision import ensure_precision
+
+ensure_precision()
 
 import jax.numpy as jnp  # noqa: E402
 

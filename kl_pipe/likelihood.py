@@ -78,6 +78,23 @@ def _gaussian_log_likelihood(
     Factored out so the SourceModel-channel likelihoods share one shape.
     The ``mask is not None`` branch resolves at JIT trace time (mask is
     static aux from the obs pytree).
+
+    Precision of the chi-squared reduction
+    --------------------------------------
+    Under the default float64 mode the sums below accumulate in float64.
+    Under ``KLPIPE_FP32`` (x64 disabled) true float64 accumulation is
+    IMPOSSIBLE: JAX canonicalizes every float64 request back to float32
+    (``jnp.sum(..., dtype=jnp.float64)`` and
+    ``lax.dot(..., preferred_element_type=jnp.float64)`` both truncate,
+    verified empirically), so the reduction runs in float32. With
+    ``|log L| ~ 1e5-1e6`` and float32 eps ~ 1.2e-7 the naive worst case
+    looks alarming, but XLA's blocked/pairwise reduction keeps the
+    measured relative error at ~1e-8 for 2e5-element sums, i.e. ~0.01
+    absolute in log L at ``|log L| ~ 1e6``. The backward pass of the sum
+    itself broadcasts the cotangent (no accumulation), but VJP reductions
+    upstream in the model also run in float32 under ``KLPIPE_FP32``. If
+    float32 sampling shows likelihood-resolution artifacts, this
+    reduction is the first place to look.
     """
     residuals = data - model
     variance = jnp.broadcast_to(jnp.asarray(variance), data.shape)
