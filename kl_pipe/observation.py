@@ -876,6 +876,8 @@ def build_grism_obs(
     variance=None,
     mask=None,
     render_config: Optional[RenderConfig] = None,
+    velocity_window_kms: float = 3000.0,
+    n_lambda: Optional[int] = None,
 ) -> GrismObs:
     """Build grism observation.
 
@@ -904,13 +906,31 @@ def build_grism_obs(
         with tight priors, pass an explicit
         ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
         result (from ``kl_pipe.render``).
+    velocity_window_kms : float, optional
+        Half-width of the wavelength-grid velocity window (km/s), passed
+        to ``grism_pars.to_cube_pars``. Default 3000.
+    n_lambda : int, optional
+        Wavelength slice count, passed to ``grism_pars.to_cube_pars``.
+        When None (default), sized so slices are ~1 dispersion pixel
+        apart. WARNING: the default under-resolves spatially-varying
+        Doppler shifts (a real rotation curve) -- slice spacing is ~250
+        km/s at Roman-like configs, quantizing the dispersed position of
+        velocity structure by up to half a slice (measured ~5% of peak at
+        the flagship config) and carrying an O(dlam) continuum flux
+        excess (~+3%). Size ``n_lambda`` so the slice width in velocity
+        units is a small fraction of the prior-maximal LOS velocity span
+        when sub-percent grism accuracy is required; cost scales with
+        ``n_lambda`` (see tests/test_pixel_readout.py entanglement
+        canary).
     """
     rc_was_default = render_config is None
     if rc_was_default:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample  # canonical
 
-    cube_pars = grism_pars.to_cube_pars(z)
+    cube_pars = grism_pars.to_cube_pars(
+        z, velocity_window_kms=velocity_window_kms, n_lambda=n_lambda
+    )
 
     psf_data = None
     fine_image_pars = None

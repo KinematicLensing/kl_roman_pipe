@@ -291,6 +291,33 @@ class TestBuildGrismObs:
         assert obs.cube_pars is not None
         assert obs.psf_data is None
 
+    def test_wavelength_grid_passthrough(self):
+        from kl_pipe.dispersion import GrismPars
+
+        ip = ImagePars(shape=(8, 8), pixel_scale=0.11, indexing='ij')
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=1.0,
+            lambda_ref=1.5,
+            dispersion_angle=0.0,
+        )
+        obs_default = build_grism_obs(gp, z=1.0)
+        obs_refined = build_grism_obs(gp, z=1.0, n_lambda=101)
+        assert obs_refined.cube_pars.lambda_grid.shape[0] == 101
+        assert (
+            obs_refined.cube_pars.lambda_grid.shape[0]
+            != obs_default.cube_pars.lambda_grid.shape[0]
+        )
+        # same window: identical endpoints, finer spacing
+        np.testing.assert_allclose(
+            float(obs_refined.cube_pars.lambda_grid[0]),
+            float(obs_default.cube_pars.lambda_grid[0]),
+        )
+        obs_window = build_grism_obs(gp, z=1.0, velocity_window_kms=1500.0)
+        assert float(obs_window.cube_pars.lambda_grid[0]) > float(
+            obs_default.cube_pars.lambda_grid[0]
+        )
+
     def test_with_psf(self):
         import galsim
         from kl_pipe.dispersion import GrismPars
