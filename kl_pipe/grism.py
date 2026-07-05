@@ -30,8 +30,17 @@ def _apply_post_dispersion_pixel_response(
     1. Multiplies by the precomputed BoxPixel sinc on the fine k-grid
        (``GrismObs.pixel_response_fft``) -- only when ``oversample > 1``;
        at ``oversample == 1`` the input is already at coarse detector
-       resolution and no fine-grid sinc is required.
-    2. Bins fine cells to coarse pixels (mean over each N×N block).
+       resolution and no fine-grid sinc is required. The sinc has the
+       COARSE pixel side, so after the IFFT each fine cell holds the
+       coarse-box-AVERAGED SB centered on that cell -- the sinc alone
+       performs the full coarse-pixel integration.
+    2. Reads out by SAMPLING the box-averaged field at each coarse pixel
+       center: the center fine cell of every N×N block, which for odd N
+       lies exactly on the coarse pixel center. The readout is a sample,
+       not an average -- mean-binning the block would convolve the already
+       box-averaged field with a second coarse-pixel-wide box, biasing
+       peaks of compact sources low by several percent while conserving
+       flux.
     3. Multiplies by ``coarse_pixel_scale**2`` to convert SB (per arcsec²)
        to flux per coarse pixel. See ``docs/units_and_conventions.md``.
 
@@ -46,7 +55,8 @@ def _apply_post_dispersion_pixel_response(
     coarse_shape : tuple
         ``(Nrow_c, Ncol_c)`` of the coarse detector grid.
     oversample : int
-        Spatial oversampling factor of the input.
+        Spatial oversampling factor of the input. Must be odd when > 1
+        (even factors have no fine cell centered on a coarse pixel).
     coarse_pixel_scale : float
         Coarse detector pixel scale (arcsec); used for the SB→flux/pixel
         conversion.
@@ -62,15 +72,30 @@ def _apply_post_dispersion_pixel_response(
         # input already at coarse resolution; just convert SB -> flux/pixel
         return dispersed * coarse_area
 
+    if oversample % 2 == 0:
+        raise ValueError(
+            f"oversample must be odd for the post-dispersion pixel-response "
+            f"readout, got {oversample}. The coarse-pixel sinc already "
+            f"performs the pixel integration, so the readout samples the "
+            f"box-averaged field at each coarse pixel center; with an even "
+            f"oversample no fine cell is centered on a coarse pixel."
+        )
+
     Nrow_c, Ncol_c = coarse_shape
     N = oversample
+    if dispersed.shape != (Nrow_c * N, Ncol_c * N):
+        raise ValueError(
+            f"dispersed shape {dispersed.shape} does not match "
+            f"coarse_shape × oversample = ({Nrow_c * N}, {Ncol_c * N})."
+        )
 
-    # FFT -> sinc multiply -> IFFT at fine grid (still in SB units)
+    # FFT -> sinc multiply -> IFFT at fine grid (still in SB units); each
+    # fine cell now holds the coarse-box-averaged SB centered on that cell
     img_fft = jnp.fft.fft2(dispersed)
     pixel_integrated_fine = jnp.fft.ifft2(img_fft * pixel_response_fft).real
 
-    # mean-bin SB to coarse, then multiply by coarse area to get flux/pixel.
-    # Equivalent to sum-bin × fine_pixel_area = sum × (coarse/N)² , i.e.
-    # mean × coarse_area.
-    sb_coarse = pixel_integrated_fine.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+    # sample the box-averaged SB at coarse pixel centers (center fine cell
+    # of each N×N block; exact for odd N), then convert to flux/pixel
+    c = N // 2
+    sb_coarse = pixel_integrated_fine[c::N, c::N]
     return sb_coarse * coarse_area

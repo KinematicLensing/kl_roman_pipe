@@ -232,8 +232,9 @@ class SourceModel:
              the ``folding_threshold`` flux class. Both use
              ``bin=False`` so images stay at fine resolution.
           3. Disperse via ``disperse_cube`` (existing kl_pipe.dispersion).
-          4. Apply the precomputed BoxPixel sinc + sum-bin to coarse
-             detector pixels at the 2D output.
+          4. Apply the precomputed BoxPixel sinc (coarse-pixel integration
+             in k-space) and read out the box-averaged field at coarse
+             pixel centers at the 2D output.
 
         .. note::
            Both modes apply a **single shared** PSF (``obs.psf_data``).

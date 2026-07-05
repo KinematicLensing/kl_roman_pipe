@@ -110,6 +110,19 @@ class RenderConfig:
     stepk: Optional[float] = None
 
     def __post_init__(self):
+        if (
+            not isinstance(self.oversample, (int, np.integer))
+            or self.oversample < 1
+            or self.oversample % 2 == 0
+        ):
+            raise ValueError(
+                f"oversample must be a positive odd integer, got "
+                f"{self.oversample!r}. Odd is required so the fine grid has "
+                f"a cell centered on every coarse pixel: both the PSF kernel "
+                f"centering (precompute_psf_fft) and the post-dispersion "
+                f"pixel-response readout (which samples the sinc-integrated "
+                f"field at coarse pixel centers) rely on that alignment."
+            )
         if self.spectral_method not in ('erf', 'oversample'):
             raise ValueError(
                 f"spectral_method must be 'erf' or 'oversample', got "

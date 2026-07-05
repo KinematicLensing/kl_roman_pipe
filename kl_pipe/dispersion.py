@@ -154,7 +154,8 @@ def disperse_cube(
     wavelength-driven shift indexes correctly into the fine grid. The
     output spatial shape matches the input cube's spatial shape (fine
     if ``oversample > 1``); the caller is responsible for applying the
-    BoxPixel sinc + sum-bin to coarse detector pixels at the 2D output.
+    BoxPixel sinc + coarse-pixel-center readout at the 2D output
+    (``kl_pipe.grism._apply_post_dispersion_pixel_response``).
 
     Parameters
     ----------
