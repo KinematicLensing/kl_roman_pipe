@@ -472,6 +472,40 @@ the warped LOS: no window, no truncation, no clip. Findings
   (that lives in coordinates/source/lines imports). Standalone scripts
   must set jax_enable_x64 explicitly.
 
+**A5b IMPLEMENTED (2026-07-04): los_quadrature='tanh' is the default.**
+All four inclined models take ``los_quadrature='tanh'|'legendre'`` +
+``n_quad`` (BulgeDiskModel forwards both to its components); 'legendre'
+= the old windowed rule, retained as the reference path. Per-class tanh
+node defaults: 32 (exponential; Fisher-gated) and 256 (cuspy
+Sersic/Spergel family). The cuspy finding (user-directed BulgeDisk
+gating): NO generic 1D quadrature converges on the de Vaucouleurs cusp
+-- tanh-2048 vs 4096 still differ ~1e-3, and the OLD GL-200 default had
+1e-1 max-rel / 2.9e-3 flux error there; tanh-256 beats it on max-rel,
+flux, AND L1 at the same node cost (9.3e-3 / 1.3e-3 / 1.3e-3).
+Pixel-accurate bulges belong to the k-space path (as GalSim insists).
+
+Validation (all green, 2026-07-04): tests/test_los_quadrature.py -- 9
+fast gates (measure-then-freeze: windowed-agreement, edge-on
+self-convergence, window/clip flux CANARY pinning the known legendre
+model error, thin-disk closed-form exactness 1.4e-6, Sersic dominance
+gate, BulgeDisk composite 2.8e-4, gradient equivalence 2.1e-4) + slow
+seeded posterior A/B (shifts 0.002-0.050 sigma, widths within 5%);
+make test-basic 904 passed with ZERO tolerance loosening and one
+TIGHTENING (test_intensity thin-disk GalSim tolerance 3.0 -> 0.02,
+measured 6.7e-3); flagship test PASSES under all new defaults -- 600
+NUTS samples in 112 s (joint Nsigma 0.131).
+
+Measured posterior-gradient wallclock after A5a+A5b (min-of-30, vs the
+Sec 1.1 baselines):
+
+| config | fwd ms | grad ms | session speedup |
+|---|---:|---:|---|
+| Q quick-dev | 2.34 (was 5.43) | 9.68 (was 33.63) | 3.5x |
+| P production | 12.87 (was 16.57) | 20.65 (was 78.24) | 3.8x |
+
+Next native frontier (re-profile before choosing): the grism tail --
+operator matvec transpose (~3.5 ms/roll), erf kernel, broadband legs.
+
 ---
 
 ## 3. GPU production path (Tier B -- TACC Vista GH200)
