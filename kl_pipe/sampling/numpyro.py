@@ -465,6 +465,59 @@ class NumpyroSampler(Sampler):
 
         return diagnostics
 
+    def _resolve_chain_method(self, n_chains: int) -> str:
+        """Resolve ``config.chain_method`` to a concrete numpyro chain method.
+
+        An explicit non-None ``config.chain_method`` always wins (including
+        raising if 'parallel' is requested without enough devices). With
+        ``config.chain_method=None`` (auto), dispatch by backend and device
+        count:
+
+        - non-CPU backend -> 'vectorized'
+        - CPU with ``jax.local_device_count() >= n_chains`` and more than one
+          device available -> 'parallel'
+        - CPU otherwise -> 'sequential'
+
+        Parameters
+        ----------
+        n_chains : int
+            Number of chains this run will launch.
+
+        Returns
+        -------
+        str
+            One of 'sequential', 'parallel', 'vectorized'.
+
+        Raises
+        ------
+        ValueError
+            If ``config.chain_method='parallel'`` is requested explicitly
+            but ``jax.local_device_count() < n_chains``. NumPyro itself
+            only warns and silently falls back to sequential execution in
+            this case; kl_pipe raises instead so a misconfigured device
+            count is never silent.
+        """
+        method = self.config.chain_method
+        if method is not None:
+            if method == 'parallel' and jax.local_device_count() < n_chains:
+                raise ValueError(
+                    f"chain_method='parallel' requires "
+                    f"jax.local_device_count() >= n_chains ({n_chains}), "
+                    f"got {jax.local_device_count()} device(s). Set the "
+                    f"KLPIPE_CPU_DEVICES environment variable (see "
+                    f"kl_pipe._devices) to force more host CPU devices "
+                    f"before the first kl_pipe/JAX import, or use "
+                    f"chain_method='sequential'/'vectorized' instead."
+                )
+            return method
+
+        if jax.default_backend() != 'cpu':
+            return 'vectorized'
+        n_devices = jax.local_device_count()
+        if n_devices >= n_chains and n_devices > 1:
+            return 'parallel'
+        return 'sequential'
+
     def run(self) -> SamplerResult:
         """
         Run NumPyro NUTS sampler.
@@ -505,13 +558,15 @@ class NumpyroSampler(Sampler):
             target_accept_prob=self.config.target_accept_prob,
         )
 
+        chain_method = self._resolve_chain_method(self.config.n_chains)
+
         # Setup MCMC
         mcmc = MCMC(
             kernel,
             num_warmup=self.config.n_warmup,
             num_samples=self.config.n_samples,
             num_chains=self.config.n_chains,
-            chain_method=self.config.chain_method,
+            chain_method=chain_method,
             progress_bar=self.config.progress,
         )
 
@@ -577,6 +632,7 @@ class NumpyroSampler(Sampler):
             'seed': seed,
             'dense_mass': self.config.dense_mass,
             'reparam_strategy': self.config.reparam_strategy.value,
+            'chain_method': chain_method,
         }
 
         return SamplerResult(
@@ -646,12 +702,14 @@ class NumpyroSampler(Sampler):
             max_tree_depth=self.config.max_tree_depth,
             target_accept_prob=self.config.target_accept_prob,
         )
+        chain_method = self._resolve_chain_method(n_chains)
+
         mcmc = MCMC(
             kernel,
             num_warmup=self.config.n_warmup,
             num_samples=self.config.n_samples,
             num_chains=n_chains,
-            chain_method=self.config.chain_method,
+            chain_method=chain_method,
             progress_bar=self.config.progress,
         )
         mcmc.run(
@@ -697,6 +755,7 @@ class NumpyroSampler(Sampler):
             'seed': seed,
             'dense_mass': True,
             'precondition': 'laplace',
+            'chain_method': chain_method,
         }
         return SamplerResult(
             samples=samples,

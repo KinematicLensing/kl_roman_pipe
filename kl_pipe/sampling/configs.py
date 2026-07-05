@@ -244,17 +244,30 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
         For posterior-informed conditioning, use
         ``InferenceTask.laplace_preconditioner`` instead.
-    chain_method : str
+    chain_method : str or None
         How to run multiple chains:
 
-        - 'sequential': Run chains one after another (default, works everywhere)
-        - 'parallel': Run chains in parallel via JAX pmap (requires multi-device)
-        - 'vectorized': Vectorize across chains (single device, memory intensive)
+        - None (default): auto-dispatch based on backend and device count
+          (see below)
+        - 'sequential': Run chains one after another (works everywhere)
+        - 'parallel': Run chains in parallel via JAX pmap (requires
+          ``jax.local_device_count() >= n_chains``; raises ``ValueError`` if
+          not, rather than numpyro's silent sequential fallback)
+        - 'vectorized': Vectorize across chains (single device, memory
+          intensive)
 
-        'sequential' is the default deliberately: on CPU, 'vectorized' was
-        benchmarked ~2.5x slower (vmap-ing the NUTS kernel adds overhead with
-        no extra parallelism to exploit) at similar peak memory. 'vectorized'
-        is expected to win only on GPU.
+        With ``chain_method=None``, ``NumpyroSampler`` resolves the method at
+        run time: non-CPU backends dispatch to 'vectorized'; CPU with
+        ``jax.local_device_count() >= n_chains`` (and more than one device)
+        dispatches to 'parallel'; CPU otherwise falls back to 'sequential'.
+        This makes 'sequential' the effective default on an unconfigured
+        single-CPU-device machine (unchanged from the historical default),
+        while opting into 'parallel' automatically once
+        ``KLPIPE_CPU_DEVICES`` (see ``kl_pipe._devices``) provides enough host
+        CPU devices. An explicit string always overrides auto-dispatch.
+        'vectorized' was benchmarked ~2.5x slower than 'sequential' on CPU
+        (vmap-ing the NUTS kernel adds overhead with no extra parallelism to
+        exploit); it is expected to win only on GPU/TPU backends.
     save_warmup : bool
         Whether to save warmup samples in result.
     save_mass_matrix : bool
@@ -301,7 +314,7 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
     reparam_strategy: ReparamStrategy = ReparamStrategy.PRIOR
 
-    chain_method: str = 'sequential'
+    chain_method: Optional[str] = None
     save_warmup: bool = False
     save_mass_matrix: bool = False
 
@@ -325,10 +338,10 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
             raise ValueError("n_map_starts must be >= 1")
         if self.n_chains < 1:
             raise ValueError("n_chains must be >= 1")
-        if self.chain_method not in ('sequential', 'parallel', 'vectorized'):
+        if self.chain_method not in (None, 'sequential', 'parallel', 'vectorized'):
             raise ValueError(
-                f"chain_method must be 'sequential', 'parallel', or 'vectorized', "
-                f"got '{self.chain_method}'"
+                f"chain_method must be None (auto-dispatch), 'sequential', "
+                f"'parallel', or 'vectorized', got '{self.chain_method}'"
             )
         if self.init_strategy not in ('prior', 'median', 'jitter'):
             raise ValueError(

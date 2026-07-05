@@ -213,7 +213,7 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `max_tree_depth` | `int` | `10` | Max NUTS tree depth |
 | `target_accept_prob` | `float` | `0.8` | In (0, 1) |
 | `reparam_strategy` | `ReparamStrategy` | `PRIOR` | `'none'`, `'prior'` |
-| `chain_method` | `str` | `'sequential'` | `'sequential'`, `'parallel'`, `'vectorized'` |
+| `chain_method` | `Optional[str]` | `None` (auto-dispatch) | `None`, `'sequential'`, `'parallel'`, `'vectorized'` |
 | `save_warmup` | `bool` | `False` | Save warmup samples |
 | `save_mass_matrix` | `bool` | `False` | Save adapted inverse mass matrix |
 | `init_strategy` | `str` | `'prior'` | `'prior'`, `'median'`, `'jitter'` |
