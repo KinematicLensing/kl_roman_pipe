@@ -828,7 +828,11 @@ class SourceModel:
         """
         values = []
         for p in model.PARAMETER_NAMES:
-            if p == 'flux':
+            # amplitude is per-line: 'flux' for emission-line intensity,
+            # 'flux_per_nm' for a ContinuumModel (its relabel of 'flux').
+            # Matching only 'flux' silently read the OWNER's amplitude for
+            # continuum_key sharing, ignoring the line's own value.
+            if p in ('flux', 'flux_per_nm'):
                 values.append(_lookup_param(pars, own_prefix, p))
             else:
                 values.append(_lookup_param(pars, spatial_owner_prefix, p))

@@ -865,3 +865,133 @@ class TestDiagnosticPlots:
             save_path=os.path.join(OUT_DIR, 'datacube_overview.png'),
         )
         assert fig is not None
+
+
+# =============================================================================
+# Amplitude-scaled spatial-eval dedupe (build_cube unit-eval cache)
+# =============================================================================
+
+
+class TestIntensityDedupe:
+    """build_cube evaluates each spatial owner once at unit amplitude and
+    scales per line (profiles are linear in flux / flux_per_nm). These tests
+    pin exactness of that algebra against independently-evaluated models."""
+
+    def _cube_pars(self, z=1.0):
+        lam_center = LINE_LAMBDAS['Halpha'] * (1 + z)
+        dlam = lam_center * 3000.0 / C_KMS
+        return CubePars.from_range(
+            _IMAGE_PARS, lam_center - dlam, lam_center + dlam, 1.1
+        )
+
+    def test_shared_intensity_key_matches_independent_models(
+        self, vel_model, int_model, source_ha_nii
+    ):
+        """Shared-key cube == cube from per-line independent model instances
+        with identical spatial params (dedupe algebra is exact)."""
+        source_indep = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(intensity=InclinedExponentialModel()),
+                'NII6548': EmissionLine(intensity=InclinedExponentialModel()),
+                'NII6584': EmissionLine(intensity=InclinedExponentialModel()),
+            },
+        )
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0, 'NII6548': 10.2, 'NII6584': 30.0},
+        )
+        cp = self._cube_pars()
+        cube_shared = source_ha_nii.build_cube(pars, cp)
+        cube_indep = source_indep.build_cube(pars, cp)
+        # same algebra up to flux-scaling round-off (amplitude * unit-eval
+        # vs eval-at-amplitude)
+        np.testing.assert_allclose(
+            np.asarray(cube_shared), np.asarray(cube_indep), rtol=1e-12, atol=0
+        )
+
+    def test_line_contribution_linear_in_flux(self, source_ha_nii):
+        """NII contribution scales exactly linearly with NII flux (the
+        assumption the unit-eval cache relies on, checked end-to-end)."""
+        cp = self._cube_pars()
+
+        def cube_at(f_nii):
+            pars = _make_pars(
+                _VEL_PARS,
+                _INT_PARS,
+                z=1.0,
+                vel_dispersion=50.0,
+                line_fluxes={'Halpha': 100.0, 'NII6548': 0.0, 'NII6584': f_nii},
+            )
+            return np.asarray(source_ha_nii.build_cube(pars, cp))
+
+        base = cube_at(0.0)
+        contrib_8 = cube_at(8.0) - base
+        contrib_6 = cube_at(6.0) - base
+        np.testing.assert_allclose(contrib_6, 0.75 * contrib_8, rtol=1e-12, atol=1e-16)
+
+    def test_shared_continuum_key_matches_independent_models(self, vel_model):
+        """continuum_key sharing: dedupe algebra exact for flux_per_nm too."""
+        source_shared = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+                'NII6584': EmissionLine(intensity_key='Halpha', continuum_key='Halpha'),
+            },
+        )
+        source_indep = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+                'NII6584': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+            },
+        )
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0, 'NII6584': 30.0},
+            line_conts={'Halpha': 25.0, 'NII6584': 10.0},
+        )
+        cp = self._cube_pars()
+        cube_shared = source_shared.build_cube(pars, cp)
+        cube_indep = source_indep.build_cube(pars, cp)
+        np.testing.assert_allclose(
+            np.asarray(cube_shared), np.asarray(cube_indep), rtol=1e-12, atol=0
+        )
+
+    def test_dedupe_grad_flows_to_all_fluxes(self, source_ha_nii):
+        """Gradients w.r.t. every per-line flux are nonzero through the
+        unit-eval cache (no accidental stop-gradient via caching)."""
+        cp = self._cube_pars()
+
+        def total(fluxes):
+            pars = _make_pars(
+                _VEL_PARS,
+                _INT_PARS,
+                z=1.0,
+                vel_dispersion=50.0,
+                line_fluxes={
+                    'Halpha': fluxes[0],
+                    'NII6548': fluxes[1],
+                    'NII6584': fluxes[2],
+                },
+            )
+            return jnp.sum(source_ha_nii.build_cube(pars, cp) ** 2)
+
+        g = jax.grad(total)(jnp.array([100.0, 10.2, 30.0]))
+        assert np.all(np.isfinite(np.asarray(g)))
+        assert np.all(np.abs(np.asarray(g)) > 0.0)
