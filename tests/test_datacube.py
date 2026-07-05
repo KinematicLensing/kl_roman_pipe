@@ -995,3 +995,108 @@ class TestIntensityDedupe:
         g = jax.grad(total)(jnp.array([100.0, 10.2, 30.0]))
         assert np.all(np.isfinite(np.asarray(g)))
         assert np.all(np.abs(np.asarray(g)) > 0.0)
+
+
+# =============================================================================
+# Rematerialized cube assembly (cube_remat)
+# =============================================================================
+
+
+class TestCubeRemat:
+    """cube_remat wraps build_cube in jax.checkpoint; gradients must be
+    identical to the unwrapped path and the toggle must plumb through."""
+
+    def _make_source(self, cube_remat):
+        return SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(intensity=InclinedExponentialModel())
+            },
+            cube_remat=cube_remat,
+        )
+
+    def _make_grism_obs(self, z):
+        from kl_pipe.observation import build_grism_obs
+        from kl_pipe.render import RenderConfig
+
+        image_pars = ImagePars(shape=(24, 24), pixel_scale=0.11, indexing='ij')
+        gp = GrismPars(
+            image_pars=image_pars,
+            dispersion=1.1,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
+            dispersion_angle_detector=0.0,
+        )
+        return build_grism_obs(gp, z=z, render_config=RenderConfig(oversample=1))
+
+    def test_toggle_plumbing(self):
+        """cube_remat defaults True, accepts False, and survives a pytree
+        flatten/unflatten round-trip (instance rides in aux)."""
+        source_default = self._make_source(cube_remat=True)
+        assert source_default.cube_remat is True
+        assert (
+            SourceModel(
+                velocity_model=CenteredVelocityModel(),
+                emission_lines={
+                    'Halpha': EmissionLine(intensity=InclinedExponentialModel())
+                },
+            ).cube_remat
+            is True
+        )
+
+        source_off = self._make_source(cube_remat=False)
+        assert source_off.cube_remat is False
+        leaves, treedef = jax.tree_util.tree_flatten(source_off)
+        rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+        assert rebuilt.cube_remat is False
+
+    def test_gradient_equivalence(self):
+        """Posterior-like scalar reduction of render_grism: gradients with
+        cube_remat=True match cube_remat=False to rtol 1e-10."""
+        z = 1.0
+        obs = self._make_grism_obs(z)
+        base_pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=z,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+        )
+        source_on = self._make_source(cube_remat=True)
+        source_off = self._make_source(cube_remat=False)
+
+        # fixed pseudo-data so the scalar behaves like a chi-squared
+        data = source_off.render_grism(base_pars, obs) * 1.02 + 0.01
+        variance = 0.05**2
+
+        theta0 = jnp.array([200.0, 0.5, 100.0, 0.02])
+
+        def make_loss(source):
+            def loss(theta):
+                pars = dict(base_pars)
+                pars['vel.vcirc'] = theta[0]
+                pars['cosi'] = theta[1]
+                pars['Halpha.flux'] = theta[2]
+                pars['g1'] = theta[3]
+                model_img = source.render_grism(pars, obs)
+                return -0.5 * jnp.sum((data - model_img) ** 2 / variance)
+
+            return loss
+
+        value_on = make_loss(source_on)(theta0)
+        value_off = make_loss(source_off)(theta0)
+        np.testing.assert_allclose(
+            float(value_on), float(value_off), rtol=1e-12, atol=0
+        )
+
+        grad_on = jax.grad(make_loss(source_on))(theta0)
+        grad_off = jax.grad(make_loss(source_off))(theta0)
+        assert np.all(np.isfinite(np.asarray(grad_on)))
+        np.testing.assert_allclose(
+            np.asarray(grad_on), np.asarray(grad_off), rtol=1e-10, atol=0
+        )
+
+        # jit-compiled gradients agree as well (the production pathway)
+        grad_on_jit = jax.jit(jax.grad(make_loss(source_on)))(theta0)
+        np.testing.assert_allclose(
+            np.asarray(grad_on_jit), np.asarray(grad_off), rtol=1e-10, atol=0
+        )
