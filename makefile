@@ -343,6 +343,15 @@ test-grism-validation:
 	@conda run -n klpipe pytest tests/test_grism_validation.py -v -m grism_validation
 
 #-------------------------------------------------------------------------------
+# GalSim-chromatic reference gate (self-contained, no external env/data —
+# unlike the geko cross-code tier above; see docs/validation/galsim_reference_gate.md)
+
+.PHONY: test-galsim-reference
+test-galsim-reference:
+	@echo "Running GalSim-chromatic reference gate..."
+	@conda run -n klpipe pytest tests/test_galsim_reference.py -v -m galsim_reference
+
+#-------------------------------------------------------------------------------
 # NOTE: These may be useful in the future if we use git submodules
 
 # update-submodules:
