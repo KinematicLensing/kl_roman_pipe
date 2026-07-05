@@ -223,6 +223,54 @@ costs ZERO extra interpolation passes and lands output directly in det frame.
 Rejected alternatives: rotate dispersed 2D image (+1 interp pass/roll),
 rotate cube slices (+Nlam passes/roll).
 
+**IMPLEMENTED + BIAS INVESTIGATION (2026-07-04, second pass).** The naive
+bilinear fused-sampling shared path (commit 61ce33e) FAILED the seeded
+posterior A/B: cosi shifted 0.4 sigma of an ultra-tight test posterior
+(4 free params, SNR 50, 2 rolls, sigma_cosi 0.004). Truth-referenced fits
+(data from per-roll os=9 renders) showed the per-roll path unbiased
+(-0.006 sigma) and shared-bilinear genuinely biased (-0.49 sigma cosi):
+bilinear sub-pixel smoothing at rotated (both-axes-fractional) sample
+coordinates acts as a tiny anisotropic blur projecting onto
+inclination-like posterior modes. Findings from the targeted experiment
+campaign (`experiments/sweverett/production_speedups/a3_interp/`):
+
+- NEGATIVE: grid padding does NOT touch the bias (identical +0.35 sigma
+  Fisher shift for pad 0-6): the rotated-corner truncation lives where the
+  noise-weighted Jacobian is negligible. The earlier "truncation dominates"
+  read from unweighted image moments was an artifact of the metric.
+- NEGATIVE: k-space mean-MTF compensation (divide by rotated sinc^2)
+  OVERCORRECTS to -0.37 sigma: the actual sub-pixel phases are structured,
+  not uniform; the mean-phase model is ~2x too strong.
+- POSITIVE: Catmull-Rom cubic interpolation alone is truth-grade --
+  Fisher-projected shift 0.005 sigma (== per-roll floor 0.004), confirmed
+  by MCMC (-0.006 sigma relative, all params < 0.08 incl. MC error).
+- TOOL: Fisher linear-response projection
+  `delta_theta = -(J^T W J)^-1 J^T W (model - data)` reproduces MCMC
+  pathway shifts to ~0.03 sigma at zero MCMC cost; image-level L1 and
+  unweighted moments are demonstrably NOT posterior-relevant metrics.
+  Now a permanent test gate (tests/test_grism_shared_cube.py
+  TestFisherGate, frozen 0.05 sigma).
+- RUNTIME: dispersion + relative roll rotation + cubic interpolation have
+  theta-independent sample coordinates -> materialized as ONE precomputed
+  sparse BCOO matrix per roll (`dispersion.precompute_dispersion_operator`)
+  = the A4 gather operator, landed early. 4-roll grad: 2.9x vs per_roll
+  (bilinear loop was 1.2-1.3x; naive traced cubic 0.65x; BCOO beats a
+  dense-taps take+reduce layout 2.9x vs 2.1x). Operators are galaxy- and
+  theta-independent: one set per (grid, lambda, roll) config serves every
+  galaxy sharing it (~50 MB/roll fp64).
+- ANCHOR (user): the shared cube is built in the FIRST obs's detector
+  frame -- exact parameter-level rotation, no rotational resampling for
+  the anchor roll, and no behavior change for single-roll runs (singleton
+  groups use the classic per-obs path). Circular-mean anchoring (halves
+  worst relative angle, no exact roll) recorded as an unused alternative.
+
+**Final production numbers (from_obs likelihood, flagship grism config
+32x32/os=3/Nlam=25, min-of-50 grad, M3 Max fp64):** 1 roll 1.01x (zero
+overhead), 2 rolls 1.64x (38.4 -> 23.5 ms), 4 rolls 2.89x (80.9 ->
+28.0 ms); a 4-roll gradient costs only ~27% more than a single roll.
+Seeded posterior A/B through the production path: max shift 0.019 sigma
+(bilinear had FAILED at 0.403), widths within 12%.
+
 **PSF.** The det-frame PSF never touches the shared cube: A1's
 post-dispersion convolution applies per roll, per obs kernel (PSFs MAY
 differ across rolls -- sharing unaffected). Shared path REQUIRES
@@ -280,6 +328,13 @@ Negligible CPU win (disperse is 2%) but turns the whole grism path into dense
 XLA ops -- do it as part of the GPU port, not before. In-code note at
 `dispersion.py:200-205`: vmap/scan variants were 2.5x SLOWER on CPU (keep the
 loop on CPU); GPU untested.
+
+LANDED EARLY (2026-07-04) as the A3 shared-path implementation
+(`precompute_dispersion_operator`): fusing dispersion + roll rotation +
+cubic interpolation into one BCOO matvec turned out to be a CPU win too
+(the matvec backward is a transpose matmul vs 25 scatter passes) -- the
+"negligible CPU win" prediction was wrong once the loop-vs-matmul
+structure change is included. The per-roll path still uses the loop.
 
 ---
 
@@ -528,6 +583,25 @@ only.
     two-term budget (truncation C x folding_threshold + interpolation
     convergence-vs-oversample). Implement unpadded first; padding only if
     the measured 45-deg budget demands it.
+28. (2026-07-04, user) Bilinear shared path REJECTED after the posterior
+    A/B failure + experiment campaign (see A3 IMPLEMENTED block): "run
+    clear experiments with accuracy AND runtime, decide from a matrix,
+    don't spend the speedup chasing the bias down." Winner: precomputed
+    cubic sparse gather operator (accuracy at per-roll floor AND 2.9x,
+    fastest variant tested). Padding + MTF compensation documented as
+    negative results.
+29. (2026-07-04, user) Shared cube anchored at the FIRST grism obs's
+    detector frame (user proposal): one roll exactly free of rotational
+    resampling; relative angles shrink when survey rolls cluster. Note:
+    no runtime effect (parameter rotation is free; operator cost is
+    angle-independent; single-roll runs already bypass via the singleton
+    fallback).
+30. (2026-07-04, user) Rigor requirement for shared-vs-per-roll: rock-
+    solid unit tests + visual diagnostics, regression vs per_roll first,
+    standalone multi-roll verification by the end. Implemented as the
+    4-layer gate: operator-vs-independent-reference identity, image A/B
+    grid w/ frozen constants, Fisher-projection gate (<0.05 sigma), slow
+    seeded posterior A/B (<0.1 sigma).
 
 ## 7. TODO (rank-ordered)
 
@@ -557,12 +631,14 @@ only.
       backward = ~81% of grism grad; 4-roll scales 3.99x; A3 measured
       ceiling 2.06x on 4-roll grad (cotangent-accumulation overhead eats
       the naive 4x). Next post-A3 native lever = build_cube backward.
-- [ ] A3 shared-cube-across-rolls refactor: design GRILLED + signed off
-      (decisions 21-27; full record in A3 section). Implementation in
-      progress: pre-A3 x0/y0 rotation fix -> disperse_cube rotation kwarg
-      -> RenderConfig.cube_mode -> render_grism_group + from_obs grouping
-      -> two-term-tolerance equivalence/gradient/posterior tests + visual
-      diagnostics -> re-profile.
+- [x] A3 shared-cube-across-rolls: IMPLEMENTED as the precomputed cubic
+      sparse gather operator (== A4 landed early), anchored at the first
+      roll, cube_mode='shared' default (decisions 21-30; full saga incl.
+      the rejected bilinear path + negative results in the A3 section).
+      Measured 2.9x on the 4-roll gradient at flagship config; accuracy
+      at the per-roll floor (Fisher 0.005 sigma, MCMC-confirmed).
+- [x] A4 precomputed gather operator: landed as part of A3 (CPU win
+      already, 2.9x incl. sharing); GPU port inherits it.
 - [ ] A3-FOLLOW-UP (end-of-branch doc pass, DO NOT FORGET): tutorial +
       docs warning that the static-PSF grism pathway is valid per emission
       line complex only (issue #51); recommended workflow for now = separate
