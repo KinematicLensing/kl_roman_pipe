@@ -43,7 +43,16 @@ C_KMS = 299792.458  # km/s, matches kl_pipe.constants.C_KMS (astropy CODATA)
 
 @dataclass
 class GalaxyParams:
-    """Truth parameters for the reference scene (Halpha line only)."""
+    """Truth parameters for the reference scene (Halpha line only).
+
+    ``g1``/``g2`` are reduced lensing shear. The maps in this module are
+    source-plane (unsheared); shear is applied at the render level via
+    GalSim's own area-preserving ``.shear()`` transform, which matches
+    ``kl_pipe.transformation.cen2source`` exactly (both normalize by
+    1/sqrt(1 - g1^2 - g2^2)). Shearing the isovelocity channel images
+    shears intensity and velocity structure together, equivalent to
+    evaluating both fields on the sheared coordinate grid.
+    """
 
     cosi: float
     theta_int: float  # radians
@@ -56,6 +65,8 @@ class GalaxyParams:
     sigma_v: float  # km/s, intrinsic Gaussian velocity dispersion
     z: float  # redshift
     lambda_rest: float = 656.28  # nm, Halpha vacuum rest wavelength
+    g1: float = 0.0  # reduced shear component
+    g2: float = 0.0  # reduced shear component
 
 
 def centered_coords_1d(n: int) -> np.ndarray:

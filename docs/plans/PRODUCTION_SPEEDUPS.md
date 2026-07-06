@@ -869,18 +869,31 @@ only.
       'vectorized' on GPU (kit SETUP.md step); fp32 pass with the matmul
       pin; re-benchmark the CPU-negative variants (BCOO vs streaming,
       remat, vectorized chains).
-- [ ] Vista env: aarch64 conda-lock in flight (user); conda-lock.yml is
-      currently deleted in the working tree and the makefile platform
-      list edited -- finish or restore before committing.
+- [x] Vista env: aarch64 conda-lock root cause found (2026-07-05):
+      `sep` has no linux-aarch64 build on conda-forge and conda-lock
+      swallows the mamba solver error. `sep` is imported nowhere in the
+      repo, so it was removed from environment.yaml; the makefile
+      platform list gained linux-aarch64 and conda-lock.yml was
+      regenerated for all four platforms. Note the GPU benchmark path
+      remains the NGC container + pip --target (vista_kit/SETUP.md); the
+      conda env on Vista serves the CPU test suite and tooling. Also
+      unused in-repo (candidates for a later cleanup pass, none blocking):
+      fitsio, zeus-mcmc, schwimmbad, mpi4py, openmpi, reproject, cython.
 - [ ] geko cross-validation renders: kl_pipe set stale (pixel-readout
       fix), geko set absent locally, so that suite currently skips
       entirely. Regenerate both when geko comparisons become relevant;
       not gating.
-- [ ] Rendering test-coverage gaps (docs/validation/
-      rendering_test_coverage.md): sheared grism scenes have no
-      independent cross-check; GrismPars.throughput has no test at all;
-      continuum dispersal has no external reference. Extend the GalSim
-      reference gate scenes.
+- [x] Rendering test-coverage gaps, shear + throughput (closed
+      2026-07-05): GalSim reference gate extended with a sheared dynamic
+      scene (g=(0.05, 0.03), agreement at the unsheared floor) and a
+      ramp-throughput static scene (agreement at the flat floor), plus
+      closed-form throughput unit tests (slice selection, orientation,
+      loop-vs-operator pathway) in test_grism_core.py. See
+      docs/validation/{galsim_reference_gate,rendering_test_coverage}.md.
+- [ ] Rendering test-coverage gap, continuum dispersal (remaining):
+      no external reference. Extend the GalSim reference with a flat-SED
+      chromatic component (no isovelocity binning needed) or extend
+      geko's continuum param off zero.
 - [ ] Cross-day seeded-NUTS drift (0.131 vs 0.163 same seed/commit):
       within-day A/B protocol only; investigate only if it hits a gate.
 

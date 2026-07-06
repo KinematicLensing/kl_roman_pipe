@@ -53,17 +53,15 @@ make test-galsim-reference
 conda run -n klpipe pytest tests/test_galsim_reference.py -v -m galsim_reference
 ```
 
-Runtime: ~9-11s for both scenes (well under the 120s `slow`-marker
+Runtime: ~20-25s for all four scenes (well under the 120s `slow`-marker
 threshold), so the gate runs by default in `make test` / `make test-basic`
 / `make test-extended` -- it is not excluded by any marker filter.
 
 ### Scenes gated
 
-Both: inclined exponential disk (cosi=0.6, theta_int=pi/4), Halpha line
-only, z=1.0, no shear/continuum/off-center -- the scope the reference
-implementation currently supports. Extending it to those axes was judged
-not worth the effort right now given the geko tier's existing
-parameter-space breadth; see the gap table in
+All: inclined exponential disk (cosi=0.6, theta_int=pi/4), Halpha line
+only, z=1.0, no continuum/off-center. Continuum and off-center remain
+unextended; see the gap table in
 `docs/validation/rendering_test_coverage.md`.
 
 1. **Static** (`vcirc=0`): v_los is spatially uniform (`=v0=10 km/s`), so
@@ -73,6 +71,28 @@ parameter-space breadth; see the gap table in
    Doppler shift, rendered with a caller-tuned, refined `n_lambda=251`.
    This tests demonstrated-achievable accuracy on the entanglement
    pathway, not default behavior.
+3. **Sheared dynamic** (`vcirc=200`, `n_lambda=251`, `g1=0.05, g2=0.03`,
+   ~2.5x the flagship shear): reduced shear through the full grism
+   pathway. The reference applies GalSim's own area-preserving `.shear()`
+   to the isovelocity channel images (shearing intensity and velocity
+   structure together) -- the same transform convention as `kl_pipe`'s
+   `cen2source`, implemented independently. Measured agreement sits at or
+   below the unsheared dynamic floor (0.428%/0.019% vs 0.534%/0.030%);
+   flagship-value shear `g=(0.02, -0.01)` measured 0.487%/0.025%, same
+   conclusion. Closes the "sheared grism scenes have no independent
+   cross-check" gap.
+4. **Ramp-throughput static** (`vcirc=0`, default `n_lambda`,
+   `T(lambda) = 0.5 + 0.02*(lambda - lambda_ref)`, a factor ~3 across the
+   window): wavelength-dependent `GrismPars.throughput` vs the same
+   T(lambda) applied as the reference's GalSim draw bandpass. The ramp
+   changes the kl_pipe image by ~50% of peak vs flat (asserted in-test),
+   so a silently-ignored or index-misaligned throughput cannot pass.
+   Measured agreement sits at the flat static floor (1.715%/0.061% vs
+   1.678%/0.060%). First test coverage of `GrismPars.throughput`
+   anywhere in the suite; per-slice indexing is additionally pinned
+   closed-form by `tests/test_grism_core.py::TestDispersion`
+   throughput tests (one-hot slice selection, ramp orientation,
+   loop-vs-operator pathway agreement at integer offsets).
 
 kl_pipe's *default*-`n_lambda` regression on the dynamic case (under-
 resolving the spatially-varying Doppler field: max|diff|/peak jumps from
@@ -97,6 +117,12 @@ flux ratio).
 | Dynamic (`vcirc=200`, `n_lambda=251`) | max\|diff\|/peak | 0.534% | < 1.5% |
 | Dynamic | mean\|diff\|/peak | 0.030% | < 0.1% |
 | Dynamic | \|flux ratio - 1\| | 0.399% | < 0.5% |
+| Sheared dynamic (`g1=0.05, g2=0.03`) | max\|diff\|/peak | 0.428% | < 1.5% |
+| Sheared dynamic | mean\|diff\|/peak | 0.019% | < 0.1% |
+| Sheared dynamic | \|flux ratio - 1\| | 0.247% | < 0.5% |
+| Ramp-throughput static | max\|diff\|/peak | 1.715% | < 5.0% |
+| Ramp-throughput static | mean\|diff\|/peak | 0.061% | < 0.2% |
+| Ramp-throughput static | \|flux ratio - 1\| | 0.159% | < 0.5% |
 
 **The two scenes are frozen at different bounds because they have
 different, independently-understood floors** -- this is not a case of
@@ -115,10 +141,16 @@ entanglement-driven residual falls to the same numerical floor as the
 static scene's non-entanglement floor -- i.e., no further undiagnosed bug
 remains once refined.
 
-Flux-ratio tolerance (0.5%) is shared across both scenes: flux is
-conserved through dispersion/PSF/pixel-readout by construction, so this is
-a much harder physical constraint than shape agreement and both scenes sit
-comfortably under it (0.34-0.40%).
+Flux-ratio tolerance (0.5%) is shared across all scenes: flux is
+conserved through dispersion/PSF/pixel-readout by construction (throughput-
+weighted on both sides in the ramp scene), so this is a much harder
+physical constraint than shape agreement and every scene sits comfortably
+under it (0.16-0.40%).
+
+The sheared and ramp-throughput scenes are frozen at their parent scenes'
+bounds (dynamic and static respectively) because their measured floors are
+statistically identical to the parents' -- shear and throughput introduce
+no additional disagreement of their own.
 
 ## Bugs found during development (context)
 

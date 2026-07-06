@@ -11,8 +11,7 @@ Both sides share no code; agreement pins the pipeline's cube/dispersion/PSF/
 pixel-readout mechanics, not just a shared parametric-model implementation
 (that role is filled by the geko cross-code tier, ``test_grism_validation.py``).
 
-Two scenes, both Halpha line only, no shear/continuum/off-center (the scope
-the reference implementation currently supports; see
+Four scenes, all Halpha line only, no continuum/off-center (see
 ``docs/validation/galsim_reference_gate.md``):
 
 1. Static (``vcirc=0``): sanity floor, decoupled from any velocity-driven
@@ -24,6 +23,10 @@ the reference implementation currently supports; see
    Doppler field, ~6.4% max|diff|/peak vs a refined grid) is already pinned
    in-suite by ``tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation`` and
    is NOT re-tested here.
+3. Sheared dynamic (``g1=0.05, g2=0.03``): reduced shear through the full
+   grism pathway vs GalSim's own ``.shear()`` on the reference channels.
+4. Ramp-throughput static: wavelength-dependent ``GrismPars.throughput``
+   vs the same T(lambda) applied as the reference's draw bandpass.
 
 All tolerances are measure-then-freeze (repo convention: measured value
 recorded in a comment, frozen bound at ~3x headroom). The two scenes have
@@ -78,7 +81,13 @@ _BASE_GALAXY_KWARGS = dict(
 _REFERENCE_CFG = GalSimReferenceConfig(n_v=64, pts_per_sigma=20)
 
 
-def _render_both(vcirc: float, n_lambda: int | None):
+def _render_both(
+    vcirc: float,
+    n_lambda: int | None,
+    g1: float = 0.0,
+    g2: float = 0.0,
+    throughput_fn=None,
+):
     """Render the same scene through kl_pipe and the GalSim-chromatic
     reference. Returns (kl_pipe_image, reference_image), both flux/pixel.
     """
@@ -91,10 +100,13 @@ def _render_both(vcirc: float, n_lambda: int | None):
         dispersion_nm_per_pix=DISPERSION_NM_PER_PIX,
         oversample=OVERSAMPLE,
         n_lambda=n_lambda,
+        g1=g1,
+        g2=g2,
+        throughput_fn=throughput_fn,
     )
     kl_image = render_kl_pipe_grism(scene)
 
-    p = GalaxyParams(vcirc=vcirc, **_BASE_GALAXY_KWARGS)
+    p = GalaxyParams(vcirc=vcirc, g1=g1, g2=g2, **_BASE_GALAXY_KWARGS)
     out = render_galsim_reference(
         p,
         coarse_pixel_scale=PIXEL_SCALE,
@@ -103,8 +115,15 @@ def _render_both(vcirc: float, n_lambda: int | None):
         dispersion_nm_per_pix=DISPERSION_NM_PER_PIX,
         lambda_ref=LAMBDA_REF,
         cfg=_REFERENCE_CFG,
+        throughput_fn=throughput_fn,
     )
     return kl_image, out['image']
+
+
+def _ramp_throughput(lam):
+    """Linear throughput ramp, factor ~3 across the wavelength window
+    (positive everywhere the cube and reference windows reach)."""
+    return 0.5 + 0.02 * (np.asarray(lam) - LAMBDA_REF)
 
 
 def _assert_agreement(kl_image, ref_image, max_tol, mean_tol, flux_tol, label):
@@ -167,6 +186,71 @@ class TestGalSimReferenceGate:
             mean_tol=0.002,  # ~3x headroom over measured 0.060%
             flux_tol=self.FLUX_TOL,
             label='static scene (vcirc=0)',
+        )
+
+    def test_sheared_dynamic_scene(self):
+        # reduced shear through the full grism pathway (cube assembly +
+        # dispersion + PSF + readout) vs the independent reference, which
+        # applies GalSim's own .shear() to the isovelocity channels --
+        # kl_pipe's cen2source is the same area-preserving transform, but
+        # the two implementations share no code. g=(0.05, 0.03) is ~2.5x
+        # the flagship shear, chosen to amplify any convention bug well
+        # above the unsheared floor. Measured (2026-07-05, float64, this
+        # gate, oversample=5, n_lambda=251): max|diff|/peak=0.428%,
+        # mean|diff|/peak=0.019% -- at/below the unsheared dynamic floor
+        # (0.534%/0.030%), so shear introduces no additional disagreement.
+        # Flagship values g=(0.02, -0.01) measured 0.487%/0.025%, same
+        # conclusion. Frozen at the dynamic scene's bounds.
+        kl_image, ref_image = _render_both(vcirc=200.0, n_lambda=251, g1=0.05, g2=0.03)
+        _assert_agreement(
+            kl_image,
+            ref_image,
+            max_tol=0.015,
+            mean_tol=0.001,
+            flux_tol=self.FLUX_TOL,
+            label='sheared dynamic scene (g1=0.05, g2=0.03)',
+        )
+
+    def test_throughput_ramp_static_scene(self):
+        # wavelength-dependent throughput: kl_pipe applies per-slice
+        # T(lambda_k) * dlam * quad_weight_k in disperse_cube; the
+        # reference applies the same T(lambda) as the GalSim draw
+        # bandpass (continuous SED x bandpass integration). The ramp
+        # spans a factor ~3 across the wavelength window and changes the
+        # kl_pipe image by ~50% of peak vs flat throughput, so a
+        # silently-ignored or misaligned throughput cannot pass. Measured
+        # (2026-07-05, float64, this gate, oversample=5, default
+        # n_lambda): max|diff|/peak=1.715%, mean|diff|/peak=0.061%,
+        # flux-ratio dev 0.159% -- at the flat static-scene floor
+        # (1.678%/0.060%), so throughput adds no disagreement. Frozen at
+        # the static scene's bounds.
+        kl_ramp, ref_ramp = _render_both(
+            vcirc=0.0, n_lambda=None, throughput_fn=_ramp_throughput
+        )
+        # kl-only flat control for the self-check (no reference render needed)
+        flat_scene = build_kl_pipe_scene(
+            z=Z,
+            vcirc=0.0,
+            pixel_scale=PIXEL_SCALE,
+            shape=SHAPE,
+            psf_fwhm=PSF_FWHM,
+            dispersion_nm_per_pix=DISPERSION_NM_PER_PIX,
+            oversample=OVERSAMPLE,
+        )
+        kl_flat = np.asarray(render_kl_pipe_grism(flat_scene))
+        ramp_change = float(np.abs(kl_ramp - kl_flat).max() / kl_flat.max())
+        assert ramp_change > 0.2, (
+            f'throughput self-check: ramp changed the kl_pipe image by only '
+            f'{ramp_change:.1%} of peak (expected ~50%); the throughput array '
+            f'is not reaching disperse_cube'
+        )
+        _assert_agreement(
+            kl_ramp,
+            ref_ramp,
+            max_tol=0.05,
+            mean_tol=0.002,
+            flux_tol=self.FLUX_TOL,
+            label='ramp-throughput static scene (vcirc=0)',
         )
 
     def test_dynamic_scene_refined_n_lambda(self):

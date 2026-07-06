@@ -347,6 +347,135 @@ class TestDispersion:
         row_profile = np.array(result[:, 16])
         assert np.std(row_profile) > np.std(col_profile)
 
+    def test_throughput_slice_selection(self):
+        """A one-hot throughput selects exactly one wavelength slice.
+
+        The wavelength grid spacing equals the dispersion (nm/pixel), so
+        every slice lands at an integer pixel offset where the bilinear
+        interpolation is exact. The dispersed image must then equal the
+        selected slice shifted by its integer offset, scaled by
+        T_k * dlam * quad_weight_k. Endpoint slices (k=0, k=Nlam-1) carry
+        the trapezoid half weight; interior slices carry weight 1.
+        """
+        Nrow, Ncol, Nlam = 16, 16, 7
+        rng = np.random.default_rng(42)
+        cube_np = rng.uniform(0.1, 1.0, size=(Nrow, Ncol, Nlam))
+        cube = jnp.asarray(cube_np)
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        dispersion = 1.1
+        k_ref = 3
+        lam = 1312.0 + (np.arange(Nlam) - k_ref) * dispersion
+        dlam = dispersion
+
+        for k, weight in [(0, 0.5), (3, 1.0), (Nlam - 1, 0.5)]:
+            throughput = np.zeros(Nlam)
+            throughput[k] = 0.8
+            gp = GrismPars(
+                image_pars=ip,
+                dispersion=dispersion,
+                lambda_ref=float(lam[k_ref]),
+                dispersion_angle=0.0,
+                throughput=jnp.asarray(throughput),
+            )
+            result = np.asarray(disperse_cube(cube, gp, jnp.asarray(lam)))
+
+            offset = k - k_ref
+            expected = np.zeros((Nrow, Ncol))
+            if offset >= 0:
+                expected[:, offset:] = cube_np[:, : Ncol - offset, k]
+            else:
+                expected[:, : Ncol + offset] = cube_np[:, -offset:, k]
+            expected *= throughput[k] * dlam * weight
+
+            np.testing.assert_allclose(result, expected, atol=1e-12)
+
+    def test_throughput_ramp_wavelength_orientation(self):
+        """An asymmetric (ramp) throughput weights each slice by T at that
+        slice's own wavelength -- pinning the index alignment between the
+        throughput array and the wavelength grid (a reversed or shifted
+        alignment produces a grossly different image).
+
+        Integer pixel offsets again make the interpolation exact, so the
+        dispersed image must equal the closed-form sum of shifted slices
+        scaled by T_k * dlam * quad_weight_k.
+        """
+        Nrow, Ncol, Nlam = 16, 16, 9
+        rng = np.random.default_rng(7)
+        cube_np = rng.uniform(0.1, 1.0, size=(Nrow, Ncol, Nlam))
+        cube = jnp.asarray(cube_np)
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        dispersion = 1.1
+        k_ref = 4
+        lam = 1312.0 + (np.arange(Nlam) - k_ref) * dispersion
+        dlam = dispersion
+        # strongly asymmetric: factor ~5 from blue end to red end
+        throughput = np.linspace(0.2, 1.0, Nlam)
+
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=dispersion,
+            lambda_ref=float(lam[k_ref]),
+            dispersion_angle=0.0,
+            throughput=jnp.asarray(throughput),
+        )
+        result = np.asarray(disperse_cube(cube, gp, jnp.asarray(lam)))
+
+        quad_weight = np.ones(Nlam)
+        quad_weight[0] = 0.5
+        quad_weight[-1] = 0.5
+        expected = np.zeros((Nrow, Ncol))
+        for k in range(Nlam):
+            offset = k - k_ref
+            shifted = np.zeros((Nrow, Ncol))
+            if offset >= 0:
+                shifted[:, offset:] = cube_np[:, : Ncol - offset, k]
+            else:
+                shifted[:, : Ncol + offset] = cube_np[:, -offset:, k]
+            expected += shifted * throughput[k] * dlam * quad_weight[k]
+
+        np.testing.assert_allclose(result, expected, atol=1e-12)
+
+    def test_throughput_operator_path_matches_loop_path(self):
+        """The precomputed dispersion operator applies throughput
+        identically to disperse_cube.
+
+        At integer pixel offsets both interpolants (bilinear in
+        disperse_cube, Catmull-Rom in the operator) are exact, so the two
+        pathways must agree to float precision with the same non-flat
+        throughput.
+        """
+        from kl_pipe.dispersion import (
+            apply_dispersion_operator,
+            precompute_dispersion_operator,
+        )
+
+        Nrow, Ncol, Nlam = 16, 16, 9
+        rng = np.random.default_rng(11)
+        cube = jnp.asarray(rng.uniform(0.1, 1.0, size=(Nrow, Ncol, Nlam)))
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        dispersion = 1.1
+        k_ref = 4
+        lam = 1312.0 + (np.arange(Nlam) - k_ref) * dispersion
+        throughput = np.linspace(0.2, 1.0, Nlam)
+
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=dispersion,
+            lambda_ref=float(lam[k_ref]),
+            dispersion_angle=0.0,
+            throughput=jnp.asarray(throughput),
+        )
+        loop_image = disperse_cube(cube, gp, jnp.asarray(lam))
+        operator = precompute_dispersion_operator(gp, lam)
+        operator_image = apply_dispersion_operator(operator, cube)
+
+        np.testing.assert_allclose(
+            np.asarray(operator_image), np.asarray(loop_image), atol=1e-12
+        )
+
     def test_disperse_oversample_kwarg(self):
         """disperse_cube(oversample=N) on a fine cube reproduces the dispersion
         of the coarse cube (after sum-binning the fine output).

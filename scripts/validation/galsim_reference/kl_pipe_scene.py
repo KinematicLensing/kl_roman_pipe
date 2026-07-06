@@ -21,16 +21,16 @@ from kl_pipe.source import SourceModel
 from kl_pipe.velocity import CenteredVelocityModel
 
 
-def true_pars_dotted(z: float, vcirc: float) -> dict:
+def true_pars_dotted(z: float, vcirc: float, g1: float = 0.0, g2: float = 0.0) -> dict:
     """Truth parameter dict (dotted ``SourceModel`` keys) for the reference
     scene: inclined exponential disk, arctan rotation curve, Halpha line
-    only, no shear/continuum/off-center.
+    only, no continuum/off-center. Shear defaults to zero.
     """
     return {
         'cosi': 0.6,
         'theta_int': np.pi / 4,
-        'g1': 0.0,
-        'g2': 0.0,
+        'g1': g1,
+        'g2': g2,
         'vel.v0': 10.0,
         'vel.vcirc': vcirc,
         'vel.rscale': 0.3,
@@ -53,6 +53,9 @@ def build_kl_pipe_scene(
     dispersion_nm_per_pix: float = 1.1,
     oversample: int = 5,
     n_lambda: int | None = None,
+    g1: float = 0.0,
+    g2: float = 0.0,
+    throughput_fn=None,
 ):
     """Build the ``SourceModel`` + grism obs for the reference-gated scene.
 
@@ -63,13 +66,19 @@ def build_kl_pipe_scene(
         wavelength-slice count (caller-tuned resolution for the
         velocity-entanglement pathway; see
         ``docs/validation/galsim_reference_gate.md``).
+    g1, g2 : float
+        Reduced lensing shear applied to the scene (default 0).
+    throughput_fn : callable, optional
+        Wavelength-dependent throughput T(lambda_nm), vectorized. Sampled
+        at the final cube wavelength grid and installed as
+        ``GrismPars.throughput``. None = flat 100%.
 
     Returns
     -------
     dict with keys: 'source', 'pars', 'grism_pars', 'obs_grism',
     'image_pars', 'psf'.
     """
-    pars = true_pars_dotted(z, vcirc)
+    pars = true_pars_dotted(z, vcirc, g1=g1, g2=g2)
     image_pars = ImagePars(shape=shape, pixel_scale=pixel_scale, indexing='ij')
     psf = galsim.Gaussian(fwhm=psf_fwhm)
 
@@ -96,6 +105,20 @@ def build_kl_pipe_scene(
     if n_lambda is not None:
         cube_pars = grism_pars.to_cube_pars(z=z, n_lambda=n_lambda)
         obs_grism = dataclasses.replace(obs_grism, cube_pars=cube_pars)
+
+    if throughput_fn is not None:
+        # sample T at the final cube wavelength grid (after any n_lambda
+        # override) so the per-slice throughput array lines up with the
+        # slices disperse_cube integrates
+        lam = np.asarray(obs_grism.cube_pars.lambda_grid)
+        throughput = np.asarray(throughput_fn(lam), dtype=float)
+        if throughput.shape != lam.shape or np.any(throughput < 0):
+            raise ValueError(
+                'throughput_fn must map a wavelength array to an equal-shape '
+                'array of non-negative values'
+            )
+        grism_pars = dataclasses.replace(grism_pars, throughput=throughput)
+        obs_grism = dataclasses.replace(obs_grism, grism_pars=grism_pars)
 
     return {
         'source': source,

@@ -73,8 +73,15 @@ def render_galsim_reference(
     dispersion_nm_per_pix: float,
     lambda_ref: float,
     cfg: GalSimReferenceConfig,
+    throughput_fn=None,
 ):
     """Render the dispersed grism image via the GalSim-chromatic reference.
+
+    Parameters
+    ----------
+    throughput_fn : callable, optional
+        Wavelength-dependent throughput T(lambda_nm) -> dimensionless,
+        vectorized over an ndarray of wavelengths. None = flat 100%.
 
     Returns
     -------
@@ -156,6 +163,12 @@ def render_galsim_reference(
 
     chrom_sum = galsim.ChromaticSum(comps)
 
+    # lensing shear acts on the sky scene, before the instrument
+    # (dispersion shift + PSF). GalSim .shear() is area-preserving and
+    # matches kl_pipe's cen2source convention (see GalaxyParams docstring).
+    if p.g1 != 0.0 or p.g2 != 0.0:
+        chrom_sum = chrom_sum.shear(g1=p.g1, g2=p.g2)
+
     def shift_fn(w):
         dx = (w - lambda_ref) / dispersion_nm_per_pix * coarse_pixel_scale
         return (dx, 0.0)
@@ -164,8 +177,23 @@ def render_galsim_reference(
     psf = galsim.Gaussian(fwhm=psf_fwhm)
     final = galsim.Convolve(shifted, psf)
 
+    # wavelength-dependent instrument throughput enters as the draw
+    # bandpass: GalSim integrates SED(lambda) * T(lambda) per channel,
+    # the same integral kl_pipe approximates with per-slice
+    # throughput[k] * dlam * quad_weight[k] in disperse_cube.
+    if throughput_fn is None:
+        bp_waves = np.array([global_blue, global_red])
+        bp_vals = np.array([1.0, 1.0])
+    else:
+        bp_waves = np.linspace(global_blue, global_red, 1001)
+        bp_vals = np.asarray(throughput_fn(bp_waves), dtype=float)
+        if bp_vals.shape != bp_waves.shape or np.any(bp_vals < 0):
+            raise ValueError(
+                'throughput_fn must map a wavelength array to an equal-shape '
+                'array of non-negative values'
+            )
     bp = galsim.Bandpass(
-        galsim.LookupTable([global_blue, global_red], [1.0, 1.0]),
+        galsim.LookupTable(bp_waves, bp_vals, interpolant='linear'),
         wave_type='nm',
         blue_limit=global_blue,
         red_limit=global_red,
