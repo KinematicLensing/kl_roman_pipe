@@ -5,7 +5,7 @@ TEST_DIR = tests
 TEST_DATA_DIR = $(TEST_DIR)/data
 
 # TODO: eventually incorporate conda-lock when it is warranted
-GENERATE_CONDA_LOCK = cd "$(shell dirname "$(1)")"; conda-lock -f "$(shell basename "$(2)")" -p osx-64 -p osx-arm64 -p linux-64
+GENERATE_CONDA_LOCK = cd "$(shell dirname "$(1)")"; conda-lock -f "$(shell basename "$(2)")" -p osx-64 -p osx-arm64 -p linux-64 -p linux-aarch64
 
 # NOTE: we can add any required test data files here that need to be
 # generated or downloaded before running unit tests
