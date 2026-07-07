@@ -851,17 +851,35 @@ only.
       in InferenceTask.from_obs (mirror the render-config pattern);
       requires first sweeping test fixtures to explicit cheap grids so
       suite runtime does not triple.
-- [ ] Two-tier wavelength grid experiment: dense slices over the line's
-      velocity span, coarse over the continuum wings (~75% of a uniform
-      grid is spent on smooth continuum). Candidate 2-3x cost cut at
-      production accuracy; needs per-slice dlam weights in disperse_cube
-      and the dispersion operator.
-- [ ] Structural fix candidate: disperse the line analytically (per
-      spaxel, an erf profile along the dispersion axis; the wavelength
-      grid then only serves the continuum). Design doc first. Note: the
-      sub-bin moment/dipole correction was tried and refuted
-      (experiments/sweverett/moment_dispersal/) -- iso-cost grid
-      refinement wins 4-30x; do not revisit on CPU.
+- [x] Analytic line dispersal (2026-07-06): derivation + standalone and
+      pipeline experiments SUPPORT it. Closed-form per-spaxel deposit
+      (Gaussian conv tent along the dispersion axis) + closed-form flat
+      continuum (cumulative-trapezoid box convolution) reproduces the
+      n_lambda -> infinity limit of the current method: 1.9e-6 of peak
+      vs the n=1001 reference (production n=151: 2.3e-4) at 32.6 ms
+      grad vs 98.2 ms (3.0x), equal cost to the old biased n=25
+      default. Derivation: docs/derivations/analytic_line_dispersal.md;
+      record: experiments/sweverett/analytic_dispersal/. INTEGRATED
+      same day behind RenderConfig(dispersal_method='analytic',
+      deposit_halfwidth=...): closed-form line + continuum paths in
+      kl_pipe/dispersion.py, dispatch in SourceModel.render_grism,
+      per-obs roll rotation handled at the parameter level (same
+      mechanism as the slice path). Gates in
+      tests/test_analytic_dispersal.py (16: closed-form vs quadrature,
+      dense-slice equivalence incl. rolled obs and ramp throughput,
+      jit/grad, loud guards) plus two GalSim reference scenes (dynamic
+      0.206%/0.019%, ramp-static 0.448%/0.025% -- below the slice
+      floors because slice quantization and most shift-interpolation
+      error vanish). Still pending: default flip decision ('slice'
+      remains default), multi-roll shared-cube closed form (tent-moment
+      derivation, doc section 3.2; group path raises loudly),
+      priors-aware deposit_halfwidth auto-sizing in from_obs, Fisher +
+      posterior A/B on the integrated path, os floor revisit.
+- [x] Two-tier wavelength grid experiment: REFUTED as a standalone fix
+      by the same experiment -- coarse continuum slices are limited by
+      the source's spatial structure along the trace, not throughput
+      smoothness (nc=11 leaves 2e-2 of peak). Superseded by the exact
+      closed-form continuum above.
 - [ ] Ensemble shear-floor test: one instrument gates both fp32 adoption
       and the oversample choice (coherent render deltas vs the 1e-3/1e-4
       shear stacking targets).
