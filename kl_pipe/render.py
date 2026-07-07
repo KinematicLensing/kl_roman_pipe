@@ -90,6 +90,25 @@ class RenderConfig:
         groups) or ``'per_roll'`` (reference path; every obs rebuilds its
         own detector-frame cube with rotated parameters). Applies to
         grism obs only.
+    dispersal_method : str
+        Grism dispersal pathway: ``'slice'`` (default; wavelength-grid
+        cube + shift-and-add ``disperse_cube``) or ``'analytic'``
+        (closed form: each spaxel's line flux is spread along the
+        dispersion axis by an exact erf/exp profile and the flat
+        continuum by an exact trace kernel; no wavelength grid enters
+        the line, so accuracy does not depend on
+        ``n_lambda``/``slice_width_kms``). The analytic path requires
+        ``psf_mode='post_dispersion'`` and axis-aligned dispersion
+        (``dispersion_angle_detector == 0``); per-obs roll rotation is
+        supported, the multi-roll shared-cube fast path is not. Applies
+        to grism obs only.
+    line_window_halfwidth : int, optional
+        Static half-width, in fine pixels, of the window each spaxel's
+        line flux is spread over on the analytic path. Must cover
+        ``max|xi| + ~4 sigma_s`` over the sampled parameter space. When
+        None, standalone renders size it from the concrete parameter
+        values at call time; jitted/inference use must set it
+        explicitly.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -106,6 +125,8 @@ class RenderConfig:
     spectral_method: str = 'erf'
     psf_mode: str = 'post_dispersion'
     cube_mode: str = 'shared'
+    dispersal_method: str = 'slice'
+    line_window_halfwidth: Optional[int] = None
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
 
@@ -136,6 +157,19 @@ class RenderConfig:
         if self.cube_mode not in ('shared', 'per_roll'):
             raise ValueError(
                 f"cube_mode must be 'shared' or 'per_roll', got " f"{self.cube_mode!r}"
+            )
+        if self.dispersal_method not in ('slice', 'analytic'):
+            raise ValueError(
+                f"dispersal_method must be 'slice' or 'analytic', got "
+                f"{self.dispersal_method!r}"
+            )
+        if self.line_window_halfwidth is not None and (
+            not isinstance(self.line_window_halfwidth, (int, np.integer))
+            or self.line_window_halfwidth < 1
+        ):
+            raise ValueError(
+                f"line_window_halfwidth must be a positive int or None, got "
+                f"{self.line_window_halfwidth!r}"
             )
 
     @classmethod
@@ -369,6 +403,10 @@ class RenderConfig:
             parts.append(f'psf_mode={self.psf_mode}')
         if self.cube_mode != 'shared':
             parts.append(f'cube_mode={self.cube_mode}')
+        if self.dispersal_method != 'slice':
+            parts.append(f'dispersal_method={self.dispersal_method}')
+            if self.line_window_halfwidth is not None:
+                parts.append(f'line_window_halfwidth={self.line_window_halfwidth}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -392,6 +430,8 @@ def _render_config_flatten(rc):
         rc.spectral_method,
         rc.psf_mode,
         rc.cube_mode,
+        rc.dispersal_method,
+        rc.line_window_halfwidth,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -407,8 +447,10 @@ def _render_config_unflatten(aux, children):
         spectral_method=aux[5],
         psf_mode=aux[6],
         cube_mode=aux[7],
-        effective_maxk=aux[8],
-        stepk=aux[9],
+        dispersal_method=aux[8],
+        line_window_halfwidth=aux[9],
+        effective_maxk=aux[10],
+        stepk=aux[11],
     )
 
 

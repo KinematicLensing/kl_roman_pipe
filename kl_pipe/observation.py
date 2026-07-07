@@ -332,6 +332,24 @@ class GrismObs:
             self.render_config.cube_mode if self.render_config is not None else 'shared'
         )
 
+    @property
+    def dispersal_method(self) -> str:
+        """Grism dispersal pathway; canonical source is render_config.dispersal_method."""
+        return (
+            self.render_config.dispersal_method
+            if self.render_config is not None
+            else 'slice'
+        )
+
+    @property
+    def line_window_halfwidth(self):
+        """Analytic deposit window half-width; canonical source is render_config."""
+        return (
+            self.render_config.line_window_halfwidth
+            if self.render_config is not None
+            else None
+        )
+
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
         """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
 

@@ -87,6 +87,7 @@ def _render_both(
     g1: float = 0.0,
     g2: float = 0.0,
     throughput_fn=None,
+    dispersal_method: str = 'slice',
 ):
     """Render the same scene through kl_pipe and the GalSim-chromatic
     reference. Returns (kl_pipe_image, reference_image), both flux/pixel.
@@ -103,6 +104,7 @@ def _render_both(
         g1=g1,
         g2=g2,
         throughput_fn=throughput_fn,
+        dispersal_method=dispersal_method,
     )
     kl_image = render_kl_pipe_grism(scene)
 
@@ -271,4 +273,50 @@ class TestGalSimReferenceGate:
             mean_tol=0.001,  # ~3.3x headroom over measured 0.030%
             flux_tol=self.FLUX_TOL,
             label='dynamic scene (vcirc=200, n_lambda=251)',
+        )
+
+    def test_dynamic_scene_analytic_dispersal(self):
+        # same dynamic scene through the closed-form dispersal path
+        # (dispersal_method='analytic'; no wavelength grid for the line),
+        # against the same independent GalSim-chromatic reference. The
+        # analytic path is the n_lambda -> infinity limit of the slice
+        # method, so it must sit at or below the refined-grid floor.
+        # Measured (2026-07-06, float64, this gate, oversample=5):
+        # max|diff|/peak=0.206%, mean|diff|/peak=0.019% -- well below the
+        # n_lambda=251 slice floor (0.534%/0.030%): removing slice
+        # quantization also removes part of the shift-interpolation
+        # disagreement. Frozen at ~3x measured.
+        kl_image, ref_image = _render_both(
+            vcirc=200.0, n_lambda=None, dispersal_method='analytic'
+        )
+        _assert_agreement(
+            kl_image,
+            ref_image,
+            max_tol=0.006,
+            mean_tol=0.0006,
+            flux_tol=self.FLUX_TOL,
+            label='dynamic scene (vcirc=200, analytic dispersal)',
+        )
+
+    def test_throughput_ramp_analytic_dispersal(self):
+        # ramp throughput through the analytic path: the line weight is
+        # T interpolated at each spaxel's observed wavelength instead of
+        # per-slice T(lambda_k). Measured (2026-07-06, float64, this
+        # gate, oversample=5): max|diff|/peak=0.448%, mean=0.025% --
+        # well below the slice-path static floor (1.715%/0.061%), same
+        # interpolation-floor reduction as the dynamic scene. Frozen at
+        # ~3x measured.
+        kl_image, ref_image = _render_both(
+            vcirc=0.0,
+            n_lambda=None,
+            throughput_fn=_ramp_throughput,
+            dispersal_method='analytic',
+        )
+        _assert_agreement(
+            kl_image,
+            ref_image,
+            max_tol=0.015,
+            mean_tol=0.001,
+            flux_tol=self.FLUX_TOL,
+            label='ramp-throughput static scene (analytic dispersal)',
         )

@@ -508,3 +508,199 @@ def apply_dispersion_operator(operator, cube: jnp.ndarray) -> jnp.ndarray:
     Nrow, Ncol, _ = cube.shape
     flat = jnp.transpose(cube, (2, 0, 1)).ravel()
     return (operator @ flat).reshape(Nrow, Ncol)
+
+
+# ---------------------------------------------------------------------------
+# Analytic per-spaxel dispersal (no wavelength grid for emission lines).
+#
+# The emission line's dispersed footprint has a closed form: the cube's erf
+# bin integration in lambda followed by bilinear shift-and-add converges, as
+# the wavelength grid densifies, to a Gaussian convolved with the triangle
+# kernel of bilinear interpolation (the "tent") along the dispersion axis --
+# and that convolution is exact in erf/exp terms. Evaluating it per fine
+# spaxel removes the wavelength grid from the line entirely; the flat
+# continuum has its own closed form (a throughput-weighted box convolution
+# along the trace).
+# ---------------------------------------------------------------------------
+
+
+def _normal_cdf(z: jnp.ndarray) -> jnp.ndarray:
+    return 0.5 * (1.0 + jax.scipy.special.erf(z / jnp.sqrt(2.0)))
+
+
+def _normal_pdf(z: jnp.ndarray) -> jnp.ndarray:
+    return jnp.exp(-0.5 * z * z) / jnp.sqrt(2.0 * jnp.pi)
+
+
+def _normal_cdf_antiderivative(z: jnp.ndarray) -> jnp.ndarray:
+    # antiderivative of the standard normal CDF: z * Phi(z) + phi(z)
+    return z * _normal_cdf(z) + _normal_pdf(z)
+
+
+def gaussian_tent_profile(u: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
+    """Closed form of (normalized Gaussian_sigma convolved with unit tent)(u).
+
+    This is the wavelength-continuum limit of one spaxel's dispersed line
+    profile under the current pipeline conventions: exact erf bin
+    integration in lambda plus bilinear (tent) interpolation of the
+    per-slice shift. ``u`` is the detector-axis distance from the center
+    of the spaxel's dispersed footprint in fine pixels; ``sigma`` the
+    line width in fine pixels. Both broadcast. Dimensionless; integrates
+    to 1 over u.
+    """
+    return sigma * (
+        _normal_cdf_antiderivative((u + 1.0) / sigma)
+        - 2.0 * _normal_cdf_antiderivative(u / sigma)
+        + _normal_cdf_antiderivative((u - 1.0) / sigma)
+    )
+
+
+def disperse_line_analytic(
+    I_line: jnp.ndarray,
+    xi: jnp.ndarray,
+    sigma_s: jnp.ndarray,
+    halfwidth: int,
+    weight: jnp.ndarray = None,
+) -> jnp.ndarray:
+    """Disperse one emission line in closed form, one spaxel at a time.
+
+    Each source spaxel (r, j) contributes its line flux
+    ``I_line[r, j] * weight[r, j]`` to the dispersed image, spread along
+    the dispersion axis (detector +x) within its own row as
+    ``gaussian_tent_profile`` centered ``xi[r, j]`` fine pixels from the
+    source column -- the line's dispersed footprint. Flux carried beyond
+    the stamp edge is dropped, matching ``disperse_cube``'s
+    mode='constant' pull semantics.
+
+    Parameters
+    ----------
+    I_line : jnp.ndarray
+        Line surface brightness on the (fine) spatial grid, shape
+        (Nrow, Ncol).
+    xi : jnp.ndarray
+        Footprint-center offset per spaxel in fine pixels along +x:
+        ``(lambda_obs - lambda_ref) / dispersion * oversample``.
+    sigma_s : jnp.ndarray
+        Line width per spaxel in fine pixels:
+        ``sigma_lambda / dispersion * oversample``.
+    halfwidth : int
+        Static half-width, in fine pixels, of the window each spaxel's
+        flux is spread over. Must cover ``max|xi| + ~4 max(sigma_s)``;
+        flux beyond the window is dropped (erfc-small when sized from
+        priors or concrete parameter values).
+    weight : jnp.ndarray, optional
+        Per-spaxel multiplier (throughput evaluated at each spaxel's
+        observed wavelength). None = 1.
+
+    Returns
+    -------
+    jnp.ndarray
+        Dispersed line image, same shape as ``I_line`` (dimensionless
+        profile times SB -- same units as ``I_line``).
+    """
+    if halfwidth < 1:
+        raise ValueError(f"halfwidth must be >= 1, got {halfwidth}")
+    amp = I_line if weight is None else I_line * weight
+    n = I_line.shape[1]
+    out = jnp.zeros_like(I_line)
+    for w in range(-halfwidth, halfwidth + 1):
+        term = amp * gaussian_tent_profile(w - xi, sigma_s)
+        if w == 0:
+            out = out + term
+        elif w > 0:
+            out = out.at[:, w:].add(term[:, : n - w])
+        else:
+            out = out.at[:, :w].add(term[:, -w:])
+    return out
+
+
+def _tent_running_integral(t: np.ndarray) -> np.ndarray:
+    """Integral of the unit tent from -inf to t (numpy, precompute only)."""
+    p2 = lambda z: 0.5 * np.square(np.clip(z, 0.0, None))  # noqa: E731
+    return p2(t + 1.0) - 2.0 * p2(t) + p2(t - 1.0)
+
+
+def continuum_trace_kernel(
+    grism_pars: GrismPars,
+    lambda_grid: jnp.ndarray,
+    oversample: int,
+) -> tuple:
+    """Precompute the exact continuum trace kernel (numpy, static).
+
+    A flat-in-lambda continuum disperses to a (throughput-weighted) box
+    convolution along the dispersion axis of the tent-reconstructed image:
+    ``D[r, q] = sum_j I_cont[r, j] * kernel[q - j - m_lo]``. The kernel is
+
+        kernel(m) = (dispersion / oversample) *
+                    integral_{s_min}^{s_max} T(lambda(s)) tri(m - s) ds
+
+    with s the trace coordinate in fine pixels over the wavelength window
+    [lambda_grid[0], lambda_grid[-1]] (the same window the slice method
+    integrates with trapezoid weights). Flat throughput uses the exact
+    closed form; a sampled throughput is integrated per unit-s segment
+    with 16-point Gauss-Legendre (smooth-T assumption; exact to numerical
+    precision for physically smooth bandpasses).
+
+    Returns
+    -------
+    (np.ndarray, int)
+        Kernel values at integer offsets and the first offset ``m_lo``.
+    """
+    lam = np.asarray(lambda_grid, dtype=float)
+    scale = grism_pars.dispersion / oversample  # nm per fine pixel
+    s_min = (lam[0] - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
+    s_max = (lam[-1] - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
+    m_lo = int(np.floor(s_min)) - 1
+    m_hi = int(np.ceil(s_max)) + 1
+    m = np.arange(m_lo, m_hi + 1, dtype=float)
+
+    if grism_pars.throughput is None:
+        kern = scale * (
+            _tent_running_integral(m - s_min) - _tent_running_integral(m - s_max)
+        )
+        return kern, m_lo
+
+    # throughput-weighted: integrate per unit-s segment (tent kinks sit on
+    # integer s) with fixed-order Gauss-Legendre
+    T_samples = np.asarray(grism_pars.throughput, dtype=float)
+    nodes, gl_weights = np.polynomial.legendre.leggauss(16)
+    breaks = np.unique(
+        np.concatenate([[s_min, s_max], np.arange(np.ceil(s_min), np.floor(s_max) + 1)])
+    )
+    kern = np.zeros_like(m)
+    for a, b in zip(breaks[:-1], breaks[1:]):
+        mid, half = 0.5 * (a + b), 0.5 * (b - a)
+        s = mid + half * nodes
+        lam_s = grism_pars.lambda_ref + s * grism_pars.dispersion / oversample
+        T_s = np.interp(lam_s, lam, T_samples)
+        tri = np.clip(1.0 - np.abs(m[:, None] - s[None, :]), 0.0, None)
+        kern += half * (tri * (T_s * gl_weights)[None, :]).sum(axis=1)
+    return scale * kern, m_lo
+
+
+def disperse_continuum_analytic(
+    I_cont: jnp.ndarray, kernel: np.ndarray, m_lo: int
+) -> jnp.ndarray:
+    """Disperse a flat-in-lambda continuum with a precomputed trace kernel.
+
+    ``D[r, q] = sum_j I_cont[r, j] * kernel[q - j - m_lo]`` per row --
+    exact closed form of the wavelength-continuum limit (no slices).
+    ``I_cont`` is a spectral-density surface brightness [SB/nm]; the
+    kernel carries the nm-per-fine-pixel scale so the output is SB.
+    """
+    n = I_cont.shape[1]
+    L = len(kernel)
+    kern = jnp.asarray(kernel)
+    # D[q] = full[q - m_lo] with full the length n + L - 1 convolution;
+    # slice bounds are static python ints, padded where the trace window
+    # extends past the stamp
+    start = -m_lo
+    pad_left = max(0, -start)
+    pad_right = max(0, (start + n) - (n + L - 1))
+
+    def row_conv(row):
+        full = jnp.convolve(row, kern, mode='full')
+        full = jnp.pad(full, (pad_left, pad_right))
+        return full[start + pad_left : start + pad_left + n]
+
+    return jax.vmap(row_conv)(I_cont)

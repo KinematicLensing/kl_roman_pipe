@@ -293,6 +293,11 @@ class SourceModel:
                 f"{psf_mode!r}"
             )
 
+        if obs.dispersal_method == 'analytic':
+            return self._render_grism_analytic(
+                pars, obs, plane=plane, psf_mode=psf_mode
+            )
+
         # build_cube spatial grid: fine when oversampling is active
         if obs.psf_data is not None and obs.oversample > 1:
             build_cube_pars = CubePars(
@@ -355,6 +360,182 @@ class SourceModel:
             obs.grism_pars.image_pars.pixel_scale,
         )
 
+    def _render_grism_analytic(
+        self,
+        pars: dict,
+        obs,
+        plane: str = 'obs',
+        psf_mode: str = 'post_dispersion',
+    ) -> jnp.ndarray:
+        """Render a grism image via closed-form per-spaxel dispersal.
+
+        Each emission-line spaxel's dispersed footprint is evaluated analytically (a
+        Gaussian convolved with the bilinear tent along the dispersion
+        axis, the exact wavelength-continuum limit of the slice method);
+        the flat continuum disperses through a precomputed exact trace
+        kernel. No wavelength grid enters the line calculation, so
+        accuracy is independent of ``n_lambda``. Shares the
+        post-dispersion PSF and pixel-response stages with the slice
+        path.
+
+        Roll rotation (a nonzero WCS ``image_rotation``) is handled the
+        same way the per-obs slice path handles it: model parameters are
+        rotated into the detector frame before evaluation, and the
+        detector-frame dispersal itself stays axis-aligned. Only the
+        shared-cube group fast path (one celestial cube reused across
+        rolls, rotation fused into the dispersal sampling) is not
+        supported -- there each roll's dispersion direction crosses the
+        shared celestial-frame pixel grid diagonally, and that closed
+        form (piecewise moments of the interpolation kernel along the
+        trace) is not implemented.
+
+        Restrictions (loud): requires ``psf_mode='post_dispersion'`` and
+        axis-aligned dispersion (``dispersion_angle_detector == 0``, true
+        for Roman).
+        """
+        from kl_pipe.dispersion import (
+            continuum_trace_kernel,
+            disperse_continuum_analytic,
+            disperse_line_analytic,
+        )
+        from kl_pipe.grism import _apply_post_dispersion_pixel_response
+        from kl_pipe.utils import build_map_grid_from_image_pars
+
+        gp = obs.grism_pars
+        if psf_mode != 'post_dispersion':
+            raise ValueError(
+                "dispersal_method='analytic' requires "
+                f"psf_mode='post_dispersion', got {psf_mode!r} (per-slice "
+                "PSF needs a wavelength-slice cube)"
+            )
+        if float(gp.dispersion_angle_detector) != 0.0:
+            raise NotImplementedError(
+                "dispersal_method='analytic' supports only axis-aligned "
+                f"dispersion; got dispersion_angle_detector="
+                f"{gp.dispersion_angle_detector}"
+            )
+        image_rotation = image_rotation_from_wcs(gp.image_pars.wcs)
+        if self.velocity_model is None:
+            raise ValueError(
+                "analytic grism dispersal requires velocity_model to be set"
+            )
+        if not self.emission_lines:
+            raise ValueError(
+                "analytic grism dispersal requires non-empty emission_lines"
+            )
+
+        if obs.psf_data is not None and obs.oversample > 1:
+            fine_ip = obs.fine_image_pars
+        else:
+            fine_ip = gp.image_pars
+        X, Y = build_map_grid_from_image_pars(fine_ip)
+
+        vm = self.velocity_model
+        theta_vel = _build_component_theta(pars, 'vel', vm.PARAMETER_NAMES)
+        theta_vel = _apply_obs_rotation(theta_vel, vm.PARAMETER_NAMES, image_rotation)
+        v_los = vm(theta_vel, plane, X, Y)
+
+        z = pars['z']
+        os_f = obs.oversample
+        lam_grid = obs.cube_pars.lambda_grid
+        throughput = gp.throughput
+
+        # evaluate each spatial owner once at unit amplitude (same dedupe
+        # as build_cube; spatial LOS quadrature dominates eval cost)
+        unit_eval_cache: dict = {}
+
+        def _amplitude_scaled_eval(owner_key, theta_c, model, amp_name):
+            amp_idx = model.PARAMETER_NAMES.index(amp_name)
+            amplitude = theta_c[amp_idx]
+            if owner_key not in unit_eval_cache:
+                theta_unit = theta_c.at[amp_idx].set(1.0)
+                unit_eval_cache[owner_key] = model(theta_unit, plane, X, Y)
+            return amplitude * unit_eval_cache[owner_key]
+
+        dispersed = jnp.zeros(X.shape)
+        I_cont_total = None
+        for line_key, line in self.emission_lines.items():
+            theta_int, int_model = self._build_emission_intensity_theta(pars, line_key)
+            theta_int = _apply_obs_rotation(
+                theta_int, int_model.PARAMETER_NAMES, image_rotation
+            )
+            int_owner = (
+                line.intensity_key if line.intensity_key is not None else line_key
+            )
+            I_line = _amplitude_scaled_eval(
+                f'int:{int_owner}', theta_int, int_model, 'flux'
+            )
+
+            lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_los / _C_KMS)
+            disp_owner = (
+                line.dispersion_key if line.dispersion_key is not None else line_key
+            )
+            sigma_kms = pars[f'{disp_owner}.dispersion']
+            sigma_s = lam_obs * sigma_kms / _C_KMS / gp.dispersion * os_f
+            xi = (lam_obs - gp.lambda_ref) / gp.dispersion * os_f
+
+            halfwidth = obs.line_window_halfwidth
+            if halfwidth is None:
+                # standalone sizing from the concrete parameter values;
+                # jitted/inference use must freeze it in RenderConfig
+                try:
+                    halfwidth = (
+                        int(float(jnp.max(jnp.abs(xi))) + 4.0 * float(jnp.max(sigma_s)))
+                        + 3
+                    )
+                except jax.errors.ConcretizationTypeError as err:
+                    raise ValueError(
+                        "line_window_halfwidth must be set on RenderConfig for "
+                        "jitted/inference use of dispersal_method='analytic' "
+                        "(the standalone default sizes the flux-spreading window "
+                        "from concrete parameter values, which is impossible "
+                        "under tracing)"
+                    ) from err
+
+            weight = (
+                jnp.interp(lam_obs, lam_grid, throughput)
+                if throughput is not None
+                else None
+            )
+            dispersed = dispersed + disperse_line_analytic(
+                I_line, xi, sigma_s, halfwidth, weight=weight
+            )
+
+            cont_theta, cont_model = self._build_emission_continuum_theta(
+                pars, line_key
+            )
+            if cont_model is not None:
+                cont_theta = _apply_obs_rotation(
+                    cont_theta, cont_model.PARAMETER_NAMES, image_rotation
+                )
+                cont_owner = (
+                    line.continuum_key if line.continuum_key is not None else line_key
+                )
+                I_cont = _amplitude_scaled_eval(
+                    f'cont:{cont_owner}', cont_theta, cont_model, 'flux_per_nm'
+                )
+                I_cont_total = I_cont if I_cont_total is None else I_cont_total + I_cont
+
+        if I_cont_total is not None:
+            kernel, m_lo = continuum_trace_kernel(gp, lam_grid, os_f)
+            dispersed = dispersed + disperse_continuum_analytic(
+                I_cont_total, kernel, m_lo
+            )
+
+        if obs.psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+
+        coarse_shape = (gp.image_pars.Nrow, gp.image_pars.Ncol)
+        return _apply_post_dispersion_pixel_response(
+            dispersed,
+            obs.pixel_response_fft,
+            coarse_shape,
+            obs.oversample,
+            gp.image_pars.pixel_scale,
+        )
+
     def render_grism_group(
         self,
         pars: dict,
@@ -410,6 +591,14 @@ class SourceModel:
         dict[str, jnp.ndarray]
             Dispersed detector-frame images keyed like ``obs_group``.
         """
+        for key, obs in obs_group.items():
+            if obs.dispersal_method == 'analytic':
+                raise NotImplementedError(
+                    f"dispersal_method='analytic' (obs {key!r}) is not "
+                    "supported on the shared-cube group path yet (the "
+                    "rotated-frame closed form is derived but not implemented); "
+                    "use dispersal_method='slice' for rolled groups"
+                )
         from kl_pipe.dispersion import apply_dispersion_operator
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.observation import (

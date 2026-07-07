@@ -1,0 +1,288 @@
+"""Tests for closed-form (analytic) grism dispersal.
+
+The analytic path is the exact n_lambda -> infinity limit of the slice
+method under identical conventions (erf bin integration in wavelength +
+bilinear interpolation of the per-slice shift), so a dense slice render
+must converge toward it and any residual is the slice reference's own
+O(ds^2) discretization error.
+"""
+
+import dataclasses
+
+import numpy as np
+import pytest
+import jax
+import jax.numpy as jnp
+import galsim
+from astropy.wcs import WCS
+from scipy.integrate import quad
+
+from kl_pipe.dispersion import (
+    build_grism_pars_for_line,
+    continuum_trace_kernel,
+    disperse_continuum_analytic,
+    gaussian_tent_profile,
+)
+from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.observation import build_grism_obs
+from kl_pipe.parameters import ImagePars
+from kl_pipe.render import RenderConfig
+from kl_pipe.source import SourceModel, EmissionLine
+from kl_pipe.velocity import CenteredVelocityModel
+
+
+TRUE_PARS = {
+    'cosi': 0.6,
+    'theta_int': np.pi / 4,
+    'g1': 0.02,
+    'g2': -0.01,
+    'vel.v0': 10.0,
+    'vel.vcirc': 200.0,
+    'vel.rscale': 0.3,
+    'Halpha.flux': 100.0,
+    'Halpha.rscale': 0.25,
+    'Halpha.h_over_r': 0.1,
+    'Halpha.x0': 0.0,
+    'Halpha.y0': 0.0,
+    'Halpha.dispersion': 50.0,
+    'Halpha.cont.flux_per_nm': 25.0,
+    'Halpha.cont.rscale': 0.25,
+    'Halpha.cont.h_over_r': 0.1,
+    'Halpha.cont.x0': 0.0,
+    'Halpha.cont.y0': 0.0,
+    'z': 1.0,
+}
+
+# equivalence bounds vs a dense n=501 slice reference (16x16, os=3).
+# Measured 2026-07-06 (measure-then-freeze, ~4x headroom): full scene
+# max 2.1e-5, line-only 2.7e-5, ramp-throughput 1.9e-4 of peak; the
+# residual is the n=501 reference's own convergence error, so growth
+# past these bounds means one of the paths changed behavior.
+MAX_TOL_FLAT = 1e-4
+MAX_TOL_RAMP = 7e-4
+FLUX_TOL = 1e-4
+
+
+@pytest.fixture(scope='module')
+def scene():
+    ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
+    gp = build_grism_pars_for_line(656.28, redshift=1.0, image_pars=ip, dispersion=1.1)
+    psf = galsim.Gaussian(fwhm=0.18)
+    source = SourceModel(
+        velocity_model=CenteredVelocityModel(),
+        emission_lines={
+            'Halpha': EmissionLine(
+                intensity=InclinedExponentialModel(),
+                continuum=InclinedExponentialModel(),
+            )
+        },
+    )
+    return ip, gp, psf, source
+
+
+class TestGaussianTentProfile:
+    def test_matches_quadrature(self):
+        # closed form vs adaptive quadrature of Gaussian x triangle kernel
+        for u, sig in [(0.0, 0.5), (1.3, 0.2), (-2.1, 1.5), (0.7, 3.0)]:
+
+            def integrand(x):
+                g = np.exp(-0.5 * (x / sig) ** 2) / (sig * np.sqrt(2 * np.pi))
+                return g * max(1.0 - abs(u - x), 0.0)
+
+            num, _ = quad(integrand, u - 1.0, u + 1.0, limit=200, epsabs=1e-14)
+            ana = float(gaussian_tent_profile(jnp.asarray(u), jnp.asarray(sig)))
+            assert abs(num - ana) < 1e-12
+
+    def test_narrow_limit_is_tent(self):
+        # sigma -> 0 reduces to the bare triangle kernel of bilinear
+        # interpolation (a zero-width line lands on one sub-pixel position)
+        u = jnp.linspace(-2.0, 2.0, 41)
+        sigma = 1e-7
+        prof = gaussian_tent_profile(u, jnp.asarray(sigma))
+        tent = jnp.clip(1.0 - jnp.abs(u), 0.0, None)
+        # deviation is O(sigma) at the tent kinks (Gaussian rounding)
+        np.testing.assert_allclose(np.asarray(prof), np.asarray(tent), atol=sigma)
+
+    def test_normalization(self):
+        # unit flux: samples along the dispersion axis sum to 1 at any
+        # sub-pixel center offset (translates of the triangle kernel sum to 1)
+        u = jnp.arange(-40, 41, dtype=float)
+        for frac in (0.0, 0.3, 0.77):
+            total = float(gaussian_tent_profile(u - frac, jnp.asarray(1.8)).sum())
+            assert abs(total - 1.0) < 1e-12
+
+
+class TestContinuumTraceKernel:
+    def test_flat_kernel_total(self, scene):
+        # kernel sums to the wavelength window span in nm (box integral)
+        _, gp, _, _ = scene
+        lam = jnp.linspace(1290.0, 1335.0, 41)
+        kern, _ = continuum_trace_kernel(gp, lam, oversample=3)
+        span = float(lam[-1] - lam[0])
+        assert abs(kern.sum() - span) < 1e-10 * span
+
+    def test_ramp_kernel_total(self, scene):
+        # T-weighted kernel integrates to integral of T over the window
+        _, gp, _, _ = scene
+        lam = np.linspace(1290.0, 1335.0, 41)
+        T = 1.0 + 2.0 * (lam - lam[0]) / (lam[-1] - lam[0])
+        gp_T = dataclasses.replace(gp, throughput=jnp.asarray(T))
+        kern, _ = continuum_trace_kernel(gp_T, jnp.asarray(lam), oversample=3)
+        expected = np.trapz(T, lam)
+        assert abs(kern.sum() - expected) < 1e-8 * expected
+
+    def test_correlation_matches_bruteforce(self, scene):
+        _, gp, _, _ = scene
+        lam = jnp.linspace(1300.0, 1325.0, 21)
+        kern, m_lo = continuum_trace_kernel(gp, lam, oversample=1)
+        rng = np.random.default_rng(3)
+        img = rng.uniform(size=(4, 30))
+        out = np.asarray(disperse_continuum_analytic(jnp.asarray(img), kern, m_lo))
+        brute = np.zeros_like(img)
+        for q in range(img.shape[1]):
+            for j in range(img.shape[1]):
+                m = q - j - m_lo
+                if 0 <= m < len(kern):
+                    brute[:, q] += img[:, j] * kern[m]
+        np.testing.assert_allclose(out, brute, atol=1e-12)
+
+
+class TestRenderEquivalence:
+    """Analytic render vs dense (n=501) slice render on the same obs."""
+
+    def _obs(self, gp, psf, method, **kw):
+        rc = RenderConfig(oversample=3, dispersal_method=method)
+        return build_grism_obs(gp, z=1.0, psf=psf, render_config=rc, **kw)
+
+    def test_full_scene(self, scene):
+        _, gp, psf, source = scene
+        ref = np.asarray(
+            source.render_grism(TRUE_PARS, self._obs(gp, psf, 'slice', n_lambda=501))
+        )
+        ana = np.asarray(source.render_grism(TRUE_PARS, self._obs(gp, psf, 'analytic')))
+        peak = np.abs(ref).max()
+        assert np.abs(ana - ref).max() / peak < MAX_TOL_FLAT
+        assert abs(ana.sum() / ref.sum() - 1.0) < FLUX_TOL
+
+    def test_line_only(self, scene):
+        _, gp, psf, source = scene
+        pars = dict(TRUE_PARS)
+        pars['Halpha.cont.flux_per_nm'] = 0.0
+        ref = np.asarray(
+            source.render_grism(pars, self._obs(gp, psf, 'slice', n_lambda=501))
+        )
+        ana = np.asarray(source.render_grism(pars, self._obs(gp, psf, 'analytic')))
+        peak = np.abs(ref).max()
+        assert np.abs(ana - ref).max() / peak < MAX_TOL_FLAT
+
+    def test_ramp_throughput(self, scene):
+        _, gp, psf, source = scene
+
+        def with_ramp(method, **kw):
+            base = self._obs(gp, psf, method, **kw)
+            lam = np.asarray(base.cube_pars.lambda_grid)
+            T = 1.0 + 2.0 * (lam - lam[0]) / (lam[-1] - lam[0])
+            gp_T = dataclasses.replace(gp, throughput=jnp.asarray(T))
+            return build_grism_obs(
+                gp_T,
+                z=1.0,
+                psf=psf,
+                render_config=base.render_config,
+                n_lambda=len(lam),
+            )
+
+        ref = np.asarray(
+            source.render_grism(TRUE_PARS, with_ramp('slice', n_lambda=501))
+        )
+        ana = np.asarray(source.render_grism(TRUE_PARS, with_ramp('analytic')))
+        peak = np.abs(ref).max()
+        assert np.abs(ana - ref).max() / peak < MAX_TOL_RAMP
+        assert abs(ana.sum() / ref.sum() - 1.0) < FLUX_TOL
+
+    def test_rolled_obs_matches_dense_slice(self, scene):
+        # nonzero WCS roll: both paths rotate model parameters into the
+        # detector frame and keep the dispersal along detector +x, so the
+        # rolled equivalence must hold at the unrolled floor
+        _, _, psf, source = scene
+        shape = (16, 16)
+        rot = 0.35
+        c, s = float(np.cos(rot)), float(np.sin(rot))
+        wcs = WCS(naxis=2)
+        wcs.wcs.pc = np.array([[c, -s], [s, c]])
+        wcs.wcs.cdelt = np.array([0.11, 0.11])
+        wcs.wcs.crpix = np.array([shape[1] / 2, shape[0] / 2])
+        wcs.wcs.crval = np.array([0.0, 0.0])
+        wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+        wcs.wcs.cunit = ['arcsec', 'arcsec']
+        wcs.pixel_shape = (shape[1], shape[0])
+        wcs.wcs.set()
+        ip_rot = ImagePars(shape=shape, wcs=wcs)
+        gp_rot = build_grism_pars_for_line(
+            656.28, redshift=1.0, image_pars=ip_rot, dispersion=1.1
+        )
+        ref = np.asarray(
+            source.render_grism(
+                TRUE_PARS, self._obs(gp_rot, psf, 'slice', n_lambda=501)
+            )
+        )
+        ana = np.asarray(
+            source.render_grism(TRUE_PARS, self._obs(gp_rot, psf, 'analytic'))
+        )
+        peak = np.abs(ref).max()
+        assert np.abs(ana - ref).max() / peak < MAX_TOL_FLAT
+        assert abs(ana.sum() / ref.sum() - 1.0) < FLUX_TOL
+
+    def test_jit_matches_eager_and_grad_finite(self, scene):
+        _, gp, psf, source = scene
+        rc = RenderConfig(
+            oversample=3, dispersal_method='analytic', line_window_halfwidth=16
+        )
+        obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        eager = np.asarray(source.render_grism(TRUE_PARS, obs))
+        jitted = np.asarray(jax.jit(lambda p: source.render_grism(p, obs))(TRUE_PARS))
+        np.testing.assert_allclose(jitted, eager, rtol=0, atol=1e-12)
+
+        pars_j = {k: jnp.asarray(v) for k, v in TRUE_PARS.items()}
+        grads = jax.grad(lambda p: jnp.sum(source.render_grism(p, obs) ** 2))(pars_j)
+        assert all(np.isfinite(np.asarray(v)).all() for v in grads.values())
+
+
+class TestGuards:
+    def test_render_config_validation(self):
+        with pytest.raises(ValueError, match='dispersal_method'):
+            RenderConfig(dispersal_method='magic')
+        with pytest.raises(ValueError, match='line_window_halfwidth'):
+            RenderConfig(line_window_halfwidth=0)
+        with pytest.raises(ValueError, match='line_window_halfwidth'):
+            RenderConfig(line_window_halfwidth=2.5)
+
+    def test_per_slice_psf_rejected(self, scene):
+        _, gp, psf, source = scene
+        rc = RenderConfig(oversample=3, dispersal_method='analytic')
+        obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        with pytest.raises(ValueError, match='post_dispersion'):
+            source.render_grism(TRUE_PARS, obs, psf_mode='per_slice')
+
+    def test_jit_without_halfwidth_rejected(self, scene):
+        _, gp, psf, source = scene
+        rc = RenderConfig(oversample=3, dispersal_method='analytic')
+        obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        with pytest.raises(ValueError, match='line_window_halfwidth'):
+            jax.jit(lambda p: source.render_grism(p, obs))(TRUE_PARS)
+
+    def test_rotated_dispersion_rejected(self, scene):
+        _, gp, psf, source = scene
+        gp_rot = dataclasses.replace(
+            gp, dispersion_angle_detector=0.3, dispersion_angle=None
+        )
+        rc = RenderConfig(oversample=3, dispersal_method='analytic')
+        obs = build_grism_obs(gp_rot, z=1.0, psf=psf, render_config=rc)
+        with pytest.raises(NotImplementedError, match='axis-aligned'):
+            source.render_grism(TRUE_PARS, obs)
+
+    def test_group_path_rejected(self, scene):
+        _, gp, psf, source = scene
+        rc = RenderConfig(oversample=3, dispersal_method='analytic')
+        obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        with pytest.raises(NotImplementedError, match='shared-cube group'):
+            source.render_grism_group(TRUE_PARS, {'roll0': obs})

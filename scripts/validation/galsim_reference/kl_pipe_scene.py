@@ -56,6 +56,7 @@ def build_kl_pipe_scene(
     g1: float = 0.0,
     g2: float = 0.0,
     throughput_fn=None,
+    dispersal_method: str = 'slice',
 ):
     """Build the ``SourceModel`` + grism obs for the reference-gated scene.
 
@@ -72,6 +73,9 @@ def build_kl_pipe_scene(
         Wavelength-dependent throughput T(lambda_nm), vectorized. Sampled
         at the final cube wavelength grid and installed as
         ``GrismPars.throughput``. None = flat 100%.
+    dispersal_method : str
+        ``'slice'`` (default) or ``'analytic'`` -- forwarded to
+        ``RenderConfig`` to select the grism dispersal pathway.
 
     Returns
     -------
@@ -99,7 +103,9 @@ def build_kl_pipe_scene(
         grism_pars,
         z=z,
         psf=psf,
-        render_config=RenderConfig(oversample=oversample),
+        render_config=RenderConfig(
+            oversample=oversample, dispersal_method=dispersal_method
+        ),
     )
 
     if n_lambda is not None:
