@@ -1026,7 +1026,12 @@ class TestCubeRemat:
             lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
             dispersion_angle_detector=0.0,
         )
-        return build_grism_obs(gp, z=z, render_config=RenderConfig(oversample=1))
+        # cube_remat wraps build_cube; pin the slice (cube-building) path
+        return build_grism_obs(
+            gp,
+            z=z,
+            render_config=RenderConfig(oversample=1, dispersal_method='slice'),
+        )
 
     def test_toggle_plumbing(self):
         """cube_remat defaults True, accepts False, and survives a pytree

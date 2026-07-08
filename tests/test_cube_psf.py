@@ -166,7 +166,8 @@ def _make_grism_obs(cube_pars, psf, oversample, grism_pars=None):
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
-        render_config=RenderConfig(oversample=oversample),
+        # this module tests cube assembly + PSF; pin the slice path
+        render_config=RenderConfig(oversample=oversample, dispersal_method='slice'),
         fine_image_pars=fine_ip,
     )
 

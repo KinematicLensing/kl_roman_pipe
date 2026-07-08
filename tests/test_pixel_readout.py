@@ -257,8 +257,12 @@ class TestDefaultWavelengthGridDeviation:
             'z': z,
         }
         psf = galsim.Gaussian(fwhm=0.18)
+        # these windows freeze slice-grid behavior; pin the slice path
         obs_default = build_grism_obs(
-            grism_pars, z=z, psf=psf, render_config=RenderConfig(oversample=3)
+            grism_pars,
+            z=z,
+            psf=psf,
+            render_config=RenderConfig(oversample=3, dispersal_method='slice'),
         )
         obs_refined = dataclasses.replace(
             obs_default, cube_pars=grism_pars.to_cube_pars(z, n_lambda=251)

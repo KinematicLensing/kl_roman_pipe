@@ -603,14 +603,23 @@ def disperse_line_analytic(
     amp = I_line if weight is None else I_line * weight
     n = I_line.shape[1]
     out = jnp.zeros_like(I_line)
+    # consecutive taps share Psi evaluations: the profile at tap w is
+    # sigma * (Psi_{w+1} - 2 Psi_w + Psi_{w-1}), so a rolling second
+    # difference needs one new Psi (erf + exp) per tap instead of three
+    inv_sigma = 1.0 / sigma_s
+    amp_sigma = amp * sigma_s
+    P_prev = _normal_cdf_antiderivative((-halfwidth - 1 - xi) * inv_sigma)
+    P_cur = _normal_cdf_antiderivative((-halfwidth - xi) * inv_sigma)
     for w in range(-halfwidth, halfwidth + 1):
-        term = amp * gaussian_tent_profile(w - xi, sigma_s)
+        P_next = _normal_cdf_antiderivative((w + 1 - xi) * inv_sigma)
+        term = amp_sigma * (P_next - 2.0 * P_cur + P_prev)
         if w == 0:
             out = out + term
         elif w > 0:
             out = out.at[:, w:].add(term[:, : n - w])
         else:
             out = out.at[:, :w].add(term[:, -w:])
+        P_prev, P_cur = P_cur, P_next
     return out
 
 

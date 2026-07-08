@@ -311,7 +311,9 @@ def _make_rotated_obs(
         dispersion_angle_detector=0.0,
     )
     if render_config is None:
-        render_config = RenderConfig(oversample=oversample)
+        # this module tests the slice shared-cube pathway; analytic obs
+        # never join shared groups
+        render_config = RenderConfig(oversample=oversample, dispersal_method='slice')
     return build_grism_obs(
         gp,
         z=z,
@@ -574,7 +576,7 @@ class TestGroupingAndGuards:
             gp,
             z=_Z,
             psf=galsim.Gaussian(fwhm=0.11),
-            render_config=RenderConfig(oversample=3),
+            render_config=RenderConfig(oversample=3, dispersal_method='slice'),
         )
         group = {'a': _make_rotated_obs(0.0), 'b': obs_flip}
         with pytest.raises(ValueError, match="parity-flipped"):
@@ -612,13 +614,17 @@ class TestGroupingAndGuards:
     def test_from_obs_mismatched_cube_mode_raises(self, source_ha):
         obs_a = _make_rotated_obs(
             0.0,
-            render_config=RenderConfig(oversample=3, cube_mode='shared'),
+            render_config=RenderConfig(
+                oversample=3, cube_mode='shared', dispersal_method='slice'
+            ),
             data=jnp.ones(_SHAPE),
             variance=1.0,
         )
         obs_b = _make_rotated_obs(
             np.pi / 4,
-            render_config=RenderConfig(oversample=3, cube_mode='per_roll'),
+            render_config=RenderConfig(
+                oversample=3, cube_mode='per_roll', dispersal_method='slice'
+            ),
             data=jnp.ones(_SHAPE),
             variance=1.0,
         )

@@ -2395,7 +2395,8 @@ def test_recover_inclined_spergel_with_shear(snr, test_config, intensity_grids):
 
 
 @pytest.mark.parametrize("snr", [10000, 1000])
-def test_recover_joint_phot_grism_base(snr, test_config):
+@pytest.mark.parametrize("dispersal_method", ['analytic', 'slice'])
+def test_recover_joint_phot_grism_base(dispersal_method, snr, test_config):
     """Joint vel + broadband + emission-line grism slice recovery.
 
     SourceModel with velocity (rotation curve drives Doppler), broadband
@@ -2403,6 +2404,16 @@ def test_recover_joint_phot_grism_base(snr, test_config):
     distinguishes broadband and emission-line spatial profiles
     (``F087.rscale`` vs ``Halpha.rscale``; ``F087.x0`` vs ``Halpha.x0``)
     so the slice covers both pathways independently.
+
+    Runs on both dispersal pathways. The slice arm keeps the original
+    blanket tolerances (calibrated on that pathway). The analytic arm
+    checks ``Halpha.dispersion`` and ``vel.rscale`` against conditional
+    Fisher bounds instead: the exact model carries less dispersion
+    information than the coarse wavelength grid did (the grid's frozen
+    deposit positions added artificial curvature and spuriously broke
+    the along-dispersion position/velocity degeneracy of slitless data),
+    so those parameters' 1-sigma noise floors sit above the blanket
+    tolerance and a nominal noise draw would fail it.
     """
     import galsim as gs
 
@@ -2502,9 +2513,16 @@ def test_recover_joint_phot_grism_base(snr, test_config):
     # the priors-derived render config can differ)
     from kl_pipe.render import RenderConfig as _RC
 
-    grism_obs_clean = build_grism_obs(
-        grism_pars, z=Z, psf=psf, render_config=_RC(oversample=5)
+    # the analytic arm also pins the line window: the standalone data
+    # render sizes it from the true parameter values while the likelihood
+    # sizes it from prior extremes, and data and fit must share one
+    # forward pathway exactly
+    rc_grism = _RC(
+        oversample=5,
+        dispersal_method=dispersal_method,
+        line_window_halfwidth=25 if dispersal_method == 'analytic' else None,
     )
+    grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf, render_config=rc_grism)
     clean_grism = np.asarray(source.render_grism(pars_dotted, grism_obs_clean))
     signal_power = float(np.sum(clean_grism**2))
     variance_grism = signal_power / snr**2
@@ -2527,11 +2545,11 @@ def test_recover_joint_phot_grism_base(snr, test_config):
         psf=psf,
         data=jnp.asarray(data_grism_noisy),
         variance=float(variance_grism),
-        render_config=_RC(oversample=5),  # match the data pathway (see above)
+        render_config=rc_grism,  # match the data pathway (see above)
     )
 
     # --- Data-vector diagnostics: one panel per channel ---
-    test_name = f"joint_phot_grism_base_snr{snr}"
+    test_name = f"joint_phot_grism_base_{dispersal_method}_snr{snr}"
     # Broadband F087: clean signal via the noise-free obs (matches the
     # rendering path the likelihood uses internally).
     obs_int_noPSF = build_image_obs(
@@ -2642,12 +2660,31 @@ def test_recover_joint_phot_grism_base(snr, test_config):
     # only to grism-only v0 inference; velocity-map tests already meet
     # the strict default.
     exclude = ['vel.v0'] if snr >= 10000 else []
+
+    # Analytic arm: conditional Fisher floors for these parameters exceed
+    # the blanket tolerance (measured 1/sqrt(diag(F)) on this scene, both
+    # channels, scaling as 1/SNR: sigma_dispersion ~ 4.8 km/s and
+    # sigma_vel.rscale ~ 0.0083" at SNR=1000). Bound each at 3.3 sigma.
+    fisher_bounds = {}
+    if dispersal_method == 'analytic':
+        fisher_bounds = {
+            'Halpha.dispersion': 3.3 * 4.81 * (1000.0 / snr),
+            'vel.rscale': 3.3 * 0.00828 * (1000.0 / snr),
+        }
+        exclude = sorted(set(exclude) | set(fisher_bounds))
+
     assert_parameter_recovery(
         recovery_stats,
         snr,
-        'Joint vel+phot+grism (base)',
+        f'Joint vel+phot+grism (base, {dispersal_method})',
         exclude_params=exclude,
     )
+    for name, bound in fisher_bounds.items():
+        err = recovery_stats[name]['abs_error']
+        assert err < bound, (
+            f"{name} outside conditional-Fisher bound (3.3 sigma at "
+            f"SNR={snr}): abs error {err:.4g} vs bound {bound:.4g}"
+        )
     if snr >= 10000 and 'vel.v0' in recovery_stats:
         v0_rel = recovery_stats['vel.v0']['rel_error']
         assert v0_rel < 0.04, (

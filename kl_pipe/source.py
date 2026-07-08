@@ -591,13 +591,19 @@ class SourceModel:
         dict[str, jnp.ndarray]
             Dispersed detector-frame images keyed like ``obs_group``.
         """
+        # a rotated-frame analytic closed form exists on paper but was
+        # deliberately not implemented: on CPU, independent per-obs renders
+        # measured faster than any shared-evaluation variant could be.
+        # Worth revisiting only if GPU profiling changes that trade-off.
         for key, obs in obs_group.items():
             if obs.dispersal_method == 'analytic':
                 raise NotImplementedError(
                     f"dispersal_method='analytic' (obs {key!r}) is not "
-                    "supported on the shared-cube group path yet (the "
-                    "rotated-frame closed form is derived but not implemented); "
-                    "use dispersal_method='slice' for rolled groups"
+                    "supported on the shared-cube group path (the analytic "
+                    "path builds no cube to share). Inference routes analytic "
+                    "obs to independent per-obs renders automatically; render "
+                    "each obs with render_grism, or use "
+                    "dispersal_method='slice' for group rendering."
                 )
         from kl_pipe.dispersion import apply_dispersion_operator
         from kl_pipe.grism import _apply_post_dispersion_pixel_response

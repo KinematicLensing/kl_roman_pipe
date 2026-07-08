@@ -150,7 +150,12 @@ def _make_pars(
 
 
 def _make_grism_obs_no_psf(grism_pars, cube_pars, oversample=1):
-    """Build a no-PSF GrismObs for testing."""
+    """Build a no-PSF GrismObs for testing.
+
+    Pinned to the slice dispersal path: this module tests the wavelength-
+    grid cube machinery (rotated dispersion angles, disperse_cube
+    references, cube jit/grad), which the analytic default bypasses.
+    """
     fine_ip = (
         cube_pars.image_pars.make_fine_scale(oversample) if oversample > 1 else None
     )
@@ -158,7 +163,7 @@ def _make_grism_obs_no_psf(grism_pars, cube_pars, oversample=1):
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=None,
-        render_config=RenderConfig(oversample=oversample),
+        render_config=RenderConfig(oversample=oversample, dispersal_method='slice'),
         fine_image_pars=fine_ip,
     )
 

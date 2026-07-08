@@ -139,7 +139,8 @@ def _make_obs(
         gp,
         z=_Z,
         psf=galsim.Gaussian(fwhm=fwhm),
-        render_config=RenderConfig(oversample=3),
+        # per_slice PSF needs the wavelength-slice cube; pin the slice path
+        render_config=RenderConfig(oversample=3, dispersal_method='slice'),
         **build_kwargs,
     )
 
@@ -197,7 +198,9 @@ class TestImageEquivalence:
         an unsupported (pre-existing) combination."""
         obs = _make_obs()
         obs_nopsf = build_grism_obs(
-            obs.grism_pars, z=_Z, render_config=RenderConfig(oversample=1)
+            obs.grism_pars,
+            z=_Z,
+            render_config=RenderConfig(oversample=1, dispersal_method='slice'),
         )
         img_a = source_ha.render_grism(_BASE_PARS, obs_nopsf, psf_mode='per_slice')
         img_b = source_ha.render_grism(
@@ -364,7 +367,9 @@ class TestPathwayPreservation:
             gp,
             z=_Z,
             psf=galsim.Gaussian(fwhm=0.11),
-            render_config=RenderConfig(oversample=3, psf_mode='per_slice'),
+            render_config=RenderConfig(
+                oversample=3, psf_mode='per_slice', dispersal_method='slice'
+            ),
         )
         assert obs_slice.psf_mode == 'per_slice'
         img_from_rc = source_ha.render_grism(_BASE_PARS, obs_slice)

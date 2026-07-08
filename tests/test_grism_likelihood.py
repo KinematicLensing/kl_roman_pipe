@@ -171,10 +171,14 @@ def grism_pars():
     )
 
 
-def _build_grism_synthetic(source, pars, grism_pars, psf, snr, seed=0):
+def _build_grism_synthetic(
+    source, pars, grism_pars, psf, snr, seed=0, render_config=None
+):
     """Render a clean grism image, add Gaussian noise calibrated to a target
     matched-filter SNR, return (data, variance, obs_with_data)."""
-    obs_no_data = build_grism_obs(grism_pars, z=_Z, psf=psf)
+    obs_no_data = build_grism_obs(
+        grism_pars, z=_Z, psf=psf, render_config=render_config
+    )
     clean = source.render_grism(pars, obs_no_data)
     clean = np.asarray(clean)
 
@@ -194,6 +198,7 @@ def _build_grism_synthetic(source, pars, grism_pars, psf, snr, seed=0):
         psf=psf,
         data=jnp.asarray(data),
         variance=float(variance),
+        render_config=render_config,
     )
     return jnp.asarray(data), float(variance), obs
 
@@ -323,19 +328,32 @@ class TestGrismLikelihoodUnits:
 # =============================================================================
 
 
-def test_grism_optimizer_recovery_smoke(source, grism_obs_high_snr):
+def test_grism_optimizer_recovery_smoke(source, grism_pars, roman_psf):
     """Smoke test: recover Halpha.flux + vel.vcirc + Halpha.dispersion at SNR=1000.
 
     Fixes everything else at truth; optimizes the 3 free params from a
     perturbed initial guess. Confirms end-to-end JAX gradient + scipy
     optimizer path works for grism inference under SourceModel.
 
-    Tolerances are loose (±15% relative).
+    Tolerances are loose (±15% relative). Runs on the slice path, where
+    the dispersion response is sharp enough for that bound at SNR=1000
+    (the exact analytic model's dispersion noise floor is ~10% here);
+    the analytic default's optimizer coverage lives in
+    test_optimizer_recovery.py.
     """
+    from kl_pipe.render import RenderConfig
+
     priors = _make_priors()
-    task = InferenceTask.from_obs(
-        source, priors, grism_obs={'roll0': grism_obs_high_snr}
+    _, _, obs_slice = _build_grism_synthetic(
+        source,
+        _TRUE_PARS,
+        grism_pars,
+        roman_psf,
+        snr=1000,
+        seed=0,
+        render_config=RenderConfig(oversample=5, dispersal_method='slice'),
     )
+    task = InferenceTask.from_obs(source, priors, grism_obs={'roll0': obs_slice})
     log_like_fn = task.likelihood_fn
     grad_fn = jax.jit(jax.grad(log_like_fn))
 

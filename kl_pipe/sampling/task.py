@@ -160,9 +160,28 @@ def _check_source_priors_fit_obs(
         return obs  # k-space grid sizing N/A for spatial-oversampling rendering
 
     if isinstance(obs, GrismObs):
-        from kl_pipe.render import RenderConfig, build_grism_render_config
+        import dataclasses
+
+        from kl_pipe.render import (
+            RenderConfig,
+            build_grism_render_config,
+            line_window_halfwidth_for_priors,
+        )
 
         rc_obs = obs.render_config if obs.render_config is not None else RenderConfig()
+
+        def _fill_line_window_halfwidth(rc):
+            # analytic dispersal needs a static deposit window under JIT;
+            # size it from prior extremes when the caller left it None
+            if (
+                rc.dispersal_method != 'analytic'
+                or rc.line_window_halfwidth is not None
+            ):
+                return rc
+            hw = line_window_halfwidth_for_priors(
+                source, priors, obs.grism_pars, rc.oversample
+            )
+            return dataclasses.replace(rc, line_window_halfwidth=hw)
 
         # auto-derive + rebuild when the obs carries a builder-default rc;
         # the priors-sized rc bounds cube-slice bandwidth via the Minkowski
@@ -172,7 +191,7 @@ def _check_source_priors_fit_obs(
             derived_rc = build_grism_render_config(
                 source, priors, obs.grism_pars, psf=obs.psf
             )
-            return obs.with_render_config(derived_rc)
+            return obs.with_render_config(_fill_line_window_halfwidth(derived_rc))
 
         # explicit user rc: validate against the aliasing requirement only
         # (min_oversample=1); the accuracy floor applies to auto-derived
@@ -191,6 +210,12 @@ def _check_source_priors_fit_obs(
                 f"psf=psf)\n"
                 f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
             )
+        # an explicit rc is an informed speed choice for everything it sets,
+        # but a None line_window_halfwidth on the analytic path would raise
+        # at trace time -- fill it from priors instead
+        filled_rc = _fill_line_window_halfwidth(rc_obs)
+        if filled_rc is not rc_obs:
+            return obs.with_render_config(filled_rc)
         return obs
 
     if isinstance(obs, ImageObs):

@@ -844,13 +844,13 @@ only.
 - [x] slice_width_kms sizing knob on build_grism_obs / to_cube_pars.
 - [x] GalSim chromatic reference gate (tests/test_galsim_reference.py,
       basic tier) -- independent pixel-level check of dispersed renders.
-- [ ] Wavelength-grid production rule: slice_width_kms=40 (n~151) for
-      production fits, 60-80 (n~101) for exploration; measured grad cost
-      2.0x/3.2x/6.1x at 101/151/251 slices vs the ~25-slice default.
-      Follow-up: make the safe grid the default via priors-aware sizing
-      in InferenceTask.from_obs (mirror the render-config pattern);
-      requires first sweeping test fixtures to explicit cheap grids so
-      suite runtime does not triple.
+- [x] Wavelength-grid production rule: OBSOLETED for emission lines by
+      the analytic dispersal default (2026-07-07) -- line accuracy no
+      longer depends on n_lambda at all. The rule (slice_width_kms=40,
+      n~151 for production; measured grad cost 2.0x/3.2x/6.1x at
+      101/151/251 slices) still applies to any deliberate slice-path
+      use (per-slice PSF, rotated dispersion axis, shared-cube groups,
+      cross-checks).
 - [x] Analytic line dispersal (2026-07-06): derivation + standalone and
       pipeline experiments SUPPORT it. Closed-form per-spaxel deposit
       (Gaussian conv tent along the dispersion axis) + closed-form flat
@@ -875,6 +875,65 @@ only.
       derivation, doc section 3.2; group path raises loudly),
       priors-aware deposit_halfwidth auto-sizing in from_obs, Fisher +
       posterior A/B on the integrated path, os floor revisit.
+- [x] Analytic dispersal validation closeout (2026-07-07; full record
+      experiments/sweverett/analytic_dispersal/ + derivation doc sec 13):
+      * Fisher gate PASSED: analytic worst shift 0.000-0.001 sigma vs
+        the slice n=501 os=5 reference at 3 anchors (slice n=151:
+        0.003-0.006; old n=25 default: 0.54-1.05, fails). Window
+        halfwidth 11 vs 23 indistinguishable at the anchors.
+      * os floor relaxation REFUTED: analytic os=3 == slice os=3
+        (worst 0.05-0.12 sigma vs an os=9 truth, above the 0.05 gate at
+        stress anchors). The os=3 bias is spatial-axis (LOS eval / PSF /
+        readout), not dispersal interpolation. os=5 floor stays.
+      * Adversarial literature re-survey: novelty claim SURVIVED a
+        hostile independent search; one new candidate (Griggio et al.
+        2026, arXiv:2606.09974) read in full and eliminated (gridded
+        sparse-operator inverse method). Kernel math citation: Unser
+        1999. Survey trap: an LLM web summarizer fabricated a
+        closed-form description of that paper -- verify prior-art
+        verdicts against full text.
+      * SHARED-CUBE OPERATOR ADVANTAGE COLLAPSES at production
+        settings: quiet-machine 4-roll gradient at n=151/os=5 is 322 ms
+        shared vs 310 ms per-roll (1.0x; ~7.5M nnz/roll, 3.9 s build).
+        The A3 2.9x was measured at n=25/os=3 and does not transfer.
+      * Quiet-machine bench (os=5, prior-safe halfwidth 23, grad
+        min-of-30, results_bench_final.json): quick-dev (1 band +
+        1 roll) slice n=151 99.6 ms vs analytic 31.9 ms (3.1x);
+        4-roll grism-only 310.5 vs 97.9 ms (3.2x, analytic sublinear
+        in rolls); production (2 bands + 4 rolls) 328.5 vs 119.0 ms
+        (2.8x). Grad compile 58 s -> 11-15 s at 4 rolls.
+      * Posterior A/B PASSED (identical data, seed 42, flagship short
+        config + Laplace, os=5): joint Nsigma 0.124 slice vs 0.152
+        analytic (seeded band); max param shift 0.089 sigma with the
+        bit-identical broadband channel's params shifting equally --
+        trajectory noise, not dispersal bias. ESS / R-hat / divergence
+        rate equal. End-to-end wallclock 734 -> 553 s (1.33x).
+      * Shipped: line_window_halfwidth_for_priors + from_obs auto-fill
+        (render.py/task.py, 5 new tests); rolling second-difference Psi
+        in disperse_line_analytic (1 erf+exp per tap instead of 3,
+        values identical). 21/21 analytic tests + 106/106 targeted
+        grism regression pass. NEGATIVE result: jax.checkpoint around
+        the analytic assembly (cube_remat analog) reverted -- gradients
+        identical but 1.04-1.29x slower on CPU (no cube-sized
+        intermediate to rematerialize); the multi-roll backward blowup
+        that motivated it was machine-contention noise.
+      * Doc 3.2 rotated tent-moment kernel: DEFERRED (user decision
+        2026-07-07, evidence-based, revisit on GPU). Analytic per-roll
+        already beats every slice option 3x at 4 rolls and scales
+        sublinearly; the shareable spatial eval is a minority of cost at
+        prior-safe halfwidth while the rotated deposit costs 2-3x/roll.
+        The deferral rationale is also stated in
+        group_grism_obs_by_cube_compat / render_grism_group so future
+        sessions meet it in code, not only in this doc. Shared-cube
+        operator KEPT for slice-path (n_lambda) usage per the same
+        decision.
+- [x] DEFAULT FLIP (2026-07-07, user-approved): RenderConfig
+      dispersal_method default 'slice' -> 'analytic'. Analytic obs form
+      singleton groups in group_grism_obs_by_cube_compat (no cube to
+      share), so multi-roll default configs render independently per
+      obs instead of raising on the group path. Fixture sweep: shared-
+      cube tests pinned to explicit 'slice' (they test that pathway);
+      everything else rides the new default.
 - [x] Two-tier wavelength grid experiment: REFUTED as a standalone fix
       by the same experiment -- coarse continuum slices are limited by
       the source's spatial structure along the trace, not throughput

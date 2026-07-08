@@ -404,6 +404,23 @@ Full agent survey in the session record; conclusions:
   for dispersed velocity fields exists; our entanglement tests appear to
   be the most rigorous treatment of that question anywhere.
 
+Adversarial re-survey (2026-07-07, independent agent instructed to refute
+the novelty claim): claim survived. One new candidate found and
+eliminated -- Griggio, Ryan, Pirzkal et al. 2026 (arXiv:2606.09974,
+Roman flux-cube reconstruction) is a discretized sparse-operator INVERSE
+method, wavelength-gridded; direct full-text read (an LLM summarizer
+initially fabricated a "closed-form" description of it -- always verify
+prior-art determinations against the paper text). Correct scoping for a
+paper: the kernel identity (Gaussian conv linear B-spline via second
+differences of Psi) is standard math -- cite Unser 1999 (IEEE Sig. Proc.
+Mag. 16(6), B-spline framework) and derive the specific form in an
+appendix; the novel contribution is eliminating the wavelength grid from
+slitless forward models by depositing the line as that closed form along
+the detector dispersion axis. Outini & Copin 2020 = same continuous
+integral, unpublished Fourier-space evaluation, cite as
+related-but-distinct. kl-tools (our own predecessor) is grid-based
+slice-and-shift with an in-code fine-grid caveat.
+
 ## 12. Integration (2026-07-06)
 
 Implemented behind ``RenderConfig(dispersal_method='analytic',
@@ -433,16 +450,64 @@ deposit_halfwidth=N)``:
   ramp-static 0.448%/0.025% of peak, both below the slice-path floors
   (slice quantization and most shift-interpolation error vanish).
 
-## 13. Open questions
+## 13. Open questions (status 2026-07-07)
 
-1. Default flip: 'slice' is still the default dispersal_method. Flipping
-   changes data bits everywhere (seeded posteriors re-roll) and needs a
-   fixture sweep plus the Fisher / posterior A/B on the integrated path.
-2. deposit_halfwidth auto-sizing from priors in InferenceTask.from_obs
-   (mirror the oversample-from-priors pattern).
-3. Rotated shared-cube kernel: exact tent moments (conservative) or
-   unify on the operator's Catmull-Rom (one kernel everywhere, needs
-   re-gating)?
-4. Does the os = 5 floor relax once line dispersal is closed-form? The
-   GalSim static-scene result (1.68% -> 0.45%) suggests the
-   interpolation floor drops; needs the Fisher-bias instrument at os = 3.
+1. Default flip: DONE (2026-07-07). ``dispersal_method='analytic'`` is
+   the RenderConfig default; 'slice' remains fully supported (reference
+   path, per-slice PSF, rotated dispersion axis, shared-cube groups).
+   Gates that cleared it: Fisher shift 0.000-0.001 sigma vs the n=501
+   os=5 reference at 3 anchors (slice n=151: 0.003-0.006; old n=25
+   default: 0.54-1.05, fails); seeded posterior A/B within the
+   trajectory-noise band with equal sampler health. Analytic obs form
+   singleton groups in ``group_grism_obs_by_cube_compat`` (no cube to
+   share), so multi-roll works with default configs via independent
+   per-obs renders. Fixture sweep: shared-cube tests pinned to
+   'slice' (they test that machinery).
+2. deposit_halfwidth auto-sizing: DONE --
+   ``render.line_window_halfwidth_for_priors`` (worst case
+   ``|v0| + vcirc`` from prior bounds, per-line dispersion bound,
+   unbounded Gaussians at 6 sd), filled in by
+   ``InferenceTask.from_obs`` when the analytic rc leaves it None.
+3. Rotated shared-cube kernel: tent moments derived (section 3.2), not
+   implemented. Cost analysis now disfavors it on CPU: the deposit loop
+   (not the spatial LOS eval) is the majority of analytic cost at the
+   prior-safe halfwidth, and the rotated deposit costs 2-3x the
+   axis-aligned one, so sharing the spatial eval across rolls while
+   paying 4 rotated deposits loses to 4 independent axis-aligned
+   renders. Re-evaluate on GPU (scatter/gather economics differ).
+4. os = 5 floor relaxation: REFUTED (2026-07-07). Fisher instrument at
+   os = 3 vs an analytic os = 9 reference: analytic worst shifts
+   0.048/0.082/0.116 sigma across anchors vs slice n=151's
+   0.052/0.088/0.117 -- statistically identical, both above the 0.05
+   gate at the stress anchors. The os = 3 bias lives in the spatial
+   axis (LOS evaluation / PSF grid / readout), not in dispersal
+   interpolation. os = 5 remains the inference floor for both paths
+   (results_fisher_gate.json Part B).
+
+New (2026-07-07): ``disperse_line_analytic`` computes the tap profile
+as a rolling second difference of Psi (one new erf+exp per tap instead
+of three -- identical values, ~3x fewer special-function evaluations in
+the deposit loop). A ``jax.checkpoint`` wrap of the analytic assembly
+(mirroring the slice path's cube remat) was tried and REVERTED:
+gradients identical (1e-13) but 1.04-1.29x slower on CPU -- the
+analytic path has no cube-sized intermediate to rematerialize, so the
+checkpoint only forces recompute. An apparent multi-roll backward
+blowup that motivated it was machine-contention noise; on a quiet
+machine the 4-roll analytic gradient is 97.9 ms (sublinear in rolls,
+3.1x the 31.9 ms single-roll cost).
+
+Quiet-machine benchmark (2026-07-07, os=5, prior-safe halfwidth 23,
+value-and-grad min-of-30, experiments/sweverett/analytic_dispersal/
+results_bench_final.json):
+
+| config                       | slice n=151 | analytic | speedup |
+|------------------------------|-------------|----------|---------|
+| 1 band + 1 roll (quick-dev)  | 99.6 ms     | 31.9 ms  | 3.1x    |
+| 4 rolls grism-only           | 310.5 ms    | 97.9 ms  | 3.2x    |
+| 2 bands + 4 rolls (prod)     | 328.5 ms    | 119.0 ms | 2.8x    |
+
+Gradient compile times drop 3-5x (e.g. 58 s -> 11 s at 4 rolls). The
+shared-cube operator's advantage collapses at production settings:
+slice shared at n=151/os=5 is 322.3 ms on the 4-roll gradient vs 310.5
+per-roll (the 2.9x A3 win was measured at n=25/os=3 and does not
+transfer -- the operator grows to ~7.5M nonzeros per roll).

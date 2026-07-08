@@ -298,7 +298,8 @@ class TestPlumbing:
             # (FWHM ~0.11"): softens the profile cusp without being easier
             # than the real instrument
             psf=galsim.Gaussian(fwhm=0.08),
-            render_config=RenderConfig(oversample=3),
+            # spectral_method applies to cube assembly; pin the slice path
+            render_config=RenderConfig(oversample=3, dispersal_method='slice'),
         )
 
         img_default = source_ha.render_grism(_BASE_PARS, obs)

@@ -1030,6 +1030,11 @@ def group_grism_obs_by_cube_compat(
     almost certainly meant to be identical (per-roll construction drift)
     and raise loudly instead of silently falling back to per-roll cubes.
 
+    Obs with ``dispersal_method='analytic'`` always form singleton
+    groups: the analytic path builds no cube, so each rolled obs
+    renders independently. This is routing, not an approximation --
+    the result matches the per-roll path exactly.
+
     Parameters
     ----------
     grism_obs : dict[str, GrismObs]
@@ -1044,6 +1049,11 @@ def group_grism_obs_by_cube_compat(
     group_reps: List['GrismObs'] = []
 
     for key, obs in grism_obs.items():
+        # analytic dispersal builds no cube; always a singleton group
+        if obs.dispersal_method == 'analytic':
+            groups.append({key: obs})
+            group_reps.append(obs)
+            continue
         placed = False
         for group, rep in zip(groups, group_reps):
             if _cube_compatible(obs, rep):
@@ -1061,6 +1071,9 @@ def group_grism_obs_by_cube_compat(
 
 def _cube_compatible(a: 'GrismObs', b: 'GrismObs') -> bool:
     """True when two grism obs can share one celestial-frame cube."""
+    # analytic dispersal builds no cube; never joins a shared group
+    if a.dispersal_method == 'analytic' or b.dispersal_method == 'analytic':
+        return False
     ip_a, ip_b = a.grism_pars.image_pars, b.grism_pars.image_pars
     if (ip_a.Nrow, ip_a.Ncol) != (ip_b.Nrow, ip_b.Ncol):
         return False

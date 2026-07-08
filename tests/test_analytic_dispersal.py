@@ -286,3 +286,100 @@ class TestGuards:
         obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
         with pytest.raises(NotImplementedError, match='shared-cube group'):
             source.render_grism_group(TRUE_PARS, {'roll0': obs})
+
+
+class TestHalfwidthAutoSizing:
+    """line_window_halfwidth sized from prior extremes in from_obs."""
+
+    def _priors(self):
+        from kl_pipe.priors import Gaussian, PriorDict, TruncatedNormal
+
+        sampled = {
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 80.0, 400.0),
+            'vel.v0': Gaussian(10.0, 10.0),
+            'Halpha.dispersion': TruncatedNormal(50.0, 20.0, 5.0, 150.0),
+            'Halpha.flux': TruncatedNormal(100.0, 20.0, 30.0, 250.0),
+        }
+        fixed = {k: v for k, v in TRUE_PARS.items() if k not in sampled}
+        return PriorDict({**fixed, **sampled})
+
+    def test_formula(self, scene):
+        from kl_pipe.constants import C_KMS
+        from kl_pipe.render import line_window_halfwidth_for_priors
+
+        _, gp, _, source = scene
+        oversample = 3
+        hw = line_window_halfwidth_for_priors(
+            source, self._priors(), gp, oversample=oversample
+        )
+        # independent arithmetic: v_max = (|mu| + 6 sd for the Gaussian v0)
+        # + vcirc upper bound; sigma_v_max = dispersion upper bound
+        lam_line = 656.28 * 2.0
+        scale = oversample / gp.dispersion
+        v_max = (10.0 + 6.0 * 10.0) + 400.0
+        expected = (
+            int(
+                np.ceil(
+                    abs(lam_line - gp.lambda_ref) * scale
+                    + lam_line * v_max / C_KMS * scale
+                    + 4.0 * lam_line * 150.0 / C_KMS * scale
+                )
+            )
+            + 2
+        )
+        assert hw == expected
+
+    def test_from_obs_fills_halfwidth(self, scene):
+        # analytic rc without halfwidth: from_obs sizes it from priors, so
+        # the jitted likelihood traces (raises ValueError without the fill)
+        from kl_pipe.sampling import InferenceTask
+
+        _, gp, psf, source = scene
+        rc = RenderConfig(oversample=3, dispersal_method='analytic')
+        clean = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        data = source.render_grism(TRUE_PARS, clean)
+        obs = build_grism_obs(
+            gp, z=1.0, psf=psf, render_config=rc, data=data, variance=1.0
+        )
+        priors = self._priors()
+        task = InferenceTask.from_obs(source, priors, grism_obs={'r0': obs})
+        theta = jnp.asarray([TRUE_PARS[n] for n in priors.sampled_names])
+        assert np.isfinite(float(task.log_likelihood(theta)))
+
+    def test_checked_obs_has_expected_halfwidth(self, scene):
+        from kl_pipe.render import line_window_halfwidth_for_priors
+        from kl_pipe.sampling.task import _check_source_priors_fit_obs
+
+        _, gp, psf, source = scene
+        priors = self._priors()
+        rc = RenderConfig(oversample=3, dispersal_method='analytic')
+        obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        checked = _check_source_priors_fit_obs(source, priors, obs)
+        expected = line_window_halfwidth_for_priors(source, priors, gp, oversample=3)
+        assert checked.line_window_halfwidth == expected
+
+    def test_explicit_halfwidth_respected(self, scene):
+        from kl_pipe.sampling.task import _check_source_priors_fit_obs
+
+        _, gp, psf, source = scene
+        rc = RenderConfig(
+            oversample=3, dispersal_method='analytic', line_window_halfwidth=16
+        )
+        obs = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc)
+        checked = _check_source_priors_fit_obs(source, self._priors(), obs)
+        assert checked.line_window_halfwidth == 16
+
+    def test_missing_dispersion_prior_raises(self, scene):
+        from kl_pipe.priors import PriorDict
+        from kl_pipe.render import line_window_halfwidth_for_priors
+
+        _, gp, _, source = scene
+        pruned = {
+            k: v
+            for k, v in self._priors()._param_spec.items()
+            if k != 'Halpha.dispersion'
+        }
+        with pytest.raises(KeyError, match='Halpha.dispersion'):
+            line_window_halfwidth_for_priors(
+                source, PriorDict(pruned), gp, oversample=3
+            )

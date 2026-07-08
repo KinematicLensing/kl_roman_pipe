@@ -91,17 +91,17 @@ class RenderConfig:
         own detector-frame cube with rotated parameters). Applies to
         grism obs only.
     dispersal_method : str
-        Grism dispersal pathway: ``'slice'`` (default; wavelength-grid
-        cube + shift-and-add ``disperse_cube``) or ``'analytic'``
-        (closed form: each spaxel's line flux is spread along the
-        dispersion axis by an exact erf/exp profile and the flat
-        continuum by an exact trace kernel; no wavelength grid enters
-        the line, so accuracy does not depend on
-        ``n_lambda``/``slice_width_kms``). The analytic path requires
-        ``psf_mode='post_dispersion'`` and axis-aligned dispersion
-        (``dispersion_angle_detector == 0``); per-obs roll rotation is
-        supported, the multi-roll shared-cube fast path is not. Applies
-        to grism obs only.
+        Grism dispersal pathway: ``'analytic'`` (default; each
+        spaxel's line flux is spread along the dispersion axis by an
+        exact erf/exp profile and the flat continuum by an exact trace
+        kernel, so accuracy does not depend on
+        ``n_lambda``/``slice_width_kms``) or ``'slice'``
+        (wavelength-grid cube + shift-and-add ``disperse_cube``; the
+        reference path, required for a per-slice PSF or a rotated
+        dispersion axis). The analytic path needs
+        ``psf_mode='post_dispersion'`` and axis-aligned dispersion;
+        rolled obs are supported and render independently (no shared
+        cube). Applies to grism obs only.
     line_window_halfwidth : int, optional
         Static half-width, in fine pixels, of the window each spaxel's
         line flux is spread over on the analytic path. Must cover
@@ -125,7 +125,7 @@ class RenderConfig:
     spectral_method: str = 'erf'
     psf_mode: str = 'post_dispersion'
     cube_mode: str = 'shared'
-    dispersal_method: str = 'slice'
+    dispersal_method: str = 'analytic'
     line_window_halfwidth: Optional[int] = None
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
@@ -403,10 +403,10 @@ class RenderConfig:
             parts.append(f'psf_mode={self.psf_mode}')
         if self.cube_mode != 'shared':
             parts.append(f'cube_mode={self.cube_mode}')
-        if self.dispersal_method != 'slice':
+        if self.dispersal_method != 'analytic':
             parts.append(f'dispersal_method={self.dispersal_method}')
-            if self.line_window_halfwidth is not None:
-                parts.append(f'line_window_halfwidth={self.line_window_halfwidth}')
+        if self.line_window_halfwidth is not None:
+            parts.append(f'line_window_halfwidth={self.line_window_halfwidth}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -959,3 +959,98 @@ def build_grism_render_config(
             "cannot derive grism RenderConfig"
         )
     return worst_rc
+
+
+def _prior_upper(spec, n_sd_unbounded: float) -> float:
+    """Worst-case upper value of a prior spec (or a fixed numeric)."""
+    if not hasattr(spec, 'bounds'):
+        return float(spec)
+    _, high = spec.bounds
+    if high is not None:
+        return float(high)
+    # unbounded (Gaussian): mu + n_sd_unbounded sigma covers all but
+    # erfc-negligible prior mass
+    return float(spec.mu) + n_sd_unbounded * float(spec.sigma)
+
+
+def _prior_abs_max(spec, n_sd_unbounded: float) -> float:
+    """Worst-case |value| of a prior spec (or a fixed numeric)."""
+    if not hasattr(spec, 'bounds'):
+        return abs(float(spec))
+    low, high = spec.bounds
+    if low is not None and high is not None:
+        return max(abs(float(low)), abs(float(high)))
+    return abs(float(spec.mu)) + n_sd_unbounded * float(spec.sigma)
+
+
+def line_window_halfwidth_for_priors(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    grism_pars: 'GrismPars',
+    oversample: int,
+    *,
+    n_sigma: float = 4.0,
+    n_sd_unbounded: float = 6.0,
+) -> int:
+    """Prior-safe ``line_window_halfwidth`` for the analytic dispersal path.
+
+    The analytic line deposit spreads each spaxel's flux over a static
+    window of ``+/- halfwidth`` fine pixels around the source column. The
+    window must cover, for every parameter draw the sampler can visit,
+    the deposit-center offset plus the profile width:
+
+        |xi| <= |lambda_line - lambda_ref| / D * os
+                + lambda_line * v_max / c / D * os
+        n_sigma * sigma_s <= n_sigma * lambda_line * sigma_v_max / c / D * os
+
+    with D the dispersion (nm per coarse pixel) and os the spatial
+    oversample. Worst case over emission lines; ``v_max`` is bounded by
+    ``|vel.v0| + vel.vcirc`` at the prior extremes (any LOS-projected
+    rotation curve satisfies ``|v_los| <= |v0| + vcirc``). Truncating at
+    ``n_sigma = 4`` leaves erfc(4/sqrt(2)) ~ 6e-5 of the line flux, below
+    the external-reference floors; two extra pixels cover the tent
+    support and rounding.
+
+    Unbounded (Gaussian) priors use ``mu +/- n_sd_unbounded * sigma``.
+
+    Raises ``KeyError`` if ``vel.v0``, ``vel.vcirc``, ``z``, or a line's
+    ``<disp_owner>.dispersion`` entry is missing from ``priors``.
+    """
+    from kl_pipe.constants import C_KMS
+
+    spec = priors._param_spec
+    for required in ('vel.v0', 'vel.vcirc', 'z'):
+        if required not in spec:
+            raise KeyError(
+                f"line_window_halfwidth_for_priors requires prior key "
+                f"'{required}'; available: {sorted(spec)}"
+            )
+    v_max = _prior_abs_max(spec['vel.v0'], n_sd_unbounded) + _prior_upper(
+        spec['vel.vcirc'], n_sd_unbounded
+    )
+    z_max = _prior_upper(spec['z'], n_sd_unbounded)
+
+    if not source.emission_lines:
+        raise ValueError(
+            "line_window_halfwidth_for_priors requires non-empty "
+            "source.emission_lines"
+        )
+    scale = oversample / grism_pars.dispersion  # fine px per nm
+    worst = 0.0
+    for line_key, line in source.emission_lines.items():
+        disp_owner = (
+            line.dispersion_key if line.dispersion_key is not None else line_key
+        )
+        disp_key = f'{disp_owner}.dispersion'
+        if disp_key not in spec:
+            raise KeyError(
+                f"emission line '{line_key}' requires prior key '{disp_key}'; "
+                f"available: {sorted(spec)}"
+            )
+        sigma_v_max = _prior_upper(spec[disp_key], n_sd_unbounded)
+        lam_line = line.lambda_rest * (1.0 + z_max)
+        offset_px = abs(lam_line - grism_pars.lambda_ref) * scale
+        vel_px = lam_line * v_max / C_KMS * scale
+        width_px = n_sigma * lam_line * sigma_v_max / C_KMS * scale
+        worst = max(worst, offset_px + vel_px + width_px)
+    return int(np.ceil(worst)) + 2
