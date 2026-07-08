@@ -29,6 +29,7 @@ markers = [
     "tng50: tests that require TNG50 mock data from CyVerse",
     "tng_diagnostics: TNG diagnostic plotting tests (slow, large output files)",
     "slow: tests that take significant time to run",
+    "diagnostic_plots: slow tests whose purpose is producing diagnostic figures (also marked slow; select with -m diagnostic_plots)",
     "grism_validation: cross-code grism validation against geko (requires reference data)",
     "galsim_reference: cross-check against the independent GalSim-chromatic reference render (self-contained, no external data/env)",
 ]

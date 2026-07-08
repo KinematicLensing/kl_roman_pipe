@@ -413,3 +413,114 @@ class TestHalfwidthAutoSizing:
             line_window_halfwidth_for_priors(
                 source, PriorDict(pruned), gp, oversample=3
             )
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic_plots
+def test_diagnostic_analytic_slice_figure(scene):
+    """Render the composite analytic-vs-slice diagnostic figure.
+
+    Writes tests/out/analytic_dispersal/analytic_vs_slice.png: slice
+    convergence toward the analytic image, error-map morphology, the
+    line-dispersion error bar vs slice count, and gradient cost vs
+    accuracy. Assertions here are light sanity checks on the figure's
+    inputs; the strict accuracy gates live in TestRenderEquivalence and
+    the likelihood-slice tier.
+    """
+    import time
+
+    from kl_pipe.diagnostics.grism import plot_analytic_slice_comparison
+    from kl_pipe.utils import get_test_dir
+
+    _, gp, psf, source = scene
+    snr = 1000.0
+
+    def make_obs(method, n_lambda=None):
+        rc = RenderConfig(
+            oversample=5,
+            dispersal_method=method,
+            line_window_halfwidth=25 if method == 'analytic' else None,
+        )
+        return build_grism_obs(gp, z=1.0, psf=psf, render_config=rc, n_lambda=n_lambda)
+
+    obs_ana = make_obs('analytic')
+    img_ana = np.asarray(source.render_grism(TRUE_PARS, obs_ana))
+    peak = np.abs(img_ana).max()
+
+    convergence = {}
+    diff_maps = {}
+    for n in (25, 51, 101, 151, 201, 401, 801):
+        img = np.asarray(source.render_grism(TRUE_PARS, make_obs('slice', n)))
+        convergence[n] = float(np.abs(img - img_ana).max() / peak)
+        if n in (25, 151, 401):
+            diff_maps[n] = img - img_ana
+
+    # dispersion error bar from the whitened model derivative (all other
+    # parameters at truth), at the matched-filter noise convention
+    def sigma_dispersion(obs):
+        clean = np.asarray(source.render_grism(TRUE_PARS, obs))
+        var = float((clean**2).sum()) / snr**2
+
+        def f(d):
+            pars = dict(TRUE_PARS)
+            pars['Halpha.dispersion'] = d
+            return source.render_grism(pars, obs)
+
+        _, J = jax.jvp(f, (jnp.asarray(50.0),), (jnp.asarray(1.0),))
+        fisher = float((np.asarray(J) ** 2).sum()) / var
+        return 1.0 / np.sqrt(fisher)
+
+    sigma_slice = {n: sigma_dispersion(make_obs('slice', n)) for n in (25, 151, 401)}
+    sigma_ana = sigma_dispersion(obs_ana)
+
+    # indicative gradient timings (this machine, min of 3); ratios are the
+    # meaningful quantity
+    def grad_ms(obs):
+        fn = jax.jit(
+            jax.grad(
+                lambda d: jnp.sum(
+                    source.render_grism({**TRUE_PARS, 'Halpha.dispersion': d}, obs) ** 2
+                )
+            )
+        )
+        jax.block_until_ready(fn(jnp.asarray(50.0)))  # compile
+        times = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            jax.block_until_ready(fn(jnp.asarray(50.0)))
+            times.append(time.perf_counter() - t0)
+        return min(times) * 1e3
+
+    timings = {
+        'slice $N_\\lambda$=25': (grad_ms(make_obs('slice', 25)), convergence[25]),
+        'slice $N_\\lambda$=151': (grad_ms(make_obs('slice', 151)), convergence[151]),
+        'analytic': (grad_ms(obs_ana), min(convergence.values())),
+    }
+
+    out = plot_analytic_slice_comparison(
+        get_test_dir() / 'out' / 'analytic_dispersal' / 'analytic_vs_slice.png',
+        convergence,
+        img_ana,
+        diff_maps,
+        sigma_slice,
+        sigma_ana,
+        timings_ms=timings,
+        scene_note=(
+            'Scene: 16x16 @ 0.11"/px, oversample 5,\n'
+            'Halpha + flat continuum at z=1,\n'
+            'PSF FWHM 0.18", dispersion 1.1 nm/px\n\n'
+            'Error bars: grism-only, matched-filter\n'
+            'SNR=1000 convention\n\n'
+            'Timings: this machine, min of 3;\n'
+            'ratios are the meaningful quantity'
+        ),
+    )
+    assert out.exists()
+
+    # sanity: convergence is monotone with no plateau at the dense end,
+    # and the dense-slice error bar agrees with the analytic one
+    ns = sorted(convergence)
+    errs = [convergence[n] for n in ns]
+    assert all(a > b for a, b in zip(errs, errs[1:]))
+    assert errs[-1] < 1e-4
+    assert abs(sigma_slice[401] / sigma_ana - 1.0) < 0.15

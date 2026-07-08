@@ -243,6 +243,7 @@ return 0.0  # could silently corrupt a likelihood calculation
 | `tng50` | Requires TNG50 data from CyVerse | `pytest -m tng50` |
 | `tng_diagnostics` | Slow TNG diagnostic plots | `pytest -m tng_diagnostics` |
 | `slow` | Significant runtime | `pytest -m slow` |
+| `diagnostic_plots` | Diagnostic-figure tests (also marked `slow`) | `pytest -m diagnostic_plots` |
 | `grism_validation` | Cross-code grism validation (requires reference data) | `make test-grism-validation` |
 
 ### Key Test Patterns
