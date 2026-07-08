@@ -232,6 +232,36 @@ class TestRenderEquivalence:
         assert np.abs(ana - ref).max() / peak < MAX_TOL_FLAT
         assert abs(ana.sum() / ref.sum() - 1.0) < FLUX_TOL
 
+    def test_production_slice_rule_matches_analytic(self, scene):
+        """Slice pathway at its production settings (slice_width_kms=40,
+        oversample=5) vs the analytic default.
+
+        This bound is what a user of the slice pathway at production
+        settings accepts relative to the exact model, and it is the
+        equivalence guarantee that lets the likelihood-recovery tests run
+        on the analytic path alone. Measured 2026-07-08: max 2.3e-4 of
+        peak, flux agreement 1.2e-5; frozen at ~3x.
+        """
+        _, gp, psf, source = scene
+        obs_s = build_grism_obs(
+            gp,
+            z=1.0,
+            psf=psf,
+            render_config=RenderConfig(oversample=5, dispersal_method='slice'),
+            slice_width_kms=40.0,
+        )
+        obs_a = build_grism_obs(
+            gp,
+            z=1.0,
+            psf=psf,
+            render_config=RenderConfig(oversample=5, dispersal_method='analytic'),
+        )
+        ref = np.asarray(source.render_grism(TRUE_PARS, obs_s))
+        ana = np.asarray(source.render_grism(TRUE_PARS, obs_a))
+        peak = np.abs(ana).max()
+        assert np.abs(ana - ref).max() / peak < 7e-4
+        assert abs(ref.sum() / ana.sum() - 1.0) < 5e-5
+
     def test_jit_matches_eager_and_grad_finite(self, scene):
         _, gp, psf, source = scene
         rc = RenderConfig(

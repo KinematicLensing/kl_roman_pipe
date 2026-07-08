@@ -1023,6 +1023,20 @@ def test_optimize_joint_vel_phot_line_with_psf(
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
+    # Halpha enters this data only through the velocity channel's flux
+    # weighting, which is normalized (weighted velocity = conv(I*v) /
+    # conv(I)), so the likelihood is exactly flat along Halpha.flux and
+    # the parameter is unidentifiable here. Pin that fact: if a config
+    # change ever makes it constrained, this fails and Halpha.flux must
+    # rejoin the recovery check below.
+    ha_flux_idx = sampled_names.index('Halpha.flux')
+    ll_true = float(log_like(theta_true_sampled))
+    ll_scaled = float(log_like(theta_true_sampled.at[ha_flux_idx].mul(2.0)))
+    assert abs(ll_scaled - ll_true) < 1e-8 * max(abs(ll_true), 1.0), (
+        "Halpha.flux moved the likelihood -- it is now identifiable and "
+        "must be restored to the recovery pass/fail check"
+    )
+
     # 5% perturbation initial guess.
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
@@ -1057,9 +1071,13 @@ def test_optimize_joint_vel_phot_line_with_psf(
 
     # cosi / vcirc / vel.rscale are degenerate under joint optimization with
     # cosi free (vcirc*sin(i) is the observable). Shear is weakly
-    # constrained at zero truth.
+    # constrained at zero truth. Halpha.flux enters this data only through
+    # the velocity channel's flux weighting, which is normalized (weighted
+    # velocity = conv(I*v)/conv(I)), so the flux amplitude cancels exactly
+    # and carries no constraint: it ends wherever the perturbed init left
+    # it and is excluded as unidentifiable, not as a loose tolerance.
     test_name = f"opt_joint_vel_phot_line_psf_snr{snr}"
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale']
+    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale', 'Halpha.flux']
     plot_parameter_comparison(
         {n: pars_dotted[n] for n in sampled_names},
         {n: pars_opt_dotted[n] for n in sampled_names},

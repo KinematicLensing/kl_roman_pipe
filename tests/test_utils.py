@@ -249,14 +249,6 @@ class TestConfig:
             'v0': {1000: 1.0, 500: 1.0, 100: 1.0, 50: 1.0, 10: 1.5},
             # nu-rscale degeneracy makes nu harder to constrain at low SNR
             'nu': {1000: 1.0, 500: 1.0, 100: 1.5, 50: 2.0, 10: 2.5},
-            # Emission-line kinematic dispersion (line width). Empirical
-            # 10-seed scan at SNR=1000 with the joint-phot-grism setup
-            # showed mean offset -0.4% +/- 1.5% std (consistent with the
-            # Fisher floor of ~1.65% inferred from the slice curvature).
-            # The 1/SNR scaling of the offset is clean (no systematic bias
-            # observed). 3x scaling places the tolerance 1-sigma above the
-            # Fisher floor at SNR=1000.
-            'dispersion': {1000: 3.0, 500: 3.0, 100: 3.0, 50: 3.0, 10: 3.0},
         }
 
         # Optimizer test scaling (more lenient for weakly constrained params).
@@ -443,16 +435,17 @@ class TestConfig:
             relative_tol *= self.psf_tolerance_multiplier
 
         # compute absolute tolerance
-        # use the larger of: (relative_tol × |value|) or absolute_floor
+        # use the larger of: (relative_tol × |value|) or absolute_floor.
+        # relative_tol already carries the PSF multiplier; multiplying the
+        # absolute tolerance by it again (a long-standing bug fixed
+        # 2026-07-08) silently loosened every has_psf test's effective
+        # tolerance to 2.25x base instead of the documented 1.5x.
         absolute_from_relative = relative_tol * abs(param_value)
         if param_name in self.absolute_tolerance_floor:
             absolute_floor = self.absolute_tolerance_floor[param_name]
         else:
             absolute_floor = self.absolute_tolerance_floor.get(suffix_key, 0.0)
         absolute_tol = max(absolute_from_relative, absolute_floor)
-
-        if has_psf:
-            absolute_tol *= self.psf_tolerance_multiplier
 
         return {
             'relative': relative_tol,
@@ -620,6 +613,184 @@ def assert_parameter_recovery(
     return
 
 
+def assert_noiseless_recovery(
+    recovery_stats: Dict[str, Dict[str, float]],
+    budgets: Dict[str, float],
+    test_name: str = "Test",
+) -> None:
+    """
+    Assert noise-free recovery errors are within per-parameter budgets.
+
+    On noise-free data a correct forward model recovers the truth exactly
+    (up to estimator resolution), so each budget is an accuracy statement,
+    not a noise allowance: for self-rendered data it bounds estimator and
+    model bias; for data rendered by an independent backend (e.g. GalSim)
+    it bounds the agreement between the two renderers. Budgets are
+    absolute, in each parameter's own units. There is no random element:
+    a budget violation is a real change in behavior.
+
+    Parameters
+    ----------
+    recovery_stats : dict
+        Recovery statistics from plot_likelihood_slices() or similar;
+        each entry needs 'abs_error', 'recovered', 'true'.
+    budgets : dict
+        Parameter name -> allowed absolute recovery error.
+    test_name : str, optional
+        Name of test (for error message).
+    """
+    missing = sorted(set(budgets) - set(recovery_stats))
+    if missing:
+        pytest.fail(f"{test_name}: no recovery stats for budgeted params {missing}")
+
+    failed = []
+    for name, budget in budgets.items():
+        stats = recovery_stats[name]
+        if not stats['abs_error'] < budget:
+            failed.append(
+                f"{name}: |error| {stats['abs_error']:.3e} >= budget {budget:.3e} "
+                f"(recovered {stats['recovered']:.6g}, true {stats['true']:.6g})"
+            )
+    if failed:
+        pytest.fail(
+            f"{test_name}: noise-free recovery outside accuracy budget "
+            f"(deterministic -- this is a real behavior change):\n" + "\n".join(failed)
+        )
+
+
+def slice_curvature_sigma(param_values, log_probs) -> float:
+    """
+    1-sigma error bar implied by a likelihood slice's peak sharpness.
+
+    Fits the parabola at the discrete peak of the slice and returns
+    1/sqrt of the negative second derivative of the log-likelihood --
+    the uncertainty the data could deliver for this parameter with all
+    others held at truth. Requires a uniform grid and an interior peak.
+    """
+    x = np.asarray(param_values, dtype=float)
+    lp = np.asarray(log_probs, dtype=float)
+    best = int(np.argmax(lp))
+    if best == 0 or best == len(x) - 1:
+        raise ValueError(
+            f"slice peak at grid boundary (index {best}); widen the scan "
+            f"before measuring curvature"
+        )
+    h = x[1] - x[0]
+    curvature = -(lp[best - 1] - 2.0 * lp[best] + lp[best + 1]) / h**2
+    if not curvature > 0:
+        raise ValueError(
+            f"non-positive curvature {curvature} at the slice peak; the "
+            f"likelihood is flat or corrupted on this slice"
+        )
+    return float(1.0 / np.sqrt(curvature))
+
+
+def assert_slice_curvature_references(
+    slices: Dict[str, Tuple],
+    references: Dict[str, float],
+    test_name: str = "Test",
+    band: float = 0.20,
+) -> None:
+    """
+    Assert each slice's implied error bar matches its frozen reference.
+
+    Guards the information content of the likelihood: a change that blurs
+    the likelihood (constraining power lost) or sharpens it beyond the
+    physics (e.g. a discretization artifact faking precision) moves the
+    error bar out of the band and fails loudly. References are measured
+    once on the frozen test scene at its stated noise convention and are
+    updated only deliberately, with the reason recorded next to the value.
+
+    Parameters
+    ----------
+    slices : dict
+        Parameter name -> (param_values, log_probs) from slice_all_parameters.
+    references : dict
+        Parameter name -> frozen 1-sigma reference value.
+    test_name : str, optional
+        Name of test (for error message).
+    band : float, optional
+        Allowed fractional deviation from the reference (default 0.20).
+    """
+    missing = sorted(set(references) - set(slices))
+    if missing:
+        pytest.fail(f"{test_name}: no slices for referenced params {missing}")
+
+    failed = []
+    for name, ref in references.items():
+        sigma = slice_curvature_sigma(*slices[name])
+        if not (abs(sigma / ref - 1.0) < band):
+            direction = (
+                "blurred (information lost)"
+                if sigma > ref
+                else ("sharpened beyond the reference (fake precision)")
+            )
+            failed.append(
+                f"{name}: slice error bar {sigma:.4g} vs reference {ref:.4g} "
+                f"(+/-{band:.0%} band) -- likelihood {direction}"
+            )
+    if failed:
+        pytest.fail(
+            f"{test_name}: likelihood information content changed:\n"
+            + "\n".join(failed)
+        )
+
+
+def _round_up_1sf(x: float) -> float:
+    """Round a positive number up to one significant figure."""
+    if x <= 0:
+        raise ValueError(f"expected positive value, got {x}")
+    exp = np.floor(np.log10(x))
+    mant = x / 10**exp
+    return float(np.ceil(mant - 1e-12) * 10**exp)
+
+
+def assert_noiseless_gates(
+    recovery_stats: Dict[str, Dict[str, float]],
+    slices: Dict[str, Tuple],
+    budgets: Dict[str, float],
+    sigma_refs: Dict[str, float],
+    test_name: str = "Test",
+    band: float = 0.20,
+) -> None:
+    """
+    Run both noiseless gates: accuracy budgets and error-bar references.
+
+    Set the environment variable KLPIPE_TEST_MEASURE=1 to print
+    ready-to-freeze tables instead of asserting (budget rule: 10x the
+    measured error, floored at 1e-5 of the scan half-range, rounded up to
+    one significant figure; error bars to 3 significant figures). Used to
+    measure a frozen scene once; the printed values are then pasted into
+    the test with a provenance comment.
+    """
+    import os
+
+    if os.environ.get('KLPIPE_TEST_MEASURE'):
+        budget_lines = []
+        sigma_lines = []
+        for name in recovery_stats:
+            if name not in slices:
+                continue
+            vals = np.asarray(slices[name][0], dtype=float)
+            half_range = (vals[-1] - vals[0]) / 2.0
+            err = abs(recovery_stats[name]['abs_error'])
+            budget = _round_up_1sf(max(10.0 * err, 1e-5 * half_range))
+            sigma = slice_curvature_sigma(*slices[name])
+            budget_lines.append(f"        '{name}': {budget:.0e},")
+            sigma_lines.append(f"        '{name}': {float(f'{sigma:.3g}')},")
+        print(f"\nKLPIPE-MEASURE {test_name} entry:")
+        print(f"    'budgets': {{")
+        print("\n".join(budget_lines))
+        print(f"    }},")
+        print(f"    'sigma_refs': {{")
+        print("\n".join(sigma_lines))
+        print(f"    }},")
+        return
+
+    assert_noiseless_recovery(recovery_stats, budgets, test_name)
+    assert_slice_curvature_references(slices, sigma_refs, test_name, band=band)
+
+
 def check_degenerate_product_recovery(
     pars_true: Dict[str, float],
     pars_recovered: Dict[str, float],
@@ -746,8 +917,15 @@ def compute_parameter_bounds(
     if param_name in config.param_bounds:
         lower_phys, upper_phys = config.param_bounds[param_name]
 
-        # Compute +/-fraction range
+        # Compute +/-fraction range. A zero-truth bounded parameter (e.g.
+        # shear at 0) previously produced a zero-width scan, making its
+        # slice vacuous; scan a fraction of the physical span instead.
         delta = fraction * abs(true_value)
+        if delta == 0.0:
+            if lower_phys is not None and upper_phys is not None:
+                delta = fraction * (upper_phys - lower_phys) / 2.0
+            else:
+                delta = 0.1
         lower_pct = true_value - delta
         upper_pct = true_value + delta
 
