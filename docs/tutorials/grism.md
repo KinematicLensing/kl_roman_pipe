@@ -314,6 +314,17 @@ plt.tight_layout(); plt.show()
 Independent per-line fluxes enable line-ratio diagnostics ([N II]/H-alpha for
 metallicity / ionization) alongside the kinematic fit.
 
+**Validity limit: one line complex per fit.** The grism pathway applies a
+single, wavelength-independent PSF to every spectral slice (and, for the
+analytic dispersal path, to every line). This is accurate for a tight line
+complex like H-alpha + [N II] (~5 nm apart; the instrumental PSF varies by
+well under a percent across it), but it is a real bias for widely separated
+lines — over the ~170 nm between H-alpha and H-beta the Roman PSF size
+changes at the several-percent level. Until per-line PSFs land (issue #51),
+fit widely separated lines as separate per-complex posterior runs and
+combine the chains afterwards; when multiplying the posteriors, divide out
+the shared-parameter prior N-1 times so it is not double-counted.
+
 ---
 
 ## Diagnostics and reference tests

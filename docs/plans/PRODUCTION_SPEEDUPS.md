@@ -809,11 +809,15 @@ only.
       at the per-roll floor (Fisher 0.005 sigma, MCMC-confirmed).
 - [x] A4 precomputed gather operator: landed as part of A3 (CPU win
       already, 2.9x incl. sharing); GPU port inherits it.
-- [ ] A3-FOLLOW-UP (end-of-branch doc pass, DO NOT FORGET): tutorial +
-      docs warning that the static-PSF grism pathway is valid per emission
-      line complex only (issue #51); recommended workflow for now = separate
-      per-line posterior fits, combine chains post hoc (divide out the
-      shared-param prior N-1 times when multiplying posteriors).
+- [x] A3-FOLLOW-UP (done 2026-07-08): tutorial warning added
+      (docs/tutorials/grism.md, multi-line section) that the static-PSF
+      grism pathway is valid per emission line complex only (issue #51);
+      recommended workflow = separate per-line posterior fits, combine
+      chains post hoc (divide out the shared-param prior N-1 times when
+      multiplying posteriors). API docstrings already point at #51.
+      Novelty-scoping citations (Unser 1999, Outini & Copin 2020, Ryan+
+      2018 LINEAR, Danhaive & Tacchella 2025 geko, Griggio+ 2026) added
+      to docs/papers/kl-roman-pipeline/refs.bib.
 - [ ] (DEFERRED, decision 19 -- revisit at ~30M scale) B: RenderConfig
       pinning + data-as-argument likelihood refactor
       (potential_fn(theta, data)); kill per-galaxy recompilation.
@@ -939,9 +943,14 @@ only.
       the source's spatial structure along the trace, not throughput
       smoothness (nc=11 leaves 2e-2 of peak). Superseded by the exact
       closed-form continuum above.
+- PARKED until after the first GPU/Vista runs (2026-07-08, session
+  decision; none of these gate GPU work): ensemble shear-floor test,
+  continuum external reference gate, geko render regeneration,
+  cross-day seeded-NUTS drift, A2-FOLLOW-UP erf-vs-osf seeded A/B.
+  Individual entries below/above retain their detail.
 - [ ] Ensemble shear-floor test: one instrument gates both fp32 adoption
       and the oversample choice (coherent render deltas vs the 1e-3/1e-4
-      shear stacking targets).
+      shear stacking targets). (Parked: post-GPU.)
 - [ ] Vista runs: verify chain-method auto-dispatch resolves
       'vectorized' on GPU (kit SETUP.md step); fp32 pass with the matmul
       pin; re-benchmark the CPU-negative variants (BCOO vs streaming,
