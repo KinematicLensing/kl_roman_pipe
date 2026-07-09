@@ -39,6 +39,7 @@ from kl_pipe.spectral import CubePars
 from kl_pipe.dispersion import GrismPars, build_grism_pars_for_line, disperse_cube
 from kl_pipe.source import SourceModel
 from kl_pipe.observation import build_velocity_obs, build_image_obs, build_grism_obs
+from kl_pipe.render import RenderConfig
 ```
 
 | Object | Purpose |
@@ -251,7 +252,13 @@ morphological axes, and the joint photometry + grism fit decouples them (see
 
 The dispersion direction sets how strongly the rotation term appears: aligning
 the kinematic major axis with the dispersion axis maximizes it, orthogonal
-alignment suppresses it. The `plot_dispersion_angle_study` diagnostic sweeps this:
+alignment suppresses it. The `plot_dispersion_angle_study` diagnostic sweeps this
+by rotating the dispersion direction with the galaxy held fixed, which isolates
+the effect against a single broadband reference. Rotating the dispersion axis is
+a slice-path capability, so this study sets `dispersal_method='slice'`; the
+analytic default (like Roman) disperses along a fixed detector axis, and in
+production the relative angle varies through the roll angle or the galaxy's
+position angle instead.
 
 ```{code-cell} python
 from kl_pipe.diagnostics.grism import plot_dispersion_angle_study
@@ -263,7 +270,9 @@ broadband = np.sum(cube_aligned, axis=2) * dl
 def render_at_angle(angle):
     gp_a = GrismPars(image_pars=image_pars, dispersion=1.1,
                      lambda_ref=gp.lambda_ref, dispersion_angle_detector=angle)
-    obs_a = build_grism_obs(gp_a, z=Z, psf=psf)
+    obs_a = build_grism_obs(gp_a, z=Z, psf=psf,
+                            render_config=RenderConfig(oversample=3,
+                                                       dispersal_method='slice'))
     return np.asarray(source.render_grism(pars_aligned, obs_a))
 
 fig = plot_dispersion_angle_study(render_at_angle, broadband,
