@@ -908,6 +908,33 @@ def optimizer_measure_mode() -> bool:
     return bool(os.environ.get('KLPIPE_TEST_MEASURE'))
 
 
+def print_optimizer_bias_entry(
+    test_key: str,
+    theta_truth: jnp.ndarray,
+    theta_fit: jnp.ndarray,
+    names: List[str],
+) -> None:
+    """
+    Print a ready-to-freeze bias-allowance table entry.
+
+    Call with the result of fitting an independent backend's NOISE-FREE
+    render (e.g. GalSim): the recovered offset from truth is the
+    deterministic rendering difference between that backend and the
+    model. The allowance rule is 2x the measured offset, rounded up to
+    one significant figure -- margin for optimizer path variation while
+    still failing loudly if the rendering difference ever doubles.
+    """
+    lines = []
+    for name, t, f in zip(names, np.asarray(theta_truth), np.asarray(theta_fit)):
+        offset = 2.0 * abs(float(f) - float(t))
+        allowance = _round_up_1sf(offset) if offset > 0 else 0.0
+        lines.append(f"        '{name}': {allowance:.0e},")
+    print(f"\nKLPIPE-MEASURE optimizer bias entry '{test_key}' (2x measured, 1 s.f.):")
+    print("    'biases': {")
+    print("\n".join(lines))
+    print("    },")
+
+
 def k_sigma_recovery_stats(
     pars_true: Dict[str, float],
     pars_recovered: Dict[str, float],
