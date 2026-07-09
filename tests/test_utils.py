@@ -9,10 +9,12 @@ moved to kl_pipe.diagnostics. The versions in this file are deprecated wrappers
 for backward compatibility.
 """
 
+import os
 import pytest
 import sys
 import contextlib
 import warnings
+import jax
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -196,26 +198,10 @@ class TestConfig:
             500: 0.01,
         }
 
-        # =========================================================================
-        # OPTIMIZER TEST TOLERANCES
-        # Gradient-based recovery - looser due to local optima & parameter degeneracies
-        # Philosophy: Validate optimization framework works, not perfect recovery.
-        # These are 10-20x looser than likelihood slices to account for:
-        #   - Local minima in optimization landscape
-        #   - Parameter degeneracies (cosi/g1/g2 trade-off)
-        #   - Finite sampling noise in gradients
-        #   - Initial guess dependence
-        # =========================================================================
-        self.optimizer_tolerance_velocity = {
-            10000: 0.02,  # 2%   (high)
-            1000: 0.05,  # 5%   (mid)
-            500: 0.10,  # 10%   (low)
-        }
-        self.optimizer_tolerance_intensity = {
-            10000: 0.02,
-            1000: 0.05,
-            500: 0.10,
-        }
+        # Optimizer-tier tolerances retired 2026-07-08: optimizer recovery
+        # tests now bound |error| by k * sigma with sigma the measured
+        # marginal noise floor (frozen tables in test_optimizer_recovery.py)
+        # and k from suite_false_alarm_k.
 
         # =========================================================================
         # COMPOSITE INTENSITY MODEL TOLERANCES
@@ -229,14 +215,9 @@ class TestConfig:
             1000: 0.005,
             500: 0.01,
         }
-        self.optimizer_tolerance_intensity_composite = {
-            10000: 0.02,
-            1000: 0.05,
-            500: 0.10,
-        }
 
         # =========================================================================
-        # PARAMETER-SPECIFIC SCALING (applies to both test types)
+        # PARAMETER-SPECIFIC SCALING (legacy likelihood-slice pattern only)
         # Accounts for inherently weaker constraints on certain parameters
         # =========================================================================
 
@@ -249,25 +230,6 @@ class TestConfig:
             'v0': {1000: 1.0, 500: 1.0, 100: 1.0, 50: 1.0, 10: 1.5},
             # nu-rscale degeneracy makes nu harder to constrain at low SNR
             'nu': {1000: 1.0, 500: 1.0, 100: 1.5, 50: 2.0, 10: 2.5},
-        }
-
-        # Optimizer test scaling (more lenient for weakly constrained params).
-        # Keys are unprefixed; get_tolerance strips a leading dotted prefix
-        # (e.g. 'vel.x0' / 'F087.x0' / 'Halpha.x0' all lookup 'x0').
-        self.optimizer_param_scaling = {
-            # Shear degeneracies with other geometric parameters in optimization
-            'g1': {1000: 2.0, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
-            'g2': {1000: 2.0, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
-            # v0 can get stuck in local optima
-            'v0': {1000: 1.5, 500: 1.5, 100: 1.5, 50: 2.0, 10: 2.5},
-            # Offsets can have shallow likelihood surfaces (applies to vel + intensity)
-            'x0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
-            'y0': {1000: 1.5, 500: 1.5, 100: 2.0, 50: 2.0, 10: 2.5},
-            # theta_int partially degenerate with (g1, g2) under joint
-            # optimization when shear is resolved at high SNR.
-            'theta_int': {10000: 1.5},
-            # nu-rscale degeneracy in optimization
-            'nu': {1000: 1.5, 500: 2.0, 100: 2.5, 50: 3.0, 10: 3.0},
         }
 
         # Composite-specific param scaling. Starts EMPTY: per the project
@@ -368,8 +330,8 @@ class TestConfig:
         data_type : str
             'velocity' or 'intensity'.
         test_type : str
-            'likelihood_slice' or 'optimizer'. Determines which tolerance set to use.
-            Optimizer tests use looser tolerances due to local optima & degeneracies.
+            Must be 'likelihood_slice' (legacy slice-test pattern). Optimizer
+            tests use k-sigma bounds instead (k_sigma_recovery_stats).
         has_psf : bool
             If True, apply psf_tolerance_multiplier to loosen tolerances.
         model_kind : str, optional
@@ -383,36 +345,29 @@ class TestConfig:
             Contains 'relative' and 'absolute' tolerance values.
         """
 
-        # Get base tolerance for this SNR and test type. Composite intensity
-        # models route to the dedicated dicts so per-param scaling and
-        # tolerances can evolve independently from the exponential baseline.
+        # Get base tolerance for this SNR. Composite intensity models route
+        # to the dedicated dicts so per-param scaling and tolerances can
+        # evolve independently from the exponential baseline.
         is_composite = model_kind == 'composite' and data_type == 'intensity'
-        if test_type == 'optimizer':
-            if data_type == 'velocity':
-                base_tol = self.optimizer_tolerance_velocity.get(snr, 0.075)
-            elif is_composite:
-                base_tol = self.optimizer_tolerance_intensity_composite.get(snr, 0.075)
-            else:
-                base_tol = self.optimizer_tolerance_intensity.get(snr, 0.075)
-            param_scaling = (
-                self.composite_param_scaling
-                if is_composite
-                else self.optimizer_param_scaling
+        if test_type != 'likelihood_slice':
+            raise ValueError(
+                f"unknown test_type '{test_type}'; optimizer-tier tolerances "
+                f"were retired 2026-07-08 in favor of k-sigma bounds "
+                f"(k_sigma_recovery_stats)"
             )
-        else:  # likelihood_slice (default)
-            if data_type == 'velocity':
-                base_tol = self.likelihood_slice_tolerance_velocity.get(snr, 0.05)
-            elif is_composite:
-                base_tol = self.likelihood_slice_tolerance_intensity_composite.get(
-                    snr, 0.05
-                )
-            else:
-                base_tol = self.likelihood_slice_tolerance_intensity.get(snr, 0.05)
-            param_scaling = (
-                self.composite_param_scaling
-                if is_composite
-                else self.likelihood_slice_param_scaling
+        if data_type == 'velocity':
+            base_tol = self.likelihood_slice_tolerance_velocity.get(snr, 0.05)
+        elif is_composite:
+            base_tol = self.likelihood_slice_tolerance_intensity_composite.get(
+                snr, 0.05
             )
+        else:
+            base_tol = self.likelihood_slice_tolerance_intensity.get(snr, 0.05)
+        param_scaling = (
+            self.composite_param_scaling
+            if is_composite
+            else self.likelihood_slice_param_scaling
+        )
 
         # Parameter-name lookup: exact match (full dotted name) first, then
         # suffix after the first '.' (e.g. 'F087.x0' -> 'x0'). Lets the dict
@@ -763,8 +718,6 @@ def assert_noiseless_gates(
     measure a frozen scene once; the printed values are then pasted into
     the test with a provenance comment.
     """
-    import os
-
     if os.environ.get('KLPIPE_TEST_MEASURE'):
         budget_lines = []
         sigma_lines = []
@@ -789,6 +742,226 @@ def assert_noiseless_gates(
 
     assert_noiseless_recovery(recovery_stats, budgets, test_name)
     assert_slice_curvature_references(slices, sigma_refs, test_name, band=band)
+
+
+def suite_false_alarm_k(n_checks: int, budget: float = 0.01) -> float:
+    """
+    Bound multiplier k for noisy recovery checks, from a false-alarm budget.
+
+    A recovery error on noisy data is a random draw: near the maximum-
+    likelihood point it is approximately Gaussian with the parameter's
+    marginal 1-sigma noise floor as its scale. A check ``|error| < k *
+    sigma`` therefore has a two-sided false-alarm probability
+    ``2 * Phi(-k)`` per check even when the code is correct. Requiring the
+    whole suite of ``n_checks`` such checks to spuriously fail with total
+    probability at most ``budget`` (union bound, checks treated as
+    independent) gives ``k = Phi^-1(1 - budget / n_checks / 2)``.
+
+    This is the single suite-wide constant used by every k-sigma bound:
+    it is derived, not tuned, and it grows only logarithmically with the
+    number of checks (17 checks -> 3.44, 50 -> 3.72, 200 -> 4.06 at the
+    default 1% budget).
+
+    Parameters
+    ----------
+    n_checks : int
+        Number of bounded checks sharing the budget.
+    budget : float, optional
+        Total suite false-alarm probability (default 0.01).
+
+    Returns
+    -------
+    float
+        The bound multiplier k.
+    """
+    from scipy.stats import norm
+
+    if n_checks < 1:
+        raise ValueError(f"n_checks must be >= 1, got {n_checks}")
+    if not 0.0 < budget < 1.0:
+        raise ValueError(f"budget must be in (0, 1), got {budget}")
+    return float(norm.isf(budget / n_checks / 2.0))
+
+
+def measure_marginal_sigmas(
+    log_like: Callable,
+    theta_truth: jnp.ndarray,
+    names: List[str],
+    drop: Tuple[str, ...] = (),
+    prior_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+) -> Dict[str, float]:
+    """
+    Marginal 1-sigma noise floors from the likelihood curvature at truth.
+
+    Call with a likelihood built on the MODEL'S OWN noise-free render so
+    the curvature at truth is exactly the information matrix (a residual
+    at truth -- noise, or an independent renderer's version of the scene
+    -- adds a second-order term that can even flip curvature signs along
+    degenerate directions). The marginal floor -- the error bar for each
+    parameter with all others fit jointly -- is the square root of the
+    corresponding diagonal element of the inverse.
+
+    When ``prior_bounds`` is given, each parameter's uniform prior box is
+    approximated by a Gaussian of equal variance (precision 12/width^2)
+    and added to the information matrix. Data-dominated floors are
+    unaffected (the prior precision is negligible against them), while
+    degenerate directions -- constrained only by the box in the actual
+    fit -- get honest prior-scale floors instead of a singular inversion,
+    and parameters coupled to a degenerate direction get their true
+    marginal including the bounded wander along it.
+
+    Parameters listed in ``drop`` are removed before inversion; use it
+    only for exactly-flat directions that are pinned separately.
+
+    Parameters
+    ----------
+    log_like : callable
+        Jitted log-likelihood of the sampled parameter vector, built on
+        the model's own noise-free render with the test's noise variance.
+    theta_truth : jnp.ndarray
+        True sampled-parameter vector.
+    names : list of str
+        Sampled parameter names, in theta order.
+    drop : tuple of str, optional
+        Names of exactly-unconstrained parameters to remove.
+    prior_bounds : dict, optional
+        Parameter name -> (low, high) uniform prior bounds.
+
+    Returns
+    -------
+    dict
+        Parameter name -> marginal 1-sigma floor.
+    """
+    hessian = np.asarray(jax.hessian(log_like)(jnp.asarray(theta_truth)))
+    fisher = -0.5 * (hessian + hessian.T)  # symmetrize away roundoff
+    if prior_bounds is not None:
+        for i, name in enumerate(names):
+            if name not in prior_bounds:
+                continue
+            low, high = prior_bounds[name]
+            width = float(high) - float(low)
+            if width <= 0:
+                raise ValueError(f"non-positive prior width for {name}")
+            fisher[i, i] += 12.0 / width**2
+    keep = [i for i, n in enumerate(names) if n not in drop]
+    missing_drops = sorted(set(drop) - set(names))
+    if missing_drops:
+        raise ValueError(f"drop names not in sampled names: {missing_drops}")
+    fisher_kept = fisher[np.ix_(keep, keep)]
+    eigvals = np.linalg.eigvalsh(fisher_kept)
+    if eigvals[0] <= 0:
+        bad = [names[keep[i]] for i in np.argsort(eigvals)[:3]]
+        raise ValueError(
+            f"information matrix not positive definite (min eigenvalue "
+            f"{eigvals[0]:.3e}); flattest directions involve {bad} -- an "
+            f"exactly unconstrained parameter must be dropped, or the "
+            f"likelihood is corrupted"
+        )
+    cov = np.linalg.inv(fisher_kept)
+    sigmas = np.sqrt(np.diag(cov))
+    if not np.all(np.isfinite(sigmas)):
+        raise ValueError("non-finite marginal sigma; likelihood corrupted")
+    return {names[i]: float(s) for i, s in zip(keep, sigmas)}
+
+
+def print_optimizer_sigma_entry(
+    test_key: str,
+    log_like: Callable,
+    theta_truth: jnp.ndarray,
+    names: List[str],
+    snr: float,
+    snr_ref: float,
+    drop: Tuple[str, ...] = (),
+    prior_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+) -> None:
+    """
+    Print a ready-to-freeze marginal-sigma table entry for one test scene.
+
+    A single frozen table serves every SNR the test runs at via a 1/SNR
+    rescale of the floors. That rescale is exact only for data-dominated
+    floors (the prior term from ``prior_bounds`` does not scale with SNR),
+    so always measure at the HIGHEST SNR the test runs -- snr must equal
+    snr_ref -- making the frozen bounds exact at the tightest instance and
+    conservative (never tighter than honest) at lower SNR.
+    """
+    if snr != snr_ref:
+        raise ValueError(
+            f"measure at the reference SNR (snr={snr} != snr_ref={snr_ref}); "
+            f"the 1/SNR rescale is not exact for prior-dominated floors"
+        )
+    sigmas = measure_marginal_sigmas(
+        log_like, theta_truth, names, drop, prior_bounds=prior_bounds
+    )
+    scale = snr / snr_ref
+    lines = [
+        f"        '{name}': {float(f'{sigma * scale:.3g}')},"
+        for name, sigma in sigmas.items()
+    ]
+    print(f"\nKLPIPE-MEASURE optimizer sigma entry '{test_key}' (snr_ref={snr_ref:g}):")
+    print("    'sigmas': {")
+    print("\n".join(lines))
+    print("    },")
+
+
+def optimizer_measure_mode() -> bool:
+    """True when KLPIPE_TEST_MEASURE=1: measure noise floors, skip recovery."""
+    return bool(os.environ.get('KLPIPE_TEST_MEASURE'))
+
+
+def k_sigma_recovery_stats(
+    pars_true: Dict[str, float],
+    pars_recovered: Dict[str, float],
+    names: List[str],
+    sigmas: Dict[str, float],
+    k: float,
+    snr: float,
+    snr_ref: float,
+    biases: Optional[Dict[str, float]] = None,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Recovery statistics with k-sigma bounds on noisy-data errors.
+
+    Each parameter's bound is ``bias + k * sigma * (snr_ref / snr)`` where
+    sigma is its frozen marginal noise floor at the reference SNR (the
+    error a correct pipeline can produce on a noisy draw, scaled by the
+    shared suite-wide multiplier from ``suite_false_alarm_k``) and bias is
+    an optional frozen allowance for a measured systematic offset (e.g.
+    data rendered by an independent backend whose disagreement with the
+    model exceeds the noise floor at high SNR). Parameters absent from
+    ``sigmas`` (exactly unconstrained directions, pinned separately) are
+    skipped. Output is compatible with ``assert_parameter_recovery`` and
+    the comparison plots.
+    """
+    missing = sorted(set(sigmas) - set(names))
+    if missing:
+        raise ValueError(f"sigma table has unknown parameters: {missing}")
+    if biases:
+        bad_bias = sorted(set(biases) - set(sigmas))
+        if bad_bias:
+            raise ValueError(f"bias table has parameters without sigmas: {bad_bias}")
+    stats = {}
+    for name in names:
+        if name not in sigmas:
+            continue
+        true_val = pars_true[name]
+        recovered = pars_recovered[name]
+        bound = (biases or {}).get(name, 0.0) + k * sigmas[name] * (snr_ref / snr)
+        abs_error = abs(recovered - true_val)
+        rel_error = abs_error / abs(true_val) if abs(true_val) > 1e-10 else abs_error
+        passed = abs_error < bound
+        stats[name] = {
+            'true': true_val,
+            'recovered': recovered,
+            'abs_error': abs_error,
+            'rel_error': rel_error,
+            'abs_tolerance': bound,
+            'rel_tolerance': bound / abs(true_val) if abs(true_val) > 1e-10 else bound,
+            'passed_absolute': passed,
+            'passed_relative': False,
+            'passed': passed,
+            'criterion': 'absolute' if passed else 'none',
+        }
+    return stats
 
 
 def check_degenerate_product_recovery(

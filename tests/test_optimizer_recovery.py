@@ -41,12 +41,237 @@ from kl_pipe.diagnostics.imaging import plot_data_comparison_panels
 
 from test_utils import (
     TestConfig,
-    check_parameter_recovery,
     assert_parameter_recovery,
     plot_parameter_comparison,
     check_degenerate_product_recovery,
     make_aperture_mask,
+    suite_false_alarm_k,
+    k_sigma_recovery_stats,
+    optimizer_measure_mode,
+    print_optimizer_sigma_entry,
 )
+
+
+# ==============================================================================
+# Frozen noise floors and the suite-wide bound multiplier
+# ==============================================================================
+
+# Marginal 1-sigma noise floors per test scene, measured 2026-07-08 from
+# the likelihood curvature at truth on the model's own noise-free render,
+# with each uniform prior box folded in as a Gaussian of equal variance
+# (run this module with KLPIPE_TEST_MEASURE=1 to regenerate). snr_ref is
+# the HIGHEST SNR the test runs; floors rescale as 1/SNR, which is exact
+# for data-dominated floors and conservative for prior-dominated ones.
+# Each recovery check bounds |recovered - truth| by bias + _K * sigma. A
+# prior-scale floor on a degenerate direction (e.g. cosi/g/vcirc/rscale
+# in velocity-only scenes) is honest: the data cannot do better, and the
+# vcirc*sin(i) product checks carry the physics there. 'biases' entries
+# are 2x the measured noiseless-data recovery offset, rounded up to one
+# significant figure -- used only where an independent rendering backend
+# (GalSim) disagrees with the model by more than the noise floor. Update
+# a value only deliberately, with the reason recorded here.
+_OPT_SIGMAS = {
+    'centered_velocity_base': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'cosi': 0.0658,
+            'g1': 0.000345,
+            'g2': 0.0549,
+            'theta_int': 0.000282,
+            'vel.rscale': 0.274,
+            'vel.v0': 0.00479,
+            'vel.vcirc': 12.3,
+        },
+    },
+    'offset_velocity': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'cosi': 0.0659,
+            'g1': 0.000295,
+            'g2': 0.0548,
+            'theta_int': 0.00113,
+            'vel.rscale': 0.274,
+            'vel.v0': 0.028,
+            'vel.vcirc': 12.3,
+            'vel.x0': 0.00192,
+            'vel.y0': 0.00226,
+        },
+    },
+    'centered_velocity_masked': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'cosi': 0.0658,
+            'g1': 0.000448,
+            'g2': 0.0549,
+            'theta_int': 0.000343,
+            'vel.rscale': 0.274,
+            'vel.v0': 0.00541,
+            'vel.vcirc': 12.3,
+        },
+    },
+    'inclined_exponential': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'F087.flux': 0.000184,
+            'F087.rscale': 0.00852,
+            'F087.x0': 0.000382,
+            'F087.y0': 0.000359,
+            'cosi': 0.0041,
+            'g1': 0.00604,
+            'g2': 0.00287,
+            'theta_int': 0.0178,
+        },
+    },
+    'inclined_exponential_psf': {
+        'snr_ref': 1000,
+        'sigmas': {
+            'F087.flux': 0.00183,
+            'F087.rscale': 0.0917,
+            'F087.x0': 0.00383,
+            'F087.y0': 0.00382,
+            'cosi': 0.044,
+            'g1': 0.0463,
+            'g2': 0.0309,
+            'theta_int': 0.137,
+        },
+    },
+    'inclined_exponential_masked': {
+        'snr_ref': 1000,
+        'sigmas': {
+            'F087.flux': 0.00186,
+            'F087.rscale': 0.0757,
+            'F087.x0': 0.00382,
+            'F087.y0': 0.00359,
+            'cosi': 0.0365,
+            'g1': 0.0415,
+            'g2': 0.0255,
+            'theta_int': 0.122,
+        },
+    },
+    'joint_vel_phot_line_psf': {
+        'snr_ref': 1000,
+        'sigmas': {
+            'F087.flux': 0.00195,
+            'F087.rscale': 0.0989,
+            'F087.x0': 0.00486,
+            'F087.y0': 0.00484,
+            'Halpha.rscale': 0.91,
+            'Halpha.x0': 0.503,
+            'Halpha.y0': 0.528,
+            'cosi': 0.0309,
+            'g1': 0.000884,
+            'g2': 0.0251,
+            'theta_int': 0.00108,
+            'vel.rscale': 0.154,
+            'vel.v0': 0.291,
+            'vel.vcirc': 6.16,
+            'vel.x0': 0.0193,
+            'vel.y0': 0.0274,
+        },
+    },
+    'joint_phot_grism_base': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'F087.flux': 0.0182,
+            'F087.rscale': 0.00194,
+            'F087.x0': 4.16e-05,
+            'F087.y0': 4.16e-05,
+            'Halpha.dispersion': 2.14,
+            'Halpha.flux': 0.0181,
+            'Halpha.rscale': 0.0013,
+            'Halpha.x0': 0.000223,
+            'Halpha.y0': 3.36e-05,
+            'cosi': 0.00796,
+            'g1': 0.00291,
+            'g2': 0.00651,
+            'theta_int': 0.0062,
+            'vel.rscale': 0.00631,
+            'vel.vcirc': 2.92,
+            'vel.x0': 0.00254,
+            'vel.y0': 0.00287,
+        },
+    },
+    'joint_masked': {
+        'snr_ref': 1000,
+        'sigmas': {
+            'F087.flux': 0.00185,
+            'F087.rscale': 0.0654,
+            'F087.x0': 0.00358,
+            'F087.y0': 0.00358,
+            'cosi': 0.0273,
+            'g1': 0.000904,
+            'g2': 0.0221,
+            'theta_int': 0.00118,
+            'vel.rscale': 0.131,
+            'vel.v0': 0.333,
+            'vel.vcirc': 5.2,
+            'vel.x0': 0.0173,
+            'vel.y0': 0.0237,
+        },
+    },
+    'inclined_spergel': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'F087.flux': 0.000221,
+            'F087.nu': 0.000912,
+            'F087.rscale': 0.0128,
+            'F087.x0': 0.000382,
+            'F087.y0': 0.000359,
+            'cosi': 0.00552,
+            'g1': 0.00604,
+            'g2': 0.00385,
+            'theta_int': 0.0178,
+        },
+    },
+    'inclined_spergel_psf': {
+        'snr_ref': 1000,
+        'sigmas': {
+            'F087.flux': 0.0022,
+            'F087.nu': 0.00893,
+            'F087.rscale': 0.124,
+            'F087.x0': 0.00383,
+            'F087.y0': 0.00382,
+            'cosi': 0.054,
+            'g1': 0.0463,
+            'g2': 0.0378,
+            'theta_int': 0.137,
+        },
+    },
+    'bulge_disk': {
+        'snr_ref': 10000,
+        'sigmas': {
+            'F087.bulge_frac': 0.000269,
+            'F087.bulge_hlr': 0.000824,
+            'F087.disk_rscale': 0.00109,
+            'F087.total_flux': 0.000389,
+            'cosi': 0.000707,
+            'g1': 0.000145,
+            'g2': 0.000431,
+            'theta_int': 0.000486,
+        },
+        # GalSim ground truth vs the n=4 emulator: measured noiseless
+        # recovery offsets (2026-07-08, multi-start, deterministic)
+        # exceed the SNR=10000 noise floor; allowance = 2x measured,
+        # rounded up to one significant figure.
+        'biases': {
+            'F087.bulge_frac': 7e-03,
+            'F087.bulge_hlr': 3e-02,
+            'F087.disk_rscale': 2e-02,
+            'F087.total_flux': 4e-03,
+            'cosi': 3e-02,
+            'g1': 6e-06,
+            'g2': 2e-02,
+            'theta_int': 3e-05,
+        },
+    },
+}
+
+# Every parameter bounded above across all test instances (SNR variants
+# included) shares one false-alarm budget of 1% for the whole module, so
+# the multiplier is derived, not tuned (k = 4.04). Recount when adding or
+# removing tests/parameters: sum of sigma-table sizes times SNR instances.
+_N_BOUNDED_CHECKS = 184
+_K = suite_false_alarm_k(_N_BOUNDED_CHECKS, budget=0.01)
 
 
 # ==============================================================================
@@ -243,9 +468,12 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    # Build velocity obs WITH data + likelihood task
+    # Build velocity obs WITH data + likelihood task. Measure mode fits
+    # nothing: the likelihood is built on the model's own noise-free render
+    # so its curvature at truth is exactly the information matrix.
+    data_fit = model_eval if optimizer_measure_mode() else data_noisy
     obs_vel = build_velocity_obs(
-        test_config.image_pars_velocity, data=data_noisy, variance=variance
+        test_config.image_pars_velocity, data=data_fit, variance=variance
     )
     # Every dotted param sampled with a wide Uniform so recovery exercises
     # the full parameter space.
@@ -264,6 +492,24 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
 
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
+
+    if optimizer_measure_mode():
+        # Velocity-only data with free shear constrains only vcirc*sin(i)
+        # (the kinematic lensing degeneracy): without the prior term the
+        # information matrix is numerically singular along the
+        # cosi/g1/g2/vcirc/rscale subspace, so those floors come out at
+        # prior-box scale (honest non-checks) and the vcirc*sini product
+        # check carries the physics there.
+        print_optimizer_sigma_entry(
+            'centered_velocity_base',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
 
     # 5% random perturbation on theta_true_sampled.
     rng = np.random.default_rng(test_config.seed)
@@ -297,40 +543,34 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    # Check parameter recovery (keyed by dotted sampled names)
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'velocity', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise
+    # floor; the degenerate cosi/g1/g2/vcirc/rscale subspace carries
+    # honest prior-scale floors (see the measure-mode comment above) and
+    # the vcirc*sini product check carries the physics there.
+    entry = _OPT_SIGMAS['centered_velocity_base']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     # Check degenerate product vcirc*sini (helper accepts both 'vcirc' and 'vel.vcirc')
     product_passed, product_stats = check_degenerate_product_recovery(
         pars_dotted, pars_opt_dotted, snr=snr
     )
 
-    # cosi / vcirc / vel.rscale lie on a 3-way degeneracy ridge under joint
-    # optimization with cosi free (the observable is vcirc*sin(i)); g1/g2
-    # are weakly constrained for non-sheared velocity-only data. Strict
-    # per-param recovery is checked via the slice tests in
-    # ``test_likelihood_slices.py`` where 1D slices through truth (other
-    # params fixed) cleanly separate these parameters.
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale']
     plot_parameter_comparison(
-        pars_dotted,
-        pars_opt_dotted,
+        {n: pars_dotted[n] for n in recovery_stats},
+        {n: pars_opt_dotted[n] for n in recovery_stats},
         recovery_stats,
         test_name,
         test_config,
         snr,
         product_stats=product_stats,
-        exclude_params=exclude_params,
     )
 
     # Check if product passed
@@ -347,7 +587,6 @@ def test_optimize_centered_velocity_base(snr, test_config, velocity_grids):
         recovery_stats,
         snr,
         'Optimizer: Centered velocity (base)',
-        exclude_params=exclude_params,
     )
     assert (
         product_passed
@@ -413,9 +652,12 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    # Build velocity obs with data + likelihood task
+    # Build velocity obs with data + likelihood task (model self-render in
+    # measure mode so the curvature at truth is exactly the information
+    # matrix)
+    data_fit = model_eval if optimizer_measure_mode() else data_noisy
     obs_vel = build_velocity_obs(
-        test_config.image_pars_velocity, data=data_noisy, variance=variance
+        test_config.image_pars_velocity, data=data_fit, variance=variance
     )
     extent = (
         test_config.image_pars_velocity.shape[0]
@@ -439,6 +681,21 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
 
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
+
+    if optimizer_measure_mode():
+        # Same kinematic-lensing degeneracy as the centered test: the
+        # cosi/g1/g2/vcirc/rscale floors are prior-box scale and the
+        # product check carries the physics there.
+        print_optimizer_sigma_entry(
+            'offset_velocity',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
 
     # 5% random perturbation on theta_true_sampled.
     rng = np.random.default_rng(test_config.seed)
@@ -470,36 +727,33 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    # Check recovery (keyed by dotted sampled names)
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'velocity', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise
+    # floor; the degenerate subspace carries honest prior-scale floors
+    # and the product check carries the physics there.
+    entry = _OPT_SIGMAS['offset_velocity']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     # Check degenerate product vcirc*sini
     product_passed, product_stats = check_degenerate_product_recovery(
         pars_dotted, pars_opt_dotted, snr=snr
     )
 
-    # cosi / vcirc / vel.rscale lie on a 3-way degeneracy ridge under joint
-    # optimization with cosi free (vcirc*sin(i) is the observable).
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale']
     plot_parameter_comparison(
-        pars_dotted,
-        pars_opt_dotted,
+        {n: pars_dotted[n] for n in recovery_stats},
+        {n: pars_opt_dotted[n] for n in recovery_stats},
         recovery_stats,
         test_name,
         test_config,
         snr,
         product_stats=product_stats,
-        exclude_params=exclude_params,
     )
 
     if not product_passed:
@@ -515,7 +769,6 @@ def test_optimize_offset_velocity(snr, test_config, velocity_grids):
         recovery_stats,
         snr,
         'Optimizer: Offset velocity with shear',
-        exclude_params=exclude_params,
     )
     assert (
         product_passed
@@ -589,10 +842,13 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    # Build image obs with data + likelihood task
+    # Build image obs with data + likelihood task (model self-render in
+    # measure mode so the curvature at truth is exactly the information
+    # matrix)
+    data_fit = model_eval if optimizer_measure_mode() else data_noisy
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         broadband_key='F087',
     )
@@ -621,6 +877,18 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
 
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
+
+    if optimizer_measure_mode():
+        print_optimizer_sigma_entry(
+            'inclined_exponential',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
 
     # 5% random perturbation on theta_true_sampled.
     rng = np.random.default_rng(test_config.seed)
@@ -654,22 +922,20 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    # Check recovery
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'intensity', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    entry = _OPT_SIGMAS['inclined_exponential']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     # Create parameter comparison plot (no vcirc*sini for intensity-only models).
     # Pass only sampled-name dicts so plot iterates over recovery_stats keys.
-    exclude_params = ['cosi', 'g1', 'g2']
     plot_parameter_comparison(
         {n: pars_dotted[n] for n in sampled_names},
         {n: pars_opt_dotted[n] for n in sampled_names},
@@ -678,7 +944,6 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
         test_config,
         snr,
         product_stats=None,
-        exclude_params=exclude_params,
     )
 
     # No vcirc*sini check for intensity-only models (no velocity field)
@@ -686,7 +951,6 @@ def test_optimize_inclined_exponential(snr, test_config, intensity_grids):
         recovery_stats,
         snr,
         'Optimizer: Inclined exponential intensity',
-        exclude_params=['cosi', 'g1', 'g2'],
     )
 
 
@@ -744,14 +1008,26 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
 
     # GalSim and model both produce flux/pixel; no conversion needed.
 
-    # build SourceModel + obs with PSF
+    # build SourceModel + obs with PSF (model self-render in measure mode
+    # so the curvature at truth is exactly the information matrix)
     int_model = InclinedExponentialModel()
     source = SourceModel(broadband_models={'F087': int_model})
+
+    if optimizer_measure_mode():
+        obs_render = build_image_obs(
+            test_config.image_pars_intensity,
+            psf=psf,
+            int_model=int_model,
+            broadband_key='F087',
+        )
+        data_fit = source.render_broadband(pars_dotted, obs_render, band_key='F087')
+    else:
+        data_fit = data_noisy
 
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
         psf=psf,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         int_model=int_model,
         broadband_key='F087',
@@ -780,6 +1056,18 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
+    if optimizer_measure_mode():
+        print_optimizer_sigma_entry(
+            'inclined_exponential_psf',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=1000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
+
     # 5% random perturbation on theta_true_sampled.
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
@@ -791,21 +1079,21 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
     theta_opt, result = optimize_with_gradients(log_like, theta_init, bounds)
     assert result.success, f"Optimization failed: {result.message}"
 
-    # check recovery
+    # check recovery: every sampled parameter bounded at _K times its
+    # marginal noise floor
     pars_opt_dotted = dict(pars_dotted)
     for n, v in zip(sampled_names, theta_opt):
         pars_opt_dotted[n] = float(v)
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'intensity', test_type='optimizer', has_psf=True
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    entry = _OPT_SIGMAS['inclined_exponential_psf']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     test_name = f"opt_inclined_exp_psf_snr{snr}"
     plot_parameter_comparison(
@@ -815,14 +1103,12 @@ def test_optimize_inclined_exponential_with_psf(test_config, intensity_grids):
         test_name,
         test_config,
         snr,
-        exclude_params=['cosi', 'theta_int', 'g1', 'g2'],
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Inclined exponential (PSF)',
-        exclude_params=['cosi', 'theta_int', 'g1', 'g2'],
     )
 
 
@@ -965,17 +1251,37 @@ def test_optimize_joint_vel_phot_line_with_psf(
         emission_lines={'Halpha': EmissionLine(intensity=halpha_int)},
     )
 
+    # model self-render in measure mode so the likelihood curvature at
+    # truth is exactly the information matrix
+    measure = optimizer_measure_mode()
+    if measure:
+        obs_vel_render = build_velocity_obs(
+            test_config.image_pars_velocity, psf=psf, flux_weight_key='Halpha'
+        )
+        obs_int_render = build_image_obs(
+            test_config.image_pars_intensity,
+            psf=psf,
+            int_model=f087_int,
+            broadband_key='F087',
+        )
+        data_vel_fit = source.render_velocity(pars_dotted, obs_vel_render)
+        data_int_fit = source.render_broadband(
+            pars_dotted, obs_int_render, band_key='F087'
+        )
+    else:
+        data_vel_fit = data_vel_noisy
+        data_int_fit = data_int_noisy
     obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
         psf=psf,
-        data=data_vel_noisy,
+        data=data_vel_fit,
         variance=variance_vel,
         flux_weight_key='Halpha',
     )
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
         psf=psf,
-        data=data_int_noisy,
+        data=data_int_fit,
         variance=variance_int,
         int_model=f087_int,
         broadband_key='F087',
@@ -1037,6 +1343,21 @@ def test_optimize_joint_vel_phot_line_with_psf(
         "must be restored to the recovery pass/fail check"
     )
 
+    if measure:
+        # Halpha.flux is exactly flat (pinned above): dropped so its
+        # vacuous prior-scale floor does not enter the check count.
+        print_optimizer_sigma_entry(
+            'joint_vel_phot_line_psf',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=1000,
+            drop=('Halpha.flux',),
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
+
     # 5% perturbation initial guess.
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
@@ -1052,48 +1373,41 @@ def test_optimize_joint_vel_phot_line_with_psf(
     for n, v in zip(sampled_names, theta_opt):
         pars_opt_dotted[n] = float(v)
 
-    # Recovery (keyed by dotted sampled names).
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'joint', test_type='optimizer', has_psf=True
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    # Halpha.flux is absent from the sigma table: it enters this data only
+    # through the velocity channel's normalized flux weighting, so the
+    # amplitude cancels exactly (pinned flat above) and it ends wherever
+    # the perturbed init left it.
+    entry = _OPT_SIGMAS['joint_vel_phot_line_psf']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     product_passed, product_stats = check_degenerate_product_recovery(
         pars_dotted, pars_opt_dotted, snr=snr
     )
 
-    # cosi / vcirc / vel.rscale are degenerate under joint optimization with
-    # cosi free (vcirc*sin(i) is the observable). Shear is weakly
-    # constrained at zero truth. Halpha.flux enters this data only through
-    # the velocity channel's flux weighting, which is normalized (weighted
-    # velocity = conv(I*v)/conv(I)), so the flux amplitude cancels exactly
-    # and carries no constraint: it ends wherever the perturbed init left
-    # it and is excluded as unidentifiable, not as a loose tolerance.
     test_name = f"opt_joint_vel_phot_line_psf_snr{snr}"
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale', 'Halpha.flux']
     plot_parameter_comparison(
-        {n: pars_dotted[n] for n in sampled_names},
-        {n: pars_opt_dotted[n] for n in sampled_names},
+        {n: pars_dotted[n] for n in recovery_stats},
+        {n: pars_opt_dotted[n] for n in recovery_stats},
         recovery_stats,
         test_name,
         test_config,
         snr,
         product_stats=product_stats,
-        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Joint vel+phot+line (PSF)',
-        exclude_params=exclude_params,
     )
     assert (
         product_passed
@@ -1220,10 +1534,23 @@ def test_optimize_joint_phot_grism_base(test_config):
     noise_grism = rng.normal(0.0, np.sqrt(variance_grism), size=clean_grism.shape)
     data_grism_noisy = clean_grism + noise_grism
 
+    # model self-render in measure mode so the likelihood curvature at
+    # truth is exactly the information matrix (clean_grism already is the
+    # model's own render)
+    measure = optimizer_measure_mode()
+    if measure:
+        obs_int_render = build_image_obs(
+            image_pars, psf=psf, int_model=f087_int, broadband_key='F087'
+        )
+        data_int_fit = source.render_broadband(
+            pars_dotted, obs_int_render, band_key='F087'
+        )
+    else:
+        data_int_fit = data_int_noisy
     obs_int = build_image_obs(
         image_pars,
         psf=psf,
-        data=jnp.asarray(data_int_noisy),
+        data=jnp.asarray(data_int_fit),
         variance=variance_int,
         int_model=f087_int,
         broadband_key='F087',
@@ -1232,7 +1559,7 @@ def test_optimize_joint_phot_grism_base(test_config):
         grism_pars,
         z=Z,
         psf=psf,
-        data=jnp.asarray(data_grism_noisy),
+        data=jnp.asarray(clean_grism if measure else data_grism_noisy),
         variance=float(variance_grism),
     )
 
@@ -1272,6 +1599,18 @@ def test_optimize_joint_phot_grism_base(test_config):
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
+    if measure:
+        print_optimizer_sigma_entry(
+            'joint_phot_grism_base',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
+
     # B.4c uses 1% init perturbation, not the 5% used elsewhere. Empirically
     # (seed scan with default_rng, SNR=10000), 5% perturbation pushes
     # single-start L-BFGS-B into a non-truth local minimum on a substantial
@@ -1296,43 +1635,37 @@ def test_optimize_joint_phot_grism_base(test_config):
     for n, v in zip(sampled_names, theta_opt):
         pars_opt_dotted[n] = float(v)
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'joint', test_type='optimizer', has_psf=True
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    entry = _OPT_SIGMAS['joint_phot_grism_base']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     product_passed, product_stats = check_degenerate_product_recovery(
         pars_dotted, pars_opt_dotted, snr=snr
     )
 
     test_name = f"opt_joint_phot_grism_base_snr{snr}"
-    # cosi / vcirc / vel.rscale lie on a degeneracy ridge under joint
-    # optimization with cosi free (vcirc*sin(i) is the observable). Shear
-    # is weakly constrained at zero truth.
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale']
     plot_parameter_comparison(
-        {n: pars_dotted[n] for n in sampled_names},
-        {n: pars_opt_dotted[n] for n in sampled_names},
+        {n: pars_dotted[n] for n in recovery_stats},
+        {n: pars_opt_dotted[n] for n in recovery_stats},
         recovery_stats,
         test_name,
         test_config,
         snr,
         product_stats=product_stats,
-        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Joint phot+grism (base)',
-        exclude_params=exclude_params,
     )
     assert (
         product_passed
@@ -1381,9 +1714,15 @@ def test_optimize_centered_velocity_masked(test_config, velocity_grids):
 
     mask = make_aperture_mask(data_noisy.shape)
 
+    # model self-render in measure mode (masked information matrix)
+    if optimizer_measure_mode():
+        obs_render = build_velocity_obs(test_config.image_pars_velocity)
+        data_fit = source.render_velocity(pars_dotted, obs_render)
+    else:
+        data_fit = data_noisy
     obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         mask=jnp.array(mask),
     )
@@ -1402,6 +1741,19 @@ def test_optimize_centered_velocity_masked(test_config, velocity_grids):
 
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
+
+    if optimizer_measure_mode():
+        # Same kinematic-lensing degeneracy as the unmasked test.
+        print_optimizer_sigma_entry(
+            'centered_velocity_masked',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
 
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
@@ -1434,40 +1786,38 @@ def test_optimize_centered_velocity_masked(test_config, velocity_grids):
         mask=mask,
     )
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'velocity', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            pars_opt_dotted[name], true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise
+    # floor; the degenerate subspace carries honest prior-scale floors
+    # and the product check carries the physics there.
+    entry = _OPT_SIGMAS['centered_velocity_masked']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     product_passed, product_stats = check_degenerate_product_recovery(
         pars_dotted, pars_opt_dotted, snr=snr
     )
 
-    # cosi / vcirc / vel.rscale lie on a 3-way degeneracy ridge under joint
-    # optimization with cosi free (vcirc*sin(i) is the observable).
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale']
     plot_parameter_comparison(
-        pars_dotted,
-        pars_opt_dotted,
+        {n: pars_dotted[n] for n in recovery_stats},
+        {n: pars_opt_dotted[n] for n in recovery_stats},
         recovery_stats,
         test_name,
         test_config,
         snr,
         product_stats=product_stats,
-        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Centered velocity (masked)',
-        exclude_params=exclude_params,
     )
     assert product_passed, (
         f"Degenerate product vcirc*sini not recovered: "
@@ -1516,9 +1866,17 @@ def test_optimize_inclined_exponential_masked(test_config, intensity_grids):
 
     mask = make_aperture_mask(data_noisy.shape)
 
+    # model self-render in measure mode (masked information matrix)
+    if optimizer_measure_mode():
+        obs_render = build_image_obs(
+            test_config.image_pars_intensity, broadband_key='F087'
+        )
+        data_fit = source.render_broadband(pars_dotted, obs_render, band_key='F087')
+    else:
+        data_fit = data_noisy
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         mask=jnp.array(mask),
         broadband_key='F087',
@@ -1546,6 +1904,18 @@ def test_optimize_inclined_exponential_masked(test_config, intensity_grids):
 
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
+
+    if optimizer_measure_mode():
+        print_optimizer_sigma_entry(
+            'inclined_exponential_masked',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=1000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
 
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
@@ -1582,16 +1952,17 @@ def test_optimize_inclined_exponential_masked(test_config, intensity_grids):
         mask=mask,
     )
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'intensity', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            pars_opt_dotted[name], true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    entry = _OPT_SIGMAS['inclined_exponential_masked']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     plot_parameter_comparison(
         {n: pars_dotted[n] for n in sampled_names},
@@ -1601,14 +1972,12 @@ def test_optimize_inclined_exponential_masked(test_config, intensity_grids):
         test_config,
         snr,
         product_stats=None,
-        exclude_params=['cosi', 'g1', 'g2'],
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Inclined exponential (masked)',
-        exclude_params=['cosi', 'g1', 'g2'],
     )
 
 
@@ -1682,15 +2051,29 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
     mask_vel = make_aperture_mask(data_vel_noisy.shape)
     mask_int = make_aperture_mask(data_int_noisy.shape)
 
+    # model self-render in measure mode (masked information matrix)
+    measure = optimizer_measure_mode()
+    if measure:
+        obs_vel_render = build_velocity_obs(test_config.image_pars_velocity)
+        obs_int_render = build_image_obs(
+            test_config.image_pars_intensity, broadband_key='F087'
+        )
+        data_vel_fit = source.render_velocity(pars_dotted, obs_vel_render)
+        data_int_fit = source.render_broadband(
+            pars_dotted, obs_int_render, band_key='F087'
+        )
+    else:
+        data_vel_fit = data_vel_noisy
+        data_int_fit = data_int_noisy
     obs_vel = build_velocity_obs(
         test_config.image_pars_velocity,
-        data=data_vel_noisy,
+        data=data_vel_fit,
         variance=variance_vel,
         mask=jnp.array(mask_vel),
     )
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
-        data=data_int_noisy,
+        data=data_int_fit,
         variance=variance_int,
         mask=jnp.array(mask_int),
         broadband_key='F087',
@@ -1730,6 +2113,18 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
 
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
+
+    if measure:
+        print_optimizer_sigma_entry(
+            'joint_masked',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=1000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
 
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
@@ -1782,32 +2177,21 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
         mask=mask_int,
     )
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'joint', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            pars_opt_dotted[name], true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    entry = _OPT_SIGMAS['joint_masked']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
     product_passed, product_stats = check_degenerate_product_recovery(
         pars_dotted, pars_opt_dotted, snr=snr
     )
-    # cosi / vcirc / vel.rscale lie on a 3-way degeneracy ridge under joint
-    # optimization with cosi free (vcirc*sin(i) is the observable).
-    # vel.v0 also excluded from the standard per-param check: a 20-seed
-    # empirical scan (default_rng + RandomState, 5% init perturbation,
-    # SNR=1000) showed v0 recovery std ~2-3% with ~10% of seeds landing
-    # in a non-truth local minimum (max observed |err| = 12.13%). The
-    # standard tolerance for v0 here is 7.5% (= 5% base * 1.5x scaling)
-    # which the empirical distribution genuinely cannot meet without
-    # multi-start optimization. v0 is checked separately below with a
-    # 15% bound covering observed max plus margin (user-approved
-    # loosening; see session 2026-06-10).
-    exclude_params = ['cosi', 'g1', 'g2', 'vel.vcirc', 'vel.rscale', 'vel.v0']
     plot_parameter_comparison(
         {n: pars_dotted[n] for n in sampled_names},
         {n: pars_opt_dotted[n] for n in sampled_names},
@@ -1816,20 +2200,12 @@ def test_optimize_joint_masked(test_config, velocity_grids, intensity_grids):
         test_config,
         snr,
         product_stats=product_stats,
-        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Joint model (masked)',
-        exclude_params=exclude_params,
-    )
-    # Per-test v0 bound (see comment above)
-    v0_rel = recovery_stats['vel.v0']['rel_error']
-    assert v0_rel < 0.15, (
-        f"vel.v0 outside masked-joint local-min budget at SNR={snr}: "
-        f"rel {v0_rel*100:.2f}% (bound 15.0%)"
     )
 
 
@@ -1900,9 +2276,12 @@ def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
         enable_plots=test_config.enable_plots,
     )
 
+    # model self-render in measure mode so the curvature at truth is
+    # exactly the information matrix
+    data_fit = model_eval if optimizer_measure_mode() else data_noisy
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         broadband_key='F087',
     )
@@ -1933,6 +2312,18 @@ def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
+    if optimizer_measure_mode():
+        print_optimizer_sigma_entry(
+            'inclined_spergel',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
+
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
         size=len(theta_true_sampled)
@@ -1962,19 +2353,18 @@ def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
         enable_plots=test_config.enable_plots,
     )
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr, name, true_val, 'intensity', test_type='optimizer'
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    entry = _OPT_SIGMAS['inclined_spergel']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
-    exclude_params = ['cosi', 'g1', 'g2']
     plot_parameter_comparison(
         {n: pars_dotted[n] for n in sampled_names},
         {n: pars_opt_dotted[n] for n in sampled_names},
@@ -1983,14 +2373,12 @@ def test_optimize_inclined_spergel(snr, test_config, intensity_grids):
         test_config,
         snr,
         product_stats=None,
-        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Inclined Spergel',
-        exclude_params=exclude_params,
     )
 
 
@@ -2048,10 +2436,21 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
     int_model = InclinedSpergelModel()
     source = SourceModel(broadband_models={'F087': int_model})
 
+    # model self-render in measure mode
+    if optimizer_measure_mode():
+        obs_render = build_image_obs(
+            test_config.image_pars_intensity,
+            psf=psf,
+            int_model=int_model,
+            broadband_key='F087',
+        )
+        data_fit = source.render_broadband(pars_dotted, obs_render, band_key='F087')
+    else:
+        data_fit = data_noisy
     obs_int = build_image_obs(
         test_config.image_pars_intensity,
         psf=psf,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         int_model=int_model,
         broadband_key='F087',
@@ -2082,6 +2481,18 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
+    if optimizer_measure_mode():
+        print_optimizer_sigma_entry(
+            'inclined_spergel_psf',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=1000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
+
     rng = np.random.default_rng(test_config.seed)
     theta_init = theta_true_sampled + 0.05 * theta_true_sampled * rng.normal(
         size=len(theta_true_sampled)
@@ -2096,24 +2507,18 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
     for n, v in zip(sampled_names, theta_opt):
         pars_opt_dotted[n] = float(v)
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr,
-            name,
-            true_val,
-            'intensity',
-            test_type='optimizer',
-            has_psf=True,
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at _K times its marginal noise floor.
+    entry = _OPT_SIGMAS['inclined_spergel_psf']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+    )
 
-    exclude_params = ['cosi', 'g1', 'g2']
     test_name = f"opt_inclined_spergel_psf_snr{snr}"
     plot_parameter_comparison(
         {n: pars_dotted[n] for n in sampled_names},
@@ -2123,14 +2528,12 @@ def test_optimize_inclined_spergel_with_psf(test_config, intensity_grids):
         test_config,
         snr,
         product_stats=None,
-        exclude_params=exclude_params,
     )
 
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'Optimizer: Inclined Spergel (PSF)',
-        exclude_params=exclude_params,
     )
 
 
@@ -2180,10 +2583,18 @@ def test_optimize_bulge_disk(snr, test_config):
         true_pars_flat, _IMAGE_PARS, snr, psf=_TEST_PSF
     )
 
+    # model self-render in measure mode
+    if optimizer_measure_mode():
+        obs_render = build_image_obs(
+            _IMAGE_PARS, psf=_TEST_PSF, int_model=int_model, broadband_key='F087'
+        )
+        data_fit = source.render_broadband(pars_dotted, obs_render, band_key='F087')
+    else:
+        data_fit = data_noisy
     obs_int = build_image_obs(
         _IMAGE_PARS,
         psf=_TEST_PSF,
-        data=data_noisy,
+        data=data_fit,
         variance=variance,
         int_model=int_model,
         broadband_key='F087',
@@ -2213,6 +2624,18 @@ def test_optimize_bulge_disk(snr, test_config):
     sampled_names = list(priors.sampled_names)
     theta_true_sampled = jnp.array([pars_dotted[n] for n in sampled_names])
 
+    if optimizer_measure_mode():
+        print_optimizer_sigma_entry(
+            'bulge_disk',
+            log_like,
+            theta_true_sampled,
+            sampled_names,
+            snr=snr,
+            snr_ref=10000,
+            prior_bounds={n: priors._priors[n].bounds for n in sampled_names},
+        )
+        return
+
     neg_ll_and_grad = jax.jit(jax.value_and_grad(lambda t: -log_like(t)))
 
     def objective(x):
@@ -2240,33 +2663,27 @@ def test_optimize_bulge_disk(snr, test_config):
     for n, v in zip(sampled_names, theta_opt):
         pars_opt_dotted[n] = float(v)
 
-    recovery_stats = {}
-    for name in sampled_names:
-        true_val = pars_dotted[name]
-        recovered_val = pars_opt_dotted[name]
-        tolerance = test_config.get_tolerance(
-            snr,
-            name,
-            true_val,
-            'intensity',
-            test_type='optimizer',
-            has_psf=True,
-            model_kind='composite',
-        )
-        passed, stats = check_parameter_recovery(
-            recovered_val, true_val, tolerance, name
-        )
-        recovery_stats[name] = stats
+    # Every sampled parameter bounded at bias + _K times its marginal
+    # noise floor (centroids + thickness aspect ratios are pinned in
+    # priors and so absent from the sigma table). The bias allowance
+    # covers the measured GalSim-vs-emulator rendering offset, which
+    # exceeds the noise floor at SNR=10000.
+    entry = _OPT_SIGMAS['bulge_disk']
+    recovery_stats = k_sigma_recovery_stats(
+        pars_dotted,
+        pars_opt_dotted,
+        sampled_names,
+        entry['sigmas'],
+        _K,
+        snr=snr,
+        snr_ref=entry['snr_ref'],
+        biases=entry['biases'],
+    )
 
-    # Shear weakly constrained without velocity data; centroids + thickness
-    # aspect ratios are pinned in priors and so absent from recovery_stats
-    # (no need to list them in exclude_params).
-    exclude_params = ['g1', 'g2']
     assert_parameter_recovery(
         recovery_stats,
         snr,
         'BulgeDisk optimizer',
-        exclude_params=exclude_params,
     )
 
 

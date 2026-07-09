@@ -128,10 +128,35 @@ reads 0.78 -> loud fail). Deterministic.
   The skipped Spergel de Vauc test stays on the legacy pattern until its
   renderer limitation is fixed. The bulge-disk test's g1/g2 exclusions
   removed (the zero-width-scan fix made those slices real).
-- Phase 2 (optimizer tier): recalibrate bounds as k * sigma with
-  marginal floors; k decision parked with the user (suite-budget
-  derivation proposed and explained: declare a suite false-alarm
-  budget, e.g. 1% over ~50 bounded checks -> k ~= 3.7).
+- Phase 2 (optimizer tier): IMPLEMENTED 2026-07-08; numeric rules
+  RATIFIED by user same day (prior-box regularization included). All 12 optimizer
+  recovery tests bound |recovered - truth| by bias + k * sigma:
+  - sigma = the parameter's marginal noise floor, measured per scene
+    from the likelihood curvature at truth (jax.hessian) on the MODEL'S
+    OWN noise-free render (an independent renderer's data leaves a
+    residual at truth whose second-order term can flip curvature signs
+    -- observed on the Spergel+PSF scene), with each uniform prior box
+    folded in as a Gaussian of equal variance (precision 12/width^2).
+    The prior term is what makes the velocity-only scenes invertible:
+    their cosi/g1/g2/vcirc/rscale subspace is the kinematic lensing
+    degeneracy and comes out at honest prior-box scale (non-checks; the
+    vcirc*sin(i) product checks keep carrying the physics). Frozen
+    tables (_OPT_SIGMAS) regenerate with KLPIPE_TEST_MEASURE=1;
+    reference SNR = the highest the test runs (the 1/SNR rescale is
+    exact for data-dominated floors, conservative for prior-dominated).
+  - k = suite_false_alarm_k(184, budget=0.01) = 4.04: one suite-wide
+    multiplier from a declared 1% false-alarm budget over the 184
+    bounded checks in the module (RATIFIED by user 2026-07-08).
+  - bias = 0 except where an independent rendering backend disagrees
+    with the model above the noise floor: the bulge+disk test's GalSim
+    ground truth vs the n=4 emulator at SNR=10000. Allowance = 2x the
+    measured noiseless-data recovery offset, rounded up to one
+    significant figure (RATIFIED by user 2026-07-08).
+  Retired: optimizer_tolerance_* dicts, optimizer_param_scaling, the
+  get_tolerance optimizer branch, all optimizer exclude-lists (the
+  Halpha.flux exact-flat direction stays out of the table and keeps its
+  in-test flatness pin), and the joint-masked vel.v0 15% carve-out
+  (its derived bound is 13.3%).
 - Sampler tier: unchanged.
 
 ## 6. Evidence pointers
