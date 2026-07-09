@@ -35,10 +35,11 @@ continuous representations stay in SB.
 | `SourceModel.render_broadband(pars, obs, band_key)` | flux per coarse pixel | Dispatches to `IntensityModel.render_image`; same convention. |
 | `SourceModel.render_velocity(pars, obs)` | km/s per coarse pixel | Dispatches to `VelocityModel.render_image`. |
 | `SourceModel.build_cube(pars, cube_pars, ...)` | SB per arcsec² per nm | Intermediate; cube voxel = line term `I_line(x, y) × G(λ; x, y)` (SB × 1/nm) plus continuum term `I_cont(x, y)` (already SB/nm — see below). |
-| `kl_pipe.dispersion.disperse_cube(cube, grism_pars, lambda_grid, oversample)` | SB per arcsec² | Sums `cube × throughput × dlam` over wavelength; output is wavelength-integrated SB. |
+| `kl_pipe.dispersion.disperse_line_analytic(...)` | SB per arcsec² | Default line path (`dispersal_method='analytic'`). Closed-form per-spaxel deposit along the dispersion axis (no wavelength grid); returns a dimensionless profile × `I_line` SB, same units as `disperse_cube`. |
+| `kl_pipe.dispersion.disperse_continuum_analytic(...)` | SB per arcsec² | Default continuum path. Exact wavelength-continuum limit via a precomputed trace kernel (no slices); same SB units. |
+| `kl_pipe.dispersion.disperse_cube(cube, grism_pars, lambda_grid, oversample)` | SB per arcsec² | Legacy slice path (`dispersal_method='slice'`). Sums `cube × throughput × dlam` over wavelength; output is wavelength-integrated SB. |
 | `kl_pipe.grism._apply_post_dispersion_pixel_response(...)` | flux per coarse pixel | Coarse-pixel sinc in k-space (the pixel integration), samples the box-averaged SB at coarse pixel centers, multiplies by `coarse_ps²` to convert SB → flux per coarse pixel. |
 | `SourceModel.render_grism(pars, obs, ...)` | flux per coarse pixel | Final dispersed grism observable. |
-| `KLModel.render_grism(theta, obs)` | flux per coarse pixel | Legacy path; same convention. |
 
 ## Emission line flux vs continuum flux density (cube assembly)
 

@@ -1,7 +1,7 @@
 # Strict test tier redesign (three-gate scheme)
 
-Status: vision ADOPTED by user 2026-07-08; phase 1 IMPLEMENTED same day
-(decisions in section 5). Evidence base:
+Status: vision ADOPTED by user 2026-07-08; phases 1-3 IMPLEMENTED same day
+(optimizer tier k=4.04; decisions in section 5). Evidence base:
 experiments/sweverett/analytic_audit/ (probes 1-6) and
 docs/sessions/2026-07-08_analytic_dispersal_audit.md.
 

@@ -3,7 +3,10 @@
 Honest inventory of what is and is not gated for the `kl_pipe`
 datacube-assembly + grism-dispersion + PSF + pixel-readout stack, verified
 against the actual test files (not assumed) as of 2026-07-05, `se/speedups`
-@ commit including the GalSim-chromatic reference gate.
+@ commit including the GalSim-chromatic reference gate. Update 2026-07-07:
+analytic dispersal (`dispersal_method='analytic'`) is now the default line
+path; the table below distinguishes it from the legacy `disperse_cube`
+slice path.
 
 "Gated" means an automated test asserts a numerical tolerance against
 either (a) an independently-derived closed-form/analytic answer, (b) an
@@ -19,7 +22,8 @@ shared bug in both paths.
 |---|---|---|---|
 | Spectral bin amplitude (line flux per coarse wavelength bin) | `tests/test_spectral_methods.py::TestValueEquivalence` (erf vs converged midpoint-oversample limit), `TestGradients` (AD vs finite-difference) | Closed-form (erf is the exact Gaussian CDF bin integral; the midpoint path independently converges to it) | `erf` is the default `spectral_method`. Continuum exactness also covered here (`test_erf_line_flux_conservation`-adjacent tests). |
 | Pixel readout (post-dispersion BoxPixel sinc + coarse-pixel-center sampling) | `tests/test_pixel_readout.py::TestClosedFormGate` | Closed-form (Gaussian source, erf box-integral reference) | Also pins flux conservation (`test_flux_conservation`) and the historical mean-bin bug (`TestMeanBinReadoutBug`, a regression pin, not a correctness gate). |
-| Velocity-entanglement / `n_lambda` resolution | `tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation` (default-vs-refined deviation window, in-suite) + `tests/test_galsim_reference.py::test_dynamic_scene_refined_n_lambda` (refined-`n_lambda` pathway vs independent GalSim-chromatic render) | Frozen-window test = internal (not a ground truth); GalSim-chromatic gate = independent | The frozen window catches a silent change to default behavior; the GalSim gate confirms the *refined* pathway (once entanglement quantization is resolved) is actually correct, not just internally self-consistent. Neither individually proves the *default* `n_lambda` pathway is numerically correct -- only that its deviation from the refined pathway is a known, frozen quantity. |
+| Analytic line dispersal (default path; no wavelength grid) | `tests/test_analytic_dispersal.py` (closed-form kernel vs scipy quadrature, flux conservation, O(ds^2) slice-convergence, production slice-rule equivalence) + `tests/test_galsim_reference.py::test_dynamic_scene_analytic_dispersal` / `::test_throughput_ramp_analytic_dispersal` | Closed-form + independent (GalSim-chromatic) | **Default `dispersal_method` as of 2026-07-07.** Dynamic scene 0.206%/0.019% and ramp-throughput 0.448%/0.025% vs the GalSim-chromatic reference, both below the refined-`n_lambda=251` slice floor (0.534%/0.030%) -- consistent with analytic being the `n_lambda -> infinity` limit. Removes the wavelength-grid quantization that the velocity-entanglement row (below) addresses for the legacy slice path. |
+| Velocity-entanglement / `n_lambda` resolution (**legacy slice path only**) | `tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation` (default-vs-refined deviation window, in-suite) + `tests/test_galsim_reference.py::test_dynamic_scene_refined_n_lambda` (refined-`n_lambda` pathway vs independent GalSim-chromatic render) | Frozen-window test = internal (not a ground truth); GalSim-chromatic gate = independent | Concerns the legacy `disperse_cube` slice path; the default analytic path has no wavelength grid to under-resolve. The frozen window catches a silent change to default slice behavior; the GalSim gate confirms the *refined* slice pathway (once entanglement quantization is resolved) is actually correct, not just internally self-consistent. Neither individually proves the *default* slice `n_lambda` pathway is numerically correct -- only that its deviation from the refined pathway is a known, frozen quantity. |
 | Dispersal interpolation (`disperse_cube` bilinear sub-pixel shift), integer-shift case | `tests/test_grism_core.py::TestAnalytical` (multiple, dispersion chosen so pixel offsets are integers), `tests/test_grism_shared_cube.py` point-source 90-degree-rotation tests | Closed-form (bilinear is exact at integer offsets, so these reduce to an exact analytic answer) | Only tests the degenerate case where interpolation error is exactly zero by construction. |
 | Dispersal interpolation, general fractional-shift case | `tests/test_galsim_reference.py::test_static_scene`, indirectly | Independent (GalSim-chromatic), but not isolated | The static-scene floor (1.678% max\|diff\|/peak) is understood to be dominated by this bilinear-shift bias at realistic (~2.2 fine-pixel) shifts, but the gate bounds the *combined* floor (interpolation + quintic-interpolant + other numerics), not this term alone. **No dedicated, isolated test exists** that gates the fractional-shift interpolation error against a closed-form or independent reference at a chosen shift magnitude. |
 | PSF pathway (`post_dispersion` vs `per_slice` ordering) | `tests/test_grism_psf_mode.py` (equivalence tests, `L1(A-B)/F_tot <= C * folding_threshold`) | Internal self-consistency (both `kl_pipe` code paths) | Mathematically the two orderings are identical for a wavelength-independent PSF, so this is a correctness-preserving-refactor gate, not an external-accuracy gate. External PSF accuracy for the *broadband* case (no dispersion) is separately covered in `tests/test_intensity.py`/`test_psf.py` (GalSim regression). |
@@ -55,8 +59,4 @@ shared bug in both paths.
 
 Neither tier alone would close all of the above gaps even if fully
 extended -- see `docs/validation/galsim_reference_gate.md` for what the
-GalSim-chromatic reference currently covers, and the (superseded)
-`docs/validation/oracle_promotion_audit.md` promotion audit (primary
-checkout, to be deleted after merge) for the original geko-vs-reference
-comparison this table's continuum/shear/off-center/multi-line rows are
-partly drawn from.
+GalSim-chromatic reference currently covers.

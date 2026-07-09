@@ -1,8 +1,8 @@
 # Analytic per-spaxel line dispersal: derivation and design audit
 
-Status: 2026-07-06. Derivation validated by standalone prototype (section
-11); literature search found no prior art (section 12); pipeline
-implementation pending. Companion to the wavelength-grid production rule
+Status: shipped and the default dispersal path as of 2026-07-07 (sections
+12-13). Derivation validated by standalone prototype (section 11);
+literature search found no prior art (section 12). Companion to the wavelength-grid production rule
 and the two-tier grid / analytic dispersal follow-ups in
 docs/plans/PRODUCTION_SPEEDUPS.md (section 7).
 

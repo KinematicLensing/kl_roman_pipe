@@ -50,9 +50,13 @@ from kl_pipe.observation import build_velocity_obs, build_image_obs, build_grism
 | `GrismObs` | Observation container: PSF + dispersion + (data + variance) |
 | `SourceModel.build_cube` / `.render_grism` | Cube assembly and dispersion |
 
-The cube-to-grism flow is `build_cube` -> per-slice PSF convolution ->
-`disperse_cube` -> pixel response -> detector image. `SourceModel.render_grism`
-does all of it in one call.
+By default (`dispersal_method='analytic'`) `SourceModel.render_grism` deposits
+each spaxel's line flux along the dispersion axis with an exact erf/exp kernel
+-- no wavelength grid is built -- then applies one post-dispersion PSF
+convolution and the pixel response. The legacy `slice` path
+(`dispersal_method='slice'`) instead assembles a cube (`build_cube`), convolves,
+and shift-and-adds via `disperse_cube`. Either way, `render_grism` does it all
+in one call.
 
 ---
 
@@ -189,8 +193,9 @@ plt.show()
 
 `GrismPars` specifies the dispersion direction, plate scale, and reference
 wavelength; `build_grism_pars_for_line` is the single-line convenience.
-`SourceModel.render_grism` builds the cube, convolves per slice with the PSF,
-disperses, and applies the pixel response:
+`SourceModel.render_grism` disperses the source and applies the PSF and pixel
+response (by default via the analytic path, which spreads each spaxel's line
+flux by an exact profile rather than building a cube):
 
 ```{code-cell} python
 gp = build_grism_pars_for_line(

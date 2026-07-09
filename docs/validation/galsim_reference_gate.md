@@ -53,8 +53,8 @@ make test-galsim-reference
 conda run -n klpipe pytest tests/test_galsim_reference.py -v -m galsim_reference
 ```
 
-Runtime: ~20-25s for all four scenes (well under the 120s `slow`-marker
-threshold), so the gate runs by default in `make test` / `make test-basic`
+Runtime: comfortably under the 120s `slow`-marker threshold for all six
+scenes, so the gate runs by default in `make test` / `make test-basic`
 / `make test-extended` -- it is not excluded by any marker filter.
 
 ### Scenes gated
@@ -93,6 +93,20 @@ unextended; see the gap table in
    closed-form by `tests/test_grism_core.py::TestDispersion`
    throughput tests (one-hot slice selection, ramp orientation,
    loop-vs-operator pathway agreement at integer offsets).
+5. **Dynamic, analytic dispersal** (`vcirc=200`, `dispersal_method='analytic'`):
+   the same dynamic scene through the closed-form dispersal path (no
+   wavelength grid for the line) vs the same GalSim-chromatic reference.
+   Analytic is the `n_lambda -> infinity` limit of the slice method, so it
+   must sit at or below the refined-grid floor. Measured (2026-07-06,
+   float64, oversample=5) 0.206%/0.019% -- below the `n_lambda=251` slice
+   floor (0.534%/0.030%): removing slice quantization also removes part of
+   the shift-interpolation disagreement.
+6. **Ramp-throughput, analytic dispersal** (`vcirc=0`, ramp `T(lambda)`,
+   `dispersal_method='analytic'`): the line weight is `T` interpolated at
+   each spaxel's observed wavelength instead of per-slice `T(lambda_k)`.
+   Measured 0.448%/0.025%, well below the slice-path static floor
+   (1.715%/0.061%) -- the same interpolation-floor reduction as the dynamic
+   analytic scene.
 
 kl_pipe's *default*-`n_lambda` regression on the dynamic case (under-
 resolving the spatially-varying Doppler field: max|diff|/peak jumps from
@@ -109,7 +123,7 @@ GalSim's exact but arbitrarily-scaled SED normalization vs `kl_pipe`'s flux
 convention -- absolute flux agreement is checked separately via the raw
 flux ratio).
 
-| Scene | Metric | Measured (2026-07-05, this gate, float64) | Frozen bound |
+| Scene | Metric | Measured (this gate, float64; slice scenes 2026-07-05, analytic 2026-07-06) | Frozen bound |
 |---|---|---|---|
 | Static (`vcirc=0`) | max\|diff\|/peak | 1.678% | < 5.0% |
 | Static | mean\|diff\|/peak | 0.060% | < 0.2% |
@@ -123,6 +137,12 @@ flux ratio).
 | Ramp-throughput static | max\|diff\|/peak | 1.715% | < 5.0% |
 | Ramp-throughput static | mean\|diff\|/peak | 0.061% | < 0.2% |
 | Ramp-throughput static | \|flux ratio - 1\| | 0.159% | < 0.5% |
+| Dynamic (`vcirc=200`, analytic) | max\|diff\|/peak | 0.206% | < 0.6% |
+| Dynamic (analytic) | mean\|diff\|/peak | 0.019% | < 0.06% |
+| Dynamic (analytic) | \|flux ratio - 1\| | 0.34-0.40% (shared floor) | < 0.5% |
+| Ramp-throughput (`vcirc=0`, analytic) | max\|diff\|/peak | 0.448% | < 1.5% |
+| Ramp-throughput (analytic) | mean\|diff\|/peak | 0.025% | < 0.1% |
+| Ramp-throughput (analytic) | \|flux ratio - 1\| | 0.34-0.40% (shared floor) | < 0.5% |
 
 **The two scenes are frozen at different bounds because they have
 different, independently-understood floors** -- this is not a case of
@@ -175,10 +195,3 @@ no additional disagreement of their own.
    window, not a pass/fail correctness gate) by
    `tests/test_pixel_readout.py::TestDefaultWavelengthGridDeviation`.
 
-## Superseded document
-
-The promotion plan and its measurement audit lived at
-`docs/validation/oracle_promotion_audit.md` in the primary checkout
-(untracked). That document should be deleted after this gate is merged --
-its content is now split between this file and
-`docs/validation/rendering_test_coverage.md`.

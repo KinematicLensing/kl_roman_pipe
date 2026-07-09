@@ -526,7 +526,7 @@ sampler_config = config.get_sampler_config()
 
 ### Key test utilities (`tests/test_utils.py`)
 
-**`TestConfig`** -- configuration container for parameter recovery tests. Holds output directories, tolerance tables (SNR-dependent relative + absolute), parameter bounds, and image parameters.
+**`TestConfig`** -- configuration container for parameter recovery tests. Holds output directories, parameter bounds, and image parameters. Its SNR-dependent tolerance tables are legacy (unconverted likelihood-slice tests only): converted slice tests now run noiseless with frozen curvature-sigma references, and optimizer recovery uses derived k-sigma bounds. Noise wiring is checked separately by `tests/test_noise_calibration.py`.
 
 ```python
 config = TestConfig(

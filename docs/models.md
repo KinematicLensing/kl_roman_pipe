@@ -22,7 +22,7 @@ The Spergel profile (Spergel 2010) generalizes the exponential via:
 
     I(r) = I_0 * (r/c)^nu * K_nu(r/c)
 
-where c = `int_rscale` (scale length) and K_nu is the modified Bessel function of the second kind. The analytic FT `(1+k²)^{-(1+nu)}` makes k-space rendering a one-exponent change from the exponential.
+where c = `rscale` (scale length) and K_nu is the modified Bessel function of the second kind. The analytic FT `(1+k²)^{-(1+nu)}` makes k-space rendering a one-exponent change from the exponential.
 
 | nu | Sersic n (approx) | Profile character |
 |---|---|---|
@@ -58,27 +58,32 @@ These use pre-computed lookup tables from minimizing the integrated radial profi
 | Factory name | Class | Params | Description |
 |---|---|---|---|
 | `centered` (default) | `CenteredVelocityModel` | 7 | Shared centroid with intensity |
-| `offset` | `OffsetVelocityModel` | 9 | Independent centroid (vel_x0, vel_y0) |
+| `offset` | `OffsetVelocityModel` | 9 | Independent centroid (`x0`, `y0`) |
 
-Both use the arctan rotation curve: `v_circ(r) = (2/pi) * vcirc * arctan(r / vel_rscale)`.
+Both use the arctan rotation curve: `v_circ(r) = (2/pi) * vcirc * arctan(r / rscale)`.
 
 ### Parameter names
 
 | Model | PARAMETER_NAMES |
 |---|---|
-| CenteredVelocity | `cosi, theta_int, g1, g2, v0, vcirc, vel_rscale` |
-| OffsetVelocity | `cosi, theta_int, g1, g2, v0, vcirc, vel_rscale, vel_x0, vel_y0` |
-| InclinedExponential | `cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0` |
-| InclinedSpergel | `cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, nu, int_x0, int_y0` |
-| InclinedDeVaucouleurs | `cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0` |
+| CenteredVelocity | `cosi, theta_int, g1, g2, v0, vcirc, rscale` |
+| OffsetVelocity | `cosi, theta_int, g1, g2, v0, vcirc, rscale, x0, y0` |
+| InclinedExponential | `cosi, theta_int, g1, g2, flux, rscale, h_over_r, x0, y0` |
+| InclinedSpergel | `cosi, theta_int, g1, g2, flux, rscale, h_over_r, nu, x0, y0` |
+| InclinedDeVaucouleurs | `cosi, theta_int, g1, g2, flux, rscale, h_over_r, x0, y0` |
 
 ### Naming conventions
 
+Class `PARAMETER_NAMES` tuples use bare names (no `vel_`/`int_` prefix). The
+namespace is carried by the dotted `SourceModel` keys the priors/theta use
+(`vel.rscale`, `F087.rscale`, `Halpha.x0`); shared geometric params stay
+top-level (no dot).
+
 | Pattern | Meaning |
 |---|---|
-| No prefix | Shared geometric: `cosi`, `theta_int`, `g1`, `g2` |
-| `vel_*` | Velocity-specific: `vel_rscale`, `vel_x0`, `vel_y0` |
-| `int_*` | Intensity-specific: `int_rscale`, `int_h_over_r`, `int_x0`, `int_y0` |
+| No prefix / top-level | Shared geometric: `cosi`, `theta_int`, `g1`, `g2` |
+| `vel.<param>` | Velocity component key: `vel.rscale`, `vel.x0`, `vel.y0` |
+| `<band>.<param>` / `<line>.<param>` | Intensity component key: `F087.rscale`, `F087.h_over_r`, `Halpha.x0` |
 | `flux` | Total integrated flux (intensity) |
 | `nu` | Spergel index (InclinedSpergelModel only) |
 
@@ -92,4 +97,4 @@ Both use the arctan rotation curve: `v_circ(r) = (2/pi) * vcirc * arctan(r / vel
 | Inclination | `cosi = cos(i)`: 0=edge-on, 1=face-on |
 | Shear | dimensionless g1, g2; \|g\| < 1 |
 | Flux | integrated (not surface brightness) |
-| Scale height | `int_h_over_r * int_rscale` (arcsec) |
+| Scale height | `h_over_r * rscale` (arcsec) |
