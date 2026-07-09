@@ -2880,6 +2880,10 @@ class CompositeIntensityModel(IntensityModel):
     # placeholder; set dynamically in __init__
     PARAMETER_NAMES = ()
 
+    # composites are linear in 'total_flux' (component fluxes = total_flux *
+    # fraction), not 'flux'; rendering factors this out. See IntensityModel.
+    amplitude_param = 'total_flux'
+
     _DEFAULT_SHARED = frozenset({'cosi', 'theta_int', 'g1', 'g2'})
 
     def __init__(

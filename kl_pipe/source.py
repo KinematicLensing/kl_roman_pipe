@@ -463,7 +463,7 @@ class SourceModel:
                 line.intensity_key if line.intensity_key is not None else line_key
             )
             I_line = _amplitude_scaled_eval(
-                f'int:{int_owner}', theta_int, int_model, 'flux'
+                f'int:{int_owner}', theta_int, int_model, int_model.amplitude_param
             )
 
             lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_los / _C_KMS)
@@ -512,7 +512,10 @@ class SourceModel:
                     line.continuum_key if line.continuum_key is not None else line_key
                 )
                 I_cont = _amplitude_scaled_eval(
-                    f'cont:{cont_owner}', cont_theta, cont_model, 'flux_per_nm'
+                    f'cont:{cont_owner}',
+                    cont_theta,
+                    cont_model,
+                    cont_model.amplitude_param,
                 )
                 I_cont_total = I_cont if I_cont_total is None else I_cont_total + I_cont
 
@@ -949,7 +952,7 @@ class SourceModel:
                 line.intensity_key if line.intensity_key is not None else line_key
             )
             I_line = _amplitude_scaled_eval(
-                f'int:{int_owner}', theta_int, int_model, 'flux'
+                f'int:{int_owner}', theta_int, int_model, int_model.amplitude_param
             )
 
             # Doppler-shifted observed wavelength per pixel (full LOS v_los
@@ -1001,7 +1004,10 @@ class SourceModel:
                     line.continuum_key if line.continuum_key is not None else line_key
                 )
                 I_cont = _amplitude_scaled_eval(
-                    f'cont:{cont_owner}', cont_theta, cont_model, 'flux_per_nm'
+                    f'cont:{cont_owner}',
+                    cont_theta,
+                    cont_model,
+                    cont_model.amplitude_param,
                 )
                 cube_fine = cube_fine + I_cont[:, :, None]
 
@@ -1109,12 +1115,12 @@ class SourceModel:
         """
         values = []
         for p in model.PARAMETER_NAMES:
-            # amplitude is per-line: 'flux' for emission-line intensity,
-            # 'flux_per_nm' for a ContinuumModel (its relabel of 'flux').
-            # Matching only 'flux' here silently read the OWNER's amplitude
-            # for continuum_key sharing (latent bug found 2026-07-04: no
-            # numerical continuum_key test existed).
-            if p in ('flux', 'flux_per_nm'):
+            # amplitude is per-line ('flux', 'flux_per_nm', or a composite's
+            # 'total_flux'); all other (shape) params come from the spatial
+            # owner. Resolving the amplitude name from the model avoids
+            # silently reading the OWNER's amplitude (a latent bug: matching a
+            # hardcoded {'flux','flux_per_nm'} set missed composite continua).
+            if p == model.amplitude_param:
                 values.append(_lookup_param(pars, own_prefix, p))
             else:
                 values.append(_lookup_param(pars, spatial_owner_prefix, p))

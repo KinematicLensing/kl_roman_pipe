@@ -2904,9 +2904,125 @@ class TestAnalytical:
             rel_max < 1e-4
         ), f"Continuum pedestal rel error {rel_max:.2e} exceeds 1e-4"
 
+    def test_composite_continuum_renders_and_is_linear(self):
+        """A composite (bulge+disk) continuum renders on both dispersal
+        paths and stays linear in its amplitude.
+
+        Regression: the continuum render factors out a scalar amplitude to
+        cache a unit-amplitude spatial eval, and previously hardcoded the
+        amplitude name 'flux_per_nm'. A composite continuum's amplitude is
+        'total_flux' (ContinuumModel only relabels a simple profile's
+        'flux'), so the lookup raised ValueError on both the analytic and
+        slice paths. The amplitude name is now resolved from the model via
+        IntensityModel.amplitude_param.
+        """
+        from kl_pipe.intensity import BulgeDiskModel
+
+        z = 1.0
+        source = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(), continuum=BulgeDiskModel()
+                ),
+            },
+        )
+        # composite continuum: shared bulge+disk morphology (bare keys),
+        # per-line amplitude under the Halpha.cont.* namespace.
+        base_pars = {
+            'cosi': 0.5,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'z': z,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.15,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
+            'bulge_frac': 0.3,
+            'disk_rscale': 0.15,
+            'disk_h_over_r': 0.1,
+            'disk_x0': 0.0,
+            'disk_y0': 0.0,
+            'bulge_hlr': 0.1,
+            'bulge_h_over_hlr': 0.3,
+            'bulge_x0': 0.0,
+            'bulge_y0': 0.0,
+        }
+        gp = GrismPars(
+            image_pars=_ANALYTICAL_IMAGE_PARS,
+            dispersion=1.1,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
+            dispersion_angle=0.0,
+        )
+        cp = gp.to_cube_pars(z=z)
+
+        def _obs(method):
+            return GrismObs(
+                grism_pars=gp,
+                cube_pars=cp,
+                psf_data=None,
+                render_config=RenderConfig(oversample=1, dispersal_method=method),
+                fine_image_pars=None,
+            )
+
+        totals = {}
+        for method in ('analytic', 'slice'):
+            obs = _obs(method)
+            img1 = np.array(
+                source.render_grism({**base_pars, 'Halpha.cont.total_flux': 20.0}, obs)
+            )
+            img2 = np.array(
+                source.render_grism({**base_pars, 'Halpha.cont.total_flux': 40.0}, obs)
+            )
+            img0 = np.array(
+                source.render_grism({**base_pars, 'Halpha.cont.total_flux': 0.0}, obs)
+            )
+            assert np.all(np.isfinite(img1)), f"{method}: non-finite render"
+            cont1 = (img1 - img0).sum()
+            cont2 = (img2 - img0).sum()
+            assert cont1 > 0, f"{method}: composite continuum contributes nothing"
+            ratio = cont2 / cont1
+            assert abs(ratio - 2.0) < 1e-5, (
+                f"{method}: composite continuum not linear in total_flux "
+                f"(doubling gave ratio {ratio:.6f}, expected 2.0)"
+            )
+            totals[method] = float(img1.sum())
+
+        # analytic is the n_lambda -> infinity limit of slice; total flux
+        # agrees (dispersal-shape accuracy is gated by the GalSim reference).
+        rel = abs(totals['analytic'] - totals['slice']) / abs(totals['slice'])
+        assert rel < 1e-3, f"analytic vs slice total flux disagree: rel {rel:.2e}"
+
 
 class TestContinuumModel:
     """ContinuumModel adapter: flux -> flux_per_nm relabel, wrapping, guard."""
+
+    def test_amplitude_param_resolves_by_model(self):
+        """amplitude_param names the linear amplitude the render factors out:
+        'flux' (simple profile), 'total_flux' (composite), relabeled to
+        'flux_per_nm' only when a ContinuumModel wraps a simple 'flux'
+        profile. A wrapped composite keeps 'total_flux' (no 'flux' to
+        relabel)."""
+        from kl_pipe.model import ContinuumModel
+        from kl_pipe.intensity import BulgeDiskModel
+
+        assert InclinedExponentialModel().amplitude_param == 'flux'
+        assert BulgeDiskModel().amplitude_param == 'total_flux'
+
+        cont_simple = ContinuumModel(InclinedExponentialModel())
+        assert cont_simple.amplitude_param == 'flux_per_nm'
+        assert cont_simple.amplitude_param in cont_simple.PARAMETER_NAMES
+
+        cont_comp = ContinuumModel(BulgeDiskModel())
+        assert cont_comp.amplitude_param == 'total_flux'
+        assert 'flux_per_nm' not in cont_comp.PARAMETER_NAMES
+        assert cont_comp.amplitude_param in cont_comp.PARAMETER_NAMES
 
     def test_relabels_flux_to_flux_per_nm(self):
         from kl_pipe.model import ContinuumModel
