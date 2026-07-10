@@ -25,7 +25,9 @@ PIPDIR="$WORK/klpipe_pipdeps"
 REPO="$STOCKYARD/repos/kl_roman_pipe"
 RESULTS="$STOCKYARD/klpipe_bench_results"
 
-module load tacc-apptainer
+# module init scripts are not 'set -u' clean (apptainer bash-completion
+# references unbound vars); disable nounset just around module.
+set +u; module load tacc-apptainer; set -u
 
 # 1. container: pull once, keep on $WORK. ~8.5 GB; multi-arch -> arm64 on Vista.
 mkdir -p "$CONTAINER_DIR"

@@ -36,7 +36,9 @@ RESULTS="$STOCKYARD/klpipe_bench_results"        # persistent results dir
 
 mkdir -p "$RESULTS"
 
-module load tacc-apptainer
+# module init scripts are not 'set -u' clean (apptainer bash-completion
+# references unbound vars); disable nounset just around module.
+set +u; module load tacc-apptainer; set -u
 
 # Stage the persistent $WORK master -> fast $SCRATCH (idempotent; single-job
 # safe). For a large job ARRAY, run stage_vista.sh ONCE before sbatch instead
