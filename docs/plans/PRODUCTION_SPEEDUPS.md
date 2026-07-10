@@ -985,7 +985,8 @@ only.
 
 ### Added 2026-07-09 (Vista GPU env reproducibility)
 
-- [ ] GPU env reproducibility gap (production, not benchmarking). The Vista
+- [ ] GPU env reproducibility gap (production, not benchmarking) -- issue #56.
+      The Vista
       GPU path deliberately does NOT use conda-lock: it runs the NGC JAX
       container (aarch64 CUDA jaxlib -- conda-forge has none, source build on
       GH200 fails) + a pip --target sidecar. Two un-pinned surfaces today:
