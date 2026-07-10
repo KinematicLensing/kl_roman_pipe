@@ -50,12 +50,15 @@ fi
 #    import succeeds the deps are already there. NEVER let pip touch jax/jaxlib
 #    (those come from the image) -- these three are pure-python / small builds.
 mkdir -p "$PIPDIR"
-if apptainer exec "$CONTAINER" python -c \
+# -B binds $PIPDIR into the container: pip --target writes from INSIDE the
+# container, so the target must be explicitly bind-mounted (don't rely on
+# TACC auto-bind).
+if apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" python -c \
      "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
   echo "[provision] installing numpyro astropy pyyaml -> $PIPDIR ..."
-  apptainer exec "$CONTAINER" \
+  apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" \
     python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml
 fi
 
