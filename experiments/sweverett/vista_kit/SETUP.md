@@ -113,24 +113,27 @@ The kit records the git commit in the output JSON -- keep the tree clean.
 ## 3. Install the missing python deps
 
 The NGC JAX container ships jax/jaxlib/CUDA + numpy/scipy. kl_pipe's
-inference path additionally needs: **numpyro, astropy, pyyaml**
-(scipy usually present -- verify). NOT needed: galsim (kit avoids it),
-matplotlib/emcee/nautilus/blackjax/arviz (lazy imports, unused here).
+inference path additionally needs: **numpyro, astropy, pyyaml, matplotlib**
+(scipy usually present -- verify; matplotlib IS needed -- bench section a
+imports it at module load). NOT needed: galsim (kit avoids it),
+emcee/nautilus/blackjax/arviz (lazy imports, unused here).
 
-Install into a bind-mounted target dir (containers are read-only;
-`--target` keeps it explicit and image-independent):
+Install into a bind-mounted target dir (containers are read-only; `-B` binds
+it in so pip --target can write from inside the container):
 
 ```bash
 mkdir -p $WORK/klpipe_pipdeps
-apptainer exec $WORK/containers/jax_26.06-py3.sif \
-  python -m pip install --target $WORK/klpipe_pipdeps \
-  numpyro astropy pyyaml
+apptainer exec -B $WORK/klpipe_pipdeps $WORK/containers/jax_26.06-py3.sif \
+  python -m pip install --no-cache-dir --target $WORK/klpipe_pipdeps \
+  numpyro astropy pyyaml matplotlib
+# numpyro drags in a jax/jaxlib/CUDA-plugin set that mismatches + shadows the
+# container's GPU jax; strip it so only the container's stack is used:
+rm -rf $WORK/klpipe_pipdeps/jax* $WORK/klpipe_pipdeps/nvidia*
 ```
 
 If scipy turns out to be missing from the image, add it to that list.
-Do NOT let pip touch jax/jaxlib (numpyro may try to upgrade jax -- if pip
-reports installing jax into the target dir, redo with
-`--no-deps numpyro` plus explicit `multipledispatch tqdm` and re-check).
+`provision_vista.sh` does all of the above (incl. the jax/CUDA strip)
+automatically.
 
 kl_pipe itself is used straight from the repo via
 `PYTHONPATH=$REPO:$PIPDIR` (no `pip install -e .` needed -- avoids

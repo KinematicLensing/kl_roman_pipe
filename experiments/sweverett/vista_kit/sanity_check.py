@@ -18,6 +18,7 @@ print("dtype:", jnp.zeros(1).dtype)
 import numpyro  # noqa: F401
 import astropy  # noqa: F401
 import yaml  # noqa: F401
+import matplotlib  # noqa: F401  -- bench section a imports it at module load
 import kl_pipe.source  # noqa: F401
 
 print("sanity OK")

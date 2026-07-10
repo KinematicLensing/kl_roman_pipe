@@ -54,12 +54,16 @@ mkdir -p "$PIPDIR"
 # container, so the target must be explicitly bind-mounted (don't rely on
 # TACC auto-bind).
 if apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" python -c \
-     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml" 2>/dev/null; then
+     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
-  echo "[provision] installing numpyro astropy pyyaml -> $PIPDIR ..."
+  echo "[provision] installing numpyro astropy pyyaml matplotlib -> $PIPDIR ..."
   apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" \
-    python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml
+    python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml matplotlib
+  # numpyro drags in a jax/jaxlib/CUDA-plugin set that mismatches (and would
+  # shadow) the container's GPU jax; strip it so only the container's is used.
+  echo "[provision] removing pip-dragged jax/CUDA from the sidecar ..."
+  rm -rf "$PIPDIR"/jax* "$PIPDIR"/nvidia*
 fi
 
 mkdir -p "$RESULTS"
