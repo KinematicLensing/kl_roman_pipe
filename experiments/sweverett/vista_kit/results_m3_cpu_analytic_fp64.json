@@ -1,0 +1,134 @@
+{
+  "sections": {
+    "a": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 3.9639126249821857
+          },
+          "timings": {
+            "primal": {
+              "compile_ms": 792.8123750025406,
+              "min_ms": 4.7456249594688416,
+              "mean_ms": 5.356511023516457,
+              "std_ms": 0.2530796725487959,
+              "nreps": 30
+            },
+            "grad": {
+              "compile_ms": 2156.42212505918,
+              "min_ms": 8.90612497460097,
+              "mean_ms": 9.494095800134044,
+              "std_ms": 0.4022977970806804,
+              "nreps": 30
+            },
+            "value_and_grad": {
+              "compile_ms": 1755.1602920284495,
+              "min_ms": 8.695084019564092,
+              "mean_ms": 9.686873639778545,
+              "std_ms": 0.3915533639661928,
+              "nreps": 30
+            },
+            "posterior_value": 35.7956975529872
+          }
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 1.418574000010267
+          },
+          "timings": {
+            "primal": {
+              "compile_ms": 7832.933999947272,
+              "min_ms": 47.04708303324878,
+              "mean_ms": 52.898734788565584,
+              "std_ms": 2.552801875555358,
+              "nreps": 30
+            },
+            "grad": {
+              "compile_ms": 27675.962625071406,
+              "min_ms": 71.22050004545599,
+              "mean_ms": 75.0866457897549,
+              "std_ms": 2.69416457914199,
+              "nreps": 30
+            },
+            "value_and_grad": {
+              "compile_ms": 22760.57916705031,
+              "min_ms": 59.77445899043232,
+              "mean_ms": 64.17425692779943,
+              "std_ms": 3.5677791692720824,
+              "nreps": 30
+            },
+            "posterior_value": -1697.004272806306
+          }
+        }
+      },
+      "wallclock_s": 75.98442579200491
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-09T20:27:23.288825",
+    "hostname": "nazara",
+    "platform": "macOS-14.4-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.13",
+    "jax": "0.7.1",
+    "jaxlib": "0.7.1",
+    "default_backend": "cpu",
+    "devices": [
+      "TFRT_CPU_0",
+      "TFRT_CPU_1"
+    ],
+    "local_device_count": 2,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "a",
+      "--configs",
+      "Q,P",
+      "--nreps",
+      "30",
+      "--x64",
+      "1",
+      "--force-no-galsim",
+      "--out",
+      "/private/tmp/claude-501/-Users-severett-repos-kl-roman-pipe/892b3604-3159-4e01-b964-41521256ae61/scratchpad/m3_cpu_analytic_fp64.json"
+    ],
+    "numpyro": "0.20.1",
+    "git_commit": "31bce06ec8b1d4095b1e77a5942092181729629d",
+    "git_branch": "se/speedups",
+    "galsim": "STUB (kit shim)"
+  },
+  "total_wallclock_s": 75.98587383294944
+}

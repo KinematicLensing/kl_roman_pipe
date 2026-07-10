@@ -16,6 +16,11 @@ One self-contained runner; writes one timestamped JSON. Sections:
      flagship grism + broadband renders) + posterior timing per precision
   f  environment record (always runs): jax/jaxlib/numpyro versions,
      devices, platform, hostname, git commit
+  g  galaxy-batching throughput (opt-in): vmap value_and_grad over N fits,
+     sweep N -> per-fit time + fits/s (the 30M-scale throughput lever;
+     batches theta only, a valid compute proxy pre-keystone-B)
+  h  Laplace preconditioner cost (opt-in): cold vs warm (one-time compile vs
+     per-galaxy compute) + n_starts sweep -- isolates the survey bottleneck
 
 Every section degrades gracefully: failures are caught and the traceback
 is recorded in the JSON under the section (never silently skipped);
@@ -59,7 +64,7 @@ def parse_args():
     p.add_argument(
         '--sections',
         default='a,b,c,d,e',
-        help='comma list from {a,b,c,d,e} (f always runs)',
+        help='comma list from {a,b,c,d,e,g,h} (f always runs; g,h opt-in)',
     )
     p.add_argument(
         '--configs', default='Q,P', help='comma list from {Q,P} for sections a/c'
@@ -84,6 +89,19 @@ def parse_args():
     p.add_argument('--mcmc-samples', type=int, default=200)
     p.add_argument('--mcmc-warmup', type=int, default=50)
     p.add_argument('--mcmc-chains', type=int, default=2)
+    p.add_argument(
+        '--batch-sizes',
+        default='1,2,4,8,16,32,64,128,256',
+        help='section g: galaxy-batch sizes (vmap width); stops on OOM',
+    )
+    p.add_argument(
+        '--batch-nreps', type=int, default=10, help='section g: reps per batch size'
+    )
+    p.add_argument(
+        '--precond-starts',
+        default='1,4',
+        help='section h: laplace_preconditioner n_starts values to sweep',
+    )
     p.add_argument(
         '--force-no-galsim',
         action='store_true',
@@ -656,6 +674,137 @@ def section_f(args, jax_notes):
 
 
 # ---------------------------------------------------------------------------
+# section g: galaxy-batching throughput
+# ---------------------------------------------------------------------------
+
+
+def _device_peak_mem_bytes():
+    """Peak device bytes in use, or None (CPU / unsupported)."""
+    import jax
+
+    try:
+        stats = jax.devices()[0].memory_stats()
+        return int(stats.get('peak_bytes_in_use')) if stats else None
+    except Exception:
+        return None
+
+
+def section_g(args):
+    """Galaxy-batching throughput: vmap value_and_grad over N independent fits.
+
+    THE 30M-scale lever. Section a showed single fits are launch/bandwidth-
+    bound (fp32/remat/2-chain all near-flat), so throughput must come from
+    packing many galaxies onto one device. This vmaps the posterior
+    value_and_grad over a batch of N theta and sweeps N, reporting per-fit
+    time and fits/s -- if batching amortizes overhead, per-fit time drops
+    with N until the device saturates (then it flattens / OOMs).
+
+    Batches over THETA only: data is baked into the likelihood closure
+    (pre-keystone-B), but the model render -- the dominant cost -- depends on
+    theta, so this is a valid compute-throughput proxy. True multi-DATA
+    batching (different galaxies' images) needs the data-as-argument refactor
+    (PRODUCTION_SPEEDUPS Tier B); this measures the compute ceiling that
+    refactor would unlock.
+    """
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+
+    sizes = [int(x) for x in args.batch_sizes.split(',')]
+    out = {}
+    for cfg in args.configs.split(','):
+        st = get_state(cfg)
+        task, theta0 = st['task'], st['theta']
+        batched_vg = jax.jit(jax.vmap(jax.value_and_grad(task._log_posterior_jittable)))
+        D = int(np.asarray(theta0).shape[0])
+        theta_np = np.asarray(theta0)
+        rows = {}
+        per_fit_n1 = None
+        for N in sizes:
+            rng = np.random.default_rng(1000 + N)
+            # tiny relative jitter -> N distinct, in-support thetas
+            batch = jnp.asarray(
+                theta_np[None, :] * (1.0 + 1e-3 * rng.standard_normal((N, D)))
+            )
+            try:
+                r, _ = time_fn(batched_vg, batch, nreps=args.batch_nreps)
+            except Exception as err:
+                rows[str(N)] = {'status': 'oom_or_error', 'error': repr(err)[:300]}
+                print(f'  [g:{cfg}] N={N}: OOM/error -> stop ({repr(err)[:70]})')
+                break
+            per_fit = r['min_ms'] / N
+            if N == 1:
+                per_fit_n1 = per_fit
+            speedup = (per_fit_n1 / per_fit) if per_fit_n1 else None
+            rows[str(N)] = {
+                'batch_min_ms': r['min_ms'],
+                'batch_mean_ms': r['mean_ms'],
+                'compile_ms': r['compile_ms'],
+                'per_fit_ms': per_fit,
+                'throughput_fits_per_s': N / (r['min_ms'] / 1e3),
+                'per_fit_speedup_vs_N1': speedup,
+                'peak_mem_bytes': _device_peak_mem_bytes(),
+            }
+            msg = (
+                f'  [g:{cfg}] N={N:5d}: batch {r["min_ms"]:8.2f} ms  '
+                f'per-fit {per_fit:8.4f} ms  {N / (r["min_ms"] / 1e3):9.1f} fits/s'
+            )
+            if speedup:
+                msg += f'  ({speedup:5.1f}x/N1)'
+            print(msg)
+        out[cfg] = {'meta': st['meta'], 'batch_nreps': args.batch_nreps, 'sizes': rows}
+    return out
+
+
+# ---------------------------------------------------------------------------
+# section h: Laplace preconditioner cost
+# ---------------------------------------------------------------------------
+
+
+def section_h(args):
+    """Laplace preconditioner cost + compile-vs-compute split.
+
+    Section b showed the Laplace preconditioner is ~13 s/fit -- a fixed
+    per-fit cost that dominates survey wallclock far more than the ~ms
+    gradient. This isolates it: COLD (first call, incl. JIT compile) vs WARM
+    (second call, same shapes, compile cached). warm ~= true per-galaxy
+    amortized cost; (cold - warm) ~= one-time compile that amortizes across
+    all galaxies of the same model shape. If warm is small, the 13 s is
+    mostly compile and NOT a per-fit survey bottleneck; if warm ~ cold, it is
+    a real per-galaxy cost and the top survey-scale target. Also sweeps
+    n_starts to expose the multi-start L-BFGS scaling.
+    """
+    import jax
+
+    out = {}
+    for cfg in args.configs.split(','):
+        st = get_state(cfg)
+        task = st['task']
+        # warm the posterior jit first so we isolate the preconditioner's own cost
+        vg = task.get_log_posterior_and_grad_fn()
+        jax.block_until_ready(vg(st['theta']))
+        by_starts = {}
+        for ns in [int(x) for x in args.precond_starts.split(',')]:
+            t0 = time.perf_counter()
+            task.laplace_preconditioner(n_starts=ns, seed=1)
+            cold = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            task.laplace_preconditioner(n_starts=ns, seed=2)
+            warm = time.perf_counter() - t0
+            by_starts[str(ns)] = {
+                'cold_s': cold,
+                'warm_s': warm,
+                'compile_s_est': cold - warm,
+            }
+            print(
+                f'  [h:{cfg}] n_starts={ns}: cold {cold:6.1f}s  warm {warm:6.1f}s'
+                f'  (compile~{cold - warm:.1f}s)'
+            )
+        out[cfg] = {'meta': st['meta'], 'n_starts': by_starts}
+    return out
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -665,6 +814,8 @@ SECTION_FNS = {
     'c': section_c,
     'd': section_d,
     'e': section_e,
+    'g': section_g,
+    'h': section_h,
 }
 
 
@@ -696,10 +847,10 @@ def main():
     requested = [s.strip() for s in args.sections.split(',') if s.strip()]
     unknown = [s for s in requested if s not in SECTION_FNS]
     if unknown:
-        raise ValueError(f'unknown sections {unknown}; valid: a,b,c,d,e')
+        raise ValueError(f'unknown sections {unknown}; valid: a,b,c,d,e,g,h')
 
     t_total = time.perf_counter()
-    for name in ('a', 'b', 'c', 'd', 'e'):
+    for name in ('a', 'b', 'c', 'd', 'e', 'g', 'h'):
         if name not in requested:
             results['sections'][name] = {
                 'status': 'skipped',
