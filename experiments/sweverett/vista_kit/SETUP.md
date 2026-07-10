@@ -17,6 +17,7 @@ galsim-blocked "Vista simulation" pass.
 | `check_parity.py` | local-only shim-vs-galsim validation (already PASSED) |
 | `run_vista.slurm` | SLURM batch template (fp64 pass + fp32 pass) |
 | `provision_vista.sh` | idempotent one-shot: pull container + pip sidecar to persistent $WORK |
+| `stage_vista.sh` | mirror the $WORK master to fast per-machine $SCRATCH (run before big campaigns) |
 | `smoke_full.json` | local CPU reference run (M3 Max, all sections, galsim blocked, --nreps 3) |
 
 ## 0. Quick path (recommended)
@@ -34,11 +35,20 @@ session) and it skips whatever is already in place. Then jump to step 4
 (GPU sanity on a gh-dev node) or step 5 (sbatch). Steps 1 and 3 below
 document what the script does, by hand.
 
-Persistence note: durable artifacts (container, pip deps) live on `$WORK`
-(= `$STOCKYARD/vista`), NOT `$SCRATCH`. TACC purges `$SCRATCH` files not
-accessed for ~10 days; an 8.5 GB image on scratch would need re-pulling.
-`$WORK` persists (quota only). The repo (step 2) and results already live
-on persistent `$STOCKYARD`.
+Storage model (two tiers):
+- **Master on `$WORK`** (persistent, = `$STOCKYARD/vista`): `provision_vista.sh`
+  pulls the container + pip deps here once. `$WORK` survives `$SCRATCH`
+  purges (~10 days no-access), so you never re-pull the 8.5 GB image.
+- **Hot copy on `$SCRATCH`** (fast, per-machine): jobs read from here.
+  `stage_vista.sh` mirrors master -> `$SCRATCH`; `run_vista.slurm` auto-stages
+  for a single job.
+
+Why the hot copy: the `.sif` is read-only, so concurrent reads never clobber
+-- but `$WORK`/Stockyard is a single filesystem shared across all TACC
+machines and is not built for job I/O. At hundreds/thousands of concurrent
+fits, read from `$SCRATCH`, not `$WORK`. **Before a large job array, run
+`bash stage_vista.sh` ONCE** (don't let each array task copy the image).
+The repo (step 2) and results live on persistent `$STOCKYARD`.
 
 Why galsim-free: NGC JAX containers do not ship galsim and building it on
 aarch64 is exactly the kind of yak-shave this kit avoids. The kit replaces

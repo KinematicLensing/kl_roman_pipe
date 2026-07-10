@@ -29,13 +29,19 @@ set -euo pipefail
 #-----------------------------------------------------------------------------
 REPO="$STOCKYARD/repos/kl_roman_pipe"            # repo clone location on Vista
 KIT="$REPO/experiments/sweverett/vista_kit"
-CONTAINER="$WORK/containers/jax_26.06-py3.sif"   # persistent (not $SCRATCH); provision_vista.sh pulls it
+TAG="26.06-py3"                                  # NGC JAX tag (must match provision_vista.sh)
+CONTAINER="$SCRATCH/containers/jax_${TAG}.sif"   # HOT copy on fast per-machine $SCRATCH (staged from $WORK master)
+PIPDIR="$SCRATCH/klpipe_pipdeps"                 # HOT copy of the pip sidecar
 RESULTS="$STOCKYARD/klpipe_bench_results"        # persistent results dir
-PIPDIR="$WORK/klpipe_pipdeps"                     # persistent pip --target dir; provision_vista.sh fills it
 
 mkdir -p "$RESULTS"
 
 module load tacc-apptainer
+
+# Stage the persistent $WORK master -> fast $SCRATCH (idempotent; single-job
+# safe). For a large job ARRAY, run stage_vista.sh ONCE before sbatch instead
+# of relying on this line, so array tasks don't each trigger a copy.
+bash "$KIT/stage_vista.sh" "$TAG"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 HOSTTAG=$(hostname -s)
