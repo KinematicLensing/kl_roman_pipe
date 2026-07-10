@@ -20,6 +20,11 @@
 #-----------------------------------------------------------------------------
 set -euo pipefail
 
+# apptainer is a no-op on Vista login nodes -- fail loudly (run inside idev).
+case "$(hostname -s)" in
+  login*) echo "ERROR: on login node $(hostname -s) -- apptainer no-ops here. Run inside 'idev -p gh-dev -N 1 -n 1 -t 01:00:00'." >&2; exit 1 ;;
+esac
+
 TAG="${1:-26.06-py3}"                        # NGC JAX tag (nvcr.io/nvidia/jax)
 CONTAINER_DIR="$WORK/containers"
 CONTAINER="$CONTAINER_DIR/jax_${TAG}.sif"

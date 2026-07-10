@@ -13,6 +13,11 @@
 # Env overrides: KLPIPE_TAG (container tag, default 26.06-py3).
 #-----------------------------------------------------------------------------
 set -euo pipefail
+# apptainer is a no-op on Vista login nodes -- fail loudly instead of silently
+# doing nothing (run this inside idev or sbatch).
+case "$(hostname -s)" in
+  login*) echo "ERROR: on login node $(hostname -s) -- apptainer no-ops here. Use 'idev -p gh-dev ...' or sbatch." >&2; exit 1 ;;
+esac
 # module init scripts are not 'set -u' clean; disable nounset around module.
 set +u; module load tacc-apptainer; set -u
 

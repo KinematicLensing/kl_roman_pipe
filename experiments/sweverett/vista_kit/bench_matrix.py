@@ -21,6 +21,8 @@ One self-contained runner; writes one timestamped JSON. Sections:
      batches theta only, a valid compute proxy pre-keystone-B)
   h  Laplace preconditioner cost (opt-in): cold vs warm (one-time compile vs
      per-galaxy compute) + n_starts sweep -- isolates the survey bottleneck
+  i  full-fit throughput (opt-in): end-to-end precond + NUTS at realistic
+     sample counts -> fits/node-hour + min-ESS/s (paper-planning number)
 
 Every section degrades gracefully: failures are caught and the traceback
 is recorded in the JSON under the section (never silently skipped);
@@ -102,6 +104,13 @@ def parse_args():
         default='1,4',
         help='section h: laplace_preconditioner n_starts values to sweep',
     )
+    p.add_argument(
+        '--fit-samples', type=int, default=1000, help='section i: NUTS samples/chain'
+    )
+    p.add_argument(
+        '--fit-warmup', type=int, default=500, help='section i: NUTS warmup/chain'
+    )
+    p.add_argument('--fit-chains', type=int, default=4, help='section i: NUTS chains')
     p.add_argument(
         '--force-no-galsim',
         action='store_true',
@@ -805,6 +814,74 @@ def section_h(args):
 
 
 # ---------------------------------------------------------------------------
+# section i: full-fit throughput (paper-planning number)
+# ---------------------------------------------------------------------------
+
+
+def section_i(args):
+    """End-to-end full fit wallclock -> fits/node-hour (serial baseline).
+
+    The paper-planning number: one production fit = Laplace precond + NUTS at
+    realistic sample counts. At a few thousand fits for the first paper this
+    serial throughput already sets the node-hour budget (concurrency / vmap-
+    over-galaxies is a further multiplier -- see section g for the compute
+    ceiling it would unlock, which needs the data-as-argument refactor).
+    Reports wallclock, fits/node-hour, and (if available) min-ESS/s, the
+    honest efficiency metric since sample quality varies.
+    """
+    import time
+
+    from kl_pipe.sampling import NumpyroSamplerConfig, build_sampler
+
+    out = {}
+    for cfg in args.configs.split(','):
+        st = get_state(cfg)
+        task = st['task']
+        config = NumpyroSamplerConfig(
+            n_samples=args.fit_samples,
+            n_warmup=args.fit_warmup,
+            n_chains=args.fit_chains,
+            seed=42,
+            progress=False,
+            reparam_strategy='prior',
+            dense_mass=True,
+            precondition='laplace',
+            target_accept_prob=0.8,
+            max_tree_depth=8,
+            init_strategy='prior',
+        )
+        sampler = build_sampler('numpyro', task, config)
+        t0 = time.perf_counter()
+        res = sampler.run()  # includes the Laplace preconditioner build
+        wall = time.perf_counter() - t0
+        rhat = res.diagnostics['r_hat']
+        row = {
+            'meta': st['meta'],
+            'n_samples': args.fit_samples,
+            'n_warmup': args.fit_warmup,
+            'n_chains': args.fit_chains,
+            'wallclock_s': wall,
+            'fits_per_node_hour_serial': 3600.0 / wall,
+            'max_rhat': float(max(rhat.values())),
+            'n_divergences': int(res.diagnostics['n_divergences']),
+        }
+        try:
+            ess = res.diagnostics.get('ess')
+            if ess is not None:
+                mn = float(min(ess.values()))
+                row['min_ess'] = mn
+                row['min_ess_per_s'] = mn / wall
+        except Exception:
+            pass
+        out[cfg] = row
+        print(
+            f'  [i:{cfg}] full fit {wall:7.1f}s -> {3600.0 / wall:7.1f} fits/node-hr'
+            f'  (max Rhat {row["max_rhat"]:.3f}, {row["n_divergences"]} div)'
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -816,6 +893,7 @@ SECTION_FNS = {
     'e': section_e,
     'g': section_g,
     'h': section_h,
+    'i': section_i,
 }
 
 
@@ -847,10 +925,10 @@ def main():
     requested = [s.strip() for s in args.sections.split(',') if s.strip()]
     unknown = [s for s in requested if s not in SECTION_FNS]
     if unknown:
-        raise ValueError(f'unknown sections {unknown}; valid: a,b,c,d,e,g,h')
+        raise ValueError(f'unknown sections {unknown}; valid: a,b,c,d,e,g,h,i')
 
     t_total = time.perf_counter()
-    for name in ('a', 'b', 'c', 'd', 'e', 'g', 'h'):
+    for name in ('a', 'b', 'c', 'd', 'e', 'g', 'h', 'i'):
         if name not in requested:
             results['sections'][name] = {
                 'status': 'skipped',
