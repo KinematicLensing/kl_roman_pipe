@@ -18,30 +18,32 @@ galsim-blocked "Vista simulation" pass.
 | `run_vista.slurm` | SLURM batch template (fp64 pass + fp32 pass) |
 | `provision_vista.sh` | idempotent one-shot: pull container + pip sidecar to persistent $WORK |
 | `stage_vista.sh` | mirror the $WORK master to fast per-machine $SCRATCH (run before big campaigns) |
+| `klrun.sh` | one-command wrapper: run any `python ...` inside the container (compute node only) |
+| `sanity_check.py` | GPU device + import check (run via `bash klrun.sh python sanity_check.py`) |
 | `smoke_full.json` | local CPU reference run (M3 Max, all sections, galsim blocked, --nreps 3) |
 
 ## 0. Quick path (recommended)
 
-Steps 1 + 3 are automated. After cloning the repo (step 2), run once on a
-login node:
+Steps 1 + 3 are automated. After cloning the repo (step 2), grab a compute
+node and run once THERE:
 
 ```bash
+idev -p gh-dev -N 1 -n 1 -t 01:00:00     # interactive compute node
 cd $STOCKYARD/repos/kl_roman_pipe/experiments/sweverett/vista_kit
-bash provision_vista.sh          # pulls the container + pip deps to $WORK
+bash provision_vista.sh                   # pull container + pip deps to $WORK
+bash klrun.sh python sanity_check.py      # GPU device + import check
 ```
 
-It is idempotent: re-run any time (e.g. after a $SCRATCH purge or in a new
-session) and it skips whatever is already in place. Then jump to step 4
-(GPU sanity, in an idev session) or step 5 (sbatch). Steps 1 and 3 below
-document what the script does, by hand.
+`provision_vista.sh` is idempotent: re-run any time (e.g. after a $SCRATCH
+purge or new session) and it skips whatever is already in place. Steps 1 + 3
+below document what it does, by hand.
 
-**Login-node policy:** only the internet-bound downloads (`apptainer pull`,
-`pip install`) run on the login node -- a one-time, few-minute download is
-the tolerated exception (compute nodes have no outbound network). Every
-container *execution* (the sanity check, micro-run, full matrix) must run on
-a compute node via `idev` or `sbatch`. TACC prints a "do not run Apptainer on
-the login nodes" banner whenever the module is used; for the pull/install
-that banner is expected and harmless.
+**CRITICAL -- apptainer is a NO-OP on Vista login nodes.** It prints a "do not
+run Apptainer on the login nodes" banner and exits WITHOUT executing, so a
+login-node `provision_vista.sh` silently pulls/installs nothing yet reports
+success. Everything apptainer -- pull, pip install, and all execution -- must
+run on a compute node via `idev` or `sbatch`. (`git clone`/`pull` in step 2
+is fine on the login node; that's not apptainer.)
 
 Storage model (two tiers):
 - **Master on `$WORK`** (persistent, = `$STOCKYARD/vista`): `provision_vista.sh`
@@ -68,7 +70,7 @@ broadband 2e-16, log-posterior agreement 4e-5 absolute.
 ## 1. Get the container on Vista
 
 ```bash
-# login node
+# on a COMPUTE node (idev), NOT the login node -- apptainer no-ops on login
 module load tacc-apptainer
 mkdir -p $WORK/containers && cd $WORK/containers
 apptainer pull jax_26.06-py3.sif docker://nvcr.io/nvidia/jax:26.06-py3

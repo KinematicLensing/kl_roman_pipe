@@ -11,10 +11,10 @@
 # ~10 days of no access). Safe to re-run any time: each step is skipped when
 # already satisfied, so this doubles as "repair after a purge / new session".
 #
-# Usage: run on a Vista LOGIN node -- the pull + pip install are internet-bound
-# (compute nodes have no outbound network), and a one-time download is the
-# tolerated login-node exception. All container EXECUTION (sanity, benchmarks)
-# must go through idev/sbatch, NOT the login node.
+# Usage: run INSIDE an idev session (compute node). Apptainer is a NO-OP on
+# Vista LOGIN nodes -- it prints a "do not run on login nodes" banner and does
+# nothing, so a login-node run silently pulls/installs NOTHING (and reports
+# false success). Grab a node first: idev -p gh-dev -N 1 -n 1 -t 01:00:00
 #   bash provision_vista.sh              # default tag 26.06-py3
 #   bash provision_vista.sh 26.06-py3    # pin a specific NGC JAX tag
 #-----------------------------------------------------------------------------
