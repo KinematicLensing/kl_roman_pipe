@@ -11,8 +11,10 @@
 # ~10 days of no access). Safe to re-run any time: each step is skipped when
 # already satisfied, so this doubles as "repair after a purge / new session".
 #
-# Usage:
-#   module-free; run on a Vista login node.
+# Usage: run on a Vista LOGIN node -- the pull + pip install are internet-bound
+# (compute nodes have no outbound network), and a one-time download is the
+# tolerated login-node exception. All container EXECUTION (sanity, benchmarks)
+# must go through idev/sbatch, NOT the login node.
 #   bash provision_vista.sh              # default tag 26.06-py3
 #   bash provision_vista.sh 26.06-py3    # pin a specific NGC JAX tag
 #-----------------------------------------------------------------------------
@@ -53,13 +55,10 @@ fi
 
 mkdir -p "$RESULTS"
 
-# 3. import-only sanity (no GPU needed here; run the --nv device check on a
-#    gh-dev node -- see SETUP.md step 4).
-echo "[provision] import sanity ..."
-apptainer exec \
-  --bind "$REPO:$REPO" \
-  --env "PYTHONPATH=$REPO:$PIPDIR" \
-  "$CONTAINER" python -c "import numpyro, astropy, yaml, kl_pipe.source; print('imports OK')"
+# NOTE: no sanity 'apptainer exec' here -- running containers (compute) on
+# login nodes is against TACC policy. Only the internet-bound downloads above
+# (pull + pip) run on the login node. Do the GPU device + import checks inside
+# an idev session or the batch job (SETUP.md step 4).
 
 cat <<EOF
 
@@ -69,9 +68,10 @@ cat <<EOF
   REPO      = $REPO
   RESULTS   = $RESULTS
 
-Next: on a gh-dev node, run the GPU device check (SETUP.md step 4) then the
-micro-run, or 'sbatch run_vista.slurm' for the full matrix. For interactive
-runs, this shell function wraps the exec incantation:
+Next: grab a compute node -- 'idev -p gh-dev -N 1 -n 1 -t 01:00:00' -- then run
+the GPU device check (SETUP.md step 4) + micro-run THERE, or 'sbatch
+run_vista.slurm' for the full matrix. Do NOT run the container on the login
+node. For interactive runs (on a compute node), this wraps the exec incantation:
 
   klrun() { apptainer exec --nv \\
     --bind $REPO:$REPO --bind $RESULTS:$RESULTS --bind $PIPDIR:$PIPDIR \\

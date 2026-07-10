@@ -32,8 +32,16 @@ bash provision_vista.sh          # pulls the container + pip deps to $WORK
 
 It is idempotent: re-run any time (e.g. after a $SCRATCH purge or in a new
 session) and it skips whatever is already in place. Then jump to step 4
-(GPU sanity on a gh-dev node) or step 5 (sbatch). Steps 1 and 3 below
+(GPU sanity, in an idev session) or step 5 (sbatch). Steps 1 and 3 below
 document what the script does, by hand.
+
+**Login-node policy:** only the internet-bound downloads (`apptainer pull`,
+`pip install`) run on the login node -- a one-time, few-minute download is
+the tolerated exception (compute nodes have no outbound network). Every
+container *execution* (the sanity check, micro-run, full matrix) must run on
+a compute node via `idev` or `sbatch`. TACC prints a "do not run Apptainer on
+the login nodes" banner whenever the module is used; for the pull/install
+that banner is expected and harmless.
 
 Storage model (two tiers):
 - **Master on `$WORK`** (persistent, = `$STOCKYARD/vista`): `provision_vista.sh`
@@ -125,7 +133,16 @@ kl_pipe itself is used straight from the repo via
 pulling the full dependency tree; the kit only imports the inference
 modules).
 
-## 4. Sanity checks (dev node or first job step)
+## 4. Sanity checks (compute node -- idev, NOT the login node)
+
+Grab an interactive GPU node first (container execution is banned on login
+nodes):
+
+```bash
+idev -p gh-dev -N 1 -n 1 -t 01:00:00
+```
+
+Then, on the compute node:
 
 ```bash
 apptainer exec --nv --bind $STOCKYARD/repos/kl_roman_pipe:$STOCKYARD/repos/kl_roman_pipe \
