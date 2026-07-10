@@ -16,7 +16,29 @@ galsim-blocked "Vista simulation" pass.
 | `stream_fusion_port.py` | BCOO/gather/scan dispersion variants (ported from stream_fusion_probe.py) |
 | `check_parity.py` | local-only shim-vs-galsim validation (already PASSED) |
 | `run_vista.slurm` | SLURM batch template (fp64 pass + fp32 pass) |
+| `provision_vista.sh` | idempotent one-shot: pull container + pip sidecar to persistent $WORK |
 | `smoke_full.json` | local CPU reference run (M3 Max, all sections, galsim blocked, --nreps 3) |
+
+## 0. Quick path (recommended)
+
+Steps 1 + 3 are automated. After cloning the repo (step 2), run once on a
+login node:
+
+```bash
+cd $STOCKYARD/repos/kl_roman_pipe/experiments/sweverett/vista_kit
+bash provision_vista.sh          # pulls the container + pip deps to $WORK
+```
+
+It is idempotent: re-run any time (e.g. after a $SCRATCH purge or in a new
+session) and it skips whatever is already in place. Then jump to step 4
+(GPU sanity on a gh-dev node) or step 5 (sbatch). Steps 1 and 3 below
+document what the script does, by hand.
+
+Persistence note: durable artifacts (container, pip deps) live on `$WORK`
+(= `$STOCKYARD/vista`), NOT `$SCRATCH`. TACC purges `$SCRATCH` files not
+accessed for ~10 days; an 8.5 GB image on scratch would need re-pulling.
+`$WORK` persists (quota only). The repo (step 2) and results already live
+on persistent `$STOCKYARD`.
 
 Why galsim-free: NGC JAX containers do not ship galsim and building it on
 aarch64 is exactly the kind of yak-shave this kit avoids. The kit replaces
@@ -30,15 +52,16 @@ broadband 2e-16, log-posterior agreement 4e-5 absolute.
 ```bash
 # login node
 module load tacc-apptainer
-mkdir -p $SCRATCH/containers && cd $SCRATCH/containers
-apptainer pull jax_25.04-py3.sif docker://nvcr.io/nvidia/jax:25.04-py3
+mkdir -p $WORK/containers && cd $WORK/containers
+apptainer pull jax_26.06-py3.sif docker://nvcr.io/nvidia/jax:26.06-py3
 ```
 
-`25.04-py3` is a placeholder for "recent": check
+`26.06-py3` is "recent as of this writing": check
 https://catalog.ngc.nvidia.com/orgs/nvidia/containers/jax/tags for the
 latest tag before pulling (newer = newer jax/CUDA; any 24.10+ tag is fine
-for this kit). The image is multi-arch; apptainer resolves the arm64
-variant on Vista automatically. Pull can take a while; do it once.
+for this kit). The image is multi-arch (~8.5 GB); apptainer resolves the
+arm64 variant on Vista automatically. Pull once; keep it on `$WORK` so a
+`$SCRATCH` purge never forces a re-pull.
 
 NEVER build jaxlib from source on the GH200 (known failure history --
 see docs/plans/PRODUCTION_SPEEDUPS.md Sec 3.1). If the container route
@@ -70,9 +93,9 @@ Install into a bind-mounted target dir (containers are read-only;
 `--target` keeps it explicit and image-independent):
 
 ```bash
-mkdir -p $SCRATCH/klpipe_pipdeps
-apptainer exec $SCRATCH/containers/jax_25.04-py3.sif \
-  python -m pip install --target $SCRATCH/klpipe_pipdeps \
+mkdir -p $WORK/klpipe_pipdeps
+apptainer exec $WORK/containers/jax_26.06-py3.sif \
+  python -m pip install --target $WORK/klpipe_pipdeps \
   numpyro astropy pyyaml
 ```
 
@@ -90,8 +113,8 @@ modules).
 
 ```bash
 apptainer exec --nv --bind $STOCKYARD/repos/kl_roman_pipe:$STOCKYARD/repos/kl_roman_pipe \
-  --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$SCRATCH/klpipe_pipdeps \
-  $SCRATCH/containers/jax_25.04-py3.sif python - <<'EOF'
+  --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \
+  $WORK/containers/jax_26.06-py3.sif python - <<'EOF'
 import jax
 print(jax.devices())              # expect [CudaDevice(id=0)]
 jax.config.update('jax_enable_x64', True)
@@ -114,9 +137,11 @@ apptainer exec --nv ... python bench_matrix.py --sections a --configs Q --nreps 
 
 ```bash
 cd $STOCKYARD/repos/kl_roman_pipe/experiments/sweverett/vista_kit
-# edit run_vista.slurm: TODO(user) markers (partition, allocation, paths)
-sbatch run_vista.slurm
+sbatch run_vista.slurm   # pre-filled: gh-dev, -A JPL-SPHEREx, $WORK container/pipdeps, $STOCKYARD paths
 ```
+
+If you pulled a container tag other than `26.06-py3`, update `CONTAINER=`
+in `run_vista.slurm` (and re-run `provision_vista.sh <tag>`) to match.
 
 Two passes: fp64 (GH200 fp64 is strong; this is the apples-to-apples vs
 the M3/TACC-CPU numbers) then fp32 (the GPU-throughput headline mode).

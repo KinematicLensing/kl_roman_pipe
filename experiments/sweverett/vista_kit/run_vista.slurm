@@ -29,9 +29,9 @@ set -euo pipefail
 #-----------------------------------------------------------------------------
 REPO="$STOCKYARD/repos/kl_roman_pipe"            # repo clone location on Vista
 KIT="$REPO/experiments/sweverett/vista_kit"
-CONTAINER="$SCRATCH/containers/jax_25.04-py3.sif" # see SETUP.md step 1 (apptainer pull; check NGC for the latest tag)
+CONTAINER="$WORK/containers/jax_26.06-py3.sif"   # persistent (not $SCRATCH); provision_vista.sh pulls it
 RESULTS="$STOCKYARD/klpipe_bench_results"        # persistent results dir
-PIPDIR="$SCRATCH/klpipe_pipdeps"                 # pip --target dir from SETUP.md step 3
+PIPDIR="$WORK/klpipe_pipdeps"                     # persistent pip --target dir; provision_vista.sh fills it
 
 mkdir -p "$RESULTS"
 
