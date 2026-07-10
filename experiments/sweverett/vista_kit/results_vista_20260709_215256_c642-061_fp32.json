@@ -1,0 +1,96 @@
+{
+  "sections": {
+    "a": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 712, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 238, in section_a\n    st = get_state(cfg)\n         ^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 190, in get_state\n    source, priors, task, obs_f087, obs_grism, true = tv.build_flagship_task()\n                                                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/tasks_vista.py\", line 226, in build_flagship_task\n    obs_F087 = _make_band_obs(source, true, psf, image_pars, 'F087', seed=42)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/tasks_vista.py\", line 180, in _make_band_obs\n    obs_clean = build_image_obs(\n                ^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/kl_pipe/observation.py\", line 706, in build_image_obs\n    kspace_psf_fft = precompute_psf_kspace_fft(\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/psf_numpy.py\", line 288, in precompute_psf_kspace_fft\n    return build_gaussian_kspace_psf_fft(gsobj, padded_shape, pixel_scale)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/psf_numpy.py\", line 235, in build_gaussian_kspace_psf_fft\n    return jnp.asarray(fft_ordered)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/numpy/array_constructors.py\", line 452, in asarray\n    return array(a, dtype=dtype, copy=bool(copy), order=order, device=device,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/numpy/array_constructors.py\", line 207, in array\n    return lax.stage(object)\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 1604, in stage\n    return stage_p.bind(x)\n           ^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 641, in bind\n    return self.bind_with_trace(prev_trace, args, avals, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5311, in _stage_bind_with_trace\n    return trace.stage_value(args[0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1210, in stage_value\n    return self.process_primitive(stage_p, [val], {})\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1221, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5301, in _stage_impl\n    return dispatch.apply_primitive(stage_p, x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/dispatch.py\", line 89, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: CUDA error: Error recording CUDA event: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n",
+      "wallclock_s": 2.138136377092451
+    },
+    "b": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 712, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 267, in section_b\n    st = get_state('Q')\n         ^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 190, in get_state\n    source, priors, task, obs_f087, obs_grism, true = tv.build_flagship_task()\n                                                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/tasks_vista.py\", line 217, in build_flagship_task\n    broadband_models={'F087': InclinedExponentialModel()},\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/kl_pipe/intensity.py\", line 1303, in __init__\n    _init_los_quadrature(self, n_quad, los_quadrature)\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/kl_pipe/intensity.py\", line 1042, in _init_los_quadrature\n    model._u_nodes = jnp.array(np.arctanh(t_nodes))\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/numpy/array_constructors.py\", line 207, in array\n    return lax.stage(object)\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 1604, in stage\n    return stage_p.bind(x)\n           ^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 641, in bind\n    return self.bind_with_trace(prev_trace, args, avals, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5311, in _stage_bind_with_trace\n    return trace.stage_value(args[0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1210, in stage_value\n    return self.process_primitive(stage_p, [val], {})\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1221, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5301, in _stage_impl\n    return dispatch.apply_primitive(stage_p, x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/dispatch.py\", line 89, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: CUDA error: Error recording CUDA event: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n",
+      "wallclock_s": 0.0038490169681608677
+    },
+    "c": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 712, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 375, in section_c\n    st = get_state(cfg)\n         ^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 190, in get_state\n    source, priors, task, obs_f087, obs_grism, true = tv.build_flagship_task()\n                                                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/tasks_vista.py\", line 217, in build_flagship_task\n    broadband_models={'F087': InclinedExponentialModel()},\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/kl_pipe/intensity.py\", line 1303, in __init__\n    _init_los_quadrature(self, n_quad, los_quadrature)\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/kl_pipe/intensity.py\", line 1042, in _init_los_quadrature\n    model._u_nodes = jnp.array(np.arctanh(t_nodes))\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/numpy/array_constructors.py\", line 207, in array\n    return lax.stage(object)\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 1604, in stage\n    return stage_p.bind(x)\n           ^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 641, in bind\n    return self.bind_with_trace(prev_trace, args, avals, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5311, in _stage_bind_with_trace\n    return trace.stage_value(args[0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1210, in stage_value\n    return self.process_primitive(stage_p, [val], {})\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1221, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5301, in _stage_impl\n    return dispatch.apply_primitive(stage_p, x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/dispatch.py\", line 89, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: CUDA error: Error recording CUDA event: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n",
+      "wallclock_s": 0.003751929965801537
+    },
+    "d": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 712, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 428, in section_d\n    edges, dl, I, lam, sig, ct = sfp.build_problem()\n                                 ^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/stream_fusion_port.py\", line 158, in build_problem\n    edges = jnp.asarray(lam0 + dl * (np.arange(nlam + 1) - nlam / 2))\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/numpy/array_constructors.py\", line 452, in asarray\n    return array(a, dtype=dtype, copy=bool(copy), order=order, device=device,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/numpy/array_constructors.py\", line 207, in array\n    return lax.stage(object)\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 1604, in stage\n    return stage_p.bind(x)\n           ^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 641, in bind\n    return self.bind_with_trace(prev_trace, args, avals, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5311, in _stage_bind_with_trace\n    return trace.stage_value(args[0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1210, in stage_value\n    return self.process_primitive(stage_p, [val], {})\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/core.py\", line 1221, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/lax/lax.py\", line 5301, in _stage_impl\n    return dispatch.apply_primitive(stage_p, x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/dispatch.py\", line 89, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: CUDA error: Error recording CUDA event: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n",
+      "wallclock_s": 0.016830679029226303
+    },
+    "e": {
+      "status": "ok",
+      "result": {
+        "children": {
+          "fp64": {
+            "x64": true,
+            "grism_dtype": "float64",
+            "default_dtype": "float64",
+            "posterior_value": 35.79569755298868,
+            "vg_min_ms": 0.5859779193997383,
+            "vg_mean_ms": 0.5928004587379595,
+            "vg_compile_ms": 3988.2110609905794,
+            "nreps": 30,
+            "status": "ok"
+          },
+          "fp32": {
+            "x64": false,
+            "grism_dtype": "float32",
+            "default_dtype": "float32",
+            "posterior_value": 35.79410171508789,
+            "vg_min_ms": 0.48847496509552,
+            "vg_mean_ms": 0.49628406607856357,
+            "vg_compile_ms": 3785.5884180171415,
+            "nreps": 30,
+            "status": "ok"
+          }
+        },
+        "grism_max_abs_diff_over_peak": 2.1595828427089236e-06,
+        "grism_rms_diff_over_peak": 3.483720615072694e-07,
+        "broadband_max_abs_diff_over_peak": 3.361274369922186e-07,
+        "broadband_rms_diff_over_peak": 3.2149194535525895e-08,
+        "vg_speedup_fp32_over_fp64": 1.1996068606814922,
+        "posterior_value_fp64": 35.79569755298868,
+        "posterior_value_fp32": 35.79410171508789
+      },
+      "wallclock_s": 33.84160387900192
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-09T22:02:22.922853",
+    "hostname": "c642-061.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260709",
+    "jaxlib": "0.10.1.dev20260709",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": false,
+    "jax_config_notes": {
+      "x64_requested": false,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2,
+      "fp32_intercept": true
+    },
+    "argv": [
+      "/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--x64",
+      "0",
+      "--nreps",
+      "30",
+      "--out",
+      "/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_vista_20260709_215256_c642-061_fp32.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "78afed08230af2ce12dc497521f8bbdac8635f47",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 36.010998758953065
+}
