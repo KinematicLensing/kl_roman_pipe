@@ -32,12 +32,18 @@ RESULTS="$STOCKYARD/klpipe_bench_results"
 set +u; module load tacc-apptainer; set -u
 
 # 1. container: pull once, keep on $WORK. ~8.5 GB; multi-arch -> arm64 on Vista.
-mkdir -p "$CONTAINER_DIR"
+# Cache on $SCRATCH -- the default $HOME/.apptainer/cache blows the small home
+# quota. Pull NON-INTERACTIVELY (redirect to a log): apptainer's progress bar
+# panics on this multi-layer image ("index out of range in ProgressComplete");
+# no tty -> no progress bar -> no panic.
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$SCRATCH/apptainer_cache}"
+mkdir -p "$CONTAINER_DIR" "$APPTAINER_CACHEDIR"
 if [[ -f "$CONTAINER" ]]; then
   echo "[provision] container present: $CONTAINER"
 else
-  echo "[provision] pulling docker://nvcr.io/nvidia/jax:${TAG} (several minutes) ..."
-  apptainer pull "$CONTAINER" "docker://nvcr.io/nvidia/jax:${TAG}"
+  LOG="$CONTAINER_DIR/pull_${TAG}.log"
+  echo "[provision] pulling docker://nvcr.io/nvidia/jax:${TAG} (several minutes; log: $LOG) ..."
+  apptainer pull "$CONTAINER" "docker://nvcr.io/nvidia/jax:${TAG}" > "$LOG" 2>&1
 fi
 
 # 2. pip sidecar: install once. Check by importing from the target dir; if the
@@ -50,7 +56,7 @@ if apptainer exec "$CONTAINER" python -c \
 else
   echo "[provision] installing numpyro astropy pyyaml -> $PIPDIR ..."
   apptainer exec "$CONTAINER" \
-    python -m pip install --target "$PIPDIR" numpyro astropy pyyaml
+    python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml
 fi
 
 mkdir -p "$RESULTS"

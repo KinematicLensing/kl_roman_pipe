@@ -72,8 +72,10 @@ broadband 2e-16, log-posterior agreement 4e-5 absolute.
 ```bash
 # on a COMPUTE node (idev), NOT the login node -- apptainer no-ops on login
 module load tacc-apptainer
-mkdir -p $WORK/containers && cd $WORK/containers
-apptainer pull jax_26.06-py3.sif docker://nvcr.io/nvidia/jax:26.06-py3
+export APPTAINER_CACHEDIR=$SCRATCH/apptainer_cache   # default $HOME cache blows home quota
+mkdir -p $WORK/containers $APPTAINER_CACHEDIR
+# redirect the pull: apptainer's progress bar panics on this image; no tty = no panic
+apptainer pull $WORK/containers/jax_26.06-py3.sif docker://nvcr.io/nvidia/jax:26.06-py3 > $HOME/pull.log 2>&1
 ```
 
 `26.06-py3` is "recent as of this writing": check
