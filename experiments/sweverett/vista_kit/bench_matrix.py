@@ -189,11 +189,24 @@ def get_state(config_name: str):
     if config_name == 'Q':
         source, priors, task, obs_f087, obs_grism, true = tv.build_flagship_task()
         nlam = int(len(obs_grism.cube_pars.lambda_grid))
-        meta = {'rolls': 1, 'bands': 1, 'nlam': nlam}
+        # nlam is vestigial under analytic dispersal (no wavelength grid for the
+        # line); record the actual pathway so the JSON is self-documenting.
+        meta = {
+            'rolls': 1,
+            'bands': 1,
+            'nlam': nlam,
+            'dispersal_method': obs_grism.dispersal_method,
+        }
     elif config_name == 'P':
         source, priors, task, image_obs, grism_obs, true = tv.build_production_task()
-        nlam = int(len(next(iter(grism_obs.values())).cube_pars.lambda_grid))
-        meta = {'rolls': len(grism_obs), 'bands': len(image_obs), 'nlam': nlam}
+        obs_g0 = next(iter(grism_obs.values()))
+        nlam = int(len(obs_g0.cube_pars.lambda_grid))
+        meta = {
+            'rolls': len(grism_obs),
+            'bands': len(image_obs),
+            'nlam': nlam,
+            'dispersal_method': obs_g0.dispersal_method,
+        }
     else:
         raise ValueError(f'unknown config {config_name!r}')
     build_s = time.perf_counter() - t0
