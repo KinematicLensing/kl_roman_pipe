@@ -983,6 +983,24 @@ only.
 - [ ] Cross-day seeded-NUTS drift (0.131 vs 0.163 same seed/commit):
       within-day A/B protocol only; investigate only if it hits a gate.
 
+### Added 2026-07-09 (Vista GPU env reproducibility)
+
+- [ ] GPU env reproducibility gap (production, not benchmarking). The Vista
+      GPU path deliberately does NOT use conda-lock: it runs the NGC JAX
+      container (aarch64 CUDA jaxlib -- conda-forge has none, source build on
+      GH200 fails) + a pip --target sidecar. Two un-pinned surfaces today:
+      (1) the container is pinned by TAG (`26.06-py3`), not by immutable
+      `sha256` digest; (2) the sidecar installs numpyro/astropy/pyyaml
+      UNPINNED (latest). Fine for timing (parity + fp32/fp64 acceptance guard
+      the numerics; the bench JSON `env` section records versions + git
+      commit post-hoc). NOT fine for production science fits: before GPU
+      moves from benchmark to production, pin the container digest, pin the
+      three pip versions, and record both alongside results (constitution
+      principle 4). conda-lock remains the correctness source of truth (all
+      CPU platforms, CI, Vista CPU test suite); the container is a scoped
+      GPU-performance layer validated against it via check_parity.py, not a
+      replacement. Kit + rationale: experiments/sweverett/vista_kit/SETUP.md.
+
 ## 8. Open questions
 
 (1-5 of 2026-07-02 resolved -- see decisions 13-17.)

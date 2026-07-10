@@ -142,9 +142,10 @@ nodes):
 idev -p gh-dev -N 1 -n 1 -t 01:00:00
 ```
 
-Then, on the compute node:
+Then, on the compute node (idev does NOT inherit the module -- load it here):
 
 ```bash
+module load tacc-apptainer
 apptainer exec --nv --bind $STOCKYARD/repos/kl_roman_pipe:$STOCKYARD/repos/kl_roman_pipe \
   --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \
   $WORK/containers/jax_26.06-py3.sif python - <<'EOF'
