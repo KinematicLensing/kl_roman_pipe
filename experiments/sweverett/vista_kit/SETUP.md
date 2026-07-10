@@ -80,9 +80,15 @@ aarch64 wheels exist), but the container is primary.
 
 ## 2. Get the repo on Vista
 
+GitHub auth: **do NOT run `ssh-keygen` on Vista** -- TACC auto-generates
+the `~/.ssh` key pair the batch system uses for intra-node SSH; making your
+own breaks job launch (recovery: `mv .ssh dot.ssh.old`, log out, log back
+in). Instead forward your laptop's agent (`ForwardAgent yes` in the laptop's
+`~/.ssh/config` for the Vista host), or clone over HTTPS with a PAT.
+
 ```bash
 mkdir -p $STOCKYARD/repos && cd $STOCKYARD/repos
-git clone git@github.com:KinematicLensing/kl_roman_pipe.git
+git clone git@github.com:KinematicLensing/kl_roman_pipe.git   # via forwarded agent
 cd kl_roman_pipe && git checkout se/speedups   # or the commit you want benchmarked
 ```
 
