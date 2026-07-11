@@ -1,0 +1,388 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 8.489244458964095
+          },
+          "batch_nreps": 10,
+          "sizes": {
+            "1": {
+              "batch_min_ms": 0.5749400006607175,
+              "batch_mean_ms": 0.5845359992235899,
+              "compile_ms": 4326.234818086959,
+              "per_fit_ms": 0.5749400006607175,
+              "throughput_fits_per_s": 1739.3119262023972,
+              "per_fit_speedup_vs_N1": 1.0,
+              "peak_mem_bytes": 72157696
+            },
+            "2": {
+              "batch_min_ms": 0.8665849454700947,
+              "batch_mean_ms": 0.8763446938246489,
+              "compile_ms": 3615.0642560096458,
+              "per_fit_ms": 0.43329247273504734,
+              "throughput_fits_per_s": 2307.909929031901,
+              "per_fit_speedup_vs_N1": 1.3269097361224775,
+              "peak_mem_bytes": 72157696
+            },
+            "4": {
+              "batch_min_ms": 0.9290159214287996,
+              "batch_mean_ms": 0.9405618882738054,
+              "compile_ms": 3636.3365270663053,
+              "per_fit_ms": 0.2322539803571999,
+              "throughput_fits_per_s": 4305.631268243623,
+              "per_fit_speedup_vs_N1": 2.4754796442087943,
+              "peak_mem_bytes": 90958848
+            },
+            "8": {
+              "batch_min_ms": 1.1341660283505917,
+              "batch_mean_ms": 1.1437026085332036,
+              "compile_ms": 3797.847509966232,
+              "per_fit_ms": 0.14177075354382396,
+              "throughput_fits_per_s": 7053.6410014275725,
+              "per_fit_speedup_vs_N1": 4.055420362021232,
+              "peak_mem_bytes": 167863808
+            },
+            "16": {
+              "batch_min_ms": 1.6211390029639006,
+              "batch_mean_ms": 1.6353592975065112,
+              "compile_ms": 3837.5375820323825,
+              "per_fit_ms": 0.10132118768524379,
+              "throughput_fits_per_s": 9869.604007273574,
+              "per_fit_speedup_vs_N1": 5.674430134462889,
+              "peak_mem_bytes": 351910912
+            },
+            "32": {
+              "batch_min_ms": 3.845407976768911,
+              "batch_mean_ms": 3.8694656104780734,
+              "compile_ms": 4580.941476975568,
+              "per_fit_ms": 0.12016899927402847,
+              "throughput_fits_per_s": 8321.613777606994,
+              "per_fit_speedup_vs_N1": 4.7844286307956,
+              "peak_mem_bytes": 694822656
+            },
+            "64": {
+              "batch_min_ms": 5.76558499597013,
+              "batch_mean_ms": 5.785942601505667,
+              "compile_ms": 7278.981514042243,
+              "per_fit_ms": 0.09008726556203328,
+              "throughput_fits_per_s": 11100.348021013126,
+              "per_fit_speedup_vs_N1": 6.38203409853548,
+              "peak_mem_bytes": 1395763456
+            },
+            "128": {
+              "batch_min_ms": 10.45636204071343,
+              "batch_mean_ms": 10.474431794136763,
+              "compile_ms": 7023.896649014205,
+              "per_fit_ms": 0.08169032844307367,
+              "throughput_fits_per_s": 12241.351198592074,
+              "per_fit_speedup_vs_N1": 7.038042466206601,
+              "peak_mem_bytes": 2795229952
+            },
+            "256": {
+              "batch_min_ms": 26.666434947401285,
+              "batch_mean_ms": 26.700652693398297,
+              "compile_ms": 7105.905474978499,
+              "per_fit_ms": 0.10416576151328627,
+              "throughput_fits_per_s": 9600.08341966041,
+              "per_fit_speedup_vs_N1": 5.519471967642499,
+              "peak_mem_bytes": 5741960960
+            },
+            "512": {
+              "batch_min_ms": 40.589294978417456,
+              "batch_mean_ms": 40.6318559194915,
+              "compile_ms": 7057.415892020799,
+              "per_fit_ms": 0.0792759667547216,
+              "throughput_fits_per_s": 12614.163420977027,
+              "per_fit_speedup_vs_N1": 7.25238712559093,
+              "peak_mem_bytes": 11279170048
+            },
+            "1024": {
+              "batch_min_ms": 86.42133302055299,
+              "batch_mean_ms": 86.45602690521628,
+              "compile_ms": 7578.268925077282,
+              "per_fit_ms": 0.08439583302788378,
+              "throughput_fits_per_s": 11848.926233948152,
+              "per_fit_speedup_vs_N1": 6.812421656774943,
+              "peak_mem_bytes": 22728567296
+            },
+            "2048": {
+              "batch_min_ms": 169.45536609273404,
+              "batch_mean_ms": 169.5005938061513,
+              "compile_ms": 7511.831042938866,
+              "per_fit_ms": 0.08274187797496779,
+              "throughput_fits_per_s": 12085.778380598682,
+              "per_fit_speedup_vs_N1": 6.948597430126691,
+              "peak_mem_bytes": 45454040320
+            }
+          }
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.198432311997749
+          },
+          "batch_nreps": 10,
+          "sizes": {
+            "1": {
+              "batch_min_ms": 4.453595029190183,
+              "batch_mean_ms": 4.5137002132833,
+              "compile_ms": 51822.82938703429,
+              "per_fit_ms": 4.453595029190183,
+              "throughput_fits_per_s": 224.53770346106987,
+              "per_fit_speedup_vs_N1": 1.0,
+              "peak_mem_bytes": 45454040320
+            },
+            "2": {
+              "batch_min_ms": 6.194381043314934,
+              "batch_mean_ms": 6.247266696300358,
+              "compile_ms": 50634.448087075725,
+              "per_fit_ms": 3.097190521657467,
+              "throughput_fits_per_s": 322.8732598163991,
+              "per_fit_speedup_vs_N1": 1.4379467449767454,
+              "peak_mem_bytes": 45454040320
+            },
+            "4": {
+              "batch_min_ms": 7.20656500197947,
+              "batch_mean_ms": 7.253149489406496,
+              "compile_ms": 44123.13025991898,
+              "per_fit_ms": 1.8016412504948676,
+              "throughput_fits_per_s": 555.0494582233416,
+              "per_fit_speedup_vs_N1": 2.471965508098178,
+              "peak_mem_bytes": 45454040320
+            },
+            "8": {
+              "batch_min_ms": 11.635711998678744,
+              "batch_mean_ms": 11.695234279613942,
+              "compile_ms": 49368.65206703078,
+              "per_fit_ms": 1.454463999834843,
+              "throughput_fits_per_s": 687.538502234192,
+              "per_fit_speedup_vs_N1": 3.062018055927061,
+              "peak_mem_bytes": 45454040320
+            },
+            "16": {
+              "batch_min_ms": 16.037306981161237,
+              "batch_mean_ms": 16.107175406068563,
+              "compile_ms": 52896.693002898246,
+              "per_fit_ms": 1.0023316863225773,
+              "throughput_fits_per_s": 997.6737377911977,
+              "per_fit_speedup_vs_N1": 4.443234799380468,
+              "peak_mem_bytes": 45454040320
+            },
+            "32": {
+              "batch_min_ms": 38.82339003030211,
+              "batch_mean_ms": 38.905283983331174,
+              "compile_ms": 55702.82056496944,
+              "per_fit_ms": 1.2132309384469409,
+              "throughput_fits_per_s": 824.2453833893338,
+              "per_fit_speedup_vs_N1": 3.6708551422956934,
+              "peak_mem_bytes": 45454040320
+            },
+            "64": {
+              "batch_min_ms": 166.57964291516691,
+              "batch_mean_ms": 167.39306065719575,
+              "compile_ms": 59279.99850199558,
+              "per_fit_ms": 2.602806920549483,
+              "throughput_fits_per_s": 384.2006074691427,
+              "per_fit_speedup_vs_N1": 1.7110739156364225,
+              "peak_mem_bytes": 45454040320
+            },
+            "128": {
+              "batch_min_ms": 193.187166005373,
+              "batch_mean_ms": 193.43153297668323,
+              "compile_ms": 108144.30946903303,
+              "per_fit_ms": 1.5092747344169766,
+              "throughput_fits_per_s": 662.5698934702526,
+              "per_fit_speedup_vs_N1": 2.950817984050186,
+              "peak_mem_bytes": 45454040320
+            },
+            "256": {
+              "batch_min_ms": 255.23346802219748,
+              "batch_mean_ms": 255.4150031879544,
+              "compile_ms": 61192.79951299541,
+              "per_fit_ms": 0.9970057344617089,
+              "throughput_fits_per_s": 1003.003258090494,
+              "per_fit_speedup_vs_N1": 4.466970324493382,
+              "peak_mem_bytes": 45454040320
+            },
+            "512": {
+              "batch_min_ms": 1177.6922889985144,
+              "batch_mean_ms": 1178.4981722710654,
+              "compile_ms": 128041.3886649767,
+              "per_fit_ms": 2.3001802519502235,
+              "throughput_fits_per_s": 434.7485372731738,
+              "per_fit_speedup_vs_N1": 1.9361939245475097,
+              "peak_mem_bytes": 45454040320
+            },
+            "1024": {
+              "status": "oom_or_error",
+              "error": "JaxRuntimeError(\"RESOURCE_EXHAUSTED: Out of memory while trying to allocate 96.13GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\")"
+            }
+          }
+        }
+      },
+      "wallclock_s": 838.5628447879571
+    },
+    "h": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 8.489244458964095
+          },
+          "n_starts": {
+            "1": {
+              "cold_s": 13.304795311996713,
+              "warm_s": 9.398309811018407,
+              "compile_s_est": 3.906485500978306
+            },
+            "4": {
+              "cold_s": 10.611024916986935,
+              "warm_s": 9.792321598040871,
+              "compile_s_est": 0.8187033189460635
+            }
+          }
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.198432311997749
+          },
+          "n_starts": {
+            "1": {
+              "cold_s": 173.60795198194683,
+              "warm_s": 155.51694214902818,
+              "compile_s_est": 18.091009832918644
+            },
+            "4": {
+              "cold_s": 158.92844633804634,
+              "warm_s": 159.5638933579903,
+              "compile_s_est": -0.6354470199439675
+            }
+          }
+        }
+      },
+      "wallclock_s": 740.2994046979584
+    },
+    "i": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 8.489244458964095
+          },
+          "n_samples": 1000,
+          "n_warmup": 500,
+          "n_chains": 4,
+          "wallclock_s": 50.714124714024365,
+          "fits_per_node_hour_serial": 70.98614084932564,
+          "max_rhat": 1.00202609414319,
+          "n_divergences": 486,
+          "min_ess": 2104.253281481798,
+          "min_ess_per_s": 41.492449950534045
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.198432311997749
+          },
+          "n_samples": 1000,
+          "n_warmup": 500,
+          "n_chains": 4,
+          "wallclock_s": 443.75593005598057,
+          "fits_per_node_hour_serial": 8.112567643988113,
+          "max_rhat": 1.00120732279128,
+          "n_divergences": 220,
+          "min_ess": 1569.6303541251427,
+          "min_ess_per_s": 3.53714789552701
+        }
+      },
+      "wallclock_s": 494.47027015907224
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-10T19:04:09.001808",
+    "hostname": "c642-001.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260710",
+    "jaxlib": "0.10.1.dev20260710",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "g,h,i",
+      "--configs",
+      "Q,P",
+      "--batch-sizes",
+      "1,2,4,8,16,32,64,128,256,512,1024,2048",
+      "--out",
+      "/work/09102/sweveret/klpipe_bench_results/gh_scaling.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "12703ef57e73052fdbb0b5eac41928461c4b6449",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 2073.366902227979
+}
