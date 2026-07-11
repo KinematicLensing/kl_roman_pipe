@@ -1,0 +1,166 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 8.062106044963002
+          },
+          "n_starts": {
+            "1": {
+              "cold_s": 23.67474249890074,
+              "warm_s": 20.42055467981845,
+              "compile_s_est": 3.25418781908229
+            },
+            "4": {
+              "cold_s": 21.89183860924095,
+              "warm_s": 20.711070840712637,
+              "compile_s_est": 1.1807677685283124
+            }
+          }
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.2210461948998272
+          },
+          "n_starts": {
+            "1": {
+              "cold_s": 359.92240937659517,
+              "warm_s": 338.9022892001085,
+              "compile_s_est": 21.02012017648667
+            },
+            "4": {
+              "cold_s": 330.5191096384078,
+              "warm_s": 322.5850115288049,
+              "compile_s_est": 7.934098109602928
+            }
+          }
+        }
+      },
+      "wallclock_s": 1504.8119190647267
+    },
+    "i": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 8.062106044963002
+          },
+          "n_samples": 1000,
+          "n_warmup": 500,
+          "n_chains": 4,
+          "wallclock_s": 60.593618179205805,
+          "fits_per_node_hour_serial": 59.41219732667208,
+          "max_rhat": 1.0013282064151159,
+          "n_divergences": 483,
+          "min_ess": 1810.6381060956178,
+          "min_ess_per_s": 29.881663457373516
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.2210461948998272
+          },
+          "n_samples": 1000,
+          "n_warmup": 500,
+          "n_chains": 4,
+          "wallclock_s": 591.5324960961007,
+          "fits_per_node_hour_serial": 6.085887121601418,
+          "max_rhat": 1.0048843723142924,
+          "n_divergences": 222,
+          "min_ess": 1175.5522738108295,
+          "min_ess_per_s": 1.9872995677651641
+        }
+      },
+      "wallclock_s": 652.1263197758235
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-11T14:25:27.169501",
+    "hostname": "c642-021.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260711",
+    "jaxlib": "0.10.1.dev20260711",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "h,i",
+      "--configs",
+      "Q,P",
+      "--x64",
+      "1",
+      "--precond-starts",
+      "1,4",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--out",
+      "results_gh200_precond_optax.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "c822159f4f48d7a0cedbc362c16a9c1a8ee39c78",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 2156.9519798341207
+}
