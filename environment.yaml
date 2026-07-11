@@ -26,6 +26,7 @@ dependencies:
   - zeus-mcmc
   - blackjax
   - numpyro
+  - optax
   - pip
   - pip:
     - nautilus-sampler

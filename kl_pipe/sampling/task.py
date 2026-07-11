@@ -582,25 +582,29 @@ class InferenceTask:
         eig_floor: float = 1e-4,
         maxiter: int = 300,
         seed: int = 0,
+        grad_tol: float = 1e-5,
+        ftol: float = 1e-9,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
-        Multi-start L-BFGS-B from prior draws (truth-free) locates the MAP,
-        then the Hessian of the negative log-posterior there is regularized
+        Multi-start L-BFGS from prior draws (truth-free) locates the MAP, then
+        the Hessian of the negative log-posterior there is regularized
         (eigenvalue floor) and inverted to serve as a NUTS mass matrix. Lets
         warmup begin near-optimally conditioned, skipping the expensive
         early-warmup transient (~2x faster warmup measured on correlated
         joint posteriors).
 
-        The optimizer runs unbounded in scaled coordinates (``theta = loc +
-        scale * u``); out-of-support iterates receive ``-inf`` log-posterior
-        from the prior, which acts as a soft barrier keeping the converged MAP
-        in-support. The Hessian is taken at that MAP.
+        The optimizer (optax L-BFGS) runs unbounded in scaled coordinates
+        (``theta = loc + scale * u``), vmapped over starts so the whole search
+        runs on-device (no per-iteration host<->device sync). Out-of-support
+        iterates receive ``-inf`` log-posterior from the prior, acting as a
+        soft barrier keeping the converged MAP in-support. The Hessian is taken
+        at that MAP.
 
         Parameters
         ----------
         n_starts : int, default 4
-            Number of L-BFGS-B starts from independent prior draws. The best
+            Number of L-BFGS starts from independent prior draws. The best
             (highest log-posterior) converged mode is used. Multi-start guards
             against local modes (e.g. the position-angle multimodality).
         eig_floor : float, default 1e-4
@@ -608,9 +612,17 @@ class InferenceTask:
             to that value before inversion, capping the mass-matrix condition
             number at ``1/eig_floor`` (handles near-degenerate directions).
         maxiter : int, default 300
-            Max L-BFGS-B iterations per start.
+            Max L-BFGS iterations per start.
         seed : int, default 0
             PRNG seed for the prior-draw starting points.
+        grad_tol : float, default 1e-5
+            Convergence tolerance on the scaled-coordinate gradient L2 norm.
+            A start stops when its gradient norm drops below this.
+        ftol : float, default 1e-9
+            Relative-objective-improvement tolerance (matches scipy L-BFGS-B's
+            default). A start also stops once the objective stops improving by
+            more than ``ftol * (|f| + 1)``, catching the line-search stall so
+            expensive no-op iterations are not run up to maxiter.
 
         Returns
         -------
@@ -622,14 +634,14 @@ class InferenceTask:
         RuntimeError
             If no optimization start converges to a finite-log-posterior mode.
         """
-        from scipy.optimize import minimize
+        import optax
+        import optax.tree_utils as otu
 
-        val_and_grad = self.get_log_posterior_and_grad_fn()
         hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
 
         # Per-parameter characteristic scale from prior draws. The physical
         # problem is badly scaled (e.g. vcirc~200 vs g1~0.02); optimizing in
-        # scaled coords u (theta = loc + scale*u) conditions L-BFGS-B well.
+        # scaled coords u (theta = loc + scale*u) conditions L-BFGS well.
         prior_batch = np.asarray(
             self.sample_prior(jax.random.PRNGKey(seed), n_samples=512)
         )
@@ -638,39 +650,65 @@ class InferenceTask:
         scale = np.where(scale > 0, scale, 1.0)  # guard degenerate/fixed dims
 
         def neg_u(u):
-            theta = jnp.asarray(loc + scale * u)
-            v, g = val_and_grad(theta)
-            # chain rule: d(-logpost)/du = -grad_theta * scale
-            return float(-v), np.asarray(-g, dtype=np.float64) * scale
+            # -log posterior in scaled coords; out-of-support -> +inf barrier
+            return -self._log_posterior_jittable(loc + scale * u)
+
+        # On-device multi-start L-BFGS: vmap over prior-draw starts so the whole
+        # MAP search runs on the accelerator with no per-iteration host<->device
+        # sync (a host-side scipy loop syncs every step and gets ~zero GPU
+        # speedup). Each start stops on the first of: a small gradient
+        # (grad_tol), the objective plateauing (ftol -- catches the line-search
+        # stall so we don't burn expensive no-op iterations up to maxiter), or
+        # maxiter.
+        solver = optax.lbfgs()
+        value_and_grad = optax.value_and_grad_from_state(neg_u)
+
+        def _solve_one(u0):
+            def body(carry):
+                u, state, _ = carry
+                v, g = value_and_grad(u, state=state)
+                updates, state = solver.update(
+                    g, state, u, value=v, grad=g, value_fn=neg_u
+                )
+                return optax.apply_updates(u, updates), state, v
+
+            def keep_going(carry):
+                _, state, prev_v = carry
+                it = otu.tree_get(state, 'count')
+                gnorm = otu.tree_norm(otu.tree_get(state, 'grad'))
+                v = otu.tree_get(state, 'value')
+                # relative-improvement test, mirroring scipy L-BFGS-B's ftol
+                improving = jnp.abs(prev_v - v) > ftol * (jnp.abs(v) + 1.0)
+                return (it == 0) | ((it < maxiter) & (gnorm >= grad_tol) & improving)
+
+            u, state, _ = jax.lax.while_loop(
+                keep_going, body, (u0, solver.init(u0), jnp.inf)
+            )
+            return u, neg_u(u), otu.tree_get(state, 'count')
 
         # Multi-start from prior draws (truth-free), in scaled coords.
         starts = np.asarray(
             self.sample_prior(jax.random.PRNGKey(seed + 1), n_samples=n_starts)
         )
-        best = None
-        n_converged = 0
-        for s0 in starts:
-            u0 = (np.asarray(s0, dtype=np.float64) - loc) / scale
-            res = minimize(
-                neg_u,
-                u0,
-                jac=True,
-                method='L-BFGS-B',
-                options={'maxiter': maxiter},
-            )
-            if res.success and np.isfinite(res.fun):
-                n_converged += 1
-                if best is None or res.fun < best.fun:
-                    best = res
+        u0s = (starts - loc) / scale
+        xs, funs, counts = jax.jit(jax.vmap(_solve_one))(u0s)
 
-        if best is None:
+        funs = np.asarray(funs, dtype=np.float64)
+        counts = np.asarray(counts)
+        finite = np.isfinite(funs)
+        if not np.any(finite):
             raise RuntimeError(
                 "laplace_preconditioner: no optimization start converged to a "
                 "finite-log-posterior mode (tried "
                 f"{n_starts} starts). Check priors/data."
             )
-
-        theta_map = jnp.asarray(loc + scale * best.x)
+        # A start "converged" if it stopped on a convergence criterion (small
+        # gradient or objective plateau) rather than exhausting maxiter --
+        # the on-device analogue of scipy's res.success.
+        n_converged = int(np.sum(finite & (counts < maxiter)))
+        # best = deepest finite optimum (lowest neg-log-posterior).
+        best = int(np.argmin(np.where(finite, funs, np.inf)))
+        theta_map = jnp.asarray(loc + scale * np.asarray(xs)[best])
         H = np.asarray(hess_fn(theta_map), dtype=np.float64)
         H = 0.5 * (H + H.T)
         # Scale-aware regularization: normalize the Hessian by the per-parameter

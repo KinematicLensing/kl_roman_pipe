@@ -4,7 +4,7 @@
 #
 # Assembles the three layers the kit needs (see SETUP.md "Why a container"):
 #   1. the NGC JAX container (.sif)  -- CUDA/cuDNN/jaxlib for Hopper
-#   2. a pip --target sidecar        -- numpyro astropy pyyaml
+#   2. a pip --target sidecar        -- numpyro astropy pyyaml matplotlib optax
 #   3. (repo is cloned separately to $STOCKYARD/repos/kl_roman_pipe)
 #
 # Durable artifacts live on $WORK (persistent), NOT $SCRATCH (purged after
@@ -53,18 +53,19 @@ fi
 
 # 2. pip sidecar: install once. Check by importing from the target dir; if the
 #    import succeeds the deps are already there. NEVER let pip touch jax/jaxlib
-#    (those come from the image) -- these three are pure-python / small builds.
+#    (those come from the image) -- optax drags a jax/jaxlib set that the strip
+#    step below removes so the container's GPU jax is the only one on the path.
 mkdir -p "$PIPDIR"
 # -B binds $PIPDIR into the container: pip --target writes from INSIDE the
 # container, so the target must be explicitly bind-mounted (don't rely on
 # TACC auto-bind).
 if apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" python -c \
-     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib" 2>/dev/null; then
+     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib, optax" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
-  echo "[provision] installing numpyro astropy pyyaml matplotlib -> $PIPDIR ..."
+  echo "[provision] installing numpyro astropy pyyaml matplotlib optax -> $PIPDIR ..."
   apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" \
-    python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml matplotlib
+    python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml matplotlib optax
   # numpyro drags in a jax/jaxlib/CUDA-plugin set that mismatches (and would
   # shadow) the container's GPU jax; strip it so only the container's is used.
   echo "[provision] removing pip-dragged jax/CUDA from the sidecar ..."
