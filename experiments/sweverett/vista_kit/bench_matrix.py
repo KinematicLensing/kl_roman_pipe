@@ -687,13 +687,19 @@ def section_f(args, jax_notes):
 # ---------------------------------------------------------------------------
 
 
-def _device_peak_mem_bytes():
-    """Peak device bytes in use, or None (CPU / unsupported)."""
+def _device_resident_bytes():
+    """Live (resident) device bytes right now, or None (CPU / unsupported).
+
+    Uses jax.live_arrays() -- clean per-call, NOT cumulative (unlike
+    peak_bytes_in_use, which jax cannot reset per measurement so it stays
+    polluted by earlier configs). This is the resident footprint, not the
+    transient allocation peak that triggers OOM; the OOM boundary in the sweep
+    is the true capacity ceiling.
+    """
     import jax
 
     try:
-        stats = jax.devices()[0].memory_stats()
-        return int(stats.get('peak_bytes_in_use')) if stats else None
+        return int(sum(a.nbytes for a in jax.live_arrays()))
     except Exception:
         return None
 
@@ -752,7 +758,7 @@ def section_g(args):
                 'per_fit_ms': per_fit,
                 'throughput_fits_per_s': N / (r['min_ms'] / 1e3),
                 'per_fit_speedup_vs_N1': speedup,
-                'peak_mem_bytes': _device_peak_mem_bytes(),
+                'resident_mem_bytes': _device_resident_bytes(),
             }
             msg = (
                 f'  [g:{cfg}] N={N:5d}: batch {r["min_ms"]:8.2f} ms  '
