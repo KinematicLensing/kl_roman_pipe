@@ -559,10 +559,14 @@ no overboard spending until confident.
    `jit(jax.hessian(lambda))` is built every call so even "warm" calls
    recompile. Fixed via `hessian_method='fd'` (central differences of the
    already-compiled gradient; zero new compile; inverse-mass agrees with
-   exact AD to ~1e-9, far below the eig_floor regularization). Vista A/B
-   pending; expect P precond ~155 s -> ~MAP cost. On-device precond is only
-   revisited IF keystone-3 batching later demands vmap-over-galaxies of the
-   precond itself.
+   exact AD to ~1e-9, far below the eig_floor regularization). CONFIRMED on
+   GH200 (2026-07-11, results_vista_20260711_{222232,225454}): P precond
+   warm 149-152 s (ad) -> 1.2-4.1 s (fd), inv-mass reldiff 4.6e-9; P full
+   fit 443.8 -> 322.5 s (1.38x) with divergences/R-hat unchanged (226 vs
+   220, 1.006); Q fit 50.7 -> 44.0 s. hessian_method='fd' is now the
+   DEFAULT ('ad' kept for float32 runs and cross-checks). On-device precond
+   is only revisited IF keystone-3 batching later demands vmap-over-galaxies
+   of the precond itself.
 5. Result storage. DECISION (user): keep FULL chains until we are very
    confident; reduce detail only for full-scale paper-plot runs.
    ~1.3 MB/fit at defaults => ~13 GB per 1e4 fits: fine on disk, not in RAM.

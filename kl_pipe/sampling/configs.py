@@ -326,11 +326,12 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # early-warmup transient (~2x faster warmup on correlated posteriors).
     precondition: str = 'none'
     n_map_starts: int = 4
-    # Hessian evaluation for the Laplace preconditioner: 'ad' = exact
-    # second-order autodiff (compiles a second-order graph per call); 'fd' =
-    # central differences of the compiled gradient (no new compilation). See
+    # Hessian evaluation for the Laplace preconditioner: 'fd' (default) =
+    # central differences of the compiled gradient (no new compilation);
+    # 'ad' = exact second-order autodiff (compiles a second-order graph per
+    # call -- ~150 s per fit on the production config; float32-safe). See
     # InferenceTask.laplace_preconditioner.
-    hessian_method: str = 'ad'
+    hessian_method: str = 'fd'
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
