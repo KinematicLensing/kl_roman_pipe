@@ -1,0 +1,118 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 7.297424399293959
+          },
+          "n_samples": 1000,
+          "n_warmup": 500,
+          "n_chains": 4,
+          "wallclock_s": 43.990404156968,
+          "fits_per_node_hour_serial": 81.83602922024454,
+          "max_rhat": 1.0023276702363546,
+          "n_divergences": 504,
+          "min_ess": 1867.0448232531005,
+          "min_ess_per_s": 42.4420929753464
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.14979631267488
+          },
+          "n_samples": 1000,
+          "n_warmup": 500,
+          "n_chains": 4,
+          "wallclock_s": 322.53774678800255,
+          "fits_per_node_hour_serial": 11.161484309513101,
+          "max_rhat": 1.0058364992309834,
+          "n_divergences": 226,
+          "min_ess": 1045.3433792263916,
+          "min_ess_per_s": 3.240995479246881
+        }
+      },
+      "wallclock_s": 377.84205390512943
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-11T22:54:54.803718",
+    "hostname": "c642-031.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260711",
+    "jaxlib": "0.10.1.dev20260711",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "i",
+      "--configs",
+      "Q,P",
+      "--x64",
+      "1",
+      "--fit-hessian-method",
+      "fd",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "c6143cdbafda7a71f4053f8aa06d59fe8c377847",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 377.84446873608977
+}
