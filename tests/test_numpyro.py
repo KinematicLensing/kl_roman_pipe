@@ -990,6 +990,17 @@ class TestLaplacePreconditionerConfig:
         with pytest.raises(ValueError, match="n_map_starts"):
             NumpyroSamplerConfig(n_map_starts=0)
 
+    def test_hessian_method_default_fd(self):
+        """Default Hessian evaluation is 'fd' (no second-order compile);
+        'ad' remains available."""
+        assert NumpyroSamplerConfig().hessian_method == 'fd'
+        assert NumpyroSamplerConfig(hessian_method='ad').hessian_method == 'ad'
+
+    def test_invalid_hessian_method_config_raises(self):
+        """Unknown hessian_method value raises ValueError."""
+        with pytest.raises(ValueError, match="hessian_method"):
+            NumpyroSamplerConfig(hessian_method='bogus')
+
 
 class TestLaplacePreconditioner:
     """The InferenceTask.laplace_preconditioner utility + preconditioned NUTS."""

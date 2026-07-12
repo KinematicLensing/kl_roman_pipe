@@ -112,7 +112,7 @@ def parse_args():
     )
     p.add_argument(
         '--fit-hessian-method',
-        default='ad',
+        default='fd',
         help="section i: hessian_method for the full-fit preconditioner",
     )
     p.add_argument(
@@ -342,7 +342,11 @@ def section_b(args):
     vg = task.get_log_posterior_and_grad_fn()
     jax.block_until_ready(vg(st['theta']))
     t0 = time.perf_counter()
-    pre = task.laplace_preconditioner(n_starts=4, seed=42)
+    # fd differencing needs float64 (loud RuntimeError otherwise); keep the
+    # fp32 pass on exact autodiff
+    pre = task.laplace_preconditioner(
+        n_starts=4, seed=42, hessian_method='fd' if args.x64 else 'ad'
+    )
     pre_s = time.perf_counter() - t0
     print(f'  [b] laplace preconditioner: {pre_s:.1f} s (shared)')
 

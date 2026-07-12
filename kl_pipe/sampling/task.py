@@ -582,7 +582,7 @@ class InferenceTask:
         eig_floor: float = 1e-4,
         maxiter: int = 300,
         seed: int = 0,
-        hessian_method: str = 'ad',
+        hessian_method: str = 'fd',
         fd_rel_step: float = 1e-5,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
@@ -613,15 +613,16 @@ class InferenceTask:
             Max L-BFGS-B iterations per start.
         seed : int, default 0
             PRNG seed for the prior-draw starting points.
-        hessian_method : {'ad', 'fd'}, default 'ad'
-            How to evaluate the Hessian at the MAP. 'ad' uses exact
+        hessian_method : {'fd', 'ad'}, default 'fd'
+            How to evaluate the Hessian at the MAP. 'fd' (default) uses
+            central finite differences of the already-compiled gradient
+            (2 * n_params grad evaluations, no new compilation); with float64
+            and prior-scaled steps the resulting mass matrix agrees with 'ad'
+            to well below the ``eig_floor`` regularization. 'ad' uses exact
             second-order autodiff (``jax.hessian``); tracing and compiling
             that second-order graph is paid on every call and dominates the
-            preconditioner cost on large joint tasks. 'fd' uses central finite
-            differences of the already-compiled gradient (2 * n_params grad
-            evaluations, no new compilation); with float64 and prior-scaled
-            steps the resulting mass matrix agrees with 'ad' to well below the
-            ``eig_floor`` regularization.
+            preconditioner cost on large joint tasks -- use it only for
+            float32 runs or as a cross-check.
         fd_rel_step : float, default 1e-5
             Relative step for ``hessian_method='fd'``, in units of the
             per-parameter prior scale. Steps are shrunk to stay inside prior

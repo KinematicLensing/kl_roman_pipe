@@ -228,11 +228,12 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 For posterior-informed conditioning (a MAP-based mass matrix capturing parameter
 correlations), use `InferenceTask.laplace_preconditioner` instead of a reparam strategy
 (`NumpyroSamplerConfig(precondition='laplace')`). Its `hessian_method` option selects
-how the Hessian at the MAP is evaluated: `'ad'` (exact second-order autodiff; traces
-and compiles a second-order graph on every call, which dominates the preconditioner
-cost on large joint tasks) or `'fd'` (central differences of the already-compiled
-gradient; no new compilation; agrees with `'ad'` to well below the eigenvalue-floor
-regularization).
+how the Hessian at the MAP is evaluated: `'fd'` (default; central differences of the
+already-compiled gradient; no new compilation; agrees with `'ad'` to well below the
+eigenvalue-floor regularization; requires float64) or `'ad'` (exact second-order
+autodiff; traces and compiles a second-order graph on every call, which dominates
+the preconditioner cost on large joint tasks -- use for float32 runs or as a
+cross-check).
 
 ---
 
