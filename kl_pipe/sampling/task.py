@@ -582,6 +582,8 @@ class InferenceTask:
         eig_floor: float = 1e-4,
         maxiter: int = 300,
         seed: int = 0,
+        hessian_method: str = 'ad',
+        fd_rel_step: float = 1e-5,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
@@ -611,6 +613,19 @@ class InferenceTask:
             Max L-BFGS-B iterations per start.
         seed : int, default 0
             PRNG seed for the prior-draw starting points.
+        hessian_method : {'ad', 'fd'}, default 'ad'
+            How to evaluate the Hessian at the MAP. 'ad' uses exact
+            second-order autodiff (``jax.hessian``); tracing and compiling
+            that second-order graph is paid on every call and dominates the
+            preconditioner cost on large joint tasks. 'fd' uses central finite
+            differences of the already-compiled gradient (2 * n_params grad
+            evaluations, no new compilation); with float64 and prior-scaled
+            steps the resulting mass matrix agrees with 'ad' to well below the
+            ``eig_floor`` regularization.
+        fd_rel_step : float, default 1e-5
+            Relative step for ``hessian_method='fd'``, in units of the
+            per-parameter prior scale. Steps are shrunk to stay inside prior
+            bounds when the MAP sits near a bound.
 
         Returns
         -------
@@ -620,12 +635,18 @@ class InferenceTask:
         Raises
         ------
         RuntimeError
-            If no optimization start converges to a finite-log-posterior mode.
+            If no optimization start converges to a finite-log-posterior mode,
+            or if the finite-difference Hessian encounters non-finite
+            gradients.
         """
         from scipy.optimize import minimize
 
+        if hessian_method not in ('ad', 'fd'):
+            raise ValueError(
+                f"hessian_method must be 'ad' or 'fd', got '{hessian_method}'"
+            )
+
         val_and_grad = self.get_log_posterior_and_grad_fn()
-        hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
 
         # Per-parameter characteristic scale from prior draws. The physical
         # problem is badly scaled (e.g. vcirc~200 vs g1~0.02); optimizing in
@@ -671,7 +692,11 @@ class InferenceTask:
             )
 
         theta_map = jnp.asarray(loc + scale * best.x)
-        H = np.asarray(hess_fn(theta_map), dtype=np.float64)
+        if hessian_method == 'ad':
+            hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
+            H = np.asarray(hess_fn(theta_map), dtype=np.float64)
+        else:
+            H = self._fd_hessian(val_and_grad, theta_map, scale, fd_rel_step)
         H = 0.5 * (H + H.T)
         # Scale-aware regularization: normalize the Hessian by the per-parameter
         # scale (diag(scale) @ H @ diag(scale)) BEFORE flooring eigenvalues, so
@@ -695,6 +720,66 @@ class InferenceTask:
             n_starts_converged=n_converged,
             condition_number=cond,
         )
+
+    def _fd_hessian(
+        self,
+        val_and_grad: Callable,
+        theta: jnp.ndarray,
+        scale: np.ndarray,
+        rel_step: float,
+    ) -> np.ndarray:
+        """Hessian of the negative log-posterior by central differences.
+
+        Differences the already-compiled gradient (2 * n_params evaluations),
+        so no second-order autodiff graph is traced or compiled. Steps are
+        prior-scaled and shrunk to keep both stencil points strictly inside
+        prior bounds.
+        """
+        if not jax.config.jax_enable_x64:
+            raise RuntimeError(
+                "_fd_hessian requires float64 (jax_enable_x64): float32 "
+                "gradient noise is amplified by the difference quotient and "
+                "silently degrades the mass matrix. Use hessian_method='ad' "
+                "for float32 runs."
+            )
+        th = np.asarray(theta, dtype=np.float64)
+        D = th.size
+        bounds = self.get_bounds()
+        cols = []
+        for j in range(D):
+            h = rel_step * scale[j]
+            low, high = bounds[j]
+            # keep both stencil points strictly in-support (out-of-support
+            # gradients are meaningless through the -inf prior barrier)
+            if low is not None and np.isfinite(low):
+                h = min(h, 0.5 * (th[j] - low))
+            if high is not None and np.isfinite(high):
+                h = min(h, 0.5 * (high - th[j]))
+            if not h > 0:
+                raise RuntimeError(
+                    f"_fd_hessian: MAP is at a prior bound for parameter "
+                    f"index {j} (theta={th[j]:.6g}, bounds=({low}, {high})); "
+                    "cannot take a finite-difference step. Use "
+                    "hessian_method='ad' or check priors/data."
+                )
+            tp = th.copy()
+            tp[j] += h
+            tm = th.copy()
+            tm[j] -= h
+            _, gp = val_and_grad(jnp.asarray(tp))
+            _, gm = val_and_grad(jnp.asarray(tm))
+            gp = np.asarray(gp, dtype=np.float64)
+            gm = np.asarray(gm, dtype=np.float64)
+            if not (np.all(np.isfinite(gp)) and np.all(np.isfinite(gm))):
+                raise RuntimeError(
+                    f"_fd_hessian: non-finite gradient at stencil point for "
+                    f"parameter index {j} (step {h:.3g}). Use "
+                    "hessian_method='ad' or check priors/data."
+                )
+            # grad of +log-posterior; negate for the negative-log-posterior H
+            cols.append((gm - gp) / (2.0 * h))
+        H = np.stack(cols, axis=1)
+        return 0.5 * (H + H.T)
 
     # =========================================================================
     # Grid adequacy validation

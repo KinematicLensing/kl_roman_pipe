@@ -20,7 +20,8 @@ One self-contained runner; writes one timestamped JSON. Sections:
      sweep N -> per-fit time + fits/s (the 30M-scale throughput lever;
      batches theta only, a valid compute proxy pre-keystone-B)
   h  Laplace preconditioner cost (opt-in): cold vs warm (one-time compile vs
-     per-galaxy compute) + n_starts sweep -- isolates the survey bottleneck
+     per-galaxy compute) + n_starts and hessian_method (ad vs fd) sweeps +
+     cross-method mass-matrix equivalence -- isolates the survey bottleneck
   i  full-fit throughput (opt-in): end-to-end precond + NUTS at realistic
      sample counts -> fits/node-hour + min-ESS/s (paper-planning number)
 
@@ -105,6 +106,25 @@ def parse_args():
         help='section h: laplace_preconditioner n_starts values to sweep',
     )
     p.add_argument(
+        '--hessian-methods',
+        default='ad,fd',
+        help="section h: laplace_preconditioner hessian_method values to sweep",
+    )
+    p.add_argument(
+        '--fit-hessian-method',
+        default='ad',
+        help="section i: hessian_method for the full-fit preconditioner",
+    )
+    p.add_argument(
+        '--jax-cache-dir',
+        default='',
+        help=(
+            'enable the JAX persistent compilation cache at this dir '
+            '(set before first compile; rerun the same section twice to '
+            'measure the cross-process cache hit)'
+        ),
+    )
+    p.add_argument(
         '--fit-samples', type=int, default=1000, help='section i: NUTS samples/chain'
     )
     p.add_argument(
@@ -131,6 +151,15 @@ def configure_jax(args) -> dict:
     import jax
 
     jax.config.update('jax_enable_x64', bool(args.x64))
+
+    if args.jax_cache_dir:
+        # persistent compilation cache: skips the XLA-compile step (not the
+        # trace) when the same HLO was compiled before, incl. by another
+        # process. Must be configured before the first compile.
+        jax.config.update('jax_compilation_cache_dir', args.jax_cache_dir)
+        jax.config.update('jax_persistent_cache_min_compile_time_secs', 0.5)
+        jax.config.update('jax_persistent_cache_min_entry_size_bytes', -1)
+        notes['jax_compilation_cache_dir'] = args.jax_cache_dir
 
     # forbid the tf32 tensor-core shortcut for fp32 matmuls (GH200/Ampere+):
     # without this pin an fp32 pass silently runs 10-bit-mantissa matmuls,
@@ -798,24 +827,45 @@ def section_h(args):
         # warm the posterior jit first so we isolate the preconditioner's own cost
         vg = task.get_log_posterior_and_grad_fn()
         jax.block_until_ready(vg(st['theta']))
-        by_starts = {}
-        for ns in [int(x) for x in args.precond_starts.split(',')]:
-            t0 = time.perf_counter()
-            task.laplace_preconditioner(n_starts=ns, seed=1)
-            cold = time.perf_counter() - t0
-            t0 = time.perf_counter()
-            task.laplace_preconditioner(n_starts=ns, seed=2)
-            warm = time.perf_counter() - t0
-            by_starts[str(ns)] = {
-                'cold_s': cold,
-                'warm_s': warm,
-                'compile_s_est': cold - warm,
+        by_method = {}
+        for method in args.hessian_methods.split(','):
+            by_starts = {}
+            for ns in [int(x) for x in args.precond_starts.split(',')]:
+                t0 = time.perf_counter()
+                task.laplace_preconditioner(n_starts=ns, seed=1, hessian_method=method)
+                cold = time.perf_counter() - t0
+                t0 = time.perf_counter()
+                task.laplace_preconditioner(n_starts=ns, seed=2, hessian_method=method)
+                warm = time.perf_counter() - t0
+                by_starts[str(ns)] = {
+                    'cold_s': cold,
+                    'warm_s': warm,
+                    'compile_s_est': cold - warm,
+                }
+                print(
+                    f'  [h:{cfg}:{method}] n_starts={ns}: cold {cold:6.1f}s'
+                    f'  warm {warm:6.1f}s  (compile~{cold - warm:.1f}s)'
+                )
+            by_method[method] = by_starts
+        # mass-matrix equivalence across methods at fixed seed (same MAP):
+        # max relative element difference, must be ~machine-level (<<eig_floor)
+        methods = args.hessian_methods.split(',')
+        if len(methods) > 1:
+            import numpy as np
+
+            pres = {
+                m: task.laplace_preconditioner(n_starts=1, seed=3, hessian_method=m)
+                for m in methods
             }
-            print(
-                f'  [h:{cfg}] n_starts={ns}: cold {cold:6.1f}s  warm {warm:6.1f}s'
-                f'  (compile~{cold - warm:.1f}s)'
-            )
-        out[cfg] = {'meta': st['meta'], 'n_starts': by_starts}
+            ref = pres[methods[0]].inverse_mass_matrix
+            for m in methods[1:]:
+                rel = float(
+                    np.max(np.abs(pres[m].inverse_mass_matrix - ref))
+                    / np.max(np.abs(ref))
+                )
+                by_method[f'inv_mass_reldiff_{methods[0]}_vs_{m}'] = rel
+                print(f'  [h:{cfg}] inv-mass reldiff {methods[0]} vs {m}: {rel:.2e}')
+        out[cfg] = {'meta': st['meta'], 'methods': by_method}
     return out
 
 
@@ -852,6 +902,7 @@ def section_i(args):
             reparam_strategy='prior',
             dense_mass=True,
             precondition='laplace',
+            hessian_method=args.fit_hessian_method,
             target_accept_prob=0.8,
             max_tree_depth=8,
             init_strategy='prior',

@@ -43,6 +43,13 @@ Key facts:
   a co-equal 45%. Use the numbers above.
 - Compile cost per (shape, config): ~0.6 s primal + ~1.6 s grad + NUTS kernel.
   Matters at 1e4+ fits if recompiled per galaxy (see Sec 3.2 item 3).
+  UPDATE 2026-07-11: those are Q-scale numbers; P-scale compiles are far
+  worse (grad cold 31 s CPU; second-order `jax.hessian` 26 min CPU / ~154 s
+  GH200 -- see Sec 3.2 item 4). The JAX persistent compilation cache
+  (`jax_compilation_cache_dir`, bench `--jax-cache-dir`) skips the XLA
+  compile (not the retrace) across processes of identical HLO and appears to
+  hit across different data of the same shape; validate on GH200 before
+  relying on it (known CUDA-backend cache fragility upstream).
 - Profiling script (untracked working notes):
   `experiments/sweverett/production_speedups/profile_flagship.py` (+ JSON).
 
@@ -543,13 +550,19 @@ no overboard spending until confident.
    One compiled `potential_fn(theta, data)` reused for all galaxies; vmap over
    the leading batch dim. The preconditioned numpyro path already builds a
    bare potential_fn (`numpyro.py:621`) -- use as template.
-4. JAX-native Laplace preconditioner: current impl is host-side scipy
-   L-BFGS-B multi-start + numpy eigh/inv (`task.py:552-670`) -- not
-   vmappable. Replace with optax/jax.scipy MAP + `vmap(jax.hessian)`.
-   DECISION (user): no backend preference IF equal-or-better accuracy AND
-   speed -- gate the swap on a head-to-head (same multi-start protocol,
-   compare MAP quality, Hessian conditioning, wallclock, and downstream
-   sampler ESS/wallclock on ~10 galaxies).
+4. JAX-native Laplace preconditioner: REFUTED 2026-07-11 (reverted b16acc3).
+   optax on-device MAP is ~2x slower than host scipy on BOTH CPU and GH200
+   (eval count, not host-sync, is the MAP cost). scipy L-BFGS-B stays.
+   SUPERSEDING FINDING (2026-07-11): the real precond bottleneck was the
+   per-call XLA COMPILE of the second-order `jax.hessian` graph (P: 26 min
+   compile on CPU, ~154 s on GH200; execute is seconds) -- a fresh
+   `jit(jax.hessian(lambda))` is built every call so even "warm" calls
+   recompile. Fixed via `hessian_method='fd'` (central differences of the
+   already-compiled gradient; zero new compile; inverse-mass agrees with
+   exact AD to ~1e-9, far below the eig_floor regularization). Vista A/B
+   pending; expect P precond ~155 s -> ~MAP cost. On-device precond is only
+   revisited IF keystone-3 batching later demands vmap-over-galaxies of the
+   precond itself.
 5. Result storage. DECISION (user): keep FULL chains until we are very
    confident; reduce detail only for full-scale paper-plot runs.
    ~1.3 MB/fit at defaults => ~13 GB per 1e4 fits: fine on disk, not in RAM.

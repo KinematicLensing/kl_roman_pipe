@@ -1012,6 +1012,32 @@ class TestLaplacePreconditioner:
         vcirc_map = pre.map_point[names.index('vel.vcirc')]
         assert abs(vcirc_map - true_pars['vel.vcirc']) / 200.0 < 0.1
 
+    def test_fd_hessian_matches_ad(self, simple_velocity_task):
+        """hessian_method='fd' must reproduce the 'ad' mass matrix.
+
+        Same seed -> identical MAP (deterministic scipy path), so only the
+        Hessian evaluation differs. Bound provenance: max relative element
+        difference of the regularized inverse mass measured at ~1e-9 on the
+        flagship joint task (fp64, fd_rel_step=1e-5, 2026-07-11); 1e-6 is
+        ~1000x that measurement.
+        """
+        task, _ = simple_velocity_task
+        pre_ad = task.laplace_preconditioner(n_starts=2, seed=0, hessian_method='ad')
+        pre_fd = task.laplace_preconditioner(n_starts=2, seed=0, hessian_method='fd')
+
+        np.testing.assert_array_equal(pre_fd.map_point, pre_ad.map_point)
+        ref = np.max(np.abs(pre_ad.inverse_mass_matrix))
+        assert (
+            np.max(np.abs(pre_fd.inverse_mass_matrix - pre_ad.inverse_mass_matrix))
+            < 1e-6 * ref
+        )
+
+    def test_invalid_hessian_method_raises(self, simple_velocity_task):
+        """Unknown hessian_method fails loudly."""
+        task, _ = simple_velocity_task
+        with pytest.raises(ValueError, match="hessian_method"):
+            task.laplace_preconditioner(hessian_method='bogus')
+
     def test_preconditioned_converges_and_recovers(self, simple_velocity_task):
         """precondition='laplace' yields a converged chain recovering truth."""
         task, true_pars = simple_velocity_task

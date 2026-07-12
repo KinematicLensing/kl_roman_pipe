@@ -326,6 +326,11 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # early-warmup transient (~2x faster warmup on correlated posteriors).
     precondition: str = 'none'
     n_map_starts: int = 4
+    # Hessian evaluation for the Laplace preconditioner: 'ad' = exact
+    # second-order autodiff (compiles a second-order graph per call); 'fd' =
+    # central differences of the compiled gradient (no new compilation). See
+    # InferenceTask.laplace_preconditioner.
+    hessian_method: str = 'ad'
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
@@ -336,6 +341,10 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
             )
         if self.n_map_starts < 1:
             raise ValueError("n_map_starts must be >= 1")
+        if self.hessian_method not in ('ad', 'fd'):
+            raise ValueError(
+                f"hessian_method must be 'ad' or 'fd', got '{self.hessian_method}'"
+            )
         if self.n_chains < 1:
             raise ValueError("n_chains must be >= 1")
         if self.chain_method not in (None, 'sequential', 'parallel', 'vectorized'):

@@ -665,7 +665,9 @@ class NumpyroSampler(Sampler):
         pre = self._preconditioner
         if pre is None:
             pre = self.task.laplace_preconditioner(
-                n_starts=self.config.n_map_starts, seed=seed
+                n_starts=self.config.n_map_starts,
+                seed=seed,
+                hessian_method=self.config.hessian_method,
             )
             self._preconditioner = pre
 
