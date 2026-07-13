@@ -71,13 +71,15 @@ APPTAINER_RUN="apptainer exec --nv \
   --env PYTHONPATH=$REPO:$PIPDIR \
   $CONTAINER"
 
-echo "=== GPU packing: section j, config P, N = 1,2,4,8 (MPS=$MPS_ON) ==="
+echo "=== GPU packing: section j, config P, N = 8,16,32 (MPS=$MPS_ON) ==="
 cd "$KIT"
-# --pack-vary-data: each child gets distinct mock data -> distinct baked-in
-# constants -> per-galaxy recompile included, as production pays it.
+# 2026-07-12 run measured N=1,2,4,8: 10.1 / 20.6 / 30.7 / 42.7 fits/node-hr
+# (not saturated). This sweep extends the curve: N=8 repeated as the
+# run-to-run anchor, then 16 and 32. --pack-vary-data: each child gets
+# distinct mock data -> per-galaxy recompile included, as production pays.
 $APPTAINER_RUN python "$KIT/bench_matrix.py" \
-  --sections j --pack-configs P --pack-workers 1,2,4,8 \
-  --pack-device gpu --pack-mem-fraction 0.85 \
+  --sections j --pack-configs P --pack-workers 8,16,32 \
+  --pack-device gpu --pack-mem-fraction 0.85 --pack-stagger-s 0.5 \
   --pack-vary-data --pack-vary-seeds --x64 1 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
   --jax-cache-dir "$CACHE" \

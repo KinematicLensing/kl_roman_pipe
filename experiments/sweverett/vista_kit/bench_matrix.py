@@ -195,6 +195,16 @@ def parse_args():
         help='section j gpu: total HBM fraction split across the N children',
     )
     p.add_argument(
+        '--pack-stagger-s',
+        type=float,
+        default=0.0,
+        help='section j: delay between child launches. 112 processes '
+        'initializing their JAX clients simultaneously can exhaust the '
+        'per-user thread limit (pthread_create EAGAIN aborts, observed on '
+        'Stampede3 SPR at N=112); ~0.5 s smears the init spike at '
+        'negligible makespan cost',
+    )
+    p.add_argument(
         '--force-no-galsim',
         action='store_true',
         help='block real galsim to simulate the Vista container',
@@ -1098,6 +1108,26 @@ def section_j(args):
     if device == 'cpu' and not have_taskset:
         print('  [j] WARNING: taskset unavailable (macOS?) -- children unpinned')
 
+    # total PRESENT cpus, not the affinity mask: under SLURM the batch step
+    # is often bound to 1 core (-n 1) while the job cgroup owns the whole
+    # node -- taskset can place children on any cgroup core regardless
+    total_cores = os.cpu_count() or 1
+    rlimit_note = None
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        if soft != resource.RLIM_INFINITY and (
+            hard == resource.RLIM_INFINITY or hard > soft
+        ):
+            # N children x (jax client + BLAS + python) threads can exceed
+            # the soft per-user process/thread limit -> pthread_create
+            # EAGAIN -> SIGABRT. Raise soft to hard; children inherit.
+            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+        rlimit_note = {'nproc_soft': soft, 'nproc_hard': hard}
+    except Exception as err:
+        rlimit_note = f'rlimit adjust failed: {err!r}'
+
     configs = args.pack_configs
     cfg_tag = configs.replace(',', '')
     widths = [int(x) for x in args.pack_workers.split(',')]
@@ -1108,6 +1138,12 @@ def section_j(args):
         'pack_fit_reps': args.pack_fit_reps,
         'vary_seeds': bool(args.pack_vary_seeds),
         'vary_data': bool(args.pack_vary_data),
+        'os_cpu_count': total_cores,
+        'sched_affinity_size': (
+            len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else None
+        ),
+        'rlimit_nproc': rlimit_note,
+        'stagger_s': args.pack_stagger_s,
         'points': {},
     }
 
@@ -1151,8 +1187,14 @@ def section_j(args):
                 cmd += ['--jax-cache-dir', args.jax_cache_dir]
             if args.force_no_galsim:
                 cmd.append('--force-no-galsim')
+            core = None
             if pin_cpu:
-                cmd = ['taskset', '-c', str(k)] + cmd
+                # spread children across the WHOLE node, not cores 0..N-1:
+                # contiguous ids pack one socket (N=56 on a 2x56 SPR left
+                # socket 1 idle and ran ~3x slow); stride-mapping uses both
+                # sockets' cores and memory controllers at every N
+                core = (k * total_cores) // N
+                cmd = ['taskset', '-c', str(core)] + cmd
             env = os.environ.copy()
             for var in (
                 'OMP_NUM_THREADS',
@@ -1181,6 +1223,7 @@ def section_j(args):
             procs.append(
                 (
                     k,
+                    core,
                     subprocess.Popen(
                         cmd,
                         cwd=KIT_DIR,
@@ -1192,12 +1235,14 @@ def section_j(args):
                     child_out,
                 )
             )
+            if args.pack_stagger_s > 0 and k < N - 1:
+                time.sleep(args.pack_stagger_s)
         children = {}
         n_fits_done = 0
-        for k, proc, logf, child_out in procs:
+        for k, core, proc, logf, child_out in procs:
             rc = proc.wait()
             logf.close()
-            row = {'returncode': rc}
+            row = {'returncode': rc, 'core': core}
             try:
                 with open(child_out) as f:
                     child = json.load(f)

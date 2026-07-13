@@ -36,7 +36,11 @@
 #SBATCH -e klpipe-spr-pack.%j.err
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -t 08:00:00
+#SBATCH -c 112                      # bind the batch step to ALL cores: with the
+                                    # default -c 1 the step gets a 1-core
+                                    # affinity mask (nproc=1) even on an
+                                    # exclusive node (observed 2026-07-12)
+#SBATCH -t 10:00:00
 #SBATCH -p spr
 #SBATCH -A JPL-SPHEREx
 
@@ -57,13 +61,17 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 HOSTTAG=$(hostname -s)
 cd "$KIT"
 
-echo "=== node: $(hostname) / $(nproc) cores ==="
-python -c "import jax; print('jax', jax.__version__, jax.devices())"
+# thread headroom: 112 jax processes need thousands of threads; raise the
+# soft per-user process limit to the hard cap (section j also does this
+# in-process, but do it here too so the numbers appear in the log)
+ulimit -u "$(ulimit -Hu)" 2>/dev/null || true
+echo "=== node: $(hostname) / $(nproc) cores visible / ulimit -u $(ulimit -u) ==="
+python -c "import os, jax; print('jax', jax.__version__, jax.devices(), 'os.cpu_count', os.cpu_count())"
 
 # sweep 1: Q contention curve (N=1 also warms the shared compile cache)
 python "$KIT/bench_matrix.py" \
   --sections j --pack-configs Q --pack-workers 1,56,112 \
-  --pack-device cpu --x64 1 \
+  --pack-device cpu --pack-stagger-s 0.5 --x64 1 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
   --jax-cache-dir "$CACHE" \
   --out "$KIT/results_spr_${STAMP}_${HOSTTAG}_packQ.json"
@@ -72,8 +80,9 @@ python "$KIT/bench_matrix.py" \
 # distinct mock data: data is baked into the jitted posterior as constants,
 # so this includes the per-galaxy recompile cost production actually pays.
 python "$KIT/bench_matrix.py" \
-  --sections j --pack-configs P --pack-workers 1,112 \
-  --pack-device cpu --pack-vary-data --pack-vary-seeds --x64 1 \
+  --sections j --pack-configs P --pack-workers 1,56,112 \
+  --pack-device cpu --pack-stagger-s 0.5 --pack-vary-data --pack-vary-seeds \
+  --x64 1 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
   --jax-cache-dir "$CACHE" \
   --out "$KIT/results_spr_${STAMP}_${HOSTTAG}_packP.json"

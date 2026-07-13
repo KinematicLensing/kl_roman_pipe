@@ -39,7 +39,12 @@ pip install --upgrade pip
 pip install --no-cache-dir jax numpyro scipy astropy pyyaml matplotlib
 
 echo "=== sanity ==="
-python - <<'EOF'
+# taskset -c 0: the XLA CPU client sizes its thread pool from the affinity
+# mask; unpinned on a 112-core login node it wants 100+ threads and login
+# ulimits kill it (pthread_create EAGAIN -> SIGABRT, observed 2026-07-12)
+PIN=""
+command -v taskset >/dev/null 2>&1 && PIN="taskset -c 0"
+if $PIN python - <<'EOF'
 import jax, numpyro, astropy, yaml, matplotlib, scipy
 print('jax', jax.__version__, jax.devices())
 assert jax.default_backend() == 'cpu'
@@ -48,5 +53,10 @@ import jax.numpy as jnp
 assert jnp.zeros(1).dtype == jnp.float64, 'x64 not working'
 print('venv sanity OK')
 EOF
+then :; else
+    echo "WARNING: sanity check crashed. If the trace shows pthread_create" >&2
+    echo "failure, that is the login-node thread limit, NOT a broken venv;" >&2
+    echo "re-run the check on a compute node (idev). Install itself succeeded." >&2
+fi
 
 echo "=== done; activate with: source $VENV/bin/activate ==="
