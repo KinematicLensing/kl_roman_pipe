@@ -1,0 +1,3 @@
+E0712 22:39:55.583626  853074 algebraic_simplifier.cc:10564] Algebraic simplifier is likely stuck in a circular simplification loop and ran for 50 runs on computation main.2123
+E0712 22:46:43.875050  853073 algebraic_simplifier.cc:10564] Algebraic simplifier is likely stuck in a circular simplification loop and ran for 50 runs on computation main.770
+E0712 22:48:03.456630  853074 algebraic_simplifier.cc:10564] Algebraic simplifier is likely stuck in a circular simplification loop and ran for 50 runs on computation region_10.2171

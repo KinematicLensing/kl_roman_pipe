@@ -1,0 +1,1542 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "j": {
+      "status": "ok",
+      "result": {
+        "device": "cpu",
+        "pack_configs": "Q",
+        "core_pinning": true,
+        "pack_fit_reps": 1,
+        "vary_seeds": false,
+        "vary_data": false,
+        "points": {
+          "1": {
+            "n_workers": 1,
+            "makespan_s": 1590.5845444416627,
+            "fits_completed": 1,
+            "fits_per_node_hour": 2.2633188613458426,
+            "child_wallclock_min_s": 1576.2576489103958,
+            "child_wallclock_max_s": 1576.2576489103958,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1576.2576489103958,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3500.484375
+                }
+              }
+            }
+          },
+          "56": {
+            "n_workers": 56,
+            "makespan_s": 4730.233293778263,
+            "fits_completed": 56,
+            "fits_per_node_hour": 42.619462398433306,
+            "child_wallclock_min_s": 3887.4760771412402,
+            "child_wallclock_max_s": 4706.240329838358,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4261.938111485913,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3146.515625
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 3887.4760771412402,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3166.8125
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4175.008758785203,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3142.9453125
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4313.58142163977,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3195.30078125
+                }
+              },
+              "4": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4654.21714125108,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3140.4296875
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4299.483088257723,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3142.15234375
+                }
+              },
+              "6": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4207.602064721286,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3198.2890625
+                }
+              },
+              "7": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4300.289807723835,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3145.29296875
+                }
+              },
+              "8": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4586.492585121654,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3173.05078125
+                }
+              },
+              "9": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4583.332953606732,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3197.59765625
+                }
+              },
+              "10": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4706.240329838358,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.62109375
+                }
+              },
+              "11": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4476.738726585172,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3219.2890625
+                }
+              },
+              "12": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4200.626786057837,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.0703125
+                }
+              },
+              "13": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4209.181702488102,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.515625
+                }
+              },
+              "14": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4654.379667650908,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3162.86328125
+                }
+              },
+              "15": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4430.578671504743,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.91796875
+                }
+              },
+              "16": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4576.322077487595,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3160.91015625
+                }
+              },
+              "17": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4252.642384761013,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3144.96484375
+                }
+              },
+              "18": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4450.922643626109,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.6796875
+                }
+              },
+              "19": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4590.87245931942,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3163.0625
+                }
+              },
+              "20": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4425.768890977837,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3172.21484375
+                }
+              },
+              "21": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4287.1954096686095,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3195.13671875
+                }
+              },
+              "22": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4485.615887630731,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3143.15625
+                }
+              },
+              "23": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4478.215562347323,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3143.0703125
+                }
+              },
+              "24": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4331.672876521014,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3161.37109375
+                }
+              },
+              "25": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4271.7741754436865,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3195.50390625
+                }
+              },
+              "26": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4427.221735156141,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.49609375
+                }
+              },
+              "27": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4367.747072119266,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3192.03125
+                }
+              },
+              "28": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4397.286589980125,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.71484375
+                }
+              },
+              "29": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4310.308220970444,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3144.40625
+                }
+              },
+              "30": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4497.569308821112,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3143.71875
+                }
+              },
+              "31": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4401.291915746406,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3142.2734375
+                }
+              },
+              "32": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4383.720551786944,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.01171875
+                }
+              },
+              "33": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4505.760239313357,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3146.61328125
+                }
+              },
+              "34": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4377.844109787606,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3145.93359375
+                }
+              },
+              "35": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4448.989641067572,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3145.609375
+                }
+              },
+              "36": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4661.903284650296,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3142.703125
+                }
+              },
+              "37": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4384.846297917888,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.140625
+                }
+              },
+              "38": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4359.6278489930555,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3143.6484375
+                }
+              },
+              "39": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 3949.0387605652213,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3150.73046875
+                }
+              },
+              "40": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4640.06600245554,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3198.96875
+                }
+              },
+              "41": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4383.561094041914,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3146.8203125
+                }
+              },
+              "42": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4239.180245839991,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.59765625
+                }
+              },
+              "43": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4264.244051692076,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3146.88671875
+                }
+              },
+              "44": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4624.551975348033,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3197.7734375
+                }
+              },
+              "45": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4096.648857854307,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3169.54296875
+                }
+              },
+              "46": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4233.723099051043,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3218.5078125
+                }
+              },
+              "47": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4285.588652736507,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3139.87890625
+                }
+              },
+              "48": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4395.417871305719,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3196.32421875
+                }
+              },
+              "49": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4684.744170400314,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3198.56640625
+                }
+              },
+              "50": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4238.945966831408,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3145.953125
+                }
+              },
+              "51": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4224.073396774009,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.80859375
+                }
+              },
+              "52": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4430.8097712136805,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.0390625
+                }
+              },
+              "53": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4256.581788699143,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3144.94921875
+                }
+              },
+              "54": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4667.047519608401,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3193.875
+                }
+              },
+              "55": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 4684.6012208154425,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3146.61328125
+                }
+              }
+            }
+          },
+          "112": {
+            "n_workers": 112,
+            "makespan_s": 1905.2847508816049,
+            "fits_completed": 35,
+            "fits_per_node_hour": 66.13184719066157,
+            "child_wallclock_min_s": 1779.683541532606,
+            "child_wallclock_max_s": 1859.0751045467332,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "1": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1794.74682862591,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.921875
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "error": "ipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 713, in bind_with_trace\n    return trace.process_primitive(self, args, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 1294, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/dispatch.py\", line 88, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "3": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1784.977013095282,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3213.21484375
+                }
+              },
+              "4": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1809.5326458932832,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.6875
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1789.0345507636666,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3226.18359375
+                }
+              },
+              "6": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "7": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1787.0248326873407,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3224.80859375
+                }
+              },
+              "8": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1788.764991817996,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3226.84765625
+                }
+              },
+              "9": {
+                "returncode": 0,
+                "error": "urn jnp.zeros((collection_size, *nx.shape), dtype=nx.dtype) * nx[None, ...]\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py\", line 774, in _operator_mul\n    return ufuncs.multiply(self, cast(ArrayLike, other))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py\", line 182, in __call__\n    return call(*args)\n           ^^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "10": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "11": {
+                "returncode": 0,
+                "error": "urn jnp.zeros((collection_size, *nx.shape), dtype=nx.dtype) * nx[None, ...]\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py\", line 774, in _operator_mul\n    return ufuncs.multiply(self, cast(ArrayLike, other))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py\", line 182, in __call__\n    return call(*args)\n           ^^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "12": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1780.4444555910304,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.5625
+                }
+              },
+              "13": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "14": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "15": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "16": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "17": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "18": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "19": {
+                "returncode": 0,
+                "error": "te-packages/jax/_src/cache_key.py\", line 223, in _hash_computation\n    canonical_ir = _canonicalize_ir(module, ignore_callbacks)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/cache_key.py\", line 216, in _canonicalize_ir\n    return _serialize_ir(m, ignore_callbacks)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/cache_key.py\", line 203, in _serialize_ir\n    m.operation.write_bytecode(file=output)\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "20": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "21": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1797.8902150485665,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3235.68359375
+                }
+              },
+              "22": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "23": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "24": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1801.6680752737448,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.37109375
+                }
+              },
+              "25": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "26": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "27": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "28": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "29": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "30": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1797.9074642891064,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.00390625
+                }
+              },
+              "31": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "32": {
+                "returncode": 0,
+                "error": "urn jnp.zeros((collection_size, *nx.shape), dtype=nx.dtype) * nx[None, ...]\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py\", line 774, in _operator_mul\n    return ufuncs.multiply(self, cast(ArrayLike, other))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py\", line 182, in __call__\n    return call(*args)\n           ^^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "33": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "34": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1803.742703706026,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.73828125
+                }
+              },
+              "35": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "36": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "37": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "38": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "39": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "40": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1790.4792425744236,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3184.171875
+                }
+              },
+              "41": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1802.0887179803103,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.28515625
+                }
+              },
+              "42": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "43": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "44": {
+                "returncode": 0,
+                "error": "       ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 538, in run\n    return self._run_preconditioned()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 728, in _run_preconditioned\n    log_probs = _batched_log_posterior_chunked(\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 144, in _batched_log_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n                          ^^^^^^^^^\nRuntimeError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "45": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "46": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "47": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "48": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1785.406401719898,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3228.8046875
+                }
+              },
+              "49": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "50": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "51": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "52": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1790.2592428177595,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3236.5234375
+                }
+              },
+              "53": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1783.859701759182,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3184.87890625
+                }
+              },
+              "54": {
+                "returncode": 0,
+                "error": "urn jnp.zeros((collection_size, *nx.shape), dtype=nx.dtype) * nx[None, ...]\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py\", line 774, in _operator_mul\n    return ufuncs.multiply(self, cast(ArrayLike, other))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py\", line 182, in __call__\n    return call(*args)\n           ^^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "55": {
+                "returncode": 0,
+                "error": "\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: YNNPACK operation failed: error\n"
+              },
+              "56": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1859.0751045467332,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.890625
+                }
+              },
+              "57": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "58": {
+                "returncode": 0,
+                "error": "        ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 538, in run\n    return self._run_preconditioned()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 728, in _run_preconditioned\n    log_probs = _batched_log_posterior_chunked(\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 144, in _batched_log_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n                          ^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "59": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "60": {
+                "returncode": 0,
+                "error": "potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jaxlib/mlir/dialects/_stablehlo_ops_gen.py\", line 131, in add\n    return AddOp(lhs=lhs, rhs=rhs, results=results, loc=loc, ip=ip).result\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "61": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "62": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1798.1510615730658,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3183.55078125
+                }
+              },
+              "63": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "64": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "65": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "66": {
+                "returncode": 0,
+                "error": "       ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jaxlib/mlir/dialects/_stablehlo_ops_gen.py\", line 7843, in select\n    return SelectOp(pred=pred, on_true=on_true, on_false=on_false, results=results, loc=loc, ip=ip).result\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "67": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "68": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "69": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "70": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "71": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "72": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1793.6824482204393,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3183.53125
+                }
+              },
+              "73": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1783.6039813291281,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3211.27734375
+                }
+              },
+              "74": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "75": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1786.443233110942,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.875
+                }
+              },
+              "76": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1786.5570783037692,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.50390625
+                }
+              },
+              "77": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "78": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1789.1141034234315,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3182.6484375
+                }
+              },
+              "79": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1786.371695118025,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.62109375
+                }
+              },
+              "80": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "81": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "82": {
+                "returncode": 0,
+                "error": "^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 144, in _batched_log_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n                          ^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/task.py\", line 510, in _log_posterior_jittable\n    log_like = self.log_likelihood(theta_sampled)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/task.py\", line 464, in log_likelihood\n    return self.likelihood_fn(theta_full)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "83": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "84": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1806.5286408793181,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3237.20703125
+                }
+              },
+              "85": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "86": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "87": {
+                "returncode": 0,
+                "error": "       ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jaxlib/mlir/dialects/_stablehlo_ops_gen.py\", line 7843, in select\n    return SelectOp(pred=pred, on_true=on_true, on_false=on_false, results=results, loc=loc, ip=ip).result\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "88": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1796.496074276045,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3226.234375
+                }
+              },
+              "89": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "90": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "91": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1787.9143095668405,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3182.25390625
+                }
+              },
+              "92": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "93": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "94": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1787.75219227653,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.0859375
+                }
+              },
+              "95": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1787.7762520946562,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.359375
+                }
+              },
+              "96": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "97": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "98": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1782.0553269693628,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.42578125
+                }
+              },
+              "99": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1780.772765907459,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3208.18359375
+                }
+              },
+              "100": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1794.741344419308,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3234.34375
+                }
+              },
+              "101": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "102": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1779.683541532606,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3247.16015625
+                }
+              },
+              "103": {
+                "returncode": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "104": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "105": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "106": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "107": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "108": {
+                "returncode": -6,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "109": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1796.7277614632621,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3239.91015625
+                }
+              },
+              "110": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 1800.4715105993673,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3238.546875
+                }
+              },
+              "111": {
+                "returncode": 0,
+                "error": "e 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              }
+            }
+          }
+        }
+      },
+      "wallclock_s": 8226.10375561472
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-12T20:22:15.251570",
+    "hostname": "c511-001.stampede3.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.24.1.el9_7.x86_64-x86_64-with-glibc2.34",
+    "machine": "x86_64",
+    "python": "3.12.9",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "default_backend": "cpu",
+    "devices": [
+      "cpu:0",
+      "cpu:1"
+    ],
+    "local_device_count": 2,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache_cpu",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--sections",
+      "j",
+      "--pack-configs",
+      "Q",
+      "--pack-workers",
+      "1,56,112",
+      "--pack-device",
+      "cpu",
+      "--x64",
+      "1",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache_cpu",
+      "--out",
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_spr_20260712_202205_c511-001_packQ.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "d9a5b7fd65fa4cf8fa66b5a0418a9f6cb897bb63",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 8226.10776116047
+}

@@ -1,0 +1,9 @@
+[bench] env: cpu ['cpu:0']  x64=True
+
+[bench] === section i ===
+[vista_kit] real galsim not importable -- installed minimal stub (PositionD only). Any code path needing more of galsim will fail loudly with AttributeError.
+[vista_kit] kl_pipe.psf.precompute_psf_fft / precompute_psf_kspace_fft patched: GaussianPSFShim -> analytic numpy path (no galsim, no x64 guard); other PSF types untouched.
+[bench] built config Q: {'rolls': 1, 'bands': 1, 'nlam': 25, 'dispersal_method': 'analytic', 'n_sampled': 17, 'build_s': 8.067177624441683, 'data_seed_offset': 0}
+  [i:Q] rep 0: full fit  4256.6s ->     0.8 fits/node-hr  (max Rhat 1.002, 466 div)
+
+[bench] wrote /work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_spr_20260712_202205_c511-001_packQ.json.j_Q_N56_w53.json (total 4272 s)
