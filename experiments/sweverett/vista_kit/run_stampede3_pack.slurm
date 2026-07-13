@@ -59,6 +59,8 @@ export PYTHONPATH="$REPO"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 HOSTTAG=$(hostname -s)
+RUNDIR="$KIT/results/stampede3_spr/${STAMP}_${HOSTTAG}"
+mkdir -p "$RUNDIR"
 cd "$KIT"
 
 # thread headroom: 112 jax processes need thousands of threads; raise the
@@ -68,24 +70,28 @@ ulimit -u "$(ulimit -Hu)" 2>/dev/null || true
 echo "=== node: $(hostname) / $(nproc) cores visible / ulimit -u $(ulimit -u) ==="
 python -c "import os, jax; print('jax', jax.__version__, jax.devices(), 'os.cpu_count', os.cpu_count())"
 
+# MEMORY, not cores, is the SPR ceiling (2026-07-12 run: ~3.2 GB RSS per Q
+# child; N=56 fit, N=112 OOM-stormed with jax RESOURCE_EXHAUSTED). Widths
+# below stay inside 128 GB; P children are bigger (cubes) so cap lower.
+
 # sweep 1: Q contention curve (N=1 also warms the shared compile cache)
 python "$KIT/bench_matrix.py" \
-  --sections j --pack-configs Q --pack-workers 1,56,112 \
+  --sections j --pack-configs Q --pack-workers 1,32,56 \
   --pack-device cpu --pack-stagger-s 0.5 --x64 1 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
   --jax-cache-dir "$CACHE" \
-  --out "$KIT/results_spr_${STAMP}_${HOSTTAG}_packQ.json"
+  --out "$RUNDIR/packQ.json"
 
 # sweep 2: P headline (the paper config). --pack-vary-data gives each child
 # distinct mock data: data is baked into the jitted posterior as constants,
 # so this includes the per-galaxy recompile cost production actually pays.
 python "$KIT/bench_matrix.py" \
-  --sections j --pack-configs P --pack-workers 1,56,112 \
+  --sections j --pack-configs P --pack-workers 1,16,28 \
   --pack-device cpu --pack-stagger-s 0.5 --pack-vary-data --pack-vary-seeds \
   --x64 1 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
   --jax-cache-dir "$CACHE" \
-  --out "$KIT/results_spr_${STAMP}_${HOSTTAG}_packP.json"
+  --out "$RUNDIR/packP.json"
 
-cp -v "$KIT"/results_spr_${STAMP}_*.json "$RESULTS/"
+cp -rv "$RUNDIR" "$RESULTS/spr_${STAMP}_${HOSTTAG}"
 echo "=== done; results in $RESULTS ==="

@@ -38,6 +38,8 @@ bash "$KIT/stage_vista.sh" "$TAG"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 HOSTTAG=$(hostname -s)
+RUNDIR="$KIT/results/vista_gh200/${STAMP}_${HOSTTAG}_scaling"
+mkdir -p "$RUNDIR"
 
 APPTAINER_RUN="apptainer exec --nv \
   --bind $REPO:$REPO \
@@ -54,7 +56,7 @@ $APPTAINER_RUN python "$KIT/bench_matrix.py" \
   --batch-sizes 1,2,4,8,16,32,64,128,256,512,1024,2048 \
   --precond-starts 1,4 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
-  --out "$KIT/results_scaling_${STAMP}_${HOSTTAG}.json"
+  --out "$RUNDIR/scaling.json"
 
-cp -v "$KIT"/results_scaling_${STAMP}_*.json "$RESULTS/"
+cp -rv "$RUNDIR" "$RESULTS/scaling_${STAMP}_${HOSTTAG}"
 echo "=== done; results in $RESULTS ==="
