@@ -1,0 +1,178 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "j": {
+      "status": "ok",
+      "result": {
+        "device": "cpu",
+        "pack_configs": "Q",
+        "core_pinning": true,
+        "pack_fit_reps": 1,
+        "vary_seeds": false,
+        "vary_data": false,
+        "points": {
+          "1": {
+            "n_workers": 1,
+            "makespan_s": 127.02534978091717,
+            "fits_completed": 1,
+            "fits_per_node_hour": 28.340799739650258,
+            "child_wallclock_min_s": 113.1641749413684,
+            "child_wallclock_max_s": 113.1641749413684,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 113.1641749413684,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 2.132321463681864,
+                  "n_divergences": 50,
+                  "min_ess": 1.2884880747928604,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 2370.33203125
+                }
+              }
+            }
+          },
+          "4": {
+            "n_workers": 4,
+            "makespan_s": 91.81005896814167,
+            "fits_completed": 4,
+            "fits_per_node_hour": 156.84555877473989,
+            "child_wallclock_min_s": 78.95931408181787,
+            "child_wallclock_max_s": 79.77073233667761,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 79.23741858825088,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 2.132321463681864,
+                  "n_divergences": 50,
+                  "min_ess": 1.2884880747928604,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 1969.9609375
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 79.77073233667761,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 2.132321463681864,
+                  "n_divergences": 50,
+                  "min_ess": 1.2884880747928604,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 1969.11328125
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 79.12448934093118,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 2.132321463681864,
+                  "n_divergences": 50,
+                  "min_ess": 1.2884880747928604,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 1969.98828125
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "Q": {
+                  "wallclock_s": 78.95931408181787,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 2.132321463681864,
+                  "n_divergences": 50,
+                  "min_ess": 1.2884880747928604,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 1972.2109375
+                }
+              }
+            }
+          }
+        }
+      },
+      "wallclock_s": 218.836164730601
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-12T20:23:43.679651",
+    "hostname": "c455-032.stampede3.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.24.1.el9_7.x86_64-x86_64-with-glibc2.34",
+    "machine": "x86_64",
+    "python": "3.12.9",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "default_backend": "cpu",
+    "devices": [
+      "cpu:0",
+      "cpu:1"
+    ],
+    "local_device_count": 2,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache_cpu",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "j",
+      "--pack-configs",
+      "Q",
+      "--pack-workers",
+      "1,4",
+      "--pack-device",
+      "cpu",
+      "--fit-samples",
+      "50",
+      "--fit-warmup",
+      "25",
+      "--fit-chains",
+      "2",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache_cpu",
+      "--out",
+      "smoke_spr.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "d9a5b7fd65fa4cf8fa66b5a0418a9f6cb897bb63",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 218.83837724197656
+}
