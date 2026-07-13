@@ -1,0 +1,1672 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "j": {
+      "status": "ok",
+      "result": {
+        "device": "cpu",
+        "pack_configs": "Q",
+        "core_pinning": true,
+        "pack_fit_reps": 1,
+        "vary_seeds": false,
+        "vary_data": false,
+        "os_cpu_count": 112,
+        "sched_affinity_size": 112,
+        "rlimit_nproc": {
+          "nproc_soft": 16384,
+          "nproc_hard": 16384
+        },
+        "stagger_s": 0.5,
+        "points": {
+          "1": {
+            "n_workers": 1,
+            "makespan_s": 1567.6395564293489,
+            "fits_completed": 1,
+            "fits_per_node_hour": 2.296446262302674,
+            "child_wallclock_min_s": 1552.6471754321828,
+            "child_wallclock_max_s": 1552.6471754321828,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "core": 0,
+                "Q": {
+                  "wallclock_s": 1552.6471754321828,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3197.375
+                }
+              }
+            }
+          },
+          "56": {
+            "n_workers": 56,
+            "makespan_s": 1886.7077125245705,
+            "fits_completed": 34,
+            "fits_per_node_hour": 64.87491368560671,
+            "child_wallclock_min_s": 1776.2012063469738,
+            "child_wallclock_max_s": 1862.3835529573262,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "core": 0,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "1": {
+                "returncode": 0,
+                "core": 2,
+                "Q": {
+                  "wallclock_s": 1785.1475293086842,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3187.046875
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "core": 4,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "3": {
+                "returncode": 0,
+                "core": 6,
+                "Q": {
+                  "wallclock_s": 1779.9844234222546,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3226.91796875
+                }
+              },
+              "4": {
+                "returncode": 0,
+                "core": 8,
+                "Q": {
+                  "wallclock_s": 1779.9474691944197,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3205.96484375
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "core": 10,
+                "Q": {
+                  "wallclock_s": 1812.4255572436377,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3211.57421875
+                }
+              },
+              "6": {
+                "returncode": 0,
+                "core": 12,
+                "Q": {
+                  "wallclock_s": 1792.4308933783323,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3187.859375
+                }
+              },
+              "7": {
+                "returncode": 0,
+                "core": 14,
+                "Q": {
+                  "wallclock_s": 1809.3986088568345,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3183.1484375
+                }
+              },
+              "8": {
+                "returncode": 0,
+                "core": 16,
+                "Q": {
+                  "wallclock_s": 1778.8170354394242,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.62109375
+                }
+              },
+              "9": {
+                "returncode": 0,
+                "core": 18,
+                "Q": {
+                  "wallclock_s": 1795.3780000135303,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3187.0078125
+                }
+              },
+              "10": {
+                "returncode": 0,
+                "core": 20,
+                "Q": {
+                  "wallclock_s": 1782.526722624898,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3244.50390625
+                }
+              },
+              "11": {
+                "returncode": 0,
+                "core": 22,
+                "Q": {
+                  "wallclock_s": 1786.6816958971322,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3220.77734375
+                }
+              },
+              "12": {
+                "returncode": 0,
+                "core": 24,
+                "Q": {
+                  "wallclock_s": 1803.6277590561658,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.9921875
+                }
+              },
+              "13": {
+                "returncode": 0,
+                "core": 26,
+                "Q": {
+                  "wallclock_s": 1784.144413297996,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3204.87890625
+                }
+              },
+              "14": {
+                "returncode": 0,
+                "core": 28,
+                "Q": {
+                  "wallclock_s": 1786.8652602648363,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3216.7734375
+                }
+              },
+              "15": {
+                "returncode": 0,
+                "core": 30,
+                "Q": {
+                  "wallclock_s": 1799.3206284157932,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3188.40625
+                }
+              },
+              "16": {
+                "returncode": 0,
+                "core": 32,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "17": {
+                "returncode": 0,
+                "core": 34,
+                "Q": {
+                  "wallclock_s": 1801.6076496038586,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3204.96484375
+                }
+              },
+              "18": {
+                "returncode": 0,
+                "core": 36,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "19": {
+                "returncode": 0,
+                "core": 38,
+                "Q": {
+                  "wallclock_s": 1780.3899800507352,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3218.41796875
+                }
+              },
+              "20": {
+                "returncode": 0,
+                "core": 40,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "21": {
+                "returncode": 0,
+                "core": 42,
+                "Q": {
+                  "wallclock_s": 1777.6273395353928,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.875
+                }
+              },
+              "22": {
+                "returncode": 0,
+                "core": 44,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "23": {
+                "returncode": 0,
+                "core": 46,
+                "Q": {
+                  "wallclock_s": 1778.5951962005347,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3217.140625
+                }
+              },
+              "24": {
+                "returncode": 0,
+                "core": 48,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "25": {
+                "returncode": 0,
+                "core": 50,
+                "Q": {
+                  "wallclock_s": 1778.7702258657664,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.18359375
+                }
+              },
+              "26": {
+                "returncode": 0,
+                "core": 52,
+                "Q": {
+                  "wallclock_s": 1792.0171935008839,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.9296875
+                }
+              },
+              "27": {
+                "returncode": 0,
+                "core": 54,
+                "Q": {
+                  "wallclock_s": 1796.9231120189652,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3186.984375
+                }
+              },
+              "28": {
+                "returncode": 0,
+                "core": 56,
+                "Q": {
+                  "wallclock_s": 1862.3835529573262,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3232.171875
+                }
+              },
+              "29": {
+                "returncode": 0,
+                "core": 58,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "30": {
+                "returncode": 0,
+                "core": 60,
+                "Q": {
+                  "wallclock_s": 1822.0401519061998,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3239.81640625
+                }
+              },
+              "31": {
+                "returncode": 0,
+                "core": 62,
+                "Q": {
+                  "wallclock_s": 1791.5974070476368,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3187.80078125
+                }
+              },
+              "32": {
+                "returncode": 0,
+                "core": 64,
+                "Q": {
+                  "wallclock_s": 1794.588412841782,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3234.0
+                }
+              },
+              "33": {
+                "returncode": 0,
+                "core": 66,
+                "Q": {
+                  "wallclock_s": 1843.3121403120458,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3228.859375
+                }
+              },
+              "34": {
+                "returncode": 0,
+                "core": 68,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "35": {
+                "returncode": 0,
+                "core": 70,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "36": {
+                "returncode": 0,
+                "core": 72,
+                "Q": {
+                  "wallclock_s": 1776.2012063469738,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 5021.7421875
+                }
+              },
+              "37": {
+                "returncode": 0,
+                "core": 74,
+                "Q": {
+                  "wallclock_s": 1781.9204981345683,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 5019.55859375
+                }
+              },
+              "38": {
+                "returncode": 0,
+                "core": 76,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "39": {
+                "returncode": 0,
+                "core": 78,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "40": {
+                "returncode": 0,
+                "core": 80,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "41": {
+                "returncode": 0,
+                "core": 82,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "42": {
+                "returncode": 0,
+                "core": 84,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "43": {
+                "returncode": 0,
+                "core": 86,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "44": {
+                "returncode": 0,
+                "core": 88,
+                "Q": {
+                  "wallclock_s": 1784.0810791254044,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3216.08203125
+                }
+              },
+              "45": {
+                "returncode": 0,
+                "core": 90,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "46": {
+                "returncode": 0,
+                "core": 92,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "47": {
+                "returncode": 0,
+                "core": 94,
+                "Q": {
+                  "wallclock_s": 1792.2725327452645,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3230.64453125
+                }
+              },
+              "48": {
+                "returncode": 0,
+                "core": 96,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "49": {
+                "returncode": 0,
+                "core": 98,
+                "Q": {
+                  "wallclock_s": 1777.1930614244193,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3242.32421875
+                }
+              },
+              "50": {
+                "returncode": 0,
+                "core": 100,
+                "Q": {
+                  "wallclock_s": 1788.311051003635,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3201.17578125
+                }
+              },
+              "51": {
+                "returncode": 0,
+                "core": 102,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "52": {
+                "returncode": 0,
+                "core": 104,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "53": {
+                "returncode": 0,
+                "core": 106,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "54": {
+                "returncode": 0,
+                "core": 108,
+                "Q": {
+                  "wallclock_s": 1793.0455865431577,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3206.578125
+                }
+              },
+              "55": {
+                "returncode": 0,
+                "core": 110,
+                "Q": {
+                  "wallclock_s": 1796.8613709257916,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3189.5
+                }
+              }
+            }
+          },
+          "112": {
+            "n_workers": 112,
+            "makespan_s": 2243.4942254079506,
+            "fits_completed": 51,
+            "fits_per_node_hour": 81.83662695481853,
+            "child_wallclock_min_s": 1956.1724512334913,
+            "child_wallclock_max_s": 2233.2345861764625,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "core": 0,
+                "Q": {
+                  "wallclock_s": 2233.2345861764625,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3135.79296875
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "core": 1,
+                "Q": {
+                  "wallclock_s": 2187.6121860696003,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3210.9765625
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "core": 2,
+                "Q": {
+                  "wallclock_s": 2174.2256970424205,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.96875
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "core": 3,
+                "Q": {
+                  "wallclock_s": 2185.996776012704,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3213.23828125
+                }
+              },
+              "4": {
+                "returncode": 0,
+                "core": 4,
+                "Q": {
+                  "wallclock_s": 2194.472158236429,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3118.16796875
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "core": 5,
+                "Q": {
+                  "wallclock_s": 2169.570995387621,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.53125
+                }
+              },
+              "6": {
+                "returncode": 0,
+                "core": 6,
+                "Q": {
+                  "wallclock_s": 2167.7896179184318,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.89453125
+                }
+              },
+              "7": {
+                "returncode": 0,
+                "core": 7,
+                "Q": {
+                  "wallclock_s": 2182.866566931829,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.79296875
+                }
+              },
+              "8": {
+                "returncode": 0,
+                "core": 8,
+                "Q": {
+                  "wallclock_s": 2184.8671151231974,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3238.6953125
+                }
+              },
+              "9": {
+                "returncode": 0,
+                "core": 9,
+                "Q": {
+                  "wallclock_s": 2169.5623055575415,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.83203125
+                }
+              },
+              "10": {
+                "returncode": 0,
+                "core": 10,
+                "Q": {
+                  "wallclock_s": 2189.568314109929,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3130.2265625
+                }
+              },
+              "11": {
+                "returncode": -6,
+                "core": 11,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "12": {
+                "returncode": 0,
+                "core": 12,
+                "error": "ython3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Error dispatching computation: YNNPACK operation failed: error\n"
+              },
+              "13": {
+                "returncode": 0,
+                "core": 13,
+                "error": "te-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jaxlib/mlir/dialects/func.py\", line 63, in __init__\n    super().__init__(sym_name, type, sym_visibility=sym_visibility, loc=loc, ip=ip)\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jaxlib/mlir/dialects/_func_ops_gen.py\", line 399, in __init__\n    _ods_context = _ods_get_default_loc_context(loc)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "14": {
+                "returncode": 0,
+                "core": 14,
+                "Q": {
+                  "wallclock_s": 2191.405307889916,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3156.74609375
+                }
+              },
+              "15": {
+                "returncode": 0,
+                "core": 15,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "16": {
+                "returncode": 0,
+                "core": 16,
+                "Q": {
+                  "wallclock_s": 2168.1087859347463,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3188.0390625
+                }
+              },
+              "17": {
+                "returncode": 0,
+                "core": 17,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "18": {
+                "returncode": 0,
+                "core": 18,
+                "Q": {
+                  "wallclock_s": 2183.9903062516823,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3161.2734375
+                }
+              },
+              "19": {
+                "returncode": 0,
+                "core": 19,
+                "error": "py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Error dispatching computation: Error dispatching computation: Out of memory allocating 9955592 bytes.\n"
+              },
+              "20": {
+                "returncode": 0,
+                "core": 20,
+                "Q": {
+                  "wallclock_s": 2176.050069008954,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3200.32421875
+                }
+              },
+              "21": {
+                "returncode": 0,
+                "core": 21,
+                "Q": {
+                  "wallclock_s": 2193.126653335057,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3133.44140625
+                }
+              },
+              "22": {
+                "returncode": 0,
+                "core": 22,
+                "Q": {
+                  "wallclock_s": 2188.4289212245494,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3444.5234375
+                }
+              },
+              "23": {
+                "returncode": -6,
+                "core": 23,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "24": {
+                "returncode": 0,
+                "core": 24,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "25": {
+                "returncode": 0,
+                "core": 25,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "26": {
+                "returncode": 0,
+                "core": 26,
+                "Q": {
+                  "wallclock_s": 2185.518526840955,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3136.2421875
+                }
+              },
+              "27": {
+                "returncode": 0,
+                "core": 27,
+                "Q": {
+                  "wallclock_s": 2175.112547135912,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3199.23828125
+                }
+              },
+              "28": {
+                "returncode": 0,
+                "core": 28,
+                "Q": {
+                  "wallclock_s": 2185.3233486469835,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3173.515625
+                }
+              },
+              "29": {
+                "returncode": 1,
+                "core": 29,
+                "error": "child output unreadable: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')"
+              },
+              "30": {
+                "returncode": 0,
+                "core": 30,
+                "Q": {
+                  "wallclock_s": 2186.0474507603794,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3174.6875
+                }
+              },
+              "31": {
+                "returncode": 0,
+                "core": 31,
+                "Q": {
+                  "wallclock_s": 2188.889255828224,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3143.09765625
+                }
+              },
+              "32": {
+                "returncode": 0,
+                "core": 32,
+                "Q": {
+                  "wallclock_s": 2180.7361173387617,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3138.1875
+                }
+              },
+              "33": {
+                "returncode": 0,
+                "core": 33,
+                "Q": {
+                  "wallclock_s": 2180.352534939535,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3139.89453125
+                }
+              },
+              "34": {
+                "returncode": 0,
+                "core": 34,
+                "Q": {
+                  "wallclock_s": 2191.7139911111444,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3172.25
+                }
+              },
+              "35": {
+                "returncode": 0,
+                "core": 35,
+                "Q": {
+                  "wallclock_s": 2170.322745894082,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3186.1640625
+                }
+              },
+              "36": {
+                "returncode": 0,
+                "core": 36,
+                "Q": {
+                  "wallclock_s": 2175.190482868813,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3162.6171875
+                }
+              },
+              "37": {
+                "returncode": 0,
+                "core": 37,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "38": {
+                "returncode": 0,
+                "core": 38,
+                "Q": {
+                  "wallclock_s": 2172.550738297403,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3210.24609375
+                }
+              },
+              "39": {
+                "returncode": 0,
+                "core": 39,
+                "Q": {
+                  "wallclock_s": 2171.3691983921453,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3134.26171875
+                }
+              },
+              "40": {
+                "returncode": 0,
+                "core": 40,
+                "Q": {
+                  "wallclock_s": 2181.088156734593,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3116.85546875
+                }
+              },
+              "41": {
+                "returncode": 0,
+                "core": 41,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "42": {
+                "returncode": 0,
+                "core": 42,
+                "Q": {
+                  "wallclock_s": 2176.758052402176,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3119.8828125
+                }
+              },
+              "43": {
+                "returncode": 0,
+                "core": 43,
+                "Q": {
+                  "wallclock_s": 2168.9011596636847,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3239.8671875
+                }
+              },
+              "44": {
+                "returncode": 0,
+                "core": 44,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "45": {
+                "returncode": 0,
+                "core": 45,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "46": {
+                "returncode": -11,
+                "core": 46,
+                "error": "^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nRuntimeError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "47": {
+                "returncode": 0,
+                "core": 47,
+                "Q": {
+                  "wallclock_s": 2171.093332494609,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3155.62890625
+                }
+              },
+              "48": {
+                "returncode": 0,
+                "core": 48,
+                "error": " return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Error dispatching computation: Error dispatching computation: Error dispatching computation: Out of memory allocating 2359296 bytes.\n"
+              },
+              "49": {
+                "returncode": 0,
+                "core": 49,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "50": {
+                "returncode": 0,
+                "core": 50,
+                "Q": {
+                  "wallclock_s": 2171.1242054915056,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3133.07421875
+                }
+              },
+              "51": {
+                "returncode": 0,
+                "core": 51,
+                "error": "ipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 713, in bind_with_trace\n    return trace.process_primitive(self, args, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 1294, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/dispatch.py\", line 88, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "52": {
+                "returncode": 0,
+                "core": 52,
+                "error": "o[0], inverse_mass_matrix, dense_mass)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 507, in _initialize_mass_matrix\n    mass_matrix_sqrt = solve_triangular(\n                       ^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/scipy/linalg.py\", line 1368, in solve_triangular\n    return _solve_triangular(a, b, trans, lower, unit_diagonal)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "53": {
+                "returncode": 0,
+                "core": 53,
+                "error": "ipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 713, in bind_with_trace\n    return trace.process_primitive(self, args, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 1294, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/dispatch.py\", line 88, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "54": {
+                "returncode": -6,
+                "core": 54,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "55": {
+                "returncode": 0,
+                "core": 55,
+                "Q": {
+                  "wallclock_s": 2181.5572242066264,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3141.69921875
+                }
+              },
+              "56": {
+                "returncode": 0,
+                "core": 56,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "57": {
+                "returncode": 0,
+                "core": 57,
+                "Q": {
+                  "wallclock_s": 1989.841134342365,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3186.5703125
+                }
+              },
+              "58": {
+                "returncode": 0,
+                "core": 58,
+                "Q": {
+                  "wallclock_s": 1971.4619948128238,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3239.6875
+                }
+              },
+              "59": {
+                "returncode": 0,
+                "core": 59,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "60": {
+                "returncode": 0,
+                "core": 60,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "61": {
+                "returncode": 0,
+                "core": 61,
+                "error": "rn jnp.zeros((collection_size, *nx.shape), dtype=nx.dtype) * nx[None, ...]\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py\", line 774, in _operator_mul\n    return ufuncs.multiply(self, cast(ArrayLike, other))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py\", line 182, in __call__\n    return call(*args)\n           ^^^^^^^^^^^\nRuntimeError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "62": {
+                "returncode": 0,
+                "core": 62,
+                "Q": {
+                  "wallclock_s": 1966.752802459523,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3239.2734375
+                }
+              },
+              "63": {
+                "returncode": 0,
+                "core": 63,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "64": {
+                "returncode": 1,
+                "core": 64,
+                "error": "child output unreadable: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')"
+              },
+              "65": {
+                "returncode": 0,
+                "core": 65,
+                "Q": {
+                  "wallclock_s": 1962.6388089461252,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3239.15625
+                }
+              },
+              "66": {
+                "returncode": -6,
+                "core": 66,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "67": {
+                "returncode": 0,
+                "core": 67,
+                "error": "src/random/prng.py\", line 626, in random_split_impl_base\n    return split(base_arr)\n           ^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/random/prng.py\", line 625, in <lambda>\n    split = iterated_vmap_unary(keys_ndim, lambda k: impl.split(k, shape))\n                                                     ^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/random/threefry2x32.py\", line 284, in threefry_split\n    return _threefry_split(key, shape)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "68": {
+                "returncode": -6,
+                "core": 68,
+                "error": "child output unreadable: FileNotFoundError(2, 'No such file or directory')"
+              },
+              "69": {
+                "returncode": 0,
+                "core": 69,
+                "error": "02/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 45209792 bytes.\n"
+              },
+              "70": {
+                "returncode": 0,
+                "core": 70,
+                "Q": {
+                  "wallclock_s": 1989.4976763129234,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3236.86328125
+                }
+              },
+              "71": {
+                "returncode": 0,
+                "core": 71,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "72": {
+                "returncode": 0,
+                "core": 72,
+                "error": "^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 144, in _batched_log_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n                          ^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/task.py\", line 510, in _log_posterior_jittable\n    log_like = self.log_likelihood(theta_sampled)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/task.py\", line 464, in log_likelihood\n    return self.likelihood_fn(theta_full)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "73": {
+                "returncode": 0,
+                "core": 73,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "74": {
+                "returncode": 0,
+                "core": 74,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "75": {
+                "returncode": 0,
+                "core": 75,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "76": {
+                "returncode": 0,
+                "core": 76,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "77": {
+                "returncode": 0,
+                "core": 77,
+                "Q": {
+                  "wallclock_s": 1973.9027354288846,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.01953125
+                }
+              },
+              "78": {
+                "returncode": 0,
+                "core": 78,
+                "error": "t64) * scale\n           ^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 300, in __float__\n    return self._value.__float__()\n           ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Out of memory allocating 45209792 bytes.\n"
+              },
+              "79": {
+                "returncode": 0,
+                "core": 79,
+                "Q": {
+                  "wallclock_s": 1964.1895715780556,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3187.140625
+                }
+              },
+              "80": {
+                "returncode": 0,
+                "core": 80,
+                "Q": {
+                  "wallclock_s": 1995.207615251653,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3240.80859375
+                }
+              },
+              "81": {
+                "returncode": 0,
+                "core": 81,
+                "error": "t64) * scale\n           ^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 300, in __float__\n    return self._value.__float__()\n           ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Out of memory allocating 45209792 bytes.\n"
+              },
+              "82": {
+                "returncode": 0,
+                "core": 82,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "83": {
+                "returncode": 0,
+                "core": 83,
+                "Q": {
+                  "wallclock_s": 1965.9630195228383,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3243.8984375
+                }
+              },
+              "84": {
+                "returncode": 0,
+                "core": 84,
+                "Q": {
+                  "wallclock_s": 1968.7651509372517,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3241.89453125
+                }
+              },
+              "85": {
+                "returncode": 0,
+                "core": 85,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "86": {
+                "returncode": 0,
+                "core": 86,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "87": {
+                "returncode": 0,
+                "core": 87,
+                "error": "/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Error dispatching computation: Out of memory allocating 45260200 bytes.\n"
+              },
+              "88": {
+                "returncode": 0,
+                "core": 88,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "89": {
+                "returncode": 0,
+                "core": 89,
+                "error": "/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Error dispatching computation: Out of memory allocating 45260200 bytes.\n"
+              },
+              "90": {
+                "returncode": 0,
+                "core": 90,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "91": {
+                "returncode": 0,
+                "core": 91,
+                "error": "t64) * scale\n           ^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 300, in __float__\n    return self._value.__float__()\n           ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Out of memory allocating 45209792 bytes.\n"
+              },
+              "92": {
+                "returncode": 0,
+                "core": 92,
+                "Q": {
+                  "wallclock_s": 1962.813669594936,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3187.48046875
+                }
+              },
+              "93": {
+                "returncode": 0,
+                "core": 93,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "94": {
+                "returncode": 0,
+                "core": 94,
+                "error": "t64) * scale\n           ^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 300, in __float__\n    return self._value.__float__()\n           ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Out of memory allocating 45209792 bytes.\n"
+              },
+              "95": {
+                "returncode": 0,
+                "core": 95,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "96": {
+                "returncode": 0,
+                "core": 96,
+                "error": "te-packages/jax/_src/cache_key.py\", line 223, in _hash_computation\n    canonical_ir = _canonicalize_ir(module, ignore_callbacks)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/cache_key.py\", line 216, in _canonicalize_ir\n    return _serialize_ir(m, ignore_callbacks)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/cache_key.py\", line 203, in _serialize_ir\n    m.operation.write_bytecode(file=output)\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "97": {
+                "returncode": 0,
+                "core": 97,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "98": {
+                "returncode": 0,
+                "core": 98,
+                "Q": {
+                  "wallclock_s": 1956.1724512334913,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3243.76171875
+                }
+              },
+              "99": {
+                "returncode": 0,
+                "core": 99,
+                "Q": {
+                  "wallclock_s": 1959.175864610821,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3242.1328125
+                }
+              },
+              "100": {
+                "returncode": 0,
+                "core": 100,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "101": {
+                "returncode": 0,
+                "core": 101,
+                "Q": {
+                  "wallclock_s": 1982.4314412456006,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3204.0390625
+                }
+              },
+              "102": {
+                "returncode": 0,
+                "core": 102,
+                "error": "t64) * scale\n           ^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 300, in __float__\n    return self._value.__float__()\n           ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Error dispatching computation: Out of memory allocating 45209792 bytes.\n"
+              },
+              "103": {
+                "returncode": 0,
+                "core": 103,
+                "error": "^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 496, in _single_chain_mcmc\n    collect_vals = fori_collect(\n                   ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/util.py\", line 412, in fori_collect\n    last_val, collection, _, _ = maybe_jit(\n                                 ^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "104": {
+                "returncode": 0,
+                "core": 104,
+                "error": "l__\n    fx = self.f(np.copy(x), *self.args)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/scipy/optimize/_optimize.py\", line 80, in __call__\n    self._compute_if_needed(x, *args)\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/scipy/optimize/_optimize.py\", line 74, in _compute_if_needed\n    fg = self.fun(x, *args)\n         ^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/task.py\", line 664, in neg_u\n    v, g = val_and_grad(theta)\n           ^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "105": {
+                "returncode": 0,
+                "core": 105,
+                "error": "^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 538, in run\n    return self._run_preconditioned()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 728, in _run_preconditioned\n    log_probs = _batched_log_posterior_chunked(\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 144, in _batched_log_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n                          ^^^^^^^^^\nSystemError: error return without exception set\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "106": {
+                "returncode": 0,
+                "core": 106,
+                "Q": {
+                  "wallclock_s": 1958.8402495086193,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3202.18359375
+                }
+              },
+              "107": {
+                "returncode": 0,
+                "core": 107,
+                "error": "rs.py\", line 296, in _norm_ppf\n    return jnp.sqrt(2.0) * jax.scipy.special.erfinv(2.0 * p - 1.0)\n                                                    ~~~~^~~\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py\", line 787, in _operator_rmul\n    return ufuncs.multiply(cast(ArrayLike, other), self)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py\", line 182, in __call__\n    return call(*args)\n           ^^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "108": {
+                "returncode": 0,
+                "core": 108,
+                "error": "/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n"
+              },
+              "109": {
+                "returncode": 0,
+                "core": 109,
+                "Q": {
+                  "wallclock_s": 1962.8240563524887,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0018099086573538,
+                  "n_divergences": 466,
+                  "min_ess": 2064.2779594959156,
+                  "chain_method": "sequential",
+                  "peak_rss_mb": 3242.53515625
+                }
+              },
+              "110": {
+                "returncode": 0,
+                "core": 110,
+                "error": "ipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 713, in bind_with_trace\n    return trace.process_primitive(self, args, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 1294, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/dispatch.py\", line 88, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              },
+              "111": {
+                "returncode": 0,
+                "core": 111,
+                "error": "ipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 713, in bind_with_trace\n    return trace.process_primitive(self, args, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/core.py\", line 1294, in process_primitive\n    return primitive.impl(*args, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/dispatch.py\", line 88, in apply_primitive\n    outs = fun(*args)\n           ^^^^^^^^^^\nMemoryError: std::bad_alloc\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n"
+              }
+            }
+          }
+        }
+      },
+      "wallclock_s": 5697.844945560209
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-13T10:21:28.160980",
+    "hostname": "c512-083.stampede3.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.24.1.el9_7.x86_64-x86_64-with-glibc2.34",
+    "machine": "x86_64",
+    "python": "3.12.9",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "default_backend": "cpu",
+    "devices": [
+      "cpu:0",
+      "cpu:1"
+    ],
+    "local_device_count": 2,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache_cpu",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--sections",
+      "j",
+      "--pack-configs",
+      "Q",
+      "--pack-workers",
+      "1,56,112",
+      "--pack-device",
+      "cpu",
+      "--pack-stagger-s",
+      "0.5",
+      "--x64",
+      "1",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache_cpu",
+      "--out",
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_spr_20260713_102116_c512-083_packQ.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "22bd9f5b675a14c81baffaccd42f2ac57b551759",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 5697.848415921442
+}

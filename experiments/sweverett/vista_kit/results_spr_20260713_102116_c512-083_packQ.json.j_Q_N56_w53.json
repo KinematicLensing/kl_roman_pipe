@@ -1,0 +1,98 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 1360, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 1016, in section_i\n    res = sampler.run()  # includes the Laplace preconditioner build\n          ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 538, in run\n    return self._run_preconditioned()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 728, in _run_preconditioned\n    log_probs = _batched_log_posterior_chunked(\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 144, in _batched_log_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/profiler.py\", line 420, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/array.py\", line 623, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory allocating 1906393088 bytes.\n",
+      "wallclock_s": 1698.891178054735
+    },
+    "j": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-13T10:48:04.094504",
+    "hostname": "c512-083.stampede3.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.24.1.el9_7.x86_64-x86_64-with-glibc2.34",
+    "machine": "x86_64",
+    "python": "3.12.9",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "default_backend": "cpu",
+    "devices": [
+      "cpu:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache_cpu",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 1
+    },
+    "argv": [
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--sections",
+      "i",
+      "--configs",
+      "Q",
+      "--x64",
+      "1",
+      "--cpu-devices",
+      "1",
+      "--nreps",
+      "30",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--fit-hessian-method",
+      "fd",
+      "--fit-reps",
+      "1",
+      "--fit-seed",
+      "42",
+      "--data-seed-offset",
+      "0",
+      "--out",
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_spr_20260713_102116_c512-083_packQ.json.j_Q_N56_w53.json",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache_cpu"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "22bd9f5b675a14c81baffaccd42f2ac57b551759",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 1698.893414675258
+}
