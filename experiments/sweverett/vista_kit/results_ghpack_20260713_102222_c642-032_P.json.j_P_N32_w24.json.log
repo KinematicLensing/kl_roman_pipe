@@ -1,0 +1,11 @@
+W0713 10:59:05.245730 2987612 cuda_command_buffer.cc:844] Retry CUDA graph instantiation after OOM error
+[bench] env: gpu ['cuda:0']  x64=True
+
+[bench] === section i ===
+[vista_kit] real galsim not importable -- installed minimal stub (PositionD only). Any code path needing more of galsim will fail loudly with AttributeError.
+[vista_kit] kl_pipe.psf.precompute_psf_fft / precompute_psf_kspace_fft patched: GaussianPSFShim -> analytic numpy path (no galsim, no x64 guard); other PSF types untouched.
+[bench] built config P: {'rolls': 4, 'bands': 2, 'nlam': 32, 'dispersal_method': 'analytic', 'n_sampled': 22, 'build_s': 9.82709195278585, 'data_seed_offset': 240000}
+[bench] section i ERRORED (recorded in JSON):
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 277 (total of 10 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']
+
+[bench] wrote /work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_ghpack_20260713_102222_c642-032_P.json.j_P_N32_w24.json (total 238 s)

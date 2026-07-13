@@ -1,0 +1,10 @@
+W0713 11:18:19.993731 2985452 hlo_rematerialization.cc:3233] Can't reduce memory use below 2.40GiB (2577635562 bytes) by rematerialization; only reduced to 2.55GiB (2734885768 bytes), down from 2.61GiB (2799963016 bytes) originally
+[bench] env: gpu ['cuda:0']  x64=True
+
+[bench] === section i ===
+[vista_kit] real galsim not importable -- installed minimal stub (PositionD only). Any code path needing more of galsim will fail loudly with AttributeError.
+[vista_kit] kl_pipe.psf.precompute_psf_fft / precompute_psf_kspace_fft patched: GaussianPSFShim -> analytic numpy path (no galsim, no x64 guard); other PSF types untouched.
+[bench] built config P: {'rolls': 4, 'bands': 2, 'nlam': 32, 'dispersal_method': 'analytic', 'n_sampled': 22, 'build_s': 9.77729431912303, 'data_seed_offset': 200000}
+  [i:P] rep 0: full fit  1415.9s ->     2.5 fits/node-hr  (max Rhat 1.002, 297 div)
+
+[bench] wrote /work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_ghpack_20260713_102222_c642-032_P.json.j_P_N32_w20.json (total 1427 s)
