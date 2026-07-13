@@ -24,6 +24,10 @@ One self-contained runner; writes one timestamped JSON. Sections:
      cross-method mass-matrix equivalence -- isolates the survey bottleneck
   i  full-fit throughput (opt-in): end-to-end precond + NUTS at realistic
      sample counts -> fits/node-hour + min-ESS/s (paper-planning number)
+  j  node-packing throughput (opt-in): N independent section-i child
+     processes on one node (CPU: 1 core-pinned fit per core; GPU: N
+     processes sharing the device via mem-fraction) -> aggregate
+     fits/node-hour at pack width N. The GPU-vs-CPU platform decider.
 
 Every section degrades gracefully: failures are caught and the traceback
 is recorded in the JSON under the section (never silently skipped);
@@ -67,7 +71,7 @@ def parse_args():
     p.add_argument(
         '--sections',
         default='a,b,c,d,e',
-        help='comma list from {a,b,c,d,e,g,h} (f always runs; g,h opt-in)',
+        help='comma list from {a,b,c,d,e,g,h,i,j} (f always runs; g,h,i,j opt-in)',
     )
     p.add_argument(
         '--configs', default='Q,P', help='comma list from {Q,P} for sections a/c'
@@ -131,6 +135,65 @@ def parse_args():
         '--fit-warmup', type=int, default=500, help='section i: NUTS warmup/chain'
     )
     p.add_argument('--fit-chains', type=int, default=4, help='section i: NUTS chains')
+    p.add_argument(
+        '--fit-seed', type=int, default=42, help='section i: NUTS seed (base)'
+    )
+    p.add_argument(
+        '--data-seed-offset',
+        type=int,
+        default=0,
+        help='section i: mock-noise seed offset (distinct data -> distinct '
+        'baked-in constants -> models the per-galaxy recompile cost)',
+    )
+    p.add_argument(
+        '--fit-reps',
+        type=int,
+        default=1,
+        help='section i: sequential full fits per config (rep r uses seed+101*r; '
+        'reps>1 expose the steady-state per-fit cost after compile)',
+    )
+    p.add_argument(
+        '--pack-workers',
+        default='2',
+        help='section j: comma list of pack widths N (child processes per node)',
+    )
+    p.add_argument(
+        '--pack-configs',
+        default='P',
+        help='section j: config(s) each child fits (keep to ONE for clean numbers)',
+    )
+    p.add_argument(
+        '--pack-fit-reps',
+        type=int,
+        default=1,
+        help='section j: sequential fits per child (amortizes child startup)',
+    )
+    p.add_argument(
+        '--pack-vary-seeds',
+        action='store_true',
+        help='section j: distinct NUTS seed per worker (realistic trajectory-length '
+        'spread; default = same seed for a clean contention measurement)',
+    )
+    p.add_argument(
+        '--pack-vary-data',
+        action='store_true',
+        help='section j: distinct mock DATA per worker. Data is baked into the '
+        'jitted posterior as constants, so distinct data defeats the shared '
+        'compile cache exactly like distinct galaxies do in production -- use '
+        'this for the honest production throughput number',
+    )
+    p.add_argument(
+        '--pack-device',
+        default='auto',
+        choices=('auto', 'cpu', 'gpu'),
+        help='section j: pinning strategy; auto = jax.default_backend()',
+    )
+    p.add_argument(
+        '--pack-mem-fraction',
+        type=float,
+        default=0.85,
+        help='section j gpu: total HBM fraction split across the N children',
+    )
     p.add_argument(
         '--force-no-galsim',
         action='store_true',
@@ -236,14 +299,17 @@ def time_fn(fn, *args, nreps=30):
 _STATE: dict = {}
 
 
-def get_state(config_name: str):
-    if config_name in _STATE:
-        return _STATE[config_name]
+def get_state(config_name: str, data_seed_offset: int = 0):
+    key = (config_name, data_seed_offset)
+    if key in _STATE:
+        return _STATE[key]
     import tasks_vista as tv
 
     t0 = time.perf_counter()
     if config_name == 'Q':
-        source, priors, task, obs_f087, obs_grism, true = tv.build_flagship_task()
+        source, priors, task, obs_f087, obs_grism, true = tv.build_flagship_task(
+            data_seed_offset=data_seed_offset
+        )
         nlam = int(len(obs_grism.cube_pars.lambda_grid))
         # nlam is vestigial under analytic dispersal (no wavelength grid for the
         # line); record the actual pathway so the JSON is self-documenting.
@@ -254,7 +320,9 @@ def get_state(config_name: str):
             'dispersal_method': obs_grism.dispersal_method,
         }
     elif config_name == 'P':
-        source, priors, task, image_obs, grism_obs, true = tv.build_production_task()
+        source, priors, task, image_obs, grism_obs, true = tv.build_production_task(
+            data_seed_offset=data_seed_offset
+        )
         obs_g0 = next(iter(grism_obs.values()))
         nlam = int(len(obs_g0.cube_pars.lambda_grid))
         meta = {
@@ -267,8 +335,14 @@ def get_state(config_name: str):
         raise ValueError(f'unknown config {config_name!r}')
     build_s = time.perf_counter() - t0
     theta, sampled_names = tv.perturbed_theta(priors, true)
-    meta.update({'n_sampled': len(sampled_names), 'build_s': build_s})
-    _STATE[config_name] = {
+    meta.update(
+        {
+            'n_sampled': len(sampled_names),
+            'build_s': build_s,
+            'data_seed_offset': data_seed_offset,
+        }
+    )
+    _STATE[key] = {
         'source': source,
         'priors': priors,
         'task': task,
@@ -277,7 +351,7 @@ def get_state(config_name: str):
         'meta': meta,
     }
     print(f'[bench] built config {config_name}: {meta}')
-    return _STATE[config_name]
+    return _STATE[key]
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +952,17 @@ def section_h(args):
 # ---------------------------------------------------------------------------
 
 
+def _peak_rss_mb():
+    """Process peak RSS in MB (ru_maxrss: bytes on macOS, KB on Linux)."""
+    try:
+        import resource
+
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return r / 2**20 if sys.platform == 'darwin' else r / 2**10
+    except Exception:
+        return None
+
+
 def section_i(args):
     """End-to-end full fit wallclock -> fits/node-hour (serial baseline).
 
@@ -887,7 +972,10 @@ def section_i(args):
     over-galaxies is a further multiplier -- see section g for the compute
     ceiling it would unlock, which needs the data-as-argument refactor).
     Reports wallclock, fits/node-hour, and (if available) min-ESS/s, the
-    honest efficiency metric since sample quality varies.
+    honest efficiency metric since sample quality varies. --fit-reps > 1
+    runs sequential fits (fresh sampler, seed offset per rep) so rep 0
+    carries the compile cost and later reps give the steady-state per-fit
+    number that a production task (K fits/node) actually sees.
     """
     import time
 
@@ -895,49 +983,269 @@ def section_i(args):
 
     out = {}
     for cfg in args.configs.split(','):
-        st = get_state(cfg)
+        st = get_state(cfg, data_seed_offset=args.data_seed_offset)
         task = st['task']
-        config = NumpyroSamplerConfig(
-            n_samples=args.fit_samples,
-            n_warmup=args.fit_warmup,
-            n_chains=args.fit_chains,
-            seed=42,
-            progress=False,
-            reparam_strategy='prior',
-            dense_mass=True,
-            precondition='laplace',
-            hessian_method=args.fit_hessian_method,
-            target_accept_prob=0.8,
-            max_tree_depth=8,
-            init_strategy='prior',
+        reps = []
+        for rep in range(args.fit_reps):
+            config = NumpyroSamplerConfig(
+                n_samples=args.fit_samples,
+                n_warmup=args.fit_warmup,
+                n_chains=args.fit_chains,
+                seed=args.fit_seed + 101 * rep,
+                progress=False,
+                reparam_strategy='prior',
+                dense_mass=True,
+                precondition='laplace',
+                hessian_method=args.fit_hessian_method,
+                target_accept_prob=0.8,
+                max_tree_depth=8,
+                init_strategy='prior',
+            )
+            sampler = build_sampler('numpyro', task, config)
+            t0 = time.perf_counter()
+            res = sampler.run()  # includes the Laplace preconditioner build
+            wall = time.perf_counter() - t0
+            rhat = res.diagnostics['r_hat']
+            rep_row = {
+                'seed': config.seed,
+                'wallclock_s': wall,
+                'max_rhat': float(max(rhat.values())),
+                'n_divergences': int(res.diagnostics['n_divergences']),
+            }
+            try:
+                ess = res.diagnostics.get('ess')
+                if ess is not None:
+                    mn = float(min(ess.values()))
+                    rep_row['min_ess'] = mn
+                    rep_row['min_ess_per_s'] = mn / wall
+            except Exception:
+                pass
+            try:
+                rep_row['chain_method'] = res.metadata.get('chain_method')
+            except Exception:
+                pass
+            reps.append(rep_row)
+            print(
+                f'  [i:{cfg}] rep {rep}: full fit {wall:7.1f}s -> '
+                f'{3600.0 / wall:7.1f} fits/node-hr'
+                f'  (max Rhat {rep_row["max_rhat"]:.3f}, '
+                f'{rep_row["n_divergences"]} div)'
+            )
+        # top-level fields = rep 0 (backward-compatible with earlier JSONs)
+        row = dict(reps[0])
+        row.pop('seed', None)
+        row.update(
+            {
+                'meta': st['meta'],
+                'n_samples': args.fit_samples,
+                'n_warmup': args.fit_warmup,
+                'n_chains': args.fit_chains,
+                'fits_per_node_hour_serial': 3600.0 / reps[0]['wallclock_s'],
+                'peak_rss_mb': _peak_rss_mb(),
+            }
         )
-        sampler = build_sampler('numpyro', task, config)
-        t0 = time.perf_counter()
-        res = sampler.run()  # includes the Laplace preconditioner build
-        wall = time.perf_counter() - t0
-        rhat = res.diagnostics['r_hat']
-        row = {
-            'meta': st['meta'],
-            'n_samples': args.fit_samples,
-            'n_warmup': args.fit_warmup,
-            'n_chains': args.fit_chains,
-            'wallclock_s': wall,
-            'fits_per_node_hour_serial': 3600.0 / wall,
-            'max_rhat': float(max(rhat.values())),
-            'n_divergences': int(res.diagnostics['n_divergences']),
-        }
-        try:
-            ess = res.diagnostics.get('ess')
-            if ess is not None:
-                mn = float(min(ess.values()))
-                row['min_ess'] = mn
-                row['min_ess_per_s'] = mn / wall
-        except Exception:
-            pass
+        if args.fit_reps > 1:
+            steady = min(r['wallclock_s'] for r in reps[1:])
+            row['reps'] = reps
+            row['steady_state_wallclock_s'] = steady
+            row['fits_per_node_hour_steady'] = 3600.0 / steady
         out[cfg] = row
+    return out
+
+
+# ---------------------------------------------------------------------------
+# section j: node-packing throughput (N full-fit processes per node)
+# ---------------------------------------------------------------------------
+
+
+def section_j(args):
+    """Node-packing throughput: N independent full-fit processes on one node.
+
+    The GPU-vs-CPU platform decider for the paper ensembles. A single fit
+    underutilizes the GH200 ~5-7x (section g) and occupies ONE core of a
+    CPU node, so per-node throughput at pack width N -- not single-fit
+    speed -- is what sets fits/SU. Each sweep point launches N child
+    processes (each `bench_matrix.py --sections i`, a real precond+NUTS
+    fit) simultaneously and measures the node MAKESPAN:
+
+      fits/node-hour(N) = 3600 * fits_completed / makespan
+
+    - CPU backend: each child is pinned to core k via `taskset -c k` with
+      all BLAS/OMP threading forced to 1 (no pinning on macOS -- recorded).
+      Sweep N up to the core count (112 on a Stampede3 SPR node).
+    - GPU backend: children share the device with
+      XLA_PYTHON_CLIENT_MEM_FRACTION = pack_mem_fraction/N. Without CUDA
+      MPS the contexts time-slice; with MPS kernels overlap. Tests whether
+      plain process packing recovers section g's batching headroom with no
+      code refactor.
+
+    Set --jax-cache-dir so children share compiles: the FIRST sweep point
+    doubles as the cache warmer, later points reflect production steady
+    state. Children that die are recorded (returncode + log tail) and
+    excluded from fits_completed -- the throughput number stays honest.
+    Per-child peak RSS is recorded: at N=112 on a 128 GB SPR node, memory
+    -- not cores -- may be the binding constraint.
+    """
+    import shutil
+
+    device = args.pack_device
+    if device == 'auto':
+        import jax
+
+        device = 'gpu' if jax.default_backend() != 'cpu' else 'cpu'
+    have_taskset = shutil.which('taskset') is not None
+    pin_cpu = device == 'cpu' and have_taskset
+    if device == 'cpu' and not have_taskset:
+        print('  [j] WARNING: taskset unavailable (macOS?) -- children unpinned')
+
+    configs = args.pack_configs
+    cfg_tag = configs.replace(',', '')
+    widths = [int(x) for x in args.pack_workers.split(',')]
+    out = {
+        'device': device,
+        'pack_configs': configs,
+        'core_pinning': pin_cpu,
+        'pack_fit_reps': args.pack_fit_reps,
+        'vary_seeds': bool(args.pack_vary_seeds),
+        'vary_data': bool(args.pack_vary_data),
+        'points': {},
+    }
+
+    for N in widths:
+        procs = []
+        t0 = time.perf_counter()
+        for k in range(N):
+            child_out = f'{args.out}.j_{cfg_tag}_N{N}_w{k}.json'
+            seed = args.fit_seed + (7919 * k if args.pack_vary_seeds else 0)
+            cmd = [
+                sys.executable,
+                os.path.abspath(__file__),
+                '--sections',
+                'i',
+                '--configs',
+                configs,
+                '--x64',
+                str(args.x64),
+                '--cpu-devices',
+                '1',
+                '--nreps',
+                str(args.nreps),
+                '--fit-samples',
+                str(args.fit_samples),
+                '--fit-warmup',
+                str(args.fit_warmup),
+                '--fit-chains',
+                str(args.fit_chains),
+                '--fit-hessian-method',
+                args.fit_hessian_method,
+                '--fit-reps',
+                str(args.pack_fit_reps),
+                '--fit-seed',
+                str(seed),
+                '--data-seed-offset',
+                str(10000 * k if args.pack_vary_data else 0),
+                '--out',
+                child_out,
+            ]
+            if args.jax_cache_dir:
+                cmd += ['--jax-cache-dir', args.jax_cache_dir]
+            if args.force_no_galsim:
+                cmd.append('--force-no-galsim')
+            if pin_cpu:
+                cmd = ['taskset', '-c', str(k)] + cmd
+            env = os.environ.copy()
+            for var in (
+                'OMP_NUM_THREADS',
+                'OPENBLAS_NUM_THREADS',
+                'MKL_NUM_THREADS',
+                'VECLIB_MAXIMUM_THREADS',
+                'NUMEXPR_NUM_THREADS',
+            ):
+                env[var] = '1'
+            if device == 'cpu':
+                # XLA's thread pool ignores OMP_NUM_THREADS; these are the
+                # documented jax flags for single-threaded CPU execution
+                env['XLA_FLAGS'] = (
+                    env.get('XLA_FLAGS', '')
+                    + ' --xla_cpu_multi_thread_eigen=false'
+                    + ' intra_op_parallelism_threads=1'
+                ).strip()
+            if device == 'gpu':
+                # children claim their slice up front; the parent runs with
+                # PREALLOCATE=false (see main) so it never holds HBM itself
+                env['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
+                env['XLA_PYTHON_CLIENT_MEM_FRACTION'] = (
+                    f'{args.pack_mem_fraction / N:.4f}'
+                )
+            logf = open(child_out + '.log', 'w')
+            procs.append(
+                (
+                    k,
+                    subprocess.Popen(
+                        cmd,
+                        cwd=KIT_DIR,
+                        stdout=logf,
+                        stderr=subprocess.STDOUT,
+                        env=env,
+                    ),
+                    logf,
+                    child_out,
+                )
+            )
+        children = {}
+        n_fits_done = 0
+        for k, proc, logf, child_out in procs:
+            rc = proc.wait()
+            logf.close()
+            row = {'returncode': rc}
+            try:
+                with open(child_out) as f:
+                    child = json.load(f)
+                sec = child['sections']['i']
+                if sec['status'] == 'ok':
+                    for cname, crow in sec['result'].items():
+                        row[cname] = {
+                            'wallclock_s': crow['wallclock_s'],
+                            'steady_state_wallclock_s': crow.get(
+                                'steady_state_wallclock_s'
+                            ),
+                            'max_rhat': crow['max_rhat'],
+                            'n_divergences': crow['n_divergences'],
+                            'min_ess': crow.get('min_ess'),
+                            'chain_method': crow.get('chain_method'),
+                            'peak_rss_mb': crow.get('peak_rss_mb'),
+                        }
+                        n_fits_done += args.pack_fit_reps
+                else:
+                    row['error'] = sec.get('error', '')[-800:]
+                    print(f'  [j] child {k} section-i ERROR (recorded)')
+            except Exception as err:
+                row['error'] = f'child output unreadable: {err!r}'
+                print(f'  [j] child {k} FAILED rc={rc} (see {child_out}.log)')
+            children[str(k)] = row
+        makespan = time.perf_counter() - t0
+        walls = [
+            row[c]['wallclock_s']
+            for row in children.values()
+            for c in configs.split(',')
+            if c in row
+        ]
+        point = {
+            'n_workers': N,
+            'makespan_s': makespan,
+            'fits_completed': n_fits_done,
+            'fits_per_node_hour': (
+                3600.0 * n_fits_done / makespan if n_fits_done else 0.0
+            ),
+            'child_wallclock_min_s': min(walls) if walls else None,
+            'child_wallclock_max_s': max(walls) if walls else None,
+            'children': children,
+        }
+        out['points'][str(N)] = point
         print(
-            f'  [i:{cfg}] full fit {wall:7.1f}s -> {3600.0 / wall:7.1f} fits/node-hr'
-            f'  (max Rhat {row["max_rhat"]:.3f}, {row["n_divergences"]} div)'
+            f'  [j:{cfg_tag}] N={N:4d}: makespan {makespan:8.1f}s, '
+            f'{n_fits_done} fits -> {point["fits_per_node_hour"]:8.1f} '
+            f'fits/node-hr'
         )
     return out
 
@@ -955,11 +1263,16 @@ SECTION_FNS = {
     'g': section_g,
     'h': section_h,
     'i': section_i,
+    'j': section_j,
 }
 
 
 def main():
     args = parse_args()
+    if 'j' in [s.strip() for s in args.sections.split(',')]:
+        # the section-j PARENT only queries the backend; without this it
+        # would preallocate ~75% of GPU HBM and starve its children
+        os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
     jax_notes = configure_jax(args)
 
     if args.force_no_galsim:
@@ -986,10 +1299,10 @@ def main():
     requested = [s.strip() for s in args.sections.split(',') if s.strip()]
     unknown = [s for s in requested if s not in SECTION_FNS]
     if unknown:
-        raise ValueError(f'unknown sections {unknown}; valid: a,b,c,d,e,g,h,i')
+        raise ValueError(f'unknown sections {unknown}; valid: a,b,c,d,e,g,h,i,j')
 
     t_total = time.perf_counter()
-    for name in ('a', 'b', 'c', 'd', 'e', 'g', 'h', 'i'):
+    for name in ('a', 'b', 'c', 'd', 'e', 'g', 'h', 'i', 'j'):
         if name not in requested:
             results['sections'][name] = {
                 'status': 'skipped',

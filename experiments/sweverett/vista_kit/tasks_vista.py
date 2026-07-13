@@ -199,8 +199,14 @@ def _make_band_obs(source, true_pars, psf, image_pars, band_key, seed):
     )
 
 
-def build_flagship_task():
-    """Q config. Returns (source, priors, task, obs_F087, obs_grism, true)."""
+def build_flagship_task(data_seed_offset=0):
+    """Q config. Returns (source, priors, task, obs_F087, obs_grism, true).
+
+    data_seed_offset shifts every mock-noise seed: offset k builds the SAME
+    scene with a DIFFERENT noise realization. Distinct data changes the
+    constants baked into the jitted posterior, so distinct offsets model the
+    per-galaxy recompile cost a production ensemble pays.
+    """
     true = true_pars_flagship()
     image_pars = ImagePars(shape=IMAGE_SHAPE, pixel_scale=PIXEL_SCALE, indexing='ij')
     psf = GaussianPSFShim(fwhm=PSF_FWHM)
@@ -223,12 +229,14 @@ def build_flagship_task():
         },
     )
 
-    obs_F087 = _make_band_obs(source, true, psf, image_pars, 'F087', seed=42)
+    obs_F087 = _make_band_obs(
+        source, true, psf, image_pars, 'F087', seed=42 + data_seed_offset
+    )
 
     grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf)
     data_grism_true = np.asarray(source.render_grism(true, grism_obs_clean))
     var_grism = float(np.sum(data_grism_true**2)) / SNR_GRISM**2
-    rng = np.random.default_rng(43)
+    rng = np.random.default_rng(43 + data_seed_offset)
     data_grism_noisy = data_grism_true + rng.normal(
         0.0, np.sqrt(var_grism), size=data_grism_true.shape
     )
@@ -355,20 +363,32 @@ def _build_roll_obs(source, true_pars, psf, rotation_rad, seed, window_kms=3000.
     return dataclasses.replace(obs, cube_pars=blend_cp)
 
 
-def build_production_setup(window_kms=3000.0):
-    """P config. Returns (source, priors, image_obs, grism_obs, true)."""
+def build_production_setup(window_kms=3000.0, data_seed_offset=0):
+    """P config. Returns (source, priors, image_obs, grism_obs, true).
+
+    data_seed_offset: see build_flagship_task.
+    """
     true = true_pars_production()
     source = _build_production_source()
     psf = GaussianPSFShim(fwhm=PSF_FWHM)
     image_pars = ImagePars(shape=IMAGE_SHAPE, pixel_scale=PIXEL_SCALE, indexing='ij')
 
     image_obs = {
-        'F087': _make_band_obs(source, true, psf, image_pars, 'F087', seed=42),
-        'F158': _make_band_obs(source, true, psf, image_pars, 'F158', seed=52),
+        'F087': _make_band_obs(
+            source, true, psf, image_pars, 'F087', seed=42 + data_seed_offset
+        ),
+        'F158': _make_band_obs(
+            source, true, psf, image_pars, 'F158', seed=52 + data_seed_offset
+        ),
     }
     grism_obs = {
         f'roll{i}': _build_roll_obs(
-            source, true, psf, np.deg2rad(a), seed=100 + i, window_kms=window_kms
+            source,
+            true,
+            psf,
+            np.deg2rad(a),
+            seed=100 + i + data_seed_offset,
+            window_kms=window_kms,
         )
         for i, a in enumerate(ROLL_ANGLES_DEG)
     }
@@ -376,8 +396,10 @@ def build_production_setup(window_kms=3000.0):
     return source, priors, image_obs, grism_obs, true
 
 
-def build_production_task(window_kms=3000.0):
-    source, priors, image_obs, grism_obs, true = build_production_setup(window_kms)
+def build_production_task(window_kms=3000.0, data_seed_offset=0):
+    source, priors, image_obs, grism_obs, true = build_production_setup(
+        window_kms, data_seed_offset=data_seed_offset
+    )
     task = InferenceTask.from_obs(
         source, priors, image_obs=image_obs, grism_obs=grism_obs
     )

@@ -233,7 +233,63 @@ errors carry the full traceback -- a failed section never kills the run.
   compile latency matters for the per-galaxy-recompile problem (plan
   Sec 3.2 item 3).
 
-## 7. Known limitations / notes
+## 7. Node-packing benchmark (section j) -- GPU vs CPU platform decision
+
+Section j answers the paper-platform question: a single fit underutilizes
+the GH200 ~5-7x (section g) and uses one core of a CPU node, so the number
+that matters is **fits/node-hour at pack width N**, not single-fit speed.
+It launches N simultaneous child processes (each a real section-i
+precond+NUTS fit) and reports the makespan-aggregated throughput per sweep
+point, plus per-child wallclock spread, peak RSS, and returncodes.
+
+Three run modes:
+
+| where | script | pinning |
+|---|---|---|
+| Stampede3 SPR (112-core CPU) | `run_stampede3_pack.slurm` | `taskset -c k` per child, BLAS/OMP=1 |
+| Vista GH200 (GPU packing) | `run_pack_vista.slurm` | `XLA_PYTHON_CLIENT_MEM_FRACTION=0.85/N` (+MPS if available) |
+| local smoke (macOS) | see below | none (recorded in JSON) |
+
+Stampede3 setup (no container -- x86 wheels install directly):
+
+```bash
+# login node, once:
+bash provision_stampede3.sh        # venv at $WORK/klpipe_cpu_venv
+# then from vista_kit/:
+sbatch run_stampede3_pack.slurm    # Q sweep 1,56,112 + P sweep 1,112
+```
+
+Local smoke (2 workers, tiny fit, ~2 min):
+
+```bash
+python bench_matrix.py --sections j --pack-configs Q --pack-workers 1,2 \
+  --fit-samples 50 --fit-warmup 25 --fit-chains 2 --nreps 3
+```
+
+Numbers to bring home: `fits_per_node_hour` at each N vs the GH200 serial
+reference (P = 20.2 fits/node-hr warm-cache, Q = 71), the N=112 vs N=1
+per-child slowdown (memory-bandwidth contention), per-child `peak_rss_mb`
+at full pack (128 GB node / 112 procs ~ 1.1 GB each is the ceiling), and
+on the GPU side whether N=4-8 packing recovers the section-g headroom.
+Divide by the machine's SU rate per node-hour for the final fits/SU
+comparison -- that decides the production platform.
+
+Notes:
+- Always pass `--jax-cache-dir` (the SLURM scripts do): children share
+  compiles; the first sweep point doubles as the cache warmer.
+- Children default to the SAME NUTS seed (clean contention measurement:
+  identical work per child). `--pack-vary-seeds` gives per-child seeds for
+  a realistic trajectory-length spread instead.
+- `--pack-vary-data` gives each child a DISTINCT mock-noise realization.
+  Data arrays are baked into the jitted posterior as constants, so same-data
+  children share compiles via the cache while distinct-data children each
+  recompile -- exactly the per-galaxy recompile cost a production ensemble
+  pays. Same-data = clean contention curve; vary-data = honest production
+  throughput. The SLURM scripts use vary-data for the P headline sweeps.
+- A dead child (OOM at N=112) is recorded with its returncode + log path
+  and excluded from `fits_completed`; throughput stays honest.
+
+## 8. Known limitations / notes
 
 - Section b `parallel` on a single GPU is skipped by design (recorded in
   JSON). For multi-GPU chain parallelism use a multi-node/array setup later.
