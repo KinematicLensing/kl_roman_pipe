@@ -47,6 +47,8 @@ bash "$KIT/stage_vista.sh" "$TAG"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 HOSTTAG=$(hostname -s)
+RUNDIR="$KIT/results/vista_gh200/${STAMP}_${HOSTTAG}_matrix"
+mkdir -p "$RUNDIR"
 
 # Container python + our extra pip deps + the repo itself.
 # JAX/CUDA come from the NGC image; do NOT pip-install jax in the container.
@@ -78,7 +80,7 @@ echo "=== fp64 pass ==="
 cd "$KIT"
 $APPTAINER_RUN python "$KIT/bench_matrix.py" \
   --x64 1 --nreps 30 \
-  --out "$KIT/results_vista_${STAMP}_${HOSTTAG}_fp64.json"
+  --out "$RUNDIR/matrix_fp64.json"
 
 #-----------------------------------------------------------------------------
 # pass 2: fp32 (full matrix; section e inside each pass also does the
@@ -87,14 +89,13 @@ $APPTAINER_RUN python "$KIT/bench_matrix.py" \
 echo "=== fp32 pass ==="
 $APPTAINER_RUN python "$KIT/bench_matrix.py" \
   --x64 0 --nreps 30 \
-  --out "$KIT/results_vista_${STAMP}_${HOSTTAG}_fp32.json"
+  --out "$RUNDIR/matrix_fp32.json"
 
 #-----------------------------------------------------------------------------
 # collect
 #-----------------------------------------------------------------------------
-cp -v "$KIT"/results_vista_${STAMP}_*.json "$RESULTS/"
+cp -rv "$RUNDIR" "$RESULTS/matrix_${STAMP}_${HOSTTAG}"
 # keep the section-e child artifacts too (pixel-delta npys + child jsons)
-cp -v "$KIT"/results_vista_${STAMP}_*child* "$RESULTS/" 2>/dev/null || true
 
 echo "=== done; results in $RESULTS ==="
-ls -la "$RESULTS" | grep "$STAMP"
+ls -la "$RESULTS" | grep "$STAMP" || true

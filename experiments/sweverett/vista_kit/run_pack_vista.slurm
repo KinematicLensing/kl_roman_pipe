@@ -62,6 +62,8 @@ fi
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 HOSTTAG=$(hostname -s)
+RUNDIR="$KIT/results/vista_gh200/${STAMP}_${HOSTTAG}_pack"
+mkdir -p "$RUNDIR"
 
 APPTAINER_RUN="apptainer exec --nv \
   --bind $REPO:$REPO \
@@ -83,12 +85,12 @@ $APPTAINER_RUN python "$KIT/bench_matrix.py" \
   --pack-vary-data --pack-vary-seeds --x64 1 \
   --fit-samples 1000 --fit-warmup 500 --fit-chains 4 \
   --jax-cache-dir "$CACHE" \
-  --out "$KIT/results_ghpack_${STAMP}_${HOSTTAG}_P.json"
+  --out "$RUNDIR/packP.json"
 
 # stop MPS if we started it
 if [[ "$MPS_ON" == "1" ]]; then
     echo quit | nvidia-cuda-mps-control || true
 fi
 
-cp -v "$KIT"/results_ghpack_${STAMP}_*.json "$RESULTS/"
+cp -rv "$RUNDIR" "$RESULTS/ghpack_${STAMP}_${HOSTTAG}"
 echo "=== done; results in $RESULTS ==="

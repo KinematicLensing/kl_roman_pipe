@@ -20,7 +20,7 @@ galsim-blocked "Vista simulation" pass.
 | `stage_vista.sh` | mirror the $WORK master to fast per-machine $SCRATCH (run before big campaigns) |
 | `klrun.sh` | one-command wrapper: run any `python ...` inside the container (compute node only) |
 | `sanity_check.py` | GPU device + import check (run via `bash klrun.sh python sanity_check.py`) |
-| `smoke_full.json` | local CPU reference run (M3 Max, all sections, galsim blocked, --nreps 3) |
+| `results/<machine>/<run>/` | all result JSONs, organized per machine per run (vista_gh200, stampede3_spr, local_m3); `results/local_m3/smoke_full.json` = the M3 reference run. The SLURM scripts write new runs into `results/<machine>/<stamp>_<host>*/` automatically |
 
 ## 0. Quick path (recommended)
 
