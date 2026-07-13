@@ -98,6 +98,14 @@ def pytest_addoption(parser):
         help="run the flagship test with the longer production sampler config "
         "(more samples/chains/tree-depth) for cleaner posteriors",
     )
+    parser.addoption(
+        "--flagship-production",
+        action="store_true",
+        default=False,
+        help="run the flagship test with the production observing config "
+        "(2 broadband F087+F158 + 4 grism rolls) instead of the dev 1x1 "
+        "config; orthogonal to --flagship-long (which sets sampler depth)",
+    )
 
 
 def pytest_configure(config):

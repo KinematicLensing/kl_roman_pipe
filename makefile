@@ -175,8 +175,18 @@ test-flagship:
 
 .PHONY: test-flagship-long
 test-flagship-long:
-	@echo "Running flagship test (long production config -- cleaner posteriors)..."
+	@echo "Running flagship test (long sampler config -- cleaner posteriors)..."
 	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-long --override-ini="markers=slow"
+
+.PHONY: test-flagship-production
+test-flagship-production:
+	@echo "Running flagship test (production obs config -- 2 broadband + 4 grism rolls)..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-production --override-ini="markers=slow"
+
+.PHONY: test-flagship-production-long
+test-flagship-production-long:
+	@echo "Running flagship test (production obs config + long sampler -- cleanest sensitivity posteriors)..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-production --flagship-long --override-ini="markers=slow"
 
 .PHONY: test-basic
 test-basic:
