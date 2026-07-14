@@ -65,17 +65,34 @@ if [[ -f "$FFTWDIR/lib/libfftw3.so" ]]; then
 else
   echo "[provision] building fftw-$FFTW_VERSION -> $FFTWDIR (few minutes) ..."
   FFTW_TMP="$(mktemp -d)"
-  curl -sL "https://fftw.org/fftw-${FFTW_VERSION}.tar.gz" | tar xz -C "$FFTW_TMP"
   mkdir -p "$FFTWDIR"
-  apptainer exec -B "$FFTW_TMP:$FFTW_TMP" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
-    bash -c "cd $FFTW_TMP/fftw-$FFTW_VERSION && \
-             ./configure --enable-shared --disable-fortran --disable-doc \
-                         --prefix=$FFTWDIR > $FFTWDIR/build.log 2>&1 && \
-             make -j8 >> $FFTWDIR/build.log 2>&1 && \
-             make install >> $FFTWDIR/build.log 2>&1"
+  # -f: fail on HTTP errors instead of piping an error page into tar
+  if ! curl -fsSL "https://fftw.org/pub/fftw/fftw-${FFTW_VERSION}.tar.gz" \
+       -o "$FFTW_TMP/fftw.tar.gz"; then
+    echo "[provision] primary fftw URL failed; trying mirror ..."
+    curl -fsSL "https://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz" \
+      -o "$FFTW_TMP/fftw.tar.gz" || {
+      echo "ERROR: could not download fftw-$FFTW_VERSION" >&2; exit 1; }
+  fi
+  tar xzf "$FFTW_TMP/fftw.tar.gz" -C "$FFTW_TMP" || {
+    echo "ERROR: fftw tarball extraction failed" >&2; exit 1; }
+  # run each build stage explicitly so a failure names its stage and shows
+  # the log tail (set -e would otherwise abort this script silently)
+  if ! apptainer exec -B "$FFTW_TMP:$FFTW_TMP" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
+      bash -c "set -e; cd $FFTW_TMP/fftw-$FFTW_VERSION && \
+               ./configure --enable-shared --disable-fortran --disable-doc \
+                           --prefix=$FFTWDIR > $FFTWDIR/build.log 2>&1 && \
+               make -j8 >> $FFTWDIR/build.log 2>&1 && \
+               make install >> $FFTWDIR/build.log 2>&1"; then
+    echo "ERROR: fftw build failed. Last 30 lines of $FFTWDIR/build.log:" >&2
+    tail -30 "$FFTWDIR/build.log" >&2 || true
+    exit 1
+  fi
   rm -rf "$FFTW_TMP"
   [[ -f "$FFTWDIR/lib/libfftw3.so" ]] || {
-    echo "ERROR: fftw build failed -- see $FFTWDIR/build.log" >&2; exit 1; }
+    echo "ERROR: fftw build reported success but $FFTWDIR/lib/libfftw3.so" >&2
+    echo "is missing -- see $FFTWDIR/build.log" >&2; exit 1; }
+  echo "[provision] fftw built: $FFTWDIR"
 fi
 
 # 2. pip sidecar: install once. Check by importing from the target dir; if the
