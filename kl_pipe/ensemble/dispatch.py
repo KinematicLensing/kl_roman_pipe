@@ -105,8 +105,8 @@ _SLURM_TEMPLATE = """\
 #   module load tacc-apptainer
 #   export KLPIPE_PYTHON="apptainer exec --nv \\
 #     -B $STOCKYARD/repos/kl_roman_pipe -B $WORK/klpipe_pipdeps -B $SCRATCH \\
-#     -B $WORK/fftw3 \\
 #     --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \\
+#     --env LD_PRELOAD=$WORK/klpipe_pipdeps/galsim/libfftw3.so.3 \\
 #     $WORK/containers/jax_26.06-py3.sif python"
 
 set -u
