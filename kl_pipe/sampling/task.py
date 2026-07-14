@@ -584,6 +584,7 @@ class InferenceTask:
         seed: int = 0,
         hessian_method: str = 'fd',
         fd_rel_step: float = 1e-5,
+        extra_starts: Optional[np.ndarray] = None,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
@@ -627,6 +628,13 @@ class InferenceTask:
             Relative step for ``hessian_method='fd'``, in units of the
             per-parameter prior scale. Steps are shrunk to stay inside prior
             bounds when the MAP sits near a bound.
+        extra_starts : np.ndarray, optional
+            Additional explicit start points, shape (n_extra, n_sampled), in
+            sampled-parameter order, appended to the prior-draw starts. Use
+            when random prior draws can miss a known multimodal basin (e.g.
+            position-angle-stratified starts: random draws may all land in
+            the wrong PA basin, whose shape-shear-compensated mode then traps
+            the sampler).
 
         Returns
         -------
@@ -669,6 +677,14 @@ class InferenceTask:
         starts = np.asarray(
             self.sample_prior(jax.random.PRNGKey(seed + 1), n_samples=n_starts)
         )
+        if extra_starts is not None:
+            extra_starts = np.atleast_2d(np.asarray(extra_starts, dtype=np.float64))
+            if extra_starts.shape[1] != starts.shape[1]:
+                raise ValueError(
+                    f"extra_starts has {extra_starts.shape[1]} columns; task "
+                    f"has {starts.shape[1]} sampled parameters"
+                )
+            starts = np.vstack([starts, extra_starts])
         best = None
         n_converged = 0
         for s0 in starts:
@@ -689,7 +705,7 @@ class InferenceTask:
             raise RuntimeError(
                 "laplace_preconditioner: no optimization start converged to a "
                 "finite-log-posterior mode (tried "
-                f"{n_starts} starts). Check priors/data."
+                f"{len(starts)} starts). Check priors/data."
             )
 
         theta_map = jnp.asarray(loc + scale * best.x)

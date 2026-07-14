@@ -188,10 +188,12 @@ class TestScene:
 class TestExpander:
     def test_fit_id_frozen(self):
         """fit_id scheme is load-bearing for resume; freeze one value."""
-        # provenance: sha1('run|1|0|0|0|0|0')[:16] computed at implementation
-        # time (2026-07-13); changing the hash scheme invalidates every
-        # existing run dir
-        assert compute_fit_id('run', 1, 0, 0, 0, 0, 0) == '7509f60d093524bd'
+        # provenance: sha1('run|1|0|0|0|0|0|0')[:16]. Scheme extended with
+        # the sweep_step field 2026-07-14 (config-sweep axes), deliberately
+        # invalidating pre-sweep scratch run dirs (no production campaigns
+        # existed). Changing it again invalidates every existing run dir.
+        assert compute_fit_id('run', 1, 0, 0, 0, 0, 0) == 'cd30f915609fe425'
+        assert compute_fit_id('run', 1, 0, 0, 0, 0, 0, 0) == 'cd30f915609fe425'
 
     def test_deterministic(self, dev_spec, canonical_q):
         m1 = build_manifest(dev_spec, canonical_q)
@@ -380,6 +382,139 @@ class TestCollate:
 
 
 # ==============================================================================
+# Config-sweep axis (grism SNR)
+# ==============================================================================
+
+GSNR_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_gsnr_dev.yaml'
+
+
+class TestGrismSnrSweep:
+    @pytest.fixture(scope='class')
+    def gsnr_spec(self) -> EnsembleSpec:
+        return EnsembleSpec.from_yaml(GSNR_SPEC)
+
+    def test_spec_loads(self, gsnr_spec):
+        assert gsnr_spec.measurement == 'sigma_eps_vs_grism_snr'
+        assert gsnr_spec.sweep_values == (10.0, 20.0, 50.0)
+        assert gsnr_spec.n_fits == 6
+        assert 'cosi' in gsnr_spec.draw
+
+    def test_top_level_grism_snr_conflict(self, tmp_path, gsnr_spec):
+        d = yaml.safe_load(GSNR_SPEC.read_text())
+        d['grism_snr'] = 30
+        with pytest.raises(ValueError, match='conflicts with the'):
+            EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+
+    def test_cosi_must_be_drawn(self, tmp_path):
+        d = yaml.safe_load(GSNR_SPEC.read_text())
+        del d['bank']['draw']['cosi']
+        with pytest.raises(ValueError, match='cosi in bank.draw'):
+            EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+
+    def test_crn_across_sweep(self, gsnr_spec, canonical_q):
+        """Same galaxy: identical truth + noise seed at every SNR step."""
+        m = build_manifest(gsnr_spec, canonical_q)
+        assert len(m) == 6
+        assert sorted(m['grism_snr'].unique()) == [10.0, 20.0, 50.0]
+        assert (m['broadband_snr'] == 100.0).all()
+        for _, group in m.groupby('galaxy_id'):
+            assert len(group) == 3  # one row per SNR step
+            assert group['noise_seed'].nunique() == 1  # CRN
+            for col in ('truth.cosi', 'truth.theta_int', 'truth.vel.vcirc', 'truth.z'):
+                assert group[col].nunique() == 1  # same galaxy
+        # distinct galaxies still get independent noise
+        assert m.groupby('noise_seed').ngroups == 2
+
+    def test_cosi_drawn_prior(self, gsnr_spec, canonical_q):
+        """Drawn cosi carries its generating distribution as the fit prior."""
+        truth = scene_truth_defaults(canonical_q, gsnr_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        priors = scene_priors(truth, canonical_q, gsnr_spec)
+        assert isinstance(priors.get_prior('cosi'), Uniform)
+        assert priors.get_prior('cosi').bounds == (0.1, 1.0)
+
+    def test_axis_helper(self, gsnr_spec, dev_spec):
+        from kl_pipe.ensemble.diagnostics import measurement_axis
+
+        assert measurement_axis(gsnr_spec)[:2] == ('sweep_step', 'grism_snr')
+        assert measurement_axis(dev_spec)[:2] == ('cosi_bin', 'truth.cosi')
+
+
+# ==============================================================================
+# PA-stratified MAP starts + dispatch emission
+# ==============================================================================
+
+
+class TestPAStratifiedStarts:
+    def test_grid_covers_prior_range(self, dev_spec, canonical_q):
+        from kl_pipe.ensemble.worker import _pa_stratified_starts
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        priors = scene_priors(truth, canonical_q, dev_spec)
+        starts = _pa_stratified_starts(priors, seed=7, n_pa=4)
+        names = list(priors.sampled_names)
+        thetas = starts[:, names.index('theta_int')]
+        # bin centers of a 4-way split of U(0, pi)
+        assert np.allclose(thetas, (np.arange(4) + 0.5) * np.pi / 4)
+        # non-theta columns are in-support prior draws
+        for i, name in enumerate(names):
+            lo, hi = priors.get_prior(name).bounds
+            if lo is not None:
+                assert (starts[:, i] >= lo).all()
+            if hi is not None:
+                assert (starts[:, i] <= hi).all()
+
+    def test_n_map_starts_spec_knob(self, tmp_path):
+        d = _spec_dict()
+        d['fit']['n_map_starts'] = 8
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.n_map_starts == 8
+
+
+class TestSlurmEmission:
+    def test_gpu_packing_script(self, tmp_path):
+        from kl_pipe.ensemble.dispatch import emit_slurm_script
+
+        d = _spec_dict()
+        d['dispatch'].update(
+            {'backend': 'slurm', 'workers_per_node': 8, 'account': 'TEST-ALLOC'}
+        )
+        spec_path = _write_spec(tmp_path, d)
+        run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
+        script = emit_slurm_script(run_dir).read_text()
+        assert '#SBATCH -A TEST-ALLOC' in script
+        assert f'XLA_PYTHON_CLIENT_MEM_FRACTION={round(0.85 / 8, 3)}' in script
+        assert 'KLPIPE_PYTHON' in script
+        assert 'seq 0 7' in script
+
+    def test_single_worker_no_mem_slice(self, tmp_path):
+        from kl_pipe.ensemble.dispatch import emit_slurm_script
+
+        run_dir = expand(DEV_SPEC, REGISTRY, tmp_path / 'runs')
+        script = emit_slurm_script(run_dir).read_text()
+        assert 'XLA_PYTHON_CLIENT_MEM_FRACTION=' not in script
+
+
+# ==============================================================================
 # Diagnostics
 # ==============================================================================
 
@@ -441,7 +576,7 @@ class TestDiagnostics:
 
         sig = sigma_eps_table(run_dir, table)
         excl = sig[sig['gate'] == 'exclude_catastrophic']
-        head = excl[excl['cosi_bin'] == -1]
+        head = excl[excl['axis_step'] == -1]
         assert head['n_fits'].iloc[0] == 3  # catastrophic fit masked
         # no chains saved -> marginal approx; widths are ~0.03 by
         # construction, so sigma_eps must land near 0.03

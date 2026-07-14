@@ -172,8 +172,6 @@ def scene_priors(
         raise ValueError(f"no prior rule for draw dist '{draw.dist}' ({name})")
 
     prior_spec: Dict[str, object] = {
-        # stratified cosi: population prior spans the full stratify range
-        'cosi': Uniform(*spec.stratify_range),
         # injected shear: wide, uninformative prior so posterior widths
         # reflect the data's shear constraint, not the prior; unbounded --
         # truncation would re-inject a prior edge (matches the flagship)
@@ -216,12 +214,23 @@ def scene_priors(
         prior_spec[f'{band}.x0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
         prior_spec[f'{band}.y0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
 
+    # cosi: population prior. Stratified axis -> uniform over the stratify
+    # range (the bin grid IS the random-orientation population); drawn ->
+    # handled by the generic drawn-parameter loop below.
+    if spec.stratify_param == 'cosi':
+        prior_spec['cosi'] = Uniform(*spec.stratify_range)
+
     # drawn params: generating distribution = fit prior (self-consistent)
     for name, draw in spec.draw.items():
         if name == 'z':
             continue  # z is pinned above in v1
         prior_spec[name] = population_prior(name, draw)
 
+    if 'cosi' not in prior_spec:
+        raise ValueError(
+            "cosi has no prior: it must be either the stratified axis or a "
+            "bank.draw entry"
+        )
     if 'theta_int' not in prior_spec:
         raise ValueError(
             "spec bank.draw must include theta_int (position angle population)"

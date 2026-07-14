@@ -31,6 +31,7 @@ import pandas as pd
 
 from kl_pipe.calibration import compute_shape_noise, rotate_to_galaxy_frame
 from kl_pipe.ensemble.collate import analysis_table
+from kl_pipe.ensemble.expander import load_run
 
 HEADLINE_PARAMS = ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc')
 CORNER_PARAMS = ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc', 'Halpha.dispersion')
@@ -39,6 +40,13 @@ CORNER_PARAMS = ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc', 'Halpha.dispersio
 # =============================================================================
 # tables
 # =============================================================================
+
+
+def measurement_axis(spec) -> Tuple[str, str, str, str]:
+    """(group_col, value_col, axis_label, xscale) for the spec's plot axis."""
+    if spec.measurement == 'sigma_eps_vs_grism_snr':
+        return ('sweep_step', 'grism_snr', 'grism SNR', 'log')
+    return ('cosi_bin', 'truth.cosi', 'cos i (bin center)', 'linear')
 
 
 def quality_table(table: pd.DataFrame) -> pd.DataFrame:
@@ -105,8 +113,17 @@ def _galaxy_frame_sigmas(run_dir: Path, row: pd.Series) -> Tuple[float, float, s
     return float(gp), float(gx), 'marginal-approx'
 
 
-def sigma_eps_table(run_dir: Path, table: pd.DataFrame) -> pd.DataFrame:
-    """Per-cosi-bin + collapsed sigma_eps, under both quality gates."""
+def sigma_eps_table(
+    run_dir: Path,
+    table: pd.DataFrame,
+    group_col: str = 'cosi_bin',
+    value_col: str = 'truth.cosi',
+) -> pd.DataFrame:
+    """Per-axis-step + collapsed sigma_eps, under both quality gates.
+
+    ``group_col``/``value_col`` define the plot axis (cosi bins or a
+    grism_snr sweep); ``axis_step = -1`` rows are the collapsed ensemble.
+    """
     q = quality_table(table).set_index('fit_id')
     rows: List[dict] = []
     sig = {}
@@ -116,15 +133,15 @@ def sigma_eps_table(run_dir: Path, table: pd.DataFrame) -> pd.DataFrame:
 
     def _bin_rows(mask_name: str, mask: pd.Series):
         keep = table[table['fit_id'].map(mask)]
-        for cosi_bin, group in keep.groupby('cosi_bin'):
+        for step, group in keep.groupby(group_col):
             sp = np.array([sig[f][0] for f in group['fit_id']])
             sx = np.array([sig[f][1] for f in group['fit_id']])
             se, err = compute_shape_noise(sp, sx)
             rows.append(
                 {
                     'gate': mask_name,
-                    'cosi_bin': int(cosi_bin),
-                    'cosi': float(group['truth.cosi'].iloc[0]),
+                    'axis_step': int(step),
+                    'axis_value': float(group[value_col].iloc[0]),
                     'n_fits': len(group),
                     'sigma_eps': se,
                     'sigma_eps_err': err,
@@ -137,8 +154,8 @@ def sigma_eps_table(run_dir: Path, table: pd.DataFrame) -> pd.DataFrame:
             rows.append(
                 {
                     'gate': mask_name,
-                    'cosi_bin': -1,
-                    'cosi': np.nan,
+                    'axis_step': -1,
+                    'axis_value': np.nan,
                     'n_fits': len(keep),
                     'sigma_eps': se,
                     'sigma_eps_err': err,
@@ -261,16 +278,22 @@ def plot_quality_vs_cosi(table: pd.DataFrame, out_dir: Path) -> Path:
     return path
 
 
-def plot_sigma_eps(sigma_table: pd.DataFrame, out_dir: Path) -> Path:
-    """The vehicle plot: sigma_eps vs cos i per gate, + collapsed lines."""
+def plot_sigma_eps(
+    sigma_table: pd.DataFrame,
+    out_dir: Path,
+    axis_label: str = 'cos i (bin center)',
+    xscale: str = 'linear',
+    filename: str = 'sigma_eps.png',
+) -> Path:
+    """The vehicle plot: sigma_eps vs the campaign axis, + collapsed lines."""
     plt = _mpl()
     fig, ax = plt.subplots(figsize=(5.5, 4))
     for gate, marker in [('exclude_catastrophic', 'o'), ('full_gate', 's')]:
         sub = sigma_table[sigma_table['gate'] == gate]
-        bins = sub[sub['cosi_bin'] >= 0]
-        head = sub[sub['cosi_bin'] == -1]
+        bins = sub[sub['axis_step'] >= 0]
+        head = sub[sub['axis_step'] == -1]
         ax.errorbar(
-            bins['cosi'],
+            bins['axis_value'],
             bins['sigma_eps'],
             yerr=bins['sigma_eps_err'],
             fmt=marker + '-',
@@ -285,12 +308,13 @@ def plot_sigma_eps(sigma_table: pd.DataFrame, out_dir: Path) -> Path:
                 color=ax.lines[-1].get_color(),
             )
     ax.axhline(0.26, color='gray', ls='--', lw=1, label='photometric 0.26')
-    ax.set_xlabel('cos i (bin center)')
+    ax.set_xlabel(axis_label)
     ax.set_ylabel(r'effective shape noise $\sigma_\epsilon$')
     ax.set_yscale('log')
+    ax.set_xscale(xscale)
     ax.legend(fontsize=8)
     fig.tight_layout()
-    path = out_dir / 'sigma_eps_vs_cosi.png'
+    path = out_dir / filename
     fig.savefig(path, dpi=140)
     plt.close(fig)
     return path
@@ -403,9 +427,12 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
         print(f'WARNING: {len(failed)} failed fits excluded from diagnostics')
         table = table[table['status'] == 'succeeded']
 
+    spec, _, _ = load_run(run_dir)
+    group_col, value_col, axis_label, xscale = measurement_axis(spec)
+
     quality = quality_table(table)
     pulls = pull_table(table)
-    sigma = sigma_eps_table(run_dir, table)
+    sigma = sigma_eps_table(run_dir, table, group_col, value_col)
     quality.to_csv(out_dir / 'quality.csv', index=False)
     pulls.to_csv(out_dir / 'pulls.csv', index=False)
     sigma.to_csv(out_dir / 'sigma_eps.csv', index=False)
@@ -413,14 +440,16 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     plot_recovery(table, out_dir)
     plot_pulls(table, out_dir)
     plot_quality_vs_cosi(table, out_dir)
-    plot_sigma_eps(sigma, out_dir)
+    plot_sigma_eps(sigma, out_dir, axis_label=axis_label, xscale=xscale)
 
-    # per-fit deep dives: every gated-out fit + one good fit per bin
+    # per-fit deep dives: every gated-out fit + one good fit per axis step
     flagged = quality.loc[quality['low_quality'], 'fit_id'].tolist()
     good = quality[~quality['low_quality']]
     representatives = (
         good.sort_values('max_rhat')
-        .groupby(quality['cosi_bin'], sort=True)['fit_id']
+        .groupby(table.set_index('fit_id').loc[good['fit_id'], group_col].values)[
+            'fit_id'
+        ]
         .first()
         .tolist()
         if len(good)
@@ -436,7 +465,7 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     print(f'  catastrophic (max_rhat > 1.1): {n_cat}')
     print(f'  low_quality  (full gate):      {n_low}')
     for gate in ('exclude_catastrophic', 'full_gate'):
-        head = sigma[(sigma['gate'] == gate) & (sigma['cosi_bin'] == -1)]
+        head = sigma[(sigma['gate'] == gate) & (sigma['axis_step'] == -1)]
         if len(head):
             print(
                 f"  sigma_eps [{gate}]: {head['sigma_eps'].iloc[0]:.4f} "

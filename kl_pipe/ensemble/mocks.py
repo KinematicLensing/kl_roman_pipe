@@ -164,6 +164,9 @@ def build_fit_inputs(
     noise_seed: int,
     spec: 'EnsembleSpec',
     config: 'ObservingConfig',
+    *,
+    broadband_snr: float,
+    grism_snr: float,
 ) -> FitInputs:
     """
     Build the per-fit source model, priors, and noisy mock observations.
@@ -175,15 +178,23 @@ def build_fit_inputs(
     noise_seed : int
         The row's noise seed; per-channel seeds derive from it.
     spec : EnsembleSpec
-        SNR knobs + population distributions (for the fit priors).
+        Population distributions (for the fit priors).
     config : ObservingConfig
         Structural instrument setup.
+    broadband_snr, grism_snr : float
+        Per-fit SNR values from the manifest row (the manifest, not the
+        spec, is the source of truth -- grism_snr varies per row on a
+        config-sweep axis).
 
     Returns
     -------
     FitInputs
         (source, priors, image_obs, grism_obs, truth).
     """
+    if broadband_snr <= 0 or grism_snr <= 0:
+        raise ValueError(
+            f"SNR values must be positive, got ({broadband_snr}, {grism_snr})"
+        )
     source = build_source_model(config)
     priors = scene_priors(truth, config, spec)
 
@@ -211,7 +222,7 @@ def build_fit_inputs(
             psf,
             image_pars,
             band,
-            spec.broadband_snr,
+            broadband_snr,
             seeds[i],
             config.oversample,
         )
@@ -228,7 +239,7 @@ def build_fit_inputs(
             z,
             roll,
             single_roll,
-            spec.grism_snr,
+            grism_snr,
             seeds[len(config.bands) + j],
             config.oversample,
         )

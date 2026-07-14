@@ -159,7 +159,7 @@ _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
 _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
-_MEASUREMENTS = ('sigma_eps_vs_cosi',)
+_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_grism_snr')
 
 # spec draw/fixed keys may be shared top-level params, aliased short names, or
 # fully-dotted source-model params; aliases resolve here
@@ -203,10 +203,13 @@ class EnsembleSpec:
     seed: int
     measurement: str
 
-    # bank
-    stratify_param: str
-    stratify_n_bins: int
-    stratify_range: Tuple[float, float]
+    # bank: exactly one plot axis, either a truth stratification (cosi bins)
+    # or a config sweep (grism_snr values; galaxies + noise shared across the
+    # sweep -- common random numbers)
+    stratify_param: str  # 'cosi' | 'grism_snr'
+    stratify_n_bins: int  # cosi axis only; 0 for a config sweep
+    stratify_range: Tuple[float, float]  # cosi axis only; (0, 0) for a sweep
+    sweep_values: Tuple[float, ...]  # config-sweep axis only; () for cosi
     n_gal_per_bin: int
     m_noise: int
     draw: Dict[str, DrawSpec]
@@ -233,6 +236,7 @@ class EnsembleSpec:
     n_chains: int
     precondition: str
     target_accept: float
+    n_map_starts: int
     pin_z_to_truth: bool
 
     # dispatch
@@ -254,17 +258,43 @@ class EnsembleSpec:
                 f"measurement '{self.measurement}' not supported; "
                 f"available: {_MEASUREMENTS}"
             )
-        if self.stratify_param != 'cosi':
-            raise NotImplementedError(
-                f"v1 stratifies cosi only, got '{self.stratify_param}'"
-            )
-        if self.stratify_n_bins < 1:
-            raise ValueError(f"n_bins ({self.stratify_n_bins}) must be >= 1")
-        lo, hi = self.stratify_range
-        if not (0.0 < lo < hi <= 1.0):
-            raise ValueError(
-                f"cosi stratify range ({lo}, {hi}) must satisfy 0 < lo < hi <= 1"
-            )
+        if self.measurement == 'sigma_eps_vs_cosi':
+            if self.stratify_param != 'cosi':
+                raise ValueError(
+                    f"measurement sigma_eps_vs_cosi stratifies cosi, got "
+                    f"'{self.stratify_param}'"
+                )
+            if self.stratify_n_bins < 1:
+                raise ValueError(f"n_bins ({self.stratify_n_bins}) must be >= 1")
+            lo, hi = self.stratify_range
+            if not (0.0 < lo < hi <= 1.0):
+                raise ValueError(
+                    f"cosi stratify range ({lo}, {hi}) must satisfy "
+                    f"0 < lo < hi <= 1"
+                )
+        elif self.measurement == 'sigma_eps_vs_grism_snr':
+            if self.stratify_param != 'grism_snr':
+                raise ValueError(
+                    f"measurement sigma_eps_vs_grism_snr sweeps grism_snr, "
+                    f"got '{self.stratify_param}'"
+                )
+            if len(self.sweep_values) < 2:
+                raise ValueError(
+                    f"grism_snr sweep needs >= 2 values, got "
+                    f"{list(self.sweep_values)}"
+                )
+            if any(v <= 0 for v in self.sweep_values):
+                raise ValueError(
+                    f"grism_snr sweep values must be positive, got "
+                    f"{list(self.sweep_values)}"
+                )
+            if len(set(self.sweep_values)) != len(self.sweep_values):
+                raise ValueError("grism_snr sweep values must be unique")
+            if 'cosi' not in self.draw:
+                raise ValueError(
+                    "sigma_eps_vs_grism_snr requires cosi in bank.draw "
+                    "(cosi is a drawn population truth on this axis)"
+                )
         if self.n_gal_per_bin < 1 or self.m_noise < 1:
             raise ValueError("n_gal_per_bin and m_noise must be >= 1")
         if self.shear_scheme not in _SHEAR_SCHEMES:
@@ -307,13 +337,18 @@ class EnsembleSpec:
             )
 
     @property
+    def n_axis_steps(self) -> int:
+        """Number of steps along the plot axis (cosi bins or sweep values)."""
+        if self.sweep_values:
+            return len(self.sweep_values)
+        return self.stratify_n_bins
+
+    @property
     def n_fits(self) -> int:
         """Total fits this spec expands to."""
         n_shear = len(self.shear_grid) if self.shear_scheme == 'grid' else 1
         n_ring = 2 if self.ring_enabled else 1
-        return (
-            self.stratify_n_bins * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
-        )
+        return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'EnsembleSpec':
@@ -339,7 +374,8 @@ class EnsembleSpec:
             'output',
         )
         _reject_unknown(raw, allowed, str(path))
-        _require_keys(raw, allowed, str(path))
+        # grism_snr is required as a scalar UNLESS it is the swept axis
+        _require_keys(raw, tuple(k for k in allowed if k != 'grism_snr'), str(path))
 
         bank = raw['bank']
         _reject_unknown(
@@ -355,12 +391,35 @@ class EnsembleSpec:
                 f"got {list(stratify)}"
             )
         strat_param, strat_cfg = next(iter(stratify.items()))
-        _reject_unknown(
-            strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
-        )
-        _require_keys(
-            strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
-        )
+        strat_n_bins = 0
+        strat_range = (0.0, 0.0)
+        sweep_values: Tuple[float, ...] = ()
+        if strat_param == 'grism_snr':
+            _reject_unknown(
+                strat_cfg, ('values',), f"{path}:bank.stratify.{strat_param}"
+            )
+            _require_keys(strat_cfg, ('values',), f"{path}:bank.stratify.{strat_param}")
+            sweep_values = tuple(float(v) for v in strat_cfg['values'])
+            if 'grism_snr' in raw:
+                raise ValueError(
+                    f"{path}: top-level grism_snr conflicts with the "
+                    f"grism_snr sweep axis; remove it (per-fit values come "
+                    f"from bank.stratify.grism_snr.values)"
+                )
+        else:
+            if 'grism_snr' not in raw:
+                raise ValueError(f"{path}: missing required keys ['grism_snr']")
+            _reject_unknown(
+                strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
+            )
+            _require_keys(
+                strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
+            )
+            strat_n_bins = int(strat_cfg['n_bins'])
+            strat_range = (
+                float(strat_cfg['range'][0]),
+                float(strat_cfg['range'][1]),
+            )
 
         draw = {}
         for name, dcfg in bank['draw'].items():
@@ -403,6 +462,7 @@ class EnsembleSpec:
                 'n_chains',
                 'precondition',
                 'target_accept',
+                'n_map_starts',
                 'pin_z_to_truth',
             ),
             f"{path}:fit",
@@ -437,8 +497,9 @@ class EnsembleSpec:
             seed=int(raw['seed']),
             measurement=str(raw['measurement']),
             stratify_param=strat_param,
-            stratify_n_bins=int(strat_cfg['n_bins']),
-            stratify_range=(float(strat_cfg['range'][0]), float(strat_cfg['range'][1])),
+            stratify_n_bins=strat_n_bins,
+            stratify_range=strat_range,
+            sweep_values=sweep_values,
             n_gal_per_bin=int(bank['n_gal_per_bin']),
             m_noise=int(bank.get('m_noise', 1)),
             draw=draw,
@@ -451,12 +512,20 @@ class EnsembleSpec:
             ring_enabled=bool(ring.get('enabled', False)),
             observed_config=str(raw['observed_config']),
             broadband_snr=float(raw['broadband_snr']),
-            grism_snr=float(raw['grism_snr']),
+            # swept axis: per-fit values live in the manifest; the scalar
+            # field is unused (set to the first sweep value as a placeholder
+            # that keeps validation simple)
+            grism_snr=(
+                float(raw['grism_snr'])
+                if 'grism_snr' in raw
+                else float(sweep_values[0])
+            ),
             n_warmup=int(fit.get('n_warmup', 500)),
             n_samples=int(fit.get('n_samples', 1000)),
             n_chains=int(fit.get('n_chains', 4)),
             precondition=str(fit.get('precondition', 'laplace')),
             target_accept=float(fit.get('target_accept', 0.8)),
+            n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
             backend=str(dispatch.get('backend', 'local')),
             mode=str(dispatch.get('mode', 'dynamic')),

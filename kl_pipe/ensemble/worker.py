@@ -53,6 +53,43 @@ def _atomic_savez(path: Path, arrays: Dict[str, np.ndarray]) -> None:
     os.replace(tmp, path)
 
 
+# PA basins are the known multimodality: every fit's MAP multi-start gets
+# this many extra starts with theta_int stratified across its prior range
+# (random prior draws can all land in the wrong basin, whose shape-shear-
+# compensated mode traps the sampler)
+_N_PA_STRATIFIED_STARTS = 4
+
+# a fit whose chains come back broken (stuck wrong mode) gets ONE retry with
+# a fresh sampler seed; the retry outcome is recorded, never hidden
+_CATASTROPHIC_RHAT = 1.1
+_CATASTROPHIC_DIV_RATE = 0.9
+_MAX_ATTEMPTS = 2
+
+
+def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS):
+    """Prior-draw start points with theta_int overridden by a PA grid."""
+    import jax
+
+    names = list(priors.sampled_names)
+    if 'theta_int' not in names:
+        return None
+    lo, hi = priors.get_prior('theta_int').bounds
+    if lo is None or hi is None:
+        return None
+    # explicit copy: np.asarray on a jax array returns a read-only view
+    starts = np.array(priors.sample(jax.random.PRNGKey(seed + 2), n_pa))
+    centers = lo + (np.arange(n_pa) + 0.5) * (hi - lo) / n_pa
+    starts[:, names.index('theta_int')] = centers
+    return starts
+
+
+def _is_catastrophic(summary: dict) -> bool:
+    return (
+        summary['max_rhat'] > _CATASTROPHIC_RHAT
+        or summary['divergence_rate'] > _CATASTROPHIC_DIV_RATE
+    )
+
+
 def run_single_fit(
     row: Dict,
     spec: EnsembleSpec,
@@ -61,18 +98,63 @@ def run_single_fit(
 ) -> dict:
     """Run one fit and return its summary row (also persisted by the caller).
 
-    Raises on any error -- the caller decides how to record the failure.
+    A catastrophically unconverged result (broken chains: max_rhat > 1.1 or
+    divergence rate > 0.9, i.e. a sampler stuck in a spurious mode -- not
+    mere low quality) is retried once with a fresh sampler seed; the attempt
+    count is recorded in the summary. Raises on any error -- the caller
+    decides how to record the failure.
     """
+    fit_id = str(row['fit_id'])
+    truth = truth_from_row(row)
+    noise_seed = int(row['noise_seed'])
+
+    summary = None
+    for attempt in range(_MAX_ATTEMPTS):
+        sampler_seed = _sampler_seed(noise_seed) + 1000 * attempt
+        summary = _run_fit_attempt(
+            row, spec, config, run_dir, truth, noise_seed, sampler_seed
+        )
+        summary['n_attempts'] = attempt + 1
+        if not _is_catastrophic(summary):
+            break
+        print(
+            f'[fit {fit_id}] attempt {attempt + 1} catastrophic '
+            f"(max_rhat={summary['max_rhat']:.2f}, "
+            f"div={summary['divergence_rate']:.0%}) -- "
+            + (
+                'retrying with fresh seed'
+                if attempt + 1 < _MAX_ATTEMPTS
+                else 'giving up; recorded as-is'
+            ),
+            flush=True,
+        )
+    return summary
+
+
+def _run_fit_attempt(
+    row: Dict,
+    spec: EnsembleSpec,
+    config: ObservingConfig,
+    run_dir: Path,
+    truth: Dict[str, float],
+    noise_seed: int,
+    sampler_seed: int,
+) -> dict:
     from kl_pipe.sampling import InferenceTask
     from kl_pipe.sampling.configs import NumpyroSamplerConfig
     from kl_pipe.sampling.numpyro import NumpyroSampler
 
     fit_id = str(row['fit_id'])
-    truth = truth_from_row(row)
-    noise_seed = int(row['noise_seed'])
     t_start = time.time()
 
-    inputs = build_fit_inputs(truth, noise_seed, spec, config)
+    inputs = build_fit_inputs(
+        truth,
+        noise_seed,
+        spec,
+        config,
+        broadband_snr=float(row['broadband_snr']),
+        grism_snr=float(row['grism_snr']),
+    )
     task = InferenceTask.from_obs(
         inputs.source,
         inputs.priors,
@@ -80,13 +162,13 @@ def run_single_fit(
         grism_obs=inputs.grism_obs,
     )
 
-    sampler_seed = _sampler_seed(noise_seed)
     sampler_config = NumpyroSamplerConfig(
         n_samples=spec.n_samples,
         n_warmup=spec.n_warmup,
         n_chains=spec.n_chains,
         target_accept_prob=spec.target_accept,
         precondition=spec.precondition,
+        n_map_starts=spec.n_map_starts,
         seed=sampler_seed,
     )
 
@@ -94,11 +176,13 @@ def run_single_fit(
     if spec.precondition == 'laplace':
         # build explicitly (rather than letting the sampler build it
         # internally) so the MAP point and precond diagnostics reach the
-        # summary row
+        # summary row; PA-stratified extra starts guarantee the position-
+        # angle basins are all visited
         preconditioner = task.laplace_preconditioner(
             n_starts=sampler_config.n_map_starts,
             seed=sampler_seed,
             hessian_method=sampler_config.hessian_method,
+            extra_starts=_pa_stratified_starts(inputs.priors, sampler_seed),
         )
     t_precond = time.time()
 
@@ -116,6 +200,7 @@ def run_single_fit(
         wallclock_s=t_end - t_start,
         precond_s=t_precond - t_start,
     )
+    summary['sampler_seed'] = sampler_seed
 
     if bool(row['save_chains']):
         _save_chains(run_dir, fit_id, result, sampled_names)
@@ -173,7 +258,6 @@ def _summary_row(
         ),
         'fit_wallclock_s': float(wallclock_s),
         'precond_wallclock_s': float(precond_s),
-        'sampler_seed': _sampler_seed(int(row['noise_seed'])),
     }
 
     for i, name in enumerate(sampled_names):

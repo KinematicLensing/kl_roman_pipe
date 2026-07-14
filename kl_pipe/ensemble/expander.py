@@ -57,11 +57,12 @@ def compute_fit_id(
     ring_member: int,
     noise_rep: int,
     shear_step: int,
+    sweep_step: int = 0,
 ) -> str:
     """Stable fit id from the integer index tuple (plus run identity)."""
     key = (
         f'{run_name}|{version}|{cosi_bin}|{galaxy_id}|{ring_member}'
-        f'|{noise_rep}|{shear_step}'
+        f'|{noise_rep}|{shear_step}|{sweep_step}'
     )
     return hashlib.sha1(key.encode()).hexdigest()[:16]
 
@@ -112,7 +113,14 @@ def _shear_for_step(spec: EnsembleSpec, step: int) -> Dict[str, float]:
 
 
 def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
-    """Expand the spec into the per-fit manifest table."""
+    """Expand the spec into the per-fit manifest table.
+
+    Axis semantics: a cosi stratification means each bin holds its OWN
+    galaxy bank (the property is the galaxy -- independent noise); a config
+    sweep (grism_snr) means ONE galaxy bank shared across every sweep step
+    with the SAME noise seed (common random numbers -- the knob is external
+    to the galaxy).
+    """
     base_truth = scene_truth_defaults(config, spec.fixed)
 
     required_draws = {'theta_int', 'vel.vcirc', 'z'}
@@ -125,10 +133,20 @@ def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
 
     n_shear = len(spec.shear_grid) if spec.shear_scheme == 'grid' else 1
     ring_members = (0, 90) if spec.ring_enabled else (0,)
-    cosi_centers = _cosi_bin_centers(spec)
+
+    if spec.sweep_values:
+        # config sweep: one galaxy bank (bank bin 0), swept observed knob
+        bank_bins = [(0, {})]
+        sweep_steps = list(enumerate(spec.sweep_values))
+    else:
+        # truth stratification: a galaxy bank per cosi bin
+        bank_bins = [
+            (b, {'cosi': float(c)}) for b, c in enumerate(_cosi_bin_centers(spec))
+        ]
+        sweep_steps = [(0, None)]
 
     rows: List[dict] = []
-    for cosi_bin, cosi in enumerate(cosi_centers):
+    for cosi_bin, strat_truth in bank_bins:
         for galaxy_id in range(spec.n_gal_per_bin):
             rng = _galaxy_rng(spec.seed, cosi_bin, galaxy_id)
             # fixed draw order = stable across spec-dict insertion order
@@ -141,63 +159,74 @@ def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
                     theta = (theta + np.pi / 2) % np.pi
                 for shear_step in range(n_shear):
                     shear = _shear_for_step(spec, shear_step)
-                    for noise_rep in range(spec.m_noise):
-                        truth = dict(base_truth)
-                        truth.update(drawn)
-                        truth.update(
-                            {
-                                'cosi': float(cosi),
-                                'theta_int': float(theta),
-                                'g1': shear['g1'],
-                                'g2': shear['g2'],
-                            }
-                        )
-                        fit_id = compute_fit_id(
-                            spec.run_name,
-                            spec.version,
-                            cosi_bin,
-                            galaxy_id,
-                            ring_member,
-                            noise_rep,
-                            shear_step,
-                        )
-                        ring_partner = (
-                            compute_fit_id(
+                    for sweep_step, sweep_value in sweep_steps:
+                        for noise_rep in range(spec.m_noise):
+                            truth = dict(base_truth)
+                            truth.update(drawn)
+                            truth.update(strat_truth)
+                            truth.update(
+                                {
+                                    'theta_int': float(theta),
+                                    'g1': shear['g1'],
+                                    'g2': shear['g2'],
+                                }
+                            )
+                            id_args = (
                                 spec.run_name,
                                 spec.version,
                                 cosi_bin,
                                 galaxy_id,
-                                90 if ring_member == 0 else 0,
-                                noise_rep,
-                                shear_step,
                             )
-                            if spec.ring_enabled
-                            else ''
-                        )
-                        row = {
-                            'fit_id': fit_id,
-                            'run_name': spec.run_name,
-                            'cosi_bin': cosi_bin,
-                            'galaxy_id': galaxy_id,
-                            'ring_member': ring_member,
-                            'ring_partner_id': ring_partner,
-                            'noise_rep': noise_rep,
-                            'shear_step': shear_step,
-                            'noise_seed': _noise_seed(
-                                spec.seed,
-                                cosi_bin,
-                                galaxy_id,
+                            fit_id = compute_fit_id(
+                                *id_args,
                                 ring_member,
                                 noise_rep,
-                            ),
-                            'observed_config_id': config.id,
-                            'broadband_snr': spec.broadband_snr,
-                            'grism_snr': spec.grism_snr,
-                            'save_chains': spec.save_chains == 'all',
-                            'save_mocks': spec.save_mocks == 'all',
-                        }
-                        row.update({f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()})
-                        rows.append(row)
+                                shear_step,
+                                sweep_step,
+                            )
+                            ring_partner = (
+                                compute_fit_id(
+                                    *id_args,
+                                    90 if ring_member == 0 else 0,
+                                    noise_rep,
+                                    shear_step,
+                                    sweep_step,
+                                )
+                                if spec.ring_enabled
+                                else ''
+                            )
+                            row = {
+                                'fit_id': fit_id,
+                                'run_name': spec.run_name,
+                                'cosi_bin': cosi_bin,
+                                'galaxy_id': galaxy_id,
+                                'ring_member': ring_member,
+                                'ring_partner_id': ring_partner,
+                                'noise_rep': noise_rep,
+                                'shear_step': shear_step,
+                                'sweep_step': sweep_step,
+                                # CRN: seed excludes shear_step AND sweep_step
+                                'noise_seed': _noise_seed(
+                                    spec.seed,
+                                    cosi_bin,
+                                    galaxy_id,
+                                    ring_member,
+                                    noise_rep,
+                                ),
+                                'observed_config_id': config.id,
+                                'broadband_snr': spec.broadband_snr,
+                                'grism_snr': (
+                                    float(sweep_value)
+                                    if sweep_value is not None
+                                    else spec.grism_snr
+                                ),
+                                'save_chains': spec.save_chains == 'all',
+                                'save_mocks': spec.save_mocks == 'all',
+                            }
+                            row.update(
+                                {f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()}
+                            )
+                            rows.append(row)
 
     manifest = pd.DataFrame(rows)
     if manifest['fit_id'].duplicated().any():
