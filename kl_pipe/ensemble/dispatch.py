@@ -15,8 +15,10 @@ lets every task claim from the shared ledger (better load balance).
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -55,6 +57,18 @@ def run_local(
     if n_workers == 1:
         return worker_loop(run_dir, worker_label='local0', max_fits=max_fits)
 
+    # slice HBM across workers (same rule as the emitted submit.slurm):
+    # each JAX process otherwise preallocates 75% of the device and N > 1
+    # workers OOM immediately. An explicit caller setting wins.
+    child_env = os.environ.copy()
+    if 'XLA_PYTHON_CLIENT_MEM_FRACTION' not in child_env:
+        frac = round(0.85 / n_workers, 3)
+        child_env['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(frac)
+        print(
+            f'[dispatch] XLA_PYTHON_CLIENT_MEM_FRACTION={frac} per worker '
+            f'({n_workers} workers share the device)'
+        )
+
     procs = []
     for w in range(n_workers):
         cmd = [
@@ -69,7 +83,9 @@ def run_local(
         ]
         if max_fits is not None:
             cmd += ['--max-fits', str(max_fits)]
-        procs.append(subprocess.Popen(cmd))
+        procs.append(subprocess.Popen(cmd, env=child_env))
+        # stagger jax inits (simultaneous startups spike threads/allocs)
+        time.sleep(0.5)
 
     counts = {'workers': n_workers, 'nonzero_exits': 0}
     for w, proc in enumerate(procs):
