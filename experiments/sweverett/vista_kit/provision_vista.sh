@@ -29,6 +29,8 @@ TAG="${1:-26.06-py3}"                        # NGC JAX tag (nvcr.io/nvidia/jax)
 CONTAINER_DIR="$WORK/containers"
 CONTAINER="$CONTAINER_DIR/jax_${TAG}.sif"
 PIPDIR="$WORK/klpipe_pipdeps"
+FFTWDIR="$WORK/fftw3"
+FFTW_VERSION="3.3.10"
 REPO="$STOCKYARD/repos/kl_roman_pipe"
 RESULTS="$STOCKYARD/klpipe_bench_results"
 
@@ -51,28 +53,64 @@ else
   apptainer pull "$CONTAINER" "docker://nvcr.io/nvidia/jax:${TAG}" > "$LOG" 2>&1
 fi
 
+# 2a. FFTW: galsim's one C dependency. PyPI has NO aarch64 galsim wheel, so
+#     pip builds galsim from source inside the container (compiler + Eigen
+#     auto-download both work there); only libfftw3 is missing. Build it once
+#     into $WORK with the CONTAINER's toolchain (ABI consistency) and point
+#     the galsim build at it via FFTW_DIR. galsim's setup records the fftw
+#     runtime path, so no LD_LIBRARY_PATH is needed at run time -- but the
+#     import check below verifies that loudly.
+if [[ -f "$FFTWDIR/lib/libfftw3.so" ]]; then
+  echo "[provision] fftw present: $FFTWDIR"
+else
+  echo "[provision] building fftw-$FFTW_VERSION -> $FFTWDIR (few minutes) ..."
+  FFTW_TMP="$(mktemp -d)"
+  curl -sL "https://fftw.org/fftw-${FFTW_VERSION}.tar.gz" | tar xz -C "$FFTW_TMP"
+  mkdir -p "$FFTWDIR"
+  apptainer exec -B "$FFTW_TMP:$FFTW_TMP" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
+    bash -c "cd $FFTW_TMP/fftw-$FFTW_VERSION && \
+             ./configure --enable-shared --disable-fortran --disable-doc \
+                         --prefix=$FFTWDIR > $FFTWDIR/build.log 2>&1 && \
+             make -j8 >> $FFTWDIR/build.log 2>&1 && \
+             make install >> $FFTWDIR/build.log 2>&1"
+  rm -rf "$FFTW_TMP"
+  [[ -f "$FFTWDIR/lib/libfftw3.so" ]] || {
+    echo "ERROR: fftw build failed -- see $FFTWDIR/build.log" >&2; exit 1; }
+fi
+
 # 2. pip sidecar: install once. Check by importing from the target dir; if the
 #    import succeeds the deps are already there. NEVER let pip touch jax/jaxlib
-#    (those come from the image) -- everything here is pure-python or ships a
-#    manylinux aarch64 wheel (galsim does since 2.5 -- needed by the ensemble
-#    mock PSFs; pandas/pyarrow for the ensemble parquet manifests/results;
-#    corner for run diagnostics).
+#    (those come from the image) -- pure-python or wheels, EXCEPT galsim,
+#    which builds from source against the fftw above (~10-20 min compile,
+#    one-time). pandas/pyarrow feed the ensemble parquet manifests/results;
+#    corner feeds run diagnostics.
 SIDECAR_PKGS="numpyro astropy pyyaml matplotlib galsim pandas pyarrow corner"
 mkdir -p "$PIPDIR"
 # -B binds $PIPDIR into the container: pip --target writes from INSIDE the
 # container, so the target must be explicitly bind-mounted (don't rely on
 # TACC auto-bind).
-if apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" python -c \
+if apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" python -c \
      "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib, galsim, pandas, pyarrow, corner" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
-  echo "[provision] installing $SIDECAR_PKGS -> $PIPDIR ..."
-  apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" \
+  echo "[provision] installing $SIDECAR_PKGS -> $PIPDIR (galsim compiles from"
+  echo "[provision] source, ~10-20 min one-time) ..."
+  apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" \
+    --env FFTW_DIR="$FFTWDIR" "$CONTAINER" \
     python -m pip install --no-cache-dir --target "$PIPDIR" $SIDECAR_PKGS
   # numpyro drags in a jax/jaxlib/CUDA-plugin set that mismatches (and would
   # shadow) the container's GPU jax; strip it so only the container's is used.
   echo "[provision] removing pip-dragged jax/CUDA from the sidecar ..."
   rm -rf "$PIPDIR"/jax* "$PIPDIR"/nvidia*
+  # loud post-install check: galsim must import AND find libfftw3 at runtime
+  apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
+    python -c "import sys; sys.path.insert(0, '$PIPDIR'); import galsim; \
+print('[provision] galsim', galsim.__version__, 'imports OK')" || {
+    echo "ERROR: galsim import failed after install. If the error is a" >&2
+    echo "missing libfftw3.so, bind $FFTWDIR and prepend" >&2
+    echo "$FFTWDIR/lib to LD_LIBRARY_PATH in your exec command." >&2
+    exit 1
+  }
 fi
 
 mkdir -p "$RESULTS"
@@ -97,6 +135,7 @@ node. For interactive runs (on a compute node), this wraps the exec incantation:
 
   klrun() { apptainer exec --nv \\
     --bind $REPO:$REPO --bind $RESULTS:$RESULTS --bind $PIPDIR:$PIPDIR \\
+    --bind $FFTWDIR:$FFTWDIR \\
     --env PYTHONPATH=$REPO:$PIPDIR \\
     --env XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \\
     $CONTAINER "\$@"; }

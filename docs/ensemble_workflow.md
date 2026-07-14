@@ -210,10 +210,14 @@ Define the container launcher (both idev and batch use it):
 module load tacc-apptainer
 export KLPIPE_PYTHON="apptainer exec --nv \
   -B $STOCKYARD/repos/kl_roman_pipe -B $WORK/klpipe_pipdeps -B $SCRATCH \
+  -B $WORK/fftw3 \
   --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \
   --env JAX_COMPILATION_CACHE_DIR=$SCRATCH/jax_cache \
   $WORK/containers/jax_26.06-py3.sif python"
 ```
+
+(`$WORK/fftw3` is the provision-built FFTW that the from-source galsim links
+against -- it must be bound at run time, not just at build time.)
 
 **idev micro-run** (an idev node is just a local machine -- use the local
 backend; no SLURM machinery involved):
