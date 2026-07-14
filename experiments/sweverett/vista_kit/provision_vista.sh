@@ -78,7 +78,12 @@ else
     echo "ERROR: fftw tarball extraction failed" >&2; exit 1; }
   # run each build stage explicitly so a failure names its stage and shows
   # the log tail (set -e would otherwise abort this script silently)
-  if ! apptainer exec -B "$FFTW_TMP:$FFTW_TMP" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
+  # CC/CXX pinned to the container's gcc: the HOST module environment leaks
+  # into apptainer exec (TACC binds /home1/apps and exports the nvhpc CC),
+  # and configure otherwise picks the host's nvc, which cannot create
+  # container-runnable executables. See the env-leakage note in SETUP.md.
+  if ! apptainer exec -B "$FFTW_TMP:$FFTW_TMP" -B "$FFTWDIR:$FFTWDIR" \
+      --env CC=gcc --env CXX=g++ "$CONTAINER" \
       bash -c "set -e; cd $FFTW_TMP/fftw-$FFTW_VERSION && \
                ./configure --enable-shared --disable-fortran --disable-doc \
                            --prefix=$FFTWDIR > $FFTWDIR/build.log 2>&1 && \
@@ -112,8 +117,9 @@ if apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" pytho
 else
   echo "[provision] installing $SIDECAR_PKGS -> $PIPDIR (galsim compiles from"
   echo "[provision] source, ~10-20 min one-time) ..."
+  # CC/CXX pinned for the same host-env-leakage reason as the fftw build
   apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" \
-    --env FFTW_DIR="$FFTWDIR" "$CONTAINER" \
+    --env FFTW_DIR="$FFTWDIR" --env CC=gcc --env CXX=g++ "$CONTAINER" \
     python -m pip install --no-cache-dir --target "$PIPDIR" $SIDECAR_PKGS
   # numpyro drags in a jax/jaxlib/CUDA-plugin set that mismatches (and would
   # shadow) the container's GPU jax; strip it so only the container's is used.
