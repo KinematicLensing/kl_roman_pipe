@@ -70,6 +70,7 @@ APPTAINER_RUN="apptainer exec --nv \
   --bind $RESULTS:$RESULTS \
   --bind $PIPDIR:$PIPDIR \
   --bind $SCRATCH:$SCRATCH \
+  --env LD_PRELOAD=$PIPDIR/galsim/libfftw3.so.3 \
   --env PYTHONPATH=$REPO:$PIPDIR \
   $CONTAINER"
 

@@ -39,5 +39,6 @@ exec apptainer exec --nv \
   --bind "$RESULTS:$RESULTS" \
   --bind "$PIPDIR:$PIPDIR" \
   --env "PYTHONPATH=$REPO:$PIPDIR" \
+  --env "LD_PRELOAD=$PIPDIR/galsim/libfftw3.so.3" \
   --env XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
   "$CONTAINER" "$@"

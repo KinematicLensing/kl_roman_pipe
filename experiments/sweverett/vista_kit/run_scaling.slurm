@@ -45,6 +45,7 @@ APPTAINER_RUN="apptainer exec --nv \
   --bind $REPO:$REPO \
   --bind $RESULTS:$RESULTS \
   --bind $PIPDIR:$PIPDIR \
+  --env LD_PRELOAD=$PIPDIR/galsim/libfftw3.so.3 \
   --env PYTHONPATH=$REPO:$PIPDIR \
   --env XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
   $CONTAINER"

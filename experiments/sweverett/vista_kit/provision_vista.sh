@@ -111,20 +111,30 @@ mkdir -p "$PIPDIR"
 # -B binds $PIPDIR into the container: pip --target writes from INSIDE the
 # container, so the target must be explicitly bind-mounted (don't rely on
 # TACC auto-bind).
-# galsim's from-source build does not bake an rpath to the fftw above, and
-# overriding LD_LIBRARY_PATH would risk clobbering the container's CUDA
-# paths. Instead: a sitecustomize.py in the sidecar preloads libfftw3 via
-# ctypes at interpreter startup (the sidecar is on PYTHONPATH at run time,
-# so site.py auto-imports it). Written unconditionally -- tiny + idempotent.
-cat > "$PIPDIR/sitecustomize.py" <<EOF
-# preload fftw for the from-source galsim (no rpath); see provision_vista.sh
-import ctypes
+#
+# fftw at RUN time: galsim's from-source build bakes no rpath, so _galsim
+# needs libfftw3.so.3 findable at import. The earlier sitecustomize-preload
+# approach FAILED: the NGC image ships its own sitecustomize.py, which
+# site.py imports at interpreter startup; a later 'import sitecustomize'
+# is then a sys.modules no-op and our ctypes preload never ran. Instead:
+#   (a) copy libfftw3.so.3 INTO the sidecar next to _galsim -- the sidecar
+#       is the one dir every wrapper already binds, so no extra binds and
+#       the staged $SCRATCH copy carries it too (self-contained artifact);
+#   (b) every exec wrapper sets LD_PRELOAD to that embedded copy (additive;
+#       does NOT touch the container's LD_LIBRARY_PATH/CUDA paths);
+#   (c) best-effort below: bake an \$ORIGIN rpath into _galsim with patchelf
+#       so even a bare 'apptainer exec' without LD_PRELOAD works.
+rm -f "$PIPDIR/sitecustomize.py"   # remove the broken preload shim if present
+embed_fftw() {
+  [[ -d "$PIPDIR/galsim" ]] || return 0
+  cp -fL "$FFTWDIR/lib/libfftw3.so.3" "$PIPDIR/galsim/libfftw3.so.3"
+}
+embed_fftw
+GALSIM_PRELOAD="$PIPDIR/galsim/libfftw3.so.3"
 
-ctypes.CDLL('$FFTWDIR/lib/libfftw3.so.3', mode=ctypes.RTLD_GLOBAL)
-EOF
-
-if apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" python -c \
-     "import sys; sys.path.insert(0, '$PIPDIR'); import sitecustomize; import numpyro, astropy, yaml, matplotlib, galsim, pandas, pyarrow, corner" 2>/dev/null; then
+if apptainer exec -B "$PIPDIR:$PIPDIR" --env LD_PRELOAD="$GALSIM_PRELOAD" \
+     "$CONTAINER" python -c \
+     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib, galsim, pandas, pyarrow, corner" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
   echo "[provision] installing $SIDECAR_PKGS -> $PIPDIR (galsim compiles from"
@@ -137,16 +147,36 @@ else
   # shadow) the container's GPU jax; strip it so only the container's is used.
   echo "[provision] removing pip-dragged jax/CUDA from the sidecar ..."
   rm -rf "$PIPDIR"/jax* "$PIPDIR"/nvidia*
-  # loud post-install check: galsim must import AND find libfftw3 at runtime
-  # (via the sitecustomize preload above)
-  apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
-    python -c "import sys; sys.path.insert(0, '$PIPDIR'); import sitecustomize; import galsim; \
-print('[provision] galsim', galsim.__version__, 'imports OK')" || {
-    echo "ERROR: galsim import failed after install (with the fftw" >&2
-    echo "sitecustomize preload) -- paste the traceback." >&2
+  embed_fftw
+  [[ -f "$GALSIM_PRELOAD" ]] || {
+    echo "ERROR: galsim installed but $GALSIM_PRELOAD missing -- fftw embed failed" >&2
     exit 1
   }
 fi
+
+# best-effort second line of defense: bake an $ORIGIN rpath into _galsim so
+# it finds the embedded libfftw3.so.3 even WITHOUT LD_PRELOAD (protects bare
+# 'apptainer exec' invocations). Non-fatal: LD_PRELOAD in the wrappers is the
+# primary mechanism and is verified below.
+if apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" bash -c \
+    "python -m pip install --quiet --no-cache-dir --target $PIPDIR/_tools patchelf >/dev/null 2>&1 && \
+     $PIPDIR/_tools/bin/patchelf --set-rpath '\$ORIGIN' $PIPDIR/galsim/_galsim*.so"; then
+  echo "[provision] rpath baked into _galsim (imports work even without LD_PRELOAD)"
+else
+  echo "[provision] WARNING: patchelf rpath bake failed (non-fatal);" >&2
+  echo "[provision] relying on LD_PRELOAD set by klrun.sh / slurm scripts." >&2
+fi
+
+# loud final check, exactly as the run wrappers invoke it: sidecar bind only
+# (no fftw bind -- proves the sidecar is self-contained) + LD_PRELOAD.
+apptainer exec -B "$PIPDIR:$PIPDIR" --env LD_PRELOAD="$GALSIM_PRELOAD" \
+  "$CONTAINER" python -c \
+  "import sys; sys.path.insert(0, '$PIPDIR'); import galsim; \
+print('[provision] galsim', galsim.__version__, 'imports OK (self-contained sidecar)')" || {
+  echo "ERROR: galsim import failed with the embedded fftw + LD_PRELOAD." >&2
+  echo "Debug: ls -l $PIPDIR/galsim/libfftw3.so.3 and paste the traceback." >&2
+  exit 1
+}
 
 mkdir -p "$RESULTS"
 
@@ -170,8 +200,8 @@ node. For interactive runs (on a compute node), this wraps the exec incantation:
 
   klrun() { apptainer exec --nv \\
     --bind $REPO:$REPO --bind $RESULTS:$RESULTS --bind $PIPDIR:$PIPDIR \\
-    --bind $FFTWDIR:$FFTWDIR \\
     --env PYTHONPATH=$REPO:$PIPDIR \\
+    --env LD_PRELOAD=$PIPDIR/galsim/libfftw3.so.3 \\
     --env XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \\
     $CONTAINER "\$@"; }
   # e.g.: klrun python bench_matrix.py --sections a --configs Q --nreps 5
