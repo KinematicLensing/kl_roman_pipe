@@ -115,19 +115,25 @@ _SLURM_TEMPLATE = """\
 # Emitted by kl_pipe.ensemble.dispatch -- one node per array task; each task
 # runs {workers} concurrent worker process(es) sharing the claim ledger.
 #
-# Environment: either activate a python env with kl_pipe installed before the
-# loop below, or set KLPIPE_PYTHON to a full launcher command. Containerized
-# Vista example (paths from vista_kit/provision_vista.sh):
-#   module load tacc-apptainer
-#   export KLPIPE_PYTHON="apptainer exec --nv \\
-#     -B $STOCKYARD/repos/kl_roman_pipe -B $WORK/klpipe_pipdeps -B $SCRATCH \\
-#     --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \\
-#     --env LD_PRELOAD=$WORK/klpipe_pipdeps/galsim/libfftw3.so.3 \\
-#     $WORK/containers/jax_26.06-py3.sif python"
+# Environment: KLPIPE_PYTHON is the full launcher command for a python that
+# can import kl_pipe + jax (e.g. the containerized Vista launcher from
+# docs/ensemble_workflow.md). If it was exported when this script was
+# emitted, it is baked in below; an export in the sbatch environment
+# overrides the baked value.
 
 set -u
 
+{launcher_block}
+
 PY="${{KLPIPE_PYTHON:-python}}"
+
+# preflight: one loud failure instead of {workers} import tracebacks
+if ! $PY -c "import kl_pipe, jax"; then
+  echo "ERROR: launcher '$PY' cannot import kl_pipe + jax." >&2
+  echo "Export KLPIPE_PYTHON (containerized launcher, see" >&2
+  echo "docs/ensemble_workflow.md) and re-emit or resubmit." >&2
+  exit 1
+fi
 
 export JAX_COMPILATION_CACHE_DIR="${{SCRATCH:-$HOME}}/jax_cache"
 
@@ -181,6 +187,35 @@ def emit_slurm_script(run_dir: Path) -> Path:
     else:
         mem_fraction_line = '# (single worker: full device)'
 
+    # bake the launcher into the script when available: sbatch does not see
+    # the emitting (idev) shell's exports, so relying on a manual edit or on
+    # the submit shell's environment silently falls back to the host python.
+    launcher = os.environ.get('KLPIPE_PYTHON', '').strip()
+    if '"' in launcher:
+        raise ValueError(
+            "KLPIPE_PYTHON contains a double quote -- cannot bake it into "
+            "submit.slurm safely; simplify the launcher command"
+        )
+    if launcher:
+        module_line = (
+            'set +u; module load tacc-apptainer 2>/dev/null || true; set -u\n'
+            if 'apptainer' in launcher
+            else ''
+        )
+        launcher_block = (
+            '# launcher baked from the emitting shell\'s $KLPIPE_PYTHON; an\n'
+            '# export in the sbatch environment overrides it.\n'
+            f'{module_line}'
+            f'export KLPIPE_PYTHON="${{KLPIPE_PYTHON:-{launcher}}}"'
+        )
+    else:
+        launcher_block = (
+            '# WARNING: KLPIPE_PYTHON was not set when this script was\n'
+            '# emitted -- export it in the sbatch environment or re-emit\n'
+            '# from a shell where it is set (the preflight below fails loud\n'
+            '# otherwise).'
+        )
+
     script = _SLURM_TEMPLATE.format(
         run_name=spec.run_name,
         queue=spec.queue,
@@ -192,6 +227,7 @@ def emit_slurm_script(run_dir: Path) -> Path:
         workers_minus_one=spec.workers_per_node - 1,
         shard_args=shard_args,
         mem_fraction_line=mem_fraction_line,
+        launcher_block=launcher_block,
     )
     path = run_dir / 'submit.slurm'
     path.write_text(script)
@@ -199,4 +235,11 @@ def emit_slurm_script(run_dir: Path) -> Path:
         f'wrote {path} ({n_tasks} array tasks x {spec.workers_per_node} '
         f'workers, {n_fits} fits, walltime {hh:02d}:{mm:02d}:00)'
     )
+    if launcher:
+        print(f'baked KLPIPE_PYTHON launcher into script: {launcher}')
+    else:
+        print(
+            'WARNING: KLPIPE_PYTHON not set at emission -- submit.slurm '
+            'requires it in the sbatch environment'
+        )
     return path
