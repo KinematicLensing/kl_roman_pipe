@@ -20,8 +20,10 @@ from kl_pipe.priors import (
     Gaussian,
     Normal,
     LogUniform,
+    LogNormal,
     TruncatedNormal,
     PriorDict,
+    make_tf_prior,
 )
 
 
@@ -233,6 +235,104 @@ class TestTruncatedNormal:
             TruncatedNormal(0.5, 0, 0.1, 0.9)
         with pytest.raises(ValueError, match="high.*must be > low"):
             TruncatedNormal(0.5, 0.2, 0.9, 0.1)
+
+
+# ==============================================================================
+# LogNormal Prior Tests
+# ==============================================================================
+
+
+class TestLogNormal:
+    """Tests for LogNormal prior."""
+
+    def test_log_prob_formula(self):
+        """Log prob matches the analytic log-normal density."""
+        mu, sigma = np.log(200.0), 0.2
+        prior = LogNormal(mu, sigma)
+
+        x = 250.0
+        z = (np.log(x) - mu) / sigma
+        expected = -np.log(x) - np.log(sigma) - 0.5 * np.log(2 * np.pi) - 0.5 * z**2
+        assert np.isclose(prior.log_prob(x), expected)
+
+    def test_log_prob_nonpositive(self):
+        """Log prob is -inf at and below zero, with no NaNs."""
+        prior = LogNormal(0.0, 1.0)
+        assert prior.log_prob(0.0) == -np.inf
+        assert prior.log_prob(-5.0) == -np.inf
+
+    def test_log_prob_gradient_finite_at_negative(self):
+        """Gradient has no NaN poisoning from the masked log branch."""
+        prior = LogNormal(0.0, 1.0)
+        g = jax.grad(prior.log_prob)(jnp.array(-1.0))
+        assert np.isfinite(g)
+
+    def test_sample_distribution(self):
+        """Sample moments match analytic log-normal moments."""
+        mu, sigma = np.log(200.0), 0.184
+        prior = LogNormal(mu, sigma)
+        key = random.PRNGKey(42)
+        samples = prior.sample(key, (100000,))
+
+        assert jnp.all(samples > 0)
+        mean = np.exp(mu + 0.5 * sigma**2)
+        std = mean * np.sqrt(np.expm1(sigma**2))
+        assert np.isclose(np.mean(samples), mean, rtol=0.01)
+        assert np.isclose(np.std(samples), std, rtol=0.05)
+        assert np.isclose(np.median(samples), np.exp(mu), rtol=0.01)
+
+    def test_moment_properties(self):
+        """mean/std/median properties match analytic values."""
+        mu, sigma = np.log(150.0), 0.3
+        prior = LogNormal(mu, sigma)
+        assert np.isclose(prior.mean, np.exp(mu + 0.5 * sigma**2))
+        assert np.isclose(prior.std, prior.mean * np.sqrt(np.expm1(sigma**2)))
+        assert np.isclose(prior.median, 150.0)
+
+    def test_bounds_property(self):
+        """Support is x > 0, unbounded above."""
+        prior = LogNormal(0.0, 1.0)
+        assert prior.bounds == (0.0, None)
+
+    def test_invalid_sigma(self):
+        """Raises error for non-positive sigma."""
+        with pytest.raises(ValueError, match="sigma.*must be positive"):
+            LogNormal(0.0, 0.0)
+        with pytest.raises(ValueError, match="sigma.*must be positive"):
+            LogNormal(0.0, -1.0)
+
+    def test_normalization(self):
+        """Density integrates to ~1 over the support."""
+        prior = LogNormal(np.log(200.0), 0.184)
+        x = np.linspace(1e-3, 2000.0, 200001)
+        pdf = np.exp(np.asarray(jax.vmap(prior.log_prob)(jnp.asarray(x))))
+        integral = np.trapz(pdf, x)
+        assert np.isclose(integral, 1.0, atol=1e-3)
+
+
+class TestMakeTFPrior:
+    """Tests for the Tully-Fisher prior factory."""
+
+    def test_dex_encoding(self):
+        """sigma_tf_dex is converted to natural log: sigma = dex * ln(10)."""
+        prior = make_tf_prior(200.0, 0.08)
+        assert isinstance(prior, LogNormal)
+        assert np.isclose(prior.mu, np.log(200.0))
+        assert np.isclose(prior.sigma, 0.08 * np.log(10.0))
+        # 0.08 dex -> sigma_ln ~ 0.184
+        assert np.isclose(prior.sigma, 0.184, atol=1e-3)
+
+    def test_median_is_center(self):
+        """Median of the prior equals the TF center velocity."""
+        prior = make_tf_prior(200.0, 0.08)
+        assert np.isclose(prior.median, 200.0)
+
+    def test_invalid_args(self):
+        """Raises for non-positive center or scatter."""
+        with pytest.raises(ValueError, match="v_center_kms.*must be positive"):
+            make_tf_prior(-100.0, 0.08)
+        with pytest.raises(ValueError, match="sigma_tf_dex.*must be positive"):
+            make_tf_prior(200.0, 0.0)
 
 
 # ==============================================================================

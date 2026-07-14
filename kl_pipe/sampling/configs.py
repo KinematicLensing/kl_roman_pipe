@@ -383,6 +383,8 @@ PRIOR_TYPES = {
     'normal': 'Gaussian',
     'loguniform': 'LogUniform',
     'log_uniform': 'LogUniform',
+    'lognormal': 'LogNormal',
+    'log_normal': 'LogNormal',
     'truncated_normal': 'TruncatedNormal',
     'truncatednormal': 'TruncatedNormal',
 }
@@ -410,7 +412,7 @@ def parse_prior_spec(spec: Union[dict, float, int]):
     >>> parse_prior_spec({'type': 'uniform', 'low': 0, 'high': 1})
     Uniform(0.0, 1.0)
     """
-    from kl_pipe.priors import Uniform, Gaussian, LogUniform, TruncatedNormal
+    from kl_pipe.priors import Uniform, Gaussian, LogUniform, LogNormal, TruncatedNormal
 
     if isinstance(spec, (int, float)):
         return float(spec)
@@ -432,6 +434,7 @@ def parse_prior_spec(spec: Union[dict, float, int]):
         'Uniform': Uniform,
         'Gaussian': Gaussian,
         'LogUniform': LogUniform,
+        'LogNormal': LogNormal,
         'TruncatedNormal': TruncatedNormal,
     }
     prior_class = prior_classes[PRIOR_TYPES[prior_type]]

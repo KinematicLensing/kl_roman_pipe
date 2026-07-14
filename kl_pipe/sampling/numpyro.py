@@ -43,7 +43,14 @@ import jax.random as random
 
 from kl_pipe.sampling.base import Sampler, SamplerResult
 from kl_pipe.sampling.configs import NumpyroSamplerConfig, ReparamStrategy
-from kl_pipe.priors import Prior, Gaussian, TruncatedNormal, Uniform, LogUniform
+from kl_pipe.priors import (
+    Prior,
+    Gaussian,
+    TruncatedNormal,
+    Uniform,
+    LogUniform,
+    LogNormal,
+)
 
 if TYPE_CHECKING:
     from kl_pipe.sampling.task import InferenceTask, LaplacePreconditioner
@@ -90,6 +97,10 @@ def compute_reparam_scales(prior: Prior, name: str) -> Tuple[float, float]:
         loc = (prior.low + prior.high) / 2
         scale = (prior.high - prior.low) / 4  # 4σ spans the range
         return float(loc), float(scale)
+
+    elif isinstance(prior, LogNormal):
+        # center at the distribution mean, scale = its standard deviation
+        return prior.mean, prior.std
 
     elif isinstance(prior, LogUniform):
         # Work in log-space conceptually
