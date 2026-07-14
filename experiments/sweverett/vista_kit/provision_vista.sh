@@ -53,18 +53,22 @@ fi
 
 # 2. pip sidecar: install once. Check by importing from the target dir; if the
 #    import succeeds the deps are already there. NEVER let pip touch jax/jaxlib
-#    (those come from the image) -- these three are pure-python / small builds.
+#    (those come from the image) -- everything here is pure-python or ships a
+#    manylinux aarch64 wheel (galsim does since 2.5 -- needed by the ensemble
+#    mock PSFs; pandas/pyarrow for the ensemble parquet manifests/results;
+#    corner for run diagnostics).
+SIDECAR_PKGS="numpyro astropy pyyaml matplotlib galsim pandas pyarrow corner"
 mkdir -p "$PIPDIR"
 # -B binds $PIPDIR into the container: pip --target writes from INSIDE the
 # container, so the target must be explicitly bind-mounted (don't rely on
 # TACC auto-bind).
 if apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" python -c \
-     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib" 2>/dev/null; then
+     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib, galsim, pandas, pyarrow, corner" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
-  echo "[provision] installing numpyro astropy pyyaml matplotlib -> $PIPDIR ..."
+  echo "[provision] installing $SIDECAR_PKGS -> $PIPDIR ..."
   apptainer exec -B "$PIPDIR:$PIPDIR" "$CONTAINER" \
-    python -m pip install --no-cache-dir --target "$PIPDIR" numpyro astropy pyyaml matplotlib
+    python -m pip install --no-cache-dir --target "$PIPDIR" $SIDECAR_PKGS
   # numpyro drags in a jax/jaxlib/CUDA-plugin set that mismatches (and would
   # shadow) the container's GPU jax; strip it so only the container's is used.
   echo "[provision] removing pip-dragged jax/CUDA from the sidecar ..."

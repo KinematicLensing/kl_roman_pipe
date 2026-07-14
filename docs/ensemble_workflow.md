@@ -60,9 +60,17 @@ SLURM script is only a launcher.
 See `configs/ensembles/sigma_eps_cosi_dev.yaml` for a complete example.
 Key blocks:
 
-- `bank.stratify`: the plot axis (v1: cos i only). Uniform bins over the
-  range; truth = bin centers. Uniform-in-cos-i IS the random-orientation
-  population, so the collapsed average needs no reweighting.
+- `bank.stratify`: the plot axis. Two kinds:
+  - truth stratification (`cosi: {n_bins, range}`, measurement
+    `sigma_eps_vs_cosi`): uniform bins, truth = bin centers, an independent
+    galaxy bank per bin (the property IS the galaxy). Uniform-in-cos-i IS
+    the random-orientation population, so the collapsed average needs no
+    reweighting.
+  - config sweep (`grism_snr: {values: [10, 20, 50]}`, measurement
+    `sigma_eps_vs_grism_snr`): ONE galaxy bank shared across every value
+    with the same noise seed (common random numbers -- the knob is external
+    to the galaxy, so shared noise cancels in the trend). cosi moves to
+    `bank.draw`; the top-level `grism_snr` scalar must be omitted.
 - `bank.draw`: per-galaxy truths, seeded deterministically from the global
   `seed`. Supported dists: `uniform`, `lognormal_tf` (Tully-Fisher:
   `center_kms`, `sigma_tf_dex`; 0.08 dex fiducial per Xu+2022/Pranjal+2022).
@@ -79,7 +87,13 @@ Key blocks:
 - `observed_config`: id into `configs/observing/` (structural instrument
   setup). SNR knobs stay in the spec.
 - `fit`: numpyro NUTS settings; `precondition: laplace` recommended;
-  `pin_z_to_truth: true` (v1 -- sampled narrow-spec-z planned).
+  `n_map_starts` random MAP starts (plus 4 automatic PA-stratified starts --
+  the position-angle basins are the known multimodality, and random draws
+  alone can land every start in the wrong basin, whose shape-shear-
+  compensated mode traps the sampler); `pin_z_to_truth: true` (v1 -- sampled
+  narrow-spec-z planned). A fit whose chains come back broken (max_rhat >
+  1.1 or divergence rate > 0.9) is retried once with a fresh sampler seed;
+  `n_attempts` is recorded in the summary row.
 - `output.save_chains/save_mocks`: `none | subset | all`. `subset` = the
   first galaxy of each cos-i bin; chains -> `chains/<fit_id>.npz`, mock
   datavectors + truth/MAP renders -> `mocks/<fit_id>.npz`.
@@ -175,6 +189,76 @@ holds it constant across the shear grid:
   the property is the galaxy, so different bins hold different galaxies.
 
 Verify citations against the papers before quoting them in the manuscript.
+
+## Running on Vista (TACC)
+
+The worker is backend-agnostic; on Vista it runs inside the NGC JAX
+container with the pip sidecar (galsim, pandas, pyarrow, corner included by
+`experiments/sweverett/vista_kit/provision_vista.sh`).
+
+One-time setup (inside `idev -p gh-dev -N 1 -n 1 -t 01:00:00`; idempotent,
+also repairs after a $SCRATCH purge):
+
+```bash
+cd $STOCKYARD/repos/kl_roman_pipe && git pull
+bash experiments/sweverett/vista_kit/provision_vista.sh
+```
+
+Define the container launcher (both idev and batch use it):
+
+```bash
+module load tacc-apptainer
+export KLPIPE_PYTHON="apptainer exec --nv \
+  -B $STOCKYARD/repos/kl_roman_pipe -B $WORK/klpipe_pipdeps -B $SCRATCH \
+  --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \
+  --env JAX_COMPILATION_CACHE_DIR=$SCRATCH/jax_cache \
+  $WORK/containers/jax_26.06-py3.sif python"
+```
+
+**idev micro-run** (an idev node is just a local machine -- use the local
+backend; no SLURM machinery involved):
+
+```bash
+idev -p gh-dev -N 1 -n 1 -t 01:00:00
+cd $STOCKYARD/repos/kl_roman_pipe
+# (re-export KLPIPE_PYTHON as above -- idev starts a fresh shell)
+$KLPIPE_PYTHON -m kl_pipe.ensemble expand \
+    configs/ensembles/sigma_eps_cosi_dev.yaml --runs-dir $SCRATCH/kl_runs
+$KLPIPE_PYTHON -m kl_pipe.ensemble run \
+    --run-dir $SCRATCH/kl_runs/sigma_eps_cosi_dev --max-fits 2
+$KLPIPE_PYTHON -m kl_pipe.ensemble status \
+    --run-dir $SCRATCH/kl_runs/sigma_eps_cosi_dev
+```
+
+**Node job** (the 150-fit statistics run; spec sets gh-dev queue, account,
+8-worker GPU packing -- the emitted script slices HBM per worker and
+staggers jax inits). Apptainer NO-OPS on Vista login nodes, so run the
+expand + script emission inside the same idev session as the micro-run:
+
+```bash
+# inside idev (same session as the micro-run is fine)
+$KLPIPE_PYTHON -m kl_pipe.ensemble expand \
+    configs/ensembles/sigma_eps_cosi_dev_vista.yaml --runs-dir $SCRATCH/kl_runs
+$KLPIPE_PYTHON -m kl_pipe.ensemble slurm \
+    --run-dir $SCRATCH/kl_runs/sigma_eps_cosi_dev_vista
+# edit submit.slurm: uncomment the KLPIPE_PYTHON block (paths as above), then
+# from the LOGIN node:
+sbatch $SCRATCH/kl_runs/sigma_eps_cosi_dev_vista/submit.slurm
+squeue -u $USER
+# progress without the container (plain filesystem check, login-node safe):
+ls $SCRATCH/kl_runs/sigma_eps_cosi_dev_vista/status/done | wc -l   # /150
+# when done (inside idev; resubmit/run again picks up any remainder):
+$KLPIPE_PYTHON -m kl_pipe.ensemble collate \
+    --run-dir $SCRATCH/kl_runs/sigma_eps_cosi_dev_vista
+$KLPIPE_PYTHON -c "from kl_pipe.ensemble.diagnostics import run_report; \
+    run_report('$SCRATCH/kl_runs/sigma_eps_cosi_dev_vista')"
+# pull the report + catalog back for local inspection
+scp -r vista:'$SCRATCH/kl_runs/sigma_eps_cosi_dev_vista/{diagnostics,results.parquet,manifest.parquet}' .
+```
+
+Caveats: run dirs live on `$SCRATCH` (purged after ~10 idle days -- collate
+and copy off promptly); any command through `$KLPIPE_PYTHON` must run on a
+compute node (idev or batch), never a login node.
 
 ## Outputs
 

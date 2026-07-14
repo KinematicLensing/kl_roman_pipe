@@ -98,17 +98,31 @@ _SLURM_TEMPLATE = """\
 
 # Emitted by kl_pipe.ensemble.dispatch -- one node per array task; each task
 # runs {workers} concurrent worker process(es) sharing the claim ledger.
-# Fill in (or source) your environment activation before submitting:
-#   e.g. source $STOCKYARD/kl_env/activate.sh
+#
+# Environment: either activate a python env with kl_pipe installed before the
+# loop below, or set KLPIPE_PYTHON to a full launcher command. Containerized
+# Vista example (paths from vista_kit/provision_vista.sh):
+#   module load tacc-apptainer
+#   export KLPIPE_PYTHON="apptainer exec --nv \\
+#     -B $STOCKYARD/repos/kl_roman_pipe -B $WORK/klpipe_pipdeps -B $SCRATCH \\
+#     --env PYTHONPATH=$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps \\
+#     $WORK/containers/jax_26.06-py3.sif python"
 
 set -u
 
+PY="${{KLPIPE_PYTHON:-python}}"
+
 export JAX_COMPILATION_CACHE_DIR="${{SCRATCH:-$HOME}}/jax_cache"
 
+# GPU packing: workers share the device via bounded HBM slices (harmless on
+# CPU-only nodes -- the variable is ignored without a GPU backend)
+{mem_fraction_line}
+
 for w in $(seq 0 {workers_minus_one}); do
-  python -m kl_pipe.ensemble worker \\
+  $PY -m kl_pipe.ensemble worker \\
     --run-dir {run_dir} \\
     --label "task${{SLURM_ARRAY_TASK_ID}}_w${{w}}"{shard_args} &
+  sleep 2  # stagger jax inits (simultaneous startup spikes threads/allocs)
 done
 wait
 """
@@ -144,6 +158,12 @@ def emit_slurm_script(run_dir: Path) -> Path:
     else:
         shard_args = ''
 
+    if spec.workers_per_node > 1:
+        frac = round(0.85 / spec.workers_per_node, 3)
+        mem_fraction_line = f'export XLA_PYTHON_CLIENT_MEM_FRACTION={frac}'
+    else:
+        mem_fraction_line = '# (single worker: full device)'
+
     script = _SLURM_TEMPLATE.format(
         run_name=spec.run_name,
         queue=spec.queue,
@@ -154,6 +174,7 @@ def emit_slurm_script(run_dir: Path) -> Path:
         workers=spec.workers_per_node,
         workers_minus_one=spec.workers_per_node - 1,
         shard_args=shard_args,
+        mem_fraction_line=mem_fraction_line,
     )
     path = run_dir / 'submit.slurm'
     path.write_text(script)
