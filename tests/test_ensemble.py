@@ -377,3 +377,72 @@ class TestCollate:
 
         with pytest.raises(FileNotFoundError, match='no per-fit result'):
             collate_results(run_dir)
+
+
+# ==============================================================================
+# Diagnostics
+# ==============================================================================
+
+
+def _write_fake_results(run_dir):
+    """Synthetic summary rows: 3 healthy fits + 1 catastrophic."""
+    rng = np.random.default_rng(0)
+    _, _, manifest = load_run(run_dir)
+    for i, (_, row) in enumerate(manifest.iterrows()):
+        broken = i == 0
+        summary = {
+            'fit_id': row['fit_id'],
+            'status': 'succeeded',
+            'max_rhat': 5.0 if broken else 1.005,
+            'min_ess': 2.0 if broken else 800.0,
+            'n_divergences': 4000 if broken else 40,
+            'divergence_rate': 1.0 if broken else 0.01,
+            'mean_accept_prob': 0.85,
+            'n_map_starts_converged': 4,
+            'precond_condition_number': 100.0,
+            'fit_wallclock_s': 100.0,
+            'precond_wallclock_s': 5.0,
+        }
+        for p in ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc'):
+            std = 0.03 if p.startswith('g') else 0.1
+            summary[f'post.{p}.mean'] = row[f'truth.{p}'] + rng.normal(0, std)
+            summary[f'post.{p}.std'] = std
+            summary[f'post.{p}.median'] = summary[f'post.{p}.mean']
+        pd.DataFrame([summary]).to_parquet(
+            run_dir / 'results' / f"{row['fit_id']}.parquet", index=False
+        )
+
+
+class TestDiagnostics:
+    def test_tables(self, run_dir):
+        from kl_pipe.ensemble.collate import collate_results
+        from kl_pipe.ensemble.diagnostics import (
+            pull_table,
+            quality_table,
+            sigma_eps_table,
+        )
+
+        _write_fake_results(run_dir)
+        collate_results(run_dir)
+        from kl_pipe.ensemble.collate import analysis_table
+
+        table = analysis_table(run_dir)
+
+        q = quality_table(table)
+        assert q['catastrophic'].sum() == 1
+        assert q['low_quality'].sum() >= 1
+        # the catastrophic fit is always low_quality too
+        assert q.loc[q['catastrophic'], 'low_quality'].all()
+
+        pulls = pull_table(table)
+        good = pulls[~table['max_rhat'].gt(1.1).values]
+        # healthy synthetic fits have pulls of order unity
+        assert np.abs(good[['pull.g1', 'pull.g2']].values).max() < 5
+
+        sig = sigma_eps_table(run_dir, table)
+        excl = sig[sig['gate'] == 'exclude_catastrophic']
+        head = excl[excl['cosi_bin'] == -1]
+        assert head['n_fits'].iloc[0] == 3  # catastrophic fit masked
+        # no chains saved -> marginal approx; widths are ~0.03 by
+        # construction, so sigma_eps must land near 0.03
+        assert 0.02 < head['sigma_eps'].iloc[0] < 0.04
