@@ -111,8 +111,20 @@ mkdir -p "$PIPDIR"
 # -B binds $PIPDIR into the container: pip --target writes from INSIDE the
 # container, so the target must be explicitly bind-mounted (don't rely on
 # TACC auto-bind).
+# galsim's from-source build does not bake an rpath to the fftw above, and
+# overriding LD_LIBRARY_PATH would risk clobbering the container's CUDA
+# paths. Instead: a sitecustomize.py in the sidecar preloads libfftw3 via
+# ctypes at interpreter startup (the sidecar is on PYTHONPATH at run time,
+# so site.py auto-imports it). Written unconditionally -- tiny + idempotent.
+cat > "$PIPDIR/sitecustomize.py" <<EOF
+# preload fftw for the from-source galsim (no rpath); see provision_vista.sh
+import ctypes
+
+ctypes.CDLL('$FFTWDIR/lib/libfftw3.so.3', mode=ctypes.RTLD_GLOBAL)
+EOF
+
 if apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" python -c \
-     "import sys; sys.path.insert(0, '$PIPDIR'); import numpyro, astropy, yaml, matplotlib, galsim, pandas, pyarrow, corner" 2>/dev/null; then
+     "import sys; sys.path.insert(0, '$PIPDIR'); import sitecustomize; import numpyro, astropy, yaml, matplotlib, galsim, pandas, pyarrow, corner" 2>/dev/null; then
   echo "[provision] pip deps present: $PIPDIR"
 else
   echo "[provision] installing $SIDECAR_PKGS -> $PIPDIR (galsim compiles from"
@@ -126,12 +138,12 @@ else
   echo "[provision] removing pip-dragged jax/CUDA from the sidecar ..."
   rm -rf "$PIPDIR"/jax* "$PIPDIR"/nvidia*
   # loud post-install check: galsim must import AND find libfftw3 at runtime
+  # (via the sitecustomize preload above)
   apptainer exec -B "$PIPDIR:$PIPDIR" -B "$FFTWDIR:$FFTWDIR" "$CONTAINER" \
-    python -c "import sys; sys.path.insert(0, '$PIPDIR'); import galsim; \
+    python -c "import sys; sys.path.insert(0, '$PIPDIR'); import sitecustomize; import galsim; \
 print('[provision] galsim', galsim.__version__, 'imports OK')" || {
-    echo "ERROR: galsim import failed after install. If the error is a" >&2
-    echo "missing libfftw3.so, bind $FFTWDIR and prepend" >&2
-    echo "$FFTWDIR/lib to LD_LIBRARY_PATH in your exec command." >&2
+    echo "ERROR: galsim import failed after install (with the fftw" >&2
+    echo "sitecustomize preload) -- paste the traceback." >&2
     exit 1
   }
 fi
