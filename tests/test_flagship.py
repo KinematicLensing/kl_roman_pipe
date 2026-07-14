@@ -86,7 +86,7 @@ from kl_pipe.observation import (
     build_velocity_obs,
 )
 from kl_pipe.parameters import ImagePars
-from kl_pipe.priors import Gaussian, PriorDict, TruncatedNormal
+from kl_pipe.priors import Gaussian, PriorDict, TruncatedNormal, make_tf_prior
 from kl_pipe.sampling import (
     InferenceTask,
     NumpyroSamplerConfig,
@@ -115,6 +115,13 @@ PSF_FWHM = 0.18  # arcsec, Roman-like (F087 broadband / grism)
 SNR_BROADBAND = 100.0
 SNR_GRISM = 150.0
 GRISM_DISPERSION_NM_PER_PIX = 1.1
+
+# Tully-Fisher scatter (dex) for the vel.vcirc prior. Fiducial 0.08 dex from
+# Xu+2022 / Pranjal, the project's archival TFR value (ensemble sweep spans
+# 0.05-0.20; obs z~1 ~0.20). The vcirc prior is a LogNormal centered on the
+# truth vcirc (= TF median) rather than an ad-hoc Gaussian -- the TF relation
+# is genuine external information KL inference is entitled to use.
+SIGMA_TF_DEX = 0.08
 
 # Spatial oversample factor for both broadband and grism obs. Default is 5;
 # 3 is acceptable here because PSF FWHM (0.18") is ~1.6 pixels at 0.11"/pix
@@ -225,11 +232,16 @@ def _flagship_prior_spec(true: Dict[str, float]) -> Dict[str, object]:
         # Geometry
         'cosi': TruncatedNormal(0.6, 0.15, 0.05, 0.99),
         'theta_int': TruncatedNormal(np.pi / 4, 0.3, 0.0, np.pi / 2),
-        'g1': TruncatedNormal(0.0, 0.04, -0.1, 0.1),
-        'g2': TruncatedNormal(0.0, 0.04, -0.1, 0.1),
-        # Velocity
+        # Wide, uninformative shear priors (sigma 0.1, ~2.5x the injected |g|
+        # dynamic range) so the posterior widths reflect the DATA's shear
+        # constraint, not the prior. Unbounded Gaussian: the model is stable
+        # over the ~3-sigma reach and truncation would re-inject a prior edge.
+        'g1': Gaussian(0.0, 0.1),
+        'g2': Gaussian(0.0, 0.1),
+        # Velocity. vcirc uses the Tully-Fisher LogNormal prior (median = truth,
+        # scatter SIGMA_TF_DEX) instead of an ad-hoc Gaussian.
         'vel.v0': Gaussian(10.0, 10.0),
-        'vel.vcirc': TruncatedNormal(200.0, 50.0, 80.0, 400.0),
+        'vel.vcirc': make_tf_prior(true['vel.vcirc'], SIGMA_TF_DEX),
         'vel.rscale': TruncatedNormal(0.3, 0.1, 0.05, 1.0),
         # Broadband F087
         'F087.flux': TruncatedNormal(100.0, 20.0, 30.0, 250.0),
