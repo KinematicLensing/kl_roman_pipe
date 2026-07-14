@@ -1,0 +1,16 @@
+# Flagship-Q structural observing config: 1 broadband (F087) + 1 grism roll,
+# single Halpha line. Mirrors tests/test_flagship.py dev values -- the infra
+# shakedown config. Production observation-level values (ImCom PSFs, stamp
+# sizes, SNR split) are a separate pending decision.
+id: canonical_Q
+bands: [F087]
+grism:
+  rolls_deg: [0.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband: {type: gaussian, fwhm_arcsec: {F087: 0.18}}
+  grism: {type: gaussian, fwhm_arcsec: 0.18}
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}
+render: {oversample: 3}
