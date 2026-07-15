@@ -1,0 +1,18 @@
+# Flagship-P structural observing config: 2 broadbands (F087 + F158) + 4
+# grism rolls (0/45/90/135 deg), single Halpha line. Mirrors the
+# tests/test_flagship.py production scene: roll angle is a pure WCS rotation
+# of the same sky galaxy; each band and each roll is an independent exposure
+# at fixed per-exposure SNR. Roll diversity is what constrains vcirc and
+# breaks the g2--theta_int degeneracy (single-roll canonical_Q cannot).
+id: canonical_P
+bands: [F087, F158]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband: {type: gaussian, fwhm_arcsec: {F087: 0.18, F158: 0.18}}
+  grism: {type: gaussian, fwhm_arcsec: 0.18}
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}
+render: {oversample: 3}
