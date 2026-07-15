@@ -1,0 +1,57 @@
+# idev interactive test of the line-SNR redefinition (config P), SEPARATE run
+# dir from any sbatch array (run_name -> $SCRATCH/kl_runs/sigma_eps_gsnr_P_idev).
+# 6 galaxies x line SNR {30,50,100} = 18 fits. Sized to finish well under 2h in
+# one idev session at --workers 1 (~3-4 min/warm P fit on GH200 + one-time
+# recompile after the code change). NOT production stats -- 6 gal/point is
+# coarse; it is a wiring + trend smoke test (sigma_eps should fall across the
+# SNR axis; gx/vcirc data-driven, not prior-pinned). Bump n_gal_per_bin or use
+# GPU packing (--workers 4 + MPS) for more within the same window.
+run_name: sigma_eps_gsnr_P_idev
+version: 1
+description: "idev line-SNR test, config P, 18 fits (6 gal x {30,50,100})"
+seed: 20260715
+measurement: sigma_eps_vs_line_snr
+
+bank:
+  stratify:
+    line_snr: {values: [30, 50, 100]}
+  n_gal_per_bin: 6
+  m_noise: 1
+  draw:
+    cosi: {dist: uniform, low: 0.1, high: 1.0}
+    theta_int: {dist: uniform, low: 0.0, high: 3.141592653589793}
+    vcirc: {dist: lognormal_tf, center_kms: 200.0, sigma_tf_dex: 0.08}
+    z: {dist: uniform, low: 1.0, high: 1.9}
+  fixed: {h_over_r: 0.1, x0: 0.0, y0: 0.0}
+
+shear:
+  scheme: fixed
+  g1: 0.02
+  g2: -0.01
+
+ring:
+  enabled: false
+
+observed_config: canonical_P
+broadband_snr: 100
+
+fit:
+  sampler: numpyro
+  n_warmup: 500
+  n_samples: 1000
+  n_chains: 4
+  precondition: laplace
+  target_accept: 0.8
+  n_map_starts: 4
+  pin_z_to_truth: true
+
+dispatch:
+  backend: local
+  mode: dynamic
+  workers_per_node: 4
+  target_task_walltime_min: 90
+  max_fit_walltime_min: 20
+
+output:
+  save_chains: all
+  save_mocks: subset
