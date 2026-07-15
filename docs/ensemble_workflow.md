@@ -204,7 +204,13 @@ cd $STOCKYARD/repos/kl_roman_pipe && git pull
 bash experiments/sweverett/vista_kit/provision_vista.sh
 ```
 
-Define the container launcher (both idev and batch use it):
+Define the container launcher (both idev and batch use it). Shortcut:
+
+```bash
+source experiments/sweverett/vista_kit/env_vista.sh
+```
+
+which is equivalent to:
 
 ```bash
 module load tacc-apptainer
