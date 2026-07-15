@@ -1,11 +1,11 @@
-# sigma_eps vs cos i -- Vista gh-dev statistics run (config P).
+# sigma_eps vs cos i -- Vista statistics run (gh queue) (config P).
 # 5 bins x 30 galaxies = 150 fits -> ~13% per-bin sigma_eps precision.
 # Config P (2 bands + 4 rolls): the Q shakedown run showed single-roll grism
 # leaves vcirc prior-dominated and g2 degenerate with theta_int.
 # GPU packing: 8 workers/node (~43 P fits/node-hr measured on GH200).
 run_name: sigma_eps_cosi_P_vista
 version: 1
-description: "sigma_eps vs cos i, Vista gh-dev, config P, 150 fits"
+description: "sigma_eps vs cos i, Vista gh queue, config P, 150 fits"
 seed: 20260715
 measurement: sigma_eps_vs_cosi
 
@@ -47,7 +47,9 @@ dispatch:
   mode: dynamic
   workers_per_node: 8
   target_task_walltime_min: 90
-  queue: gh-dev
+  # gh (production) not gh-dev: dev-queue QOS submit limits reject job
+  # arrays while an idev session is running
+  queue: gh
   account: JPL-SPHEREx
   # P fits pack at ~11 min latency (8 workers, GH200); 20 covers the tail
   max_fit_walltime_min: 20

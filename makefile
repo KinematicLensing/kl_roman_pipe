@@ -54,6 +54,15 @@ check-format:
 	@$(FORMATTER) --check
 
 #-------------------------------------------------------------------------------
+# Vista (TACC) helpers
+
+# make runs in a subshell and cannot export into your shell; this prints the
+# setup line. One-step alternative: eval "$(make -s env-vista)"
+.PHONY: env-vista
+env-vista:
+	@echo "source experiments/sweverett/vista_kit/env_vista.sh"
+
+#-------------------------------------------------------------------------------
 # documentation targets
 
 .PHONY: tutorials

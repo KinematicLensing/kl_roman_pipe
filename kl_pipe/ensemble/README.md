@@ -36,6 +36,7 @@ idev -p gh-dev -N 1 -n 1 -t 00:30:00
 # ---- inside idev ------------------------------------------------------
 cd $STOCKYARD/repos/kl_roman_pipe
 source experiments/sweverett/vista_kit/env_vista.sh   # defines KLPIPE_PYTHON
+# (equivalently: eval "$(make -s env-vista)")
 export RUN=sigma_eps_gsnr_P_vista
 
 # expand -> manifest; slurm -> submit.slurm (BOTH steps are required;
@@ -76,6 +77,9 @@ Gotchas that have bitten before:
   because emission bakes `KLPIPE_PYTHON` in (script preflights the import
   and fails loud otherwise).
 - Never run `$KLPIPE_PYTHON` on a login node (apptainer no-ops there).
+- gh-dev QOS rejects job arrays while an idev session is running
+  (`QOSMaxSubmitJobPerUserLimit`) -- statistics runs use `queue: gh`;
+  gh-dev is for idev shakedowns only.
 - `observed_config: canonical_Q` (1 band, 1 roll) is the shakedown config
   only -- it cannot constrain vcirc or break g2/theta_int; measurement runs
   need `canonical_P` (2 bands, 4 rolls).
