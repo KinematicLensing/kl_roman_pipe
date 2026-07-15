@@ -5,7 +5,8 @@
 # sharpens the trend further). Config P (2 bands + 4 rolls): the Q shakedown
 # run showed single-roll grism leaves vcirc prior-dominated and g2 degenerate
 # with theta_int -- roll diversity is required for a usable plot.
-# GPU packing: 8 workers/node (~43 P fits/node-hr measured on GH200).
+# GPU packing: 4 workers/node (first 8-worker P run OOMed: contexts +
+# preallocation exhausted HBM; MPS + 0.75 headroom now emitted, 4 is safe).
 run_name: sigma_eps_gsnr_P_vista
 version: 1
 description: "sigma_eps vs grism SNR {10,20,50}, Vista gh queue, config P, 90 fits"
@@ -48,7 +49,7 @@ fit:
 dispatch:
   backend: slurm
   mode: dynamic
-  workers_per_node: 8
+  workers_per_node: 4
   target_task_walltime_min: 90
   # gh (production) not gh-dev: dev-queue QOS submit limits reject job
   # arrays while an idev session is running

@@ -141,6 +141,13 @@ export JAX_COMPILATION_CACHE_DIR="${{SCRATCH:-$HOME}}/jax_cache"
 # CPU-only nodes -- the variable is ignored without a GPU backend)
 {mem_fraction_line}
 
+# CUDA MPS: one shared GPU context so the {workers} workers' kernels overlap
+# instead of context time-slicing. Without it the first packed P ensemble run
+# both crawled (seconds/step) and OOMed (N full contexts + preallocation left
+# no headroom for kernel modules/cuFFT plans). Host-side daemon; falls back
+# to time-slicing with a loud note if unavailable.
+{mps_block}
+
 for w in $(seq 0 {workers_minus_one}); do
   $PY -m kl_pipe.ensemble worker \\
     --run-dir {run_dir} \\
@@ -182,10 +189,27 @@ def emit_slurm_script(run_dir: Path) -> Path:
         shard_args = ''
 
     if spec.workers_per_node > 1:
-        frac = round(0.85 / spec.workers_per_node, 3)
+        # 0.75 (not 0.85): the first packed P run showed 0.85/N preallocation
+        # leaves no headroom for CUDA contexts / kernel modules / cuFFT plans
+        # -> RESOURCE_EXHAUSTED on module load
+        frac = round(0.75 / spec.workers_per_node, 3)
         mem_fraction_line = f'export XLA_PYTHON_CLIENT_MEM_FRACTION={frac}'
+        mps_block = """\
+if command -v nvidia-cuda-mps-control >/dev/null 2>&1; then
+  export CUDA_MPS_PIPE_DIRECTORY="${SCRATCH:-$HOME}/mps_pipe_${SLURM_JOB_ID}"
+  export CUDA_MPS_LOG_DIRECTORY="${SCRATCH:-$HOME}/mps_log_${SLURM_JOB_ID}"
+  mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+  if nvidia-cuda-mps-control -d; then
+    echo "[submit] CUDA MPS daemon started"
+  else
+    echo "[submit] WARNING: MPS failed to start; workers will time-slice"
+  fi
+else
+  echo "[submit] WARNING: nvidia-cuda-mps-control not found; workers will time-slice"
+fi"""
     else:
         mem_fraction_line = '# (single worker: full device)'
+        mps_block = '# (single worker: no MPS needed)'
 
     # bake the launcher into the script when available: sbatch does not see
     # the emitting (idev) shell's exports, so relying on a manual edit or on
@@ -227,6 +251,7 @@ def emit_slurm_script(run_dir: Path) -> Path:
         workers_minus_one=spec.workers_per_node - 1,
         shard_args=shard_args,
         mem_fraction_line=mem_fraction_line,
+        mps_block=mps_block,
         launcher_block=launcher_block,
     )
     path = run_dir / 'submit.slurm'

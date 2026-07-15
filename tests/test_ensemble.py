@@ -502,7 +502,10 @@ class TestSlurmEmission:
         run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
         script = emit_slurm_script(run_dir).read_text()
         assert '#SBATCH -A TEST-ALLOC' in script
-        assert f'XLA_PYTHON_CLIENT_MEM_FRACTION={round(0.85 / 8, 3)}' in script
+        # 0.75/N (not 0.85/N): headroom for CUDA contexts/kernel modules --
+        # 0.85/N OOMed the first packed P ensemble run on GH200
+        assert f'XLA_PYTHON_CLIENT_MEM_FRACTION={round(0.75 / 8, 3)}' in script
+        assert 'nvidia-cuda-mps-control' in script
         assert 'KLPIPE_PYTHON' in script
         assert 'seq 0 7' in script
 

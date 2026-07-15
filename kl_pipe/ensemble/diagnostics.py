@@ -320,6 +320,73 @@ def plot_sigma_eps(
     return path
 
 
+def plot_sigma_eps_slide(
+    sigma_table: pd.DataFrame,
+    out_dir: Path,
+    axis_label: str = 'cos i (bin center)',
+    gate: str = 'exclude_catastrophic',
+    show_photometric: bool = False,
+    filename: str = 'sigma_eps_slide.png',
+) -> Path:
+    """
+    Slide-friendly sigma_eps plot: linear axes, high resolution, a single
+    measurement line, per-point n_fits annotations. The photometric 0.26
+    reference (per-component shape noise) is off by default -- include it
+    only when the sigma_eps definition in use is per-component-comparable.
+    """
+    plt = _mpl()
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    sub = sigma_table[sigma_table['gate'] == gate]
+    bins = sub[sub['axis_step'] >= 0]
+    ax.errorbar(
+        bins['axis_value'],
+        bins['sigma_eps'],
+        yerr=bins['sigma_eps_err'],
+        fmt='o-',
+        capsize=3,
+        color='C0',
+        label='kinematic lensing',
+    )
+    for _, b in bins.iterrows():
+        ax.annotate(
+            f"n={int(b['n_fits'])}",
+            (b['axis_value'], b['sigma_eps']),
+            textcoords='offset points',
+            xytext=(6, 8),
+            fontsize=9,
+        )
+    if show_photometric:
+        ax.axhline(
+            0.26,
+            color='gray',
+            ls='--',
+            lw=1,
+            label=r'photometric $\sigma_\epsilon$ (per component)',
+        )
+    ax.set_xlabel(axis_label)
+    ax.set_ylabel(r'effective shape noise $\sigma_\epsilon$')
+    ax.set_ylim(bottom=0)
+    ax.legend()
+    fig.tight_layout()
+    path = out_dir / filename
+    fig.savefig(path, dpi=250)
+    plt.close(fig)
+    return path
+
+
+def _fit_title(fit_id: str, row: pd.Series) -> str:
+    """Per-fit plot title: id, truth cosi, per-channel SNRs, quality."""
+    snr_bits = ''.join(
+        f"  {label}={float(row[col]):.0f}"
+        for col, label in [('grism_snr', 'gSNR'), ('broadband_snr', 'bbSNR')]
+        if col in row.index and pd.notna(row[col])
+    )
+    return (
+        f"{fit_id}  cosi={row['truth.cosi']:.2f}{snr_bits}  "
+        f"rhat={row['max_rhat']:.2f}  div={row['divergence_rate']:.0%}"
+    )
+
+
 def plot_corner_fit(
     run_dir: Path,
     table: pd.DataFrame,
@@ -347,11 +414,7 @@ def plot_corner_fit(
         title_fmt='.3f',
         title_kwargs={'fontsize': 8},
     )
-    fig.suptitle(
-        f"{fit_id}  cosi={row['truth.cosi']:.2f}  "
-        f"rhat={row['max_rhat']:.2f}  div={row['divergence_rate']:.0%}",
-        fontsize=10,
-    )
+    fig.suptitle(_fit_title(fit_id, row), fontsize=10)
     path = out_dir / f'corner_{fit_id}.png'
     fig.savefig(path, dpi=120)
     plt.close(fig)
@@ -394,11 +457,7 @@ def plot_datavector_fit(
             ax.set_yticks([])
             fig.colorbar(im, ax=ax, fraction=0.046)
     row = table.set_index('fit_id').loc[fit_id]
-    fig.suptitle(
-        f"{fit_id}  cosi={row['truth.cosi']:.2f}  "
-        f"rhat={row['max_rhat']:.2f}  div={row['divergence_rate']:.0%}",
-        fontsize=10,
-    )
+    fig.suptitle(_fit_title(fit_id, row), fontsize=10)
     fig.tight_layout()
     path = out_dir / f'datavector_{fit_id}.png'
     fig.savefig(path, dpi=120)
@@ -441,6 +500,7 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     plot_pulls(table, out_dir)
     plot_quality_vs_cosi(table, out_dir)
     plot_sigma_eps(sigma, out_dir, axis_label=axis_label, xscale=xscale)
+    plot_sigma_eps_slide(sigma, out_dir, axis_label=axis_label)
 
     # per-fit deep dives: every gated-out fit + one good fit per axis step
     flagged = quality.loc[quality['low_quality'], 'fit_id'].tolist()
