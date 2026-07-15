@@ -30,7 +30,7 @@ ring:
 
 observed_config: canonical_Q
 broadband_snr: 100
-grism_snr: 150
+line_snr: 100
 
 fit:
   sampler: numpyro

@@ -159,7 +159,7 @@ _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
 _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
-_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_grism_snr')
+_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr')
 
 # spec draw/fixed keys may be shared top-level params, aliased short names, or
 # fully-dotted source-model params; aliases resolve here
@@ -204,9 +204,9 @@ class EnsembleSpec:
     measurement: str
 
     # bank: exactly one plot axis, either a truth stratification (cosi bins)
-    # or a config sweep (grism_snr values; galaxies + noise shared across the
+    # or a config sweep (line_snr values; galaxies + noise shared across the
     # sweep -- common random numbers)
-    stratify_param: str  # 'cosi' | 'grism_snr'
+    stratify_param: str  # 'cosi' | 'line_snr'
     stratify_n_bins: int  # cosi axis only; 0 for a config sweep
     stratify_range: Tuple[float, float]  # cosi axis only; (0, 0) for a sweep
     sweep_values: Tuple[float, ...]  # config-sweep axis only; () for cosi
@@ -228,7 +228,7 @@ class EnsembleSpec:
     # observing
     observed_config: str
     broadband_snr: float
-    grism_snr: float
+    line_snr: float
 
     # fit
     n_warmup: int
@@ -272,27 +272,27 @@ class EnsembleSpec:
                     f"cosi stratify range ({lo}, {hi}) must satisfy "
                     f"0 < lo < hi <= 1"
                 )
-        elif self.measurement == 'sigma_eps_vs_grism_snr':
-            if self.stratify_param != 'grism_snr':
+        elif self.measurement == 'sigma_eps_vs_line_snr':
+            if self.stratify_param != 'line_snr':
                 raise ValueError(
-                    f"measurement sigma_eps_vs_grism_snr sweeps grism_snr, "
+                    f"measurement sigma_eps_vs_line_snr sweeps line_snr, "
                     f"got '{self.stratify_param}'"
                 )
             if len(self.sweep_values) < 2:
                 raise ValueError(
-                    f"grism_snr sweep needs >= 2 values, got "
+                    f"line_snr sweep needs >= 2 values, got "
                     f"{list(self.sweep_values)}"
                 )
             if any(v <= 0 for v in self.sweep_values):
                 raise ValueError(
-                    f"grism_snr sweep values must be positive, got "
+                    f"line_snr sweep values must be positive, got "
                     f"{list(self.sweep_values)}"
                 )
             if len(set(self.sweep_values)) != len(self.sweep_values):
-                raise ValueError("grism_snr sweep values must be unique")
+                raise ValueError("line_snr sweep values must be unique")
             if 'cosi' not in self.draw:
                 raise ValueError(
-                    "sigma_eps_vs_grism_snr requires cosi in bank.draw "
+                    "sigma_eps_vs_line_snr requires cosi in bank.draw "
                     "(cosi is a drawn population truth on this axis)"
                 )
         if self.n_gal_per_bin < 1 or self.m_noise < 1:
@@ -311,7 +311,7 @@ class EnsembleSpec:
                 )
         if abs(self.g1) >= 1 or abs(self.g2) >= 1:
             raise ValueError(f"|g| must be < 1, got ({self.g1}, {self.g2})")
-        if self.broadband_snr <= 0 or self.grism_snr <= 0:
+        if self.broadband_snr <= 0 or self.line_snr <= 0:
             raise ValueError("SNR values must be positive")
         if self.backend not in _DISPATCH_BACKENDS:
             raise ValueError(
@@ -368,14 +368,14 @@ class EnsembleSpec:
             'ring',
             'observed_config',
             'broadband_snr',
-            'grism_snr',
+            'line_snr',
             'fit',
             'dispatch',
             'output',
         )
         _reject_unknown(raw, allowed, str(path))
-        # grism_snr is required as a scalar UNLESS it is the swept axis
-        _require_keys(raw, tuple(k for k in allowed if k != 'grism_snr'), str(path))
+        # line_snr is required as a scalar UNLESS it is the swept axis
+        _require_keys(raw, tuple(k for k in allowed if k != 'line_snr'), str(path))
 
         bank = raw['bank']
         _reject_unknown(
@@ -394,21 +394,21 @@ class EnsembleSpec:
         strat_n_bins = 0
         strat_range = (0.0, 0.0)
         sweep_values: Tuple[float, ...] = ()
-        if strat_param == 'grism_snr':
+        if strat_param == 'line_snr':
             _reject_unknown(
                 strat_cfg, ('values',), f"{path}:bank.stratify.{strat_param}"
             )
             _require_keys(strat_cfg, ('values',), f"{path}:bank.stratify.{strat_param}")
             sweep_values = tuple(float(v) for v in strat_cfg['values'])
-            if 'grism_snr' in raw:
+            if 'line_snr' in raw:
                 raise ValueError(
-                    f"{path}: top-level grism_snr conflicts with the "
-                    f"grism_snr sweep axis; remove it (per-fit values come "
-                    f"from bank.stratify.grism_snr.values)"
+                    f"{path}: top-level line_snr conflicts with the "
+                    f"line_snr sweep axis; remove it (per-fit values come "
+                    f"from bank.stratify.line_snr.values)"
                 )
         else:
-            if 'grism_snr' not in raw:
-                raise ValueError(f"{path}: missing required keys ['grism_snr']")
+            if 'line_snr' not in raw:
+                raise ValueError(f"{path}: missing required keys ['line_snr']")
             _reject_unknown(
                 strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
             )
@@ -515,10 +515,8 @@ class EnsembleSpec:
             # swept axis: per-fit values live in the manifest; the scalar
             # field is unused (set to the first sweep value as a placeholder
             # that keeps validation simple)
-            grism_snr=(
-                float(raw['grism_snr'])
-                if 'grism_snr' in raw
-                else float(sweep_values[0])
+            line_snr=(
+                float(raw['line_snr']) if 'line_snr' in raw else float(sweep_values[0])
             ),
             n_warmup=int(fit.get('n_warmup', 500)),
             n_samples=int(fit.get('n_samples', 1000)),

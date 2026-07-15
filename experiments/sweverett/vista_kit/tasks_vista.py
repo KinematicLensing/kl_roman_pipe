@@ -52,6 +52,7 @@ from astropy.wcs import WCS  # noqa: E402
 from kl_pipe.dispersion import GrismPars, build_grism_pars_for_line  # noqa: E402
 from kl_pipe.intensity import InclinedExponentialModel  # noqa: E402
 from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
+from kl_pipe.noise import grism_line_noise  # noqa: E402
 from kl_pipe.observation import build_grism_obs, build_image_obs  # noqa: E402
 from kl_pipe.parameters import ImagePars  # noqa: E402
 from kl_pipe.priors import Gaussian, PriorDict, TruncatedNormal  # noqa: E402
@@ -235,10 +236,14 @@ def build_flagship_task(data_seed_offset=0):
 
     grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf)
     data_grism_true = np.asarray(source.render_grism(true, grism_obs_clean))
-    var_grism = float(np.sum(data_grism_true**2)) / SNR_GRISM**2
-    rng = np.random.default_rng(43 + data_seed_offset)
-    data_grism_noisy = data_grism_true + rng.normal(
-        0.0, np.sqrt(var_grism), size=data_grism_true.shape
+    # SNR_GRISM = emission-line matched-filter SNR (continuum zeroed for the
+    # normalization; see kl_pipe.noise.grism_line_noise)
+    line_true = {
+        k: (0.0 if k.endswith('.cont.flux_per_nm') else v) for k, v in true.items()
+    }
+    line_grism_true = np.asarray(source.render_grism(line_true, grism_obs_clean))
+    data_grism_noisy, var_grism = grism_line_noise(
+        data_grism_true, line_grism_true, SNR_GRISM, 43 + data_seed_offset
     )
     obs_grism = build_grism_obs(
         grism_pars,
@@ -349,9 +354,13 @@ def _build_roll_obs(source, true_pars, psf, rotation_rad, seed, window_kms=3000.
     # widen to the blend window (same workaround as profile_post_a3.py)
     obs_clean = dataclasses.replace(obs_clean, cube_pars=blend_cp)
     data_true = np.asarray(source.render_grism(true_pars, obs_clean))
-    var = float(np.sum(data_true**2)) / SNR_GRISM**2
-    rng = np.random.default_rng(seed)
-    data_noisy = data_true + rng.normal(0.0, np.sqrt(var), size=data_true.shape)
+    # SNR_GRISM = emission-line matched-filter SNR (all emission lines kept,
+    # only continuum zeroed for the normalization; see noise.grism_line_noise)
+    line_true_pars = {
+        k: (0.0 if k.endswith('.cont.flux_per_nm') else v) for k, v in true_pars.items()
+    }
+    line_true = np.asarray(source.render_grism(line_true_pars, obs_clean))
+    data_noisy, var = grism_line_noise(data_true, line_true, SNR_GRISM, seed)
     obs = build_grism_obs(
         gp,
         z=Z,

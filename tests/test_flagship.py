@@ -80,6 +80,7 @@ from kl_pipe.diagnostics.imaging import (
 from kl_pipe.dispersion import build_grism_pars_for_line
 from kl_pipe.intensity import InclinedExponentialModel
 from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
+from kl_pipe.noise import grism_line_noise
 from kl_pipe.observation import (
     build_grism_obs,
     build_image_obs,
@@ -419,9 +420,14 @@ def _make_grism_channel(source, true, image_pars, psf, angle_deg, seed, roll_key
     )
     grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf)
     data_true = np.asarray(source.render_grism(true, grism_obs_clean))
-    var = float(np.sum(data_true**2)) / SNR_GRISM**2
-    rng = np.random.default_rng(seed)
-    data_noisy = data_true + rng.normal(0.0, np.sqrt(var), size=data_true.shape)
+    # SNR_GRISM is the emission-LINE matched-filter SNR: normalize the noise on
+    # the line only (continuum zeroed), not the continuum-inflated whole stamp
+    # (see kl_pipe.noise.grism_line_noise)
+    line_true_pars = {
+        k: (0.0 if k.endswith('.cont.flux_per_nm') else v) for k, v in true.items()
+    }
+    line_true = np.asarray(source.render_grism(line_true_pars, grism_obs_clean))
+    data_noisy, var = grism_line_noise(data_true, line_true, SNR_GRISM, seed)
     obs = build_grism_obs(
         grism_pars,
         z=Z,

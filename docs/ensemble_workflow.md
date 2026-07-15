@@ -66,11 +66,13 @@ Key blocks:
     galaxy bank per bin (the property IS the galaxy). Uniform-in-cos-i IS
     the random-orientation population, so the collapsed average needs no
     reweighting.
-  - config sweep (`grism_snr: {values: [10, 20, 50]}`, measurement
-    `sigma_eps_vs_grism_snr`): ONE galaxy bank shared across every value
+  - config sweep (`line_snr: {values: [30, 50, 100]}`, measurement
+    `sigma_eps_vs_line_snr`): ONE galaxy bank shared across every value
     with the same noise seed (common random numbers -- the knob is external
     to the galaxy, so shared noise cancels in the trend). cosi moves to
-    `bank.draw`; the top-level `grism_snr` scalar must be omitted.
+    `bank.draw`; the top-level `line_snr` scalar must be omitted. `line_snr`
+    is the emission-LINE matched-filter SNR (continuum is marginalized and
+    does not enter the SNR; see kl_pipe/noise.py grism_line_noise).
 - `bank.draw`: per-galaxy truths, seeded deterministically from the global
   `seed`. Supported dists: `uniform`, `lognormal_tf` (Tully-Fisher:
   `center_kms`, `sigma_tf_dex`; 0.08 dex fiducial per Xu+2022/Pranjal+2022).
@@ -156,7 +158,7 @@ returning FitInputs. Dispatch, ledger, manifest, collation, and calibration
 are untouched.
 
 Known v1 leaks across the seam (deliberate, small, all loud):
-- the spec's `broadband_snr`/`grism_snr` knobs and the ObservingConfig
+- the spec's `broadband_snr`/`line_snr` knobs and the ObservingConfig
   schema are imaging+grism-shaped (a generic version would move SNR knobs
   into a per-recipe block);
 - the worker imports `build_fit_inputs` directly instead of resolving a

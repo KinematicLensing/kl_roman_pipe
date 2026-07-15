@@ -4,13 +4,13 @@
 # so the SNR trend is a clean contrast.
 run_name: sigma_eps_gsnr_dev
 version: 1
-description: "sigma_eps vs grism SNR {10,20,50}, micro-shakedown, config Q"
+description: "sigma_eps vs emission-line SNR {30,50,100}, micro-shakedown, config Q"
 seed: 20260716
-measurement: sigma_eps_vs_grism_snr
+measurement: sigma_eps_vs_line_snr
 
 bank:
   stratify:
-    grism_snr: {values: [10, 20, 50]}
+    line_snr: {values: [30, 50, 100]}
   n_gal_per_bin: 2
   m_noise: 1
   draw:

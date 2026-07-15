@@ -153,7 +153,7 @@ def _run_fit_attempt(
         spec,
         config,
         broadband_snr=float(row['broadband_snr']),
-        grism_snr=float(row['grism_snr']),
+        line_snr=float(row['line_snr']),
     )
     task = InferenceTask.from_obs(
         inputs.source,

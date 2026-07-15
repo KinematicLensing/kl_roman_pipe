@@ -25,6 +25,7 @@ from kl_pipe.ensemble.expander import (
     load_run,
     truth_from_row,
 )
+from kl_pipe.ensemble.mocks import build_fit_inputs
 from kl_pipe.ensemble.scene import scene_priors, scene_truth_defaults
 from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
 from kl_pipe.priors import LogNormal, Uniform
@@ -32,6 +33,7 @@ from kl_pipe.priors import LogNormal, Uniform
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observing'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
+P_GSNR_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_gsnr_P_vista.yaml'
 
 
 @pytest.fixture(scope='module')
@@ -382,26 +384,26 @@ class TestCollate:
 
 
 # ==============================================================================
-# Config-sweep axis (grism SNR)
+# Config-sweep axis (emission-line SNR)
 # ==============================================================================
 
 GSNR_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_gsnr_dev.yaml'
 
 
-class TestGrismSnrSweep:
+class TestLineSnrSweep:
     @pytest.fixture(scope='class')
     def gsnr_spec(self) -> EnsembleSpec:
         return EnsembleSpec.from_yaml(GSNR_SPEC)
 
     def test_spec_loads(self, gsnr_spec):
-        assert gsnr_spec.measurement == 'sigma_eps_vs_grism_snr'
-        assert gsnr_spec.sweep_values == (10.0, 20.0, 50.0)
+        assert gsnr_spec.measurement == 'sigma_eps_vs_line_snr'
+        assert gsnr_spec.sweep_values == (30.0, 50.0, 100.0)
         assert gsnr_spec.n_fits == 6
         assert 'cosi' in gsnr_spec.draw
 
-    def test_top_level_grism_snr_conflict(self, tmp_path, gsnr_spec):
+    def test_top_level_line_snr_conflict(self, tmp_path, gsnr_spec):
         d = yaml.safe_load(GSNR_SPEC.read_text())
-        d['grism_snr'] = 30
+        d['line_snr'] = 30
         with pytest.raises(ValueError, match='conflicts with the'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
@@ -415,7 +417,7 @@ class TestGrismSnrSweep:
         """Same galaxy: identical truth + noise seed at every SNR step."""
         m = build_manifest(gsnr_spec, canonical_q)
         assert len(m) == 6
-        assert sorted(m['grism_snr'].unique()) == [10.0, 20.0, 50.0]
+        assert sorted(m['line_snr'].unique()) == [30.0, 50.0, 100.0]
         assert (m['broadband_snr'] == 100.0).all()
         for _, group in m.groupby('galaxy_id'):
             assert len(group) == 3  # one row per SNR step
@@ -445,8 +447,172 @@ class TestGrismSnrSweep:
     def test_axis_helper(self, gsnr_spec, dev_spec):
         from kl_pipe.ensemble.diagnostics import measurement_axis
 
-        assert measurement_axis(gsnr_spec)[:2] == ('sweep_step', 'grism_snr')
+        assert measurement_axis(gsnr_spec)[:2] == ('sweep_step', 'line_snr')
         assert measurement_axis(dev_spec)[:2] == ('cosi_bin', 'truth.cosi')
+
+
+# ==============================================================================
+# Emission-line SNR convention
+# ==============================================================================
+
+
+def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
+    """Grism noise variance is the emission-LINE matched filter
+    (var = ||line||^2 / line_snr^2), NOT the continuum-inflated whole stamp,
+    and scales as 1/line_snr^2. Guards the line-SNR convention wiring so a
+    regression back to whole-stamp normalization fails loudly. Deterministic
+    (no sampling, no seed dependence)."""
+    truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+    truth.update(
+        {
+            'cosi': 0.5,
+            'theta_int': 0.6,
+            'g1': 0.02,
+            'g2': -0.01,
+            'vel.vcirc': 200.0,
+            'z': 1.2,
+        }
+    )
+    line_truth = {
+        k: (0.0 if k.endswith('.cont.flux_per_nm') else v) for k, v in truth.items()
+    }
+
+    def first_grism_var(line_snr):
+        inp = build_fit_inputs(
+            truth, 12345, dev_spec, canonical_q, broadband_snr=100.0, line_snr=line_snr
+        )
+        obs = next(iter(inp.grism_obs.values()))
+        var = float(np.asarray(obs.variance))
+        full = np.asarray(inp.source.render_grism(truth, obs))
+        line = np.asarray(inp.source.render_grism(line_truth, obs))
+        return var, float(np.sum(full**2)), float(np.sum(line**2))
+
+    var40, full_power, line_power = first_grism_var(40.0)
+    # normalized on the LINE, not the whole stamp
+    assert var40 == pytest.approx(line_power / 40.0**2, rel=1e-6)
+    # continuum is present, so the line carries strictly less power than the
+    # whole stamp -- i.e. this is demonstrably NOT the whole-stamp convention
+    assert line_power < full_power
+
+    var80, _, _ = first_grism_var(80.0)
+    # matched-filter SNR: doubling line_snr quarters the variance
+    assert var80 == pytest.approx(var40 / 4.0, rel=1e-6)
+
+
+@pytest.mark.slow
+def test_shear_information_increases_with_line_snr():
+    """Data-only galaxy-frame shear widths (sigma_g+, sigma_gx) strictly
+    decrease as emission-line SNR rises: the line-SNR knob controls the
+    kinematic shear information. Fisher-based (likelihood curvature at truth) --
+    fast and deterministic, no MCMC. Config P (multi-roll) so the rotational
+    component gx is not degenerate with theta_int. No tolerance is tuned; the
+    assertion is pure monotonicity (more information never widens a posterior)."""
+    spec = EnsembleSpec.from_yaml(P_GSNR_SPEC)
+    config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
+    truth = scene_truth_defaults(config, spec.fixed)
+    truth.update(
+        {
+            'cosi': 0.5,
+            'theta_int': 0.6,
+            'g1': 0.0,
+            'g2': 0.0,
+            'vel.vcirc': 200.0,
+            'z': 1.2,
+        }
+    )
+    sub = [
+        'g1',
+        'g2',
+        'cosi',
+        'theta_int',
+        'vel.vcirc',
+        'vel.rscale',
+        'Halpha.flux',
+        'Halpha.rscale',
+        'Halpha.dispersion',
+        'F087.rscale',
+        'F158.rscale',
+    ]
+    step = {
+        'g1': 0.004,
+        'g2': 0.004,
+        'cosi': 0.004,
+        'theta_int': 0.01,
+        'vel.vcirc': 2.0,
+        'vel.rscale': 0.01,
+        'Halpha.flux': 1.0,
+        'Halpha.rscale': 0.004,
+        'Halpha.dispersion': 1.0,
+        'F087.rscale': 0.004,
+        'F158.rscale': 0.004,
+    }
+
+    def galaxy_frame_shear_sigmas(line_snr):
+        inp = build_fit_inputs(
+            truth, 7, spec, config, broadband_snr=100.0, line_snr=line_snr
+        )
+        s = inp.source
+        chans = [
+            (
+                lambda th, o=o, b=b: np.asarray(s.render_broadband(th, o, b)).ravel(),
+                float(np.asarray(o.variance)),
+            )
+            for b, o in inp.image_obs.items()
+        ]
+        chans += [
+            (
+                lambda th, o=o: np.asarray(s.render_grism(th, o)).ravel(),
+                float(np.asarray(o.variance)),
+            )
+            for o in inp.grism_obs.values()
+        ]
+        th0 = {
+            **inp.priors.fixed_values,
+            **{n: truth[n] for n in inp.priors.sampled_names},
+        }
+
+        def fv(th):
+            return np.concatenate([f(th) for f, _ in chans])
+
+        var = np.concatenate([np.full(f(th0).size, v) for f, v in chans])
+        jac = np.array(
+            [
+                (fv({**th0, n: th0[n] + step[n]}) - fv({**th0, n: th0[n] - step[n]}))
+                / (2 * step[n])
+                for n in sub
+            ]
+        )
+        fisher = (jac / var) @ jac.T
+        idx = {n: i for i, n in enumerate(sub)}
+        # fold in only the NON-shear priors (TF + nuisances) so we isolate the
+        # DATA constraint on shear (shear prior OFF)
+        prior_prec = np.zeros(len(sub))
+        for i, n in enumerate(sub):
+            if n in ('g1', 'g2'):
+                continue
+            p = inp.priors.get_prior(n)
+            cls = type(p).__name__
+            if cls in ('Gaussian', 'TruncatedNormal'):
+                prior_prec[i] = 1.0 / p.sigma**2
+            elif cls == 'LogNormal':
+                prior_prec[i] = 1.0 / (200.0 * np.log(10.0) * 0.08) ** 2
+        cov = np.linalg.inv(fisher + np.diag(prior_prec))
+        i1, i2, ti = idx['g1'], idx['g2'], truth['theta_int']
+        cov_g = np.array([[cov[i1, i1], cov[i1, i2]], [cov[i2, i1], cov[i2, i2]]])
+        c2, s2 = np.cos(2 * ti), np.sin(2 * ti)
+        rot = np.array([[c2, s2], [-s2, c2]])
+        cov_gal = rot @ cov_g @ rot.T
+        return np.sqrt(cov_gal[0, 0]), np.sqrt(cov_gal[1, 1])
+
+    sig = [galaxy_frame_shear_sigmas(ls) for ls in (30.0, 60.0, 120.0)]
+    sig_gplus = [x[0] for x in sig]
+    sig_gcross = [x[1] for x in sig]
+    assert (
+        sig_gplus[0] > sig_gplus[1] > sig_gplus[2]
+    ), f"sigma_g+ not decreasing: {sig_gplus}"
+    assert (
+        sig_gcross[0] > sig_gcross[1] > sig_gcross[2]
+    ), f"sigma_gx not decreasing: {sig_gcross}"
 
 
 # ==============================================================================

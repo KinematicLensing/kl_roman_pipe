@@ -44,8 +44,8 @@ CORNER_PARAMS = ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc', 'Halpha.dispersio
 
 def measurement_axis(spec) -> Tuple[str, str, str, str]:
     """(group_col, value_col, axis_label, xscale) for the spec's plot axis."""
-    if spec.measurement == 'sigma_eps_vs_grism_snr':
-        return ('sweep_step', 'grism_snr', 'grism SNR', 'log')
+    if spec.measurement == 'sigma_eps_vs_line_snr':
+        return ('sweep_step', 'line_snr', 'emission-line SNR', 'log')
     return ('cosi_bin', 'truth.cosi', 'cos i (bin center)', 'linear')
 
 
@@ -122,7 +122,7 @@ def sigma_eps_table(
     """Per-axis-step + collapsed sigma_eps, under both quality gates.
 
     ``group_col``/``value_col`` define the plot axis (cosi bins or a
-    grism_snr sweep); ``axis_step = -1`` rows are the collapsed ensemble.
+    line_snr sweep); ``axis_step = -1`` rows are the collapsed ensemble.
     """
     q = quality_table(table).set_index('fit_id')
     rows: List[dict] = []
@@ -378,7 +378,7 @@ def _fit_title(fit_id: str, row: pd.Series) -> str:
     """Per-fit plot title: id, truth cosi, per-channel SNRs, quality."""
     snr_bits = ''.join(
         f"  {label}={float(row[col]):.0f}"
-        for col, label in [('grism_snr', 'gSNR'), ('broadband_snr', 'bbSNR')]
+        for col, label in [('line_snr', 'lSNR'), ('broadband_snr', 'bbSNR')]
         if col in row.index and pd.notna(row[col])
     )
     return (

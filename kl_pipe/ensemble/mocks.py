@@ -4,9 +4,12 @@ Per-fit on-the-fly mock observation construction.
 The mock is a deterministic function of (truth, observing config, spec SNR
 knobs, noise_seed): the model renders its own truth datavector (guaranteeing
 fit == truth self-consistency) and Gaussian noise is added at the
-matched-filter variance ``||I||^2 / SNR^2`` (the same convention as
-``noise.add_intensity_noise``). Construction mirrors the flagship builders
-(tests/test_flagship.py, experiments/sweverett/vista_kit/tasks_vista.py).
+matched-filter variance ``||I||^2 / SNR^2``. Broadband channels use the whole
+image (``noise.add_intensity_noise`` convention); grism channels normalize on
+the emission LINE only (``noise.grism_line_noise``: ``var =
+||I_line||^2 / line_snr^2``), so the labeled ``line_snr`` is the line SNR, not
+the continuum-dominated whole-stamp SNR. Construction mirrors the flagship
+builders (tests/test_flagship.py, experiments/sweverett/vista_kit/tasks_vista.py).
 
 Per-channel noise seeds are derived from the manifest row's ``noise_seed``
 via a SeedSequence spawn, so a single integer in the manifest reproduces the
@@ -28,6 +31,7 @@ import jax.numpy as jnp
 from kl_pipe.dispersion import GrismPars, build_grism_pars_for_line
 from kl_pipe.ensemble.scene import build_source_model, scene_priors
 from kl_pipe.lines import LINE_LAMBDAS
+from kl_pipe.noise import grism_line_noise
 from kl_pipe.observation import build_grism_obs, build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.render import RenderConfig
@@ -143,12 +147,29 @@ def _grism_pars_for_roll(
 
 
 def _make_roll_obs(
-    source, truth, psf, config, z, roll_deg, single_roll, snr, seed, oversample
+    source, truth, psf, config, z, roll_deg, single_roll, line_snr, seed, oversample
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
-    obs_clean = build_grism_obs(grism_pars, z=z, psf=psf)
+    # render truth at the SAME oversample as the fit obs below (mirrors
+    # _make_band_obs); otherwise the grism truth datavector is generated at the
+    # RenderConfig default oversample=1 while the fit runs at config.oversample,
+    # silently breaking grism fit==truth self-consistency
+    obs_clean = build_grism_obs(
+        grism_pars,
+        z=z,
+        psf=psf,
+        render_config=RenderConfig(oversample=oversample),
+    )
     data_true = np.asarray(source.render_grism(truth, obs_clean))
-    data_noisy, var = _noisy(data_true, snr, seed)
+    # line-only render (continuum amplitudes zeroed) sets the noise level so the
+    # labeled SNR is the emission-LINE matched-filter SNR, not the whole
+    # (continuum-dominated) dispersed stamp; the continuum is still rendered
+    # into the data below and marginalized in the fit
+    line_truth = {
+        k: (0.0 if k.endswith('.cont.flux_per_nm') else v) for k, v in truth.items()
+    }
+    line_true = np.asarray(source.render_grism(line_truth, obs_clean))
+    data_noisy, var = grism_line_noise(data_true, line_true, line_snr, seed)
     return build_grism_obs(
         grism_pars,
         z=z,
@@ -166,7 +187,7 @@ def build_fit_inputs(
     config: 'ObservingConfig',
     *,
     broadband_snr: float,
-    grism_snr: float,
+    line_snr: float,
 ) -> FitInputs:
     """
     Build the per-fit source model, priors, and noisy mock observations.
@@ -181,19 +202,20 @@ def build_fit_inputs(
         Population distributions (for the fit priors).
     config : ObservingConfig
         Structural instrument setup.
-    broadband_snr, grism_snr : float
+    broadband_snr, line_snr : float
         Per-fit SNR values from the manifest row (the manifest, not the
-        spec, is the source of truth -- grism_snr varies per row on a
-        config-sweep axis).
+        spec, is the source of truth -- line_snr varies per row on a
+        config-sweep axis). ``line_snr`` is the emission-line matched-filter
+        SNR (see kl_pipe.noise.grism_line_noise).
 
     Returns
     -------
     FitInputs
         (source, priors, image_obs, grism_obs, truth).
     """
-    if broadband_snr <= 0 or grism_snr <= 0:
+    if broadband_snr <= 0 or line_snr <= 0:
         raise ValueError(
-            f"SNR values must be positive, got ({broadband_snr}, {grism_snr})"
+            f"SNR values must be positive, got ({broadband_snr}, {line_snr})"
         )
     source = build_source_model(config)
     priors = scene_priors(truth, config, spec)
@@ -239,7 +261,7 @@ def build_fit_inputs(
             z,
             roll,
             single_roll,
-            grism_snr,
+            line_snr,
             seeds[len(config.bands) + j],
             config.oversample,
         )

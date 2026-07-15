@@ -1,21 +1,25 @@
-# sigma_eps vs grism SNR -- Vista statistics run (gh queue) (config P).
-# THE FIRST PLOT: sigma_eps at grism SNR {10, 20, 50}, broadband SNR fixed
+# sigma_eps vs emission-line SNR -- Vista statistics run (gh queue) (config P).
+# THE FIRST PLOT: sigma_eps at emission-line SNR {30, 50, 100} (line
+# matched-filter SNR, not whole-stamp; continuum is marginalized and does not
+# enter the SNR -- see kl_pipe/noise.py grism_line_noise). Broadband SNR fixed
 # at 100, cosi drawn from the random-orientation population. 30 galaxies x
 # 3 SNR values = 90 fits (~13% sigma_eps per point; CRN across the SNR axis
 # sharpens the trend further). Config P (2 bands + 4 rolls): the Q shakedown
 # run showed single-roll grism leaves vcirc prior-dominated and g2 degenerate
-# with theta_int -- roll diversity is required for a usable plot.
+# with theta_int -- roll diversity is required for a usable plot. Axis {30,50,100}
+# matches the Xu et al. Roman-KL emission-line SNR regime (their sigma_eps
+# 0.022-0.038).
 # GPU packing: 4 workers/node (first 8-worker P run OOMed: contexts +
 # preallocation exhausted HBM; MPS + 0.75 headroom now emitted, 4 is safe).
 run_name: sigma_eps_gsnr_P_vista
 version: 1
-description: "sigma_eps vs grism SNR {10,20,50}, Vista gh queue, config P, 90 fits"
+description: "sigma_eps vs emission-line SNR {30,50,100}, Vista gh queue, config P, 90 fits"
 seed: 20260717
-measurement: sigma_eps_vs_grism_snr
+measurement: sigma_eps_vs_line_snr
 
 bank:
   stratify:
-    grism_snr: {values: [10, 20, 50]}
+    line_snr: {values: [30, 50, 100]}
   n_gal_per_bin: 30
   m_noise: 1
   draw:

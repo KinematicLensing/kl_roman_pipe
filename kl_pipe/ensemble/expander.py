@@ -117,7 +117,7 @@ def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
 
     Axis semantics: a cosi stratification means each bin holds its OWN
     galaxy bank (the property is the galaxy -- independent noise); a config
-    sweep (grism_snr) means ONE galaxy bank shared across every sweep step
+    sweep (line_snr) means ONE galaxy bank shared across every sweep step
     with the SAME noise seed (common random numbers -- the knob is external
     to the galaxy).
     """
@@ -215,10 +215,10 @@ def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
                                 ),
                                 'observed_config_id': config.id,
                                 'broadband_snr': spec.broadband_snr,
-                                'grism_snr': (
+                                'line_snr': (
                                     float(sweep_value)
                                     if sweep_value is not None
-                                    else spec.grism_snr
+                                    else spec.line_snr
                                 ),
                                 'save_chains': spec.save_chains == 'all',
                                 'save_mocks': spec.save_mocks == 'all',
