@@ -60,6 +60,51 @@ def rotate_to_galaxy_frame(
     return g_plus, g_cross
 
 
+# Default galaxy-frame rotation angle for diagnostics. 'measured' rotates each
+# posterior sample by its own theta_int (propagates position-angle uncertainty
+# into g+/gx and decorrelates the intrinsic-PA vs cross-shear ridge); 'truth'
+# rotates by the fixed truth theta_int (assumes the angle is known). Flip this
+# to 'truth' to revert all g+/gx diagnostics to the fixed-angle convention.
+GALAXY_FRAME_ANGLE = 'measured'
+
+
+def galaxy_frame_samples(
+    g1_samples: np.ndarray,
+    g2_samples: np.ndarray,
+    theta_int_samples: np.ndarray,
+    theta_int_truth: float,
+    angle: Optional[str] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Rotate posterior shear samples into the galaxy frame.
+
+    Parameters
+    ----------
+    g1_samples, g2_samples, theta_int_samples : np.ndarray
+        Per-sample sky-frame shear and position angle from a posterior chain.
+    theta_int_truth : float
+        Truth position angle, used only when ``angle='truth'``.
+    angle : {'measured', 'truth'}, optional
+        Rotation-angle convention (defaults to ``GALAXY_FRAME_ANGLE``).
+        'measured' uses each sample's own ``theta_int_samples``; 'truth' uses
+        the fixed ``theta_int_truth``.
+
+    Returns
+    -------
+    g_plus, g_cross : np.ndarray
+        Galaxy-frame shear samples.
+    """
+    angle = angle or GALAXY_FRAME_ANGLE
+    g1_samples = np.asarray(g1_samples, dtype=float)
+    if angle == 'measured':
+        theta = theta_int_samples
+    elif angle == 'truth':
+        theta = np.full_like(g1_samples, float(theta_int_truth))
+    else:
+        raise ValueError(f"angle must be 'measured' or 'truth', got {angle!r}")
+    return rotate_to_galaxy_frame(g1_samples, g2_samples, theta)
+
+
 class ShearBiasResult(NamedTuple):
     """Linear shear-bias fit result: g_meas = (1 + m) * g_true + c."""
 

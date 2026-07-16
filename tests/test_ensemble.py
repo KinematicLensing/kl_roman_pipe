@@ -721,6 +721,7 @@ class TestDiagnostics:
     def test_tables(self, run_dir):
         from kl_pipe.ensemble.collate import collate_results
         from kl_pipe.ensemble.diagnostics import (
+            augment_galaxy_frame,
             pull_table,
             quality_table,
             sigma_eps_table,
@@ -730,7 +731,7 @@ class TestDiagnostics:
         collate_results(run_dir)
         from kl_pipe.ensemble.collate import analysis_table
 
-        table = analysis_table(run_dir)
+        table = augment_galaxy_frame(run_dir, analysis_table(run_dir))
 
         q = quality_table(table)
         assert q['catastrophic'].sum() == 1
@@ -740,8 +741,9 @@ class TestDiagnostics:
 
         pulls = pull_table(table)
         good = pulls[~table['max_rhat'].gt(1.1).values]
-        # healthy synthetic fits have pulls of order unity
-        assert np.abs(good[['pull.g1', 'pull.g2']].values).max() < 5
+        # healthy synthetic fits have pulls of order unity; shear reported in
+        # the galaxy frame (g+, gx), not sky-frame g1/g2
+        assert np.abs(good[['pull.g_plus', 'pull.g_cross']].values).max() < 5
 
         sig = sigma_eps_table(run_dir, table)
         excl = sig[sig['gate'] == 'exclude_catastrophic']

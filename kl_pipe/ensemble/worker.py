@@ -199,6 +199,7 @@ def _run_fit_attempt(
         sampled_names,
         wallclock_s=t_end - t_start,
         precond_s=t_precond - t_start,
+        truth=truth,
     )
     summary['sampler_seed'] = sampler_seed
 
@@ -218,6 +219,7 @@ def _summary_row(
     sampled_names,
     wallclock_s: float,
     precond_s: float,
+    truth: Optional[Dict[str, float]] = None,
 ) -> dict:
     diag = result.diagnostics
     r_hat = diag.get('r_hat', {})
@@ -270,6 +272,23 @@ def _summary_row(
             out[f'map_minus_postmean_over_sigma.{name}'] = float(
                 (map_theta[i] - s['mean']) / s['std']
             )
+
+    # galaxy-frame shear (g+, gx): the interpretable KL diagnostic. Rotate the
+    # posterior samples per the configured angle convention (default: each
+    # sample by its own theta_int) so g+/gx replace g1/g2 in all diagnostics.
+    if all(n in sampled_names for n in ('g1', 'g2', 'theta_int')):
+        from kl_pipe.calibration import galaxy_frame_samples
+
+        samples = np.asarray(result.samples)
+        ig1, ig2, ith = (sampled_names.index(n) for n in ('g1', 'g2', 'theta_int'))
+        theta_truth = float(truth['theta_int']) if truth is not None else np.nan
+        gp, gx = galaxy_frame_samples(
+            samples[:, ig1], samples[:, ig2], samples[:, ith], theta_truth
+        )
+        for nm, arr in (('g_plus', gp), ('g_cross', gx)):
+            out[f'post.{nm}.mean'] = float(np.mean(arr))
+            out[f'post.{nm}.std'] = float(np.std(arr, ddof=1))
+            out[f'post.{nm}.median'] = float(np.median(arr))
     return out
 
 

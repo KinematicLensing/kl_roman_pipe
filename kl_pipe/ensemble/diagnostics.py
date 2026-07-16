@@ -29,12 +29,27 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from kl_pipe.calibration import compute_shape_noise, rotate_to_galaxy_frame
+from kl_pipe.calibration import (
+    GALAXY_FRAME_ANGLE,
+    compute_shape_noise,
+    galaxy_frame_samples,
+    rotate_to_galaxy_frame,
+)
 from kl_pipe.ensemble.collate import analysis_table
 from kl_pipe.ensemble.expander import load_run
 
-HEADLINE_PARAMS = ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc')
-CORNER_PARAMS = ('g1', 'g2', 'cosi', 'theta_int', 'vel.vcirc', 'Halpha.dispersion')
+# shear is reported in the galaxy frame (g+, gx), not sky-frame (g1, g2): g+/gx
+# are the interpretable kinematic-lensing quantities and their marginals do not
+# rotate fit-to-fit with the intrinsic PA. See augment_galaxy_frame.
+HEADLINE_PARAMS = ('g_plus', 'g_cross', 'cosi', 'theta_int', 'vel.vcirc')
+CORNER_PARAMS = (
+    'g_plus',
+    'g_cross',
+    'cosi',
+    'theta_int',
+    'vel.vcirc',
+    'Halpha.dispersion',
+)
 
 
 # =============================================================================
@@ -77,6 +92,75 @@ def quality_table(table: pd.DataFrame) -> pd.DataFrame:
     return q
 
 
+def augment_galaxy_frame(
+    run_dir: Path, table: pd.DataFrame, angle: Optional[str] = None
+) -> pd.DataFrame:
+    """Add galaxy-frame shear columns (g+, gx) to a collated table.
+
+    Adds ``truth.g_plus``/``truth.g_cross`` (truth shear rotated by truth PA)
+    and posterior ``post.g_plus.mean``/``.std`` + ``post.g_cross.mean``/``.std``.
+    The posterior columns come from, in order of preference: the per-sample
+    rotation of the saved chain (honours ``angle``, default the module toggle
+    ``GALAXY_FRAME_ANGLE``); the worker-written summary columns; or a
+    marginal-quadrature fallback from the g1/g2 marginals (exact only for an
+    uncorrelated posterior, recorded in ``galaxy_frame_method``). The sky-frame
+    g1/g2 columns are left intact but are no longer the reported shear.
+    """
+    angle = angle or GALAXY_FRAME_ANGLE
+    t = table.copy()
+    gp_t, gx_t = rotate_to_galaxy_frame(
+        t['truth.g1'].to_numpy(),
+        t['truth.g2'].to_numpy(),
+        t['truth.theta_int'].to_numpy(),
+    )
+    t['truth.g_plus'] = gp_t
+    t['truth.g_cross'] = gx_t
+
+    have_summary = {'post.g_plus.mean', 'post.g_cross.mean'}.issubset(t.columns)
+    means_p, stds_p, means_x, stds_x, methods = [], [], [], [], []
+    for _, r in t.iterrows():
+        theta_true = float(r['truth.theta_int'])
+        chain_path = Path(run_dir) / 'chains' / f"{r['fit_id']}.npz"
+        if chain_path.exists():
+            npz = np.load(chain_path)
+            nm = list(npz['param_names'])
+            S = npz['samples']
+            gps, gxs = galaxy_frame_samples(
+                S[:, nm.index('g1')],
+                S[:, nm.index('g2')],
+                S[:, nm.index('theta_int')],
+                theta_true,
+                angle,
+            )
+            means_p.append(float(np.mean(gps)))
+            stds_p.append(float(np.std(gps, ddof=1)))
+            means_x.append(float(np.mean(gxs)))
+            stds_x.append(float(np.std(gxs, ddof=1)))
+            methods.append('chain')
+        elif have_summary and np.isfinite(r.get('post.g_plus.mean', np.nan)):
+            means_p.append(float(r['post.g_plus.mean']))
+            stds_p.append(float(r['post.g_plus.std']))
+            means_x.append(float(r['post.g_cross.mean']))
+            stds_x.append(float(r['post.g_cross.std']))
+            methods.append('summary')
+        else:
+            c2, s2 = np.cos(2 * theta_true), np.sin(2 * theta_true)
+            gpm, gxm = rotate_to_galaxy_frame(
+                r['post.g1.mean'], r['post.g2.mean'], theta_true
+            )
+            means_p.append(float(gpm))
+            means_x.append(float(gxm))
+            stds_p.append(float(np.hypot(r['post.g1.std'] * c2, r['post.g2.std'] * s2)))
+            stds_x.append(float(np.hypot(r['post.g1.std'] * s2, r['post.g2.std'] * c2)))
+            methods.append('marginal-approx')
+    t['post.g_plus.mean'] = means_p
+    t['post.g_plus.std'] = stds_p
+    t['post.g_cross.mean'] = means_x
+    t['post.g_cross.std'] = stds_x
+    t['galaxy_frame_method'] = methods
+    return t
+
+
 def pull_table(
     table: pd.DataFrame, params: Sequence[str] = HEADLINE_PARAMS
 ) -> pd.DataFrame:
@@ -104,7 +188,8 @@ def _galaxy_frame_sigmas(run_dir: Path, row: pd.Series) -> Tuple[float, float, s
         names = list(npz['param_names'])
         g1s = npz['samples'][:, names.index('g1')]
         g2s = npz['samples'][:, names.index('g2')]
-        gp, gx = rotate_to_galaxy_frame(g1s, g2s, theta_true)
+        ths = npz['samples'][:, names.index('theta_int')]
+        gp, gx = galaxy_frame_samples(g1s, g2s, ths, theta_true)
         return float(np.std(gp, ddof=1)), float(np.std(gx, ddof=1)), 'chains'
     s1, s2 = float(row['post.g1.std']), float(row['post.g2.std'])
     c2, s2t = np.cos(2 * theta_true), np.sin(2 * theta_true)
@@ -403,11 +488,22 @@ def plot_corner_fit(
         return None
     npz = np.load(chain_path)
     names = list(npz['param_names'])
+    samples = npz['samples']
     row = table.set_index('fit_id').loc[fit_id]
+    # append galaxy-frame shear columns so CORNER_PARAMS (g_plus/g_cross) resolve
+    if all(n in names for n in ('g1', 'g2', 'theta_int')):
+        gp, gx = galaxy_frame_samples(
+            samples[:, names.index('g1')],
+            samples[:, names.index('g2')],
+            samples[:, names.index('theta_int')],
+            float(row['truth.theta_int']),
+        )
+        samples = np.column_stack([samples, gp, gx])
+        names = names + ['g_plus', 'g_cross']
     use = [p for p in params if p in names]
     idx = [names.index(p) for p in use]
     fig = corner_mod.corner(
-        npz['samples'][:, idx],
+        samples[:, idx],
         labels=use,
         truths=[float(row[f'truth.{p}']) for p in use],
         show_titles=True,
@@ -489,6 +585,7 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     spec, _, _ = load_run(run_dir)
     group_col, value_col, axis_label, xscale = measurement_axis(spec)
 
+    table = augment_galaxy_frame(run_dir, table)
     quality = quality_table(table)
     pulls = pull_table(table)
     sigma = sigma_eps_table(run_dir, table, group_col, value_col)
