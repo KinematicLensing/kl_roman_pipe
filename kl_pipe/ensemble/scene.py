@@ -174,9 +174,10 @@ def scene_priors(
     prior_spec: Dict[str, object] = {
         # injected shear: wide, uninformative prior so posterior widths
         # reflect the data's shear constraint, not the prior; unbounded --
-        # truncation would re-inject a prior edge (matches the flagship)
-        'g1': Gaussian(0.0, 0.1),
-        'g2': Gaussian(0.0, 0.1),
+        # truncation would re-inject a prior edge (matches the flagship).
+        # Width is spec-configurable (wider -> more data-driven sigma_eps).
+        'g1': Gaussian(0.0, spec.shear_fit_prior_sigma),
+        'g2': Gaussian(0.0, spec.shear_fit_prior_sigma),
         # nuisance kinematics (flagship prior widths/bounds, centered on the
         # fit's truth -- identical to scene defaults unless the spec fixed
         # block overrides them)

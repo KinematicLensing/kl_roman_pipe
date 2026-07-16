@@ -252,6 +252,10 @@ class EnsembleSpec:
     save_chains: str
     save_mocks: str
 
+    # per-component Gaussian width of the shear fit prior; wider = more
+    # data-driven sigma_eps (less prior floor). Defaults to 0.1 (unchanged).
+    shear_fit_prior_sigma: float = 0.1
+
     def __post_init__(self):
         if self.measurement not in _MEASUREMENTS:
             raise NotImplementedError(
@@ -437,7 +441,9 @@ class EnsembleSpec:
 
         shear = raw['shear']
         _reject_unknown(
-            shear, ('scheme', 'g1', 'g2', 'grid', 'component'), f"{path}:shear"
+            shear,
+            ('scheme', 'g1', 'g2', 'grid', 'component', 'fit_prior_sigma'),
+            f"{path}:shear",
         )
         scheme = shear.get('scheme', 'fixed')
         shear_grid: Tuple[float, ...] = ()
@@ -509,6 +515,7 @@ class EnsembleSpec:
             g2=float(shear.get('g2', 0.0)),
             shear_grid=shear_grid,
             shear_component=shear_component,
+            shear_fit_prior_sigma=float(shear.get('fit_prior_sigma', 0.1)),
             ring_enabled=bool(ring.get('enabled', False)),
             observed_config=str(raw['observed_config']),
             broadband_snr=float(raw['broadband_snr']),
