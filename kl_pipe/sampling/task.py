@@ -580,7 +580,7 @@ class InferenceTask:
         self,
         n_starts: int = 4,
         eig_floor: float = 1e-4,
-        maxiter: int = 300,
+        maxiter: int = 2000,
         seed: int = 0,
         hessian_method: str = 'fd',
         fd_rel_step: float = 1e-5,
@@ -610,8 +610,10 @@ class InferenceTask:
             Hessian eigenvalues below ``eig_floor * max_eigenvalue`` are floored
             to that value before inversion, capping the mass-matrix condition
             number at ``1/eig_floor`` (handles near-degenerate directions).
-        maxiter : int, default 300
-            Max L-BFGS-B iterations per start.
+        maxiter : int, default 2000
+            Max L-BFGS-B iterations per start. Sharp high-SNR posteriors need
+            more than a few hundred iterations to reach the mode; too low a cap
+            leaves the mode-finding start unconverged and produces a garbage MAP.
         seed : int, default 0
             PRNG seed for the prior-draw starting points.
         hessian_method : {'fd', 'ad'}, default 'fd'
@@ -685,6 +687,14 @@ class InferenceTask:
                     f"has {starts.shape[1]} sampled parameters"
                 )
             starts = np.vstack([starts, extra_starts])
+        # Keep the best finite objective across all starts, converged or not.
+        # A sharp high-SNR posterior can need > maxiter iterations to satisfy
+        # L-BFGS-B's convergence test, so the mode-finding start may return
+        # success=False; discarding it (keeping only success=True starts) lets a
+        # spuriously-"converged" start on a flat plateau win, yielding a garbage
+        # MAP -> a mis-scaled mass matrix -> ~100% NUTS divergence. Lower neg-log
+        # posterior is always closer to the mode, so best-of-finite is the right
+        # pick; warn loudly if it did not formally converge.
         best = None
         n_converged = 0
         for s0 in starts:
@@ -696,16 +706,26 @@ class InferenceTask:
                 method='L-BFGS-B',
                 options={'maxiter': maxiter},
             )
-            if res.success and np.isfinite(res.fun):
+            if not np.isfinite(res.fun):
+                continue
+            if res.success:
                 n_converged += 1
-                if best is None or res.fun < best.fun:
-                    best = res
+            if best is None or res.fun < best.fun:
+                best = res
 
         if best is None:
             raise RuntimeError(
-                "laplace_preconditioner: no optimization start converged to a "
-                "finite-log-posterior mode (tried "
+                "laplace_preconditioner: no optimization start reached a "
+                "finite log-posterior (tried "
                 f"{len(starts)} starts). Check priors/data."
+            )
+        if not best.success:
+            warnings.warn(
+                "laplace_preconditioner: best MAP start did not satisfy "
+                f"L-BFGS-B convergence (neg_logpost={best.fun:.4g}); using it "
+                f"anyway as the closest of {len(starts)} starts to the mode. "
+                f"Raise maxiter (currently {maxiter}) if sampling diverges.",
+                RuntimeWarning,
             )
 
         theta_map = jnp.asarray(loc + scale * best.x)
