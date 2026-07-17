@@ -33,6 +33,7 @@ shear:
   scheme: fixed
   g1: 0.02
   g2: -0.01
+  fit_prior_sigma: 0.2
 
 ring:
   enabled: false

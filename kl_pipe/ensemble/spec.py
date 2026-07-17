@@ -253,8 +253,9 @@ class EnsembleSpec:
     save_mocks: str
 
     # per-component Gaussian width of the shear fit prior; wider = more
-    # data-driven sigma_eps (less prior floor). Defaults to 0.1 (unchanged).
-    shear_fit_prior_sigma: float = 0.1
+    # data-driven sigma_eps (less prior floor). Defaults to 0.2, matching the
+    # published Roman KL prior half-width (Xu+ 2023) as an isotropic Gaussian.
+    shear_fit_prior_sigma: float = 0.2
 
     def __post_init__(self):
         if self.measurement not in _MEASUREMENTS:
@@ -515,7 +516,7 @@ class EnsembleSpec:
             g2=float(shear.get('g2', 0.0)),
             shear_grid=shear_grid,
             shear_component=shear_component,
-            shear_fit_prior_sigma=float(shear.get('fit_prior_sigma', 0.1)),
+            shear_fit_prior_sigma=float(shear.get('fit_prior_sigma', 0.2)),
             ring_enabled=bool(ring.get('enabled', False)),
             observed_config=str(raw['observed_config']),
             broadband_snr=float(raw['broadband_snr']),

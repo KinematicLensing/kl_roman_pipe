@@ -233,12 +233,13 @@ def _flagship_prior_spec(true: Dict[str, float]) -> Dict[str, object]:
         # Geometry
         'cosi': TruncatedNormal(0.6, 0.15, 0.05, 0.99),
         'theta_int': TruncatedNormal(np.pi / 4, 0.3, 0.0, np.pi / 2),
-        # Wide, uninformative shear priors (sigma 0.1, ~2.5x the injected |g|
-        # dynamic range) so the posterior widths reflect the DATA's shear
-        # constraint, not the prior. Unbounded Gaussian: the model is stable
-        # over the ~3-sigma reach and truncation would re-inject a prior edge.
-        'g1': Gaussian(0.0, 0.1),
-        'g2': Gaussian(0.0, 0.1),
+        # Wide, uninformative shear priors so the posterior widths reflect the
+        # data's shear constraint, not the prior. Sigma 0.2 matches the published
+        # Roman KL prior half-width (Xu+ 2023) as an isotropic Gaussian. Unbounded:
+        # the model is stable over the reach (|g|=1 is 5 sigma) and truncation
+        # would re-inject a prior edge and break isotropy per-component.
+        'g1': Gaussian(0.0, 0.2),
+        'g2': Gaussian(0.0, 0.2),
         # Velocity. vcirc uses the Tully-Fisher LogNormal prior (median = truth,
         # scatter SIGMA_TF_DEX) instead of an ad-hoc Gaussian.
         'vel.v0': Gaussian(10.0, 10.0),
