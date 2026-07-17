@@ -43,13 +43,36 @@ from kl_pipe.ensemble.expander import load_run
 # rotate fit-to-fit with the intrinsic PA. See augment_galaxy_frame.
 HEADLINE_PARAMS = ('g_plus', 'g_cross', 'cosi', 'theta_int', 'vel.vcirc')
 CORNER_PARAMS = (
+    'g1',
+    'g2',
     'g_plus',
     'g_cross',
     'cosi',
     'theta_int',
     'vel.vcirc',
+    'vel.rscale',
     'Halpha.dispersion',
 )
+
+# math display labels for plot axes/titles. All plotted params are mapped so the
+# typesetting is consistent (no plain-string param beside a math one). Unmapped
+# keys fall back to the raw key.
+PARAM_LABELS = {
+    'g1': r'$g_1$',
+    'g2': r'$g_2$',
+    'g_plus': r'$g_+$',
+    'g_cross': r'$g_\times$',
+    'cosi': r'$\cos i$',
+    'theta_int': r'$\theta_{\rm int}$',
+    'vel.vcirc': r'$v_{\rm circ}$',
+    'vel.rscale': r'$r_v$',
+    'Halpha.dispersion': r'$\sigma_{\rm H\alpha}$',
+}
+
+
+def _label(param: str) -> str:
+    """Math display label for a parameter key (falls back to the raw key)."""
+    return PARAM_LABELS.get(param, param)
 
 
 # =============================================================================
@@ -301,8 +324,8 @@ def plot_recovery(
         hi = max(table[f'truth.{p}'].max(), table[f'post.{p}.mean'].max())
         pad = 0.05 * (hi - lo + 1e-12)
         ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], 'k--', lw=0.8)
-        ax.set_xlabel(f'truth {p}')
-        ax.set_ylabel(f'posterior mean {p}')
+        ax.set_xlabel(f'truth {_label(p)}')
+        ax.set_ylabel(f'posterior mean {_label(p)}')
         ax.legend(fontsize=8)
         fig.tight_layout()
         path = out_dir / f"recovery_{p.replace('.', '_')}.png"
@@ -328,7 +351,7 @@ def plot_pulls(
         ax.hist(vals, bins=np.linspace(-4, 4, 17), density=True, alpha=0.7)
         ax.plot(x, np.exp(-0.5 * x**2) / np.sqrt(2 * np.pi), 'k-', lw=1)
         ax.set_title(
-            f'{p}\nmean {np.mean(vals):+.2f}  std {np.std(vals, ddof=1):.2f}',
+            f'{_label(p)}\nmean {np.mean(vals):+.2f}  std {np.std(vals, ddof=1):.2f}',
             fontsize=9,
         )
         ax.set_xlabel('pull')
@@ -504,7 +527,7 @@ def plot_corner_fit(
     idx = [names.index(p) for p in use]
     fig = corner_mod.corner(
         samples[:, idx],
-        labels=use,
+        labels=[_label(p) for p in use],
         truths=[float(row[f'truth.{p}']) for p in use],
         show_titles=True,
         title_fmt='.3f',
