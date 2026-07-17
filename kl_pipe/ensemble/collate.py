@@ -48,6 +48,23 @@ def analysis_table(run_dir: Path) -> pd.DataFrame:
     return table
 
 
+def write_collated_table(run_dir: Path) -> Path:
+    """
+    Persist the manifest-joined analysis table to disk.
+
+    Writes ``<run_name>_collated.parquet`` -- the one-stop queryable catalog:
+    truth + observable (SNR, cosi bin, seeds) + fitted (post.*, map.*, g+/gx)
+    + convergence (rhat/ess/divergences) + priors (prior.<param>.*) + has_chains,
+    one row per fit. Filename carries the run name so it stays self-identifying
+    when copied out of the run directory.
+    """
+    run_dir = Path(run_dir)
+    table = analysis_table(run_dir)
+    out_path = run_dir / f'{run_dir.name}_collated.parquet'
+    table.to_parquet(out_path, index=False)
+    return out_path
+
+
 def run_tally(run_dir: Path) -> Dict[str, List[str]]:
     run_dir = Path(run_dir)
     spec, _, manifest = load_run(run_dir)

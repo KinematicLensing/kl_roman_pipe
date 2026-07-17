@@ -548,3 +548,92 @@ class TestJAXCompatibility:
 
         result = jit_log_prior(theta)
         assert np.isfinite(result)
+
+
+# ==============================================================================
+# Serialization (to_dict / describe) -- provenance
+# ==============================================================================
+
+
+class TestPriorSerialization:
+    """to_dict() is lossless onto the flat {dist,loc,scale,low,high} schema."""
+
+    def test_uniform_to_dict(self):
+        assert Uniform(0.05, 0.9).to_dict() == {
+            'dist': 'uniform',
+            'loc': None,
+            'scale': None,
+            'low': 0.05,
+            'high': 0.9,
+        }
+
+    def test_gaussian_to_dict(self):
+        assert Gaussian(0.0, 0.2).to_dict() == {
+            'dist': 'gaussian',
+            'loc': 0.0,
+            'scale': 0.2,
+            'low': None,
+            'high': None,
+        }
+
+    def test_loguniform_to_dict(self):
+        d = LogUniform(0.1, 100.0).to_dict()
+        assert d['dist'] == 'loguniform'
+        assert (d['low'], d['high']) == (0.1, 100.0)
+        assert d['loc'] is None and d['scale'] is None
+
+    def test_truncated_normal_to_dict(self):
+        assert TruncatedNormal(0.6, 0.15, 0.05, 0.99).to_dict() == {
+            'dist': 'truncated_normal',
+            'loc': 0.6,
+            'scale': 0.15,
+            'low': 0.05,
+            'high': 0.99,
+        }
+
+    def test_lognormal_to_dict_natural_log_params(self):
+        prior = make_tf_prior(200.0, 0.08)
+        d = prior.to_dict()
+        assert d['dist'] == 'lognormal'
+        # mu, sigma are in natural-log space
+        assert d['loc'] == pytest.approx(np.log(200.0))
+        assert d['scale'] == pytest.approx(0.08 * np.log(10.0))
+        assert d['low'] is None and d['high'] is None
+
+    def test_base_to_dict_raises(self):
+        """An unserializable prior must fail loudly, not silently drop."""
+
+        class _CustomPrior(Prior):
+            def log_prob(self, value):
+                return jnp.array(0.0)
+
+            def sample(self, rng_key, shape=()):
+                return jnp.zeros(shape)
+
+            @property
+            def bounds(self):
+                return (None, None)
+
+        with pytest.raises(NotImplementedError, match='to_dict'):
+            _CustomPrior().to_dict()
+
+    def test_describe_covers_sampled_and_fixed(self):
+        priors = PriorDict(
+            {
+                'g1': Gaussian(0.0, 0.2),
+                'cosi': Uniform(0.05, 0.99),
+                'z': 1.3,  # fixed
+            }
+        )
+        desc = priors.describe()
+        assert set(desc) == {'g1', 'cosi', 'z'}
+        assert desc['g1']['dist'] == 'gaussian' and desc['g1']['scale'] == 0.2
+        assert desc['cosi']['dist'] == 'uniform'
+        # fixed param recorded with dist='fixed' and its value in loc
+        assert desc['z'] == {
+            'dist': 'fixed',
+            'loc': 1.3,
+            'scale': None,
+            'low': None,
+            'high': None,
+        }

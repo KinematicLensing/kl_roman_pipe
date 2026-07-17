@@ -200,8 +200,10 @@ def _run_fit_attempt(
         wallclock_s=t_end - t_start,
         precond_s=t_precond - t_start,
         truth=truth,
+        priors=inputs.priors,
     )
     summary['sampler_seed'] = sampler_seed
+    summary['has_chains'] = bool(row['save_chains'])
 
     if bool(row['save_chains']):
         _save_chains(run_dir, fit_id, result, sampled_names)
@@ -220,6 +222,7 @@ def _summary_row(
     wallclock_s: float,
     precond_s: float,
     truth: Optional[Dict[str, float]] = None,
+    priors=None,
 ) -> dict:
     diag = result.diagnostics
     r_hat = diag.get('r_hat', {})
@@ -289,6 +292,18 @@ def _summary_row(
             out[f'post.{nm}.mean'] = float(np.mean(arr))
             out[f'post.{nm}.std'] = float(np.std(arr, ddof=1))
             out[f'post.{nm}.median'] = float(np.median(arr))
+
+    # priors actually used for this fit (ground truth: the object passed to the
+    # sampler). Flat prior.<param>.{dist,loc,scale,low,high} columns, every
+    # param -- sampled and fixed (dist='fixed', loc=value) -- so the collated
+    # table records exactly how each parameter was set.
+    if priors is not None:
+        for name, rec in priors.describe().items():
+            out[f'prior.{name}.dist'] = rec['dist']
+            out[f'prior.{name}.loc'] = rec['loc']
+            out[f'prior.{name}.scale'] = rec['scale']
+            out[f'prior.{name}.low'] = rec['low']
+            out[f'prior.{name}.high'] = rec['high']
     return out
 
 

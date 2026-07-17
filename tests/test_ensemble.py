@@ -382,6 +382,62 @@ class TestCollate:
         with pytest.raises(FileNotFoundError, match='no per-fit result'):
             collate_results(run_dir)
 
+    def test_write_collated_table_carries_priors(self, run_dir):
+        from kl_pipe.ensemble.collate import collate_results, write_collated_table
+
+        _, _, manifest = load_run(run_dir)
+        for _, row in manifest.iterrows():
+            pd.DataFrame(
+                [
+                    {
+                        'fit_id': row['fit_id'],
+                        'status': 'succeeded',
+                        'post.g1.mean': 0.05,
+                        'has_chains': True,
+                        # flat prior columns as the worker emits them
+                        'prior.g1.dist': 'gaussian',
+                        'prior.g1.loc': 0.0,
+                        'prior.g1.scale': 0.2,
+                        'prior.g1.low': None,
+                        'prior.g1.high': None,
+                    }
+                ]
+            ).to_parquet(run_dir / 'results' / f"{row['fit_id']}.parquet", index=False)
+        collate_results(run_dir)
+        out_path = write_collated_table(run_dir)
+
+        # self-identifying filename carries the run name
+        assert out_path.name == f'{run_dir.name}_collated.parquet'
+        assert out_path.exists()
+        table = pd.read_parquet(out_path)
+        assert len(table) == len(manifest)
+        # truth (join) + fitted + priors + chains flag all present in one table
+        assert 'truth.g1' in table.columns
+        assert 'post.g1.mean' in table.columns
+        assert 'has_chains' in table.columns
+        assert table['prior.g1.dist'].iloc[0] == 'gaussian'
+        assert table['prior.g1.scale'].iloc[0] == 0.2
+
+    def test_scene_priors_describe_matches_config(self, dev_spec, canonical_q):
+        # the production shear prior serializes to the configured width
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        desc = scene_priors(truth, canonical_q, dev_spec).describe()
+        assert desc['g1']['dist'] == 'gaussian'
+        assert desc['g1']['loc'] == 0.0
+        assert desc['g1']['scale'] == dev_spec.shear_fit_prior_sigma
+        # a truth-pinned param is recorded as fixed
+        assert desc['z']['dist'] == 'fixed'
+
 
 # ==============================================================================
 # Config-sweep axis (emission-line SNR)

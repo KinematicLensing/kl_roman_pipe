@@ -111,6 +111,18 @@ class Prior(ABC):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
 
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        """
+        Serialize the prior to a flat, provenance-friendly record.
+
+        Returns a dict with the fixed schema ``{dist, loc, scale, low, high}``
+        (unused fields are None), lossless for every built-in prior. Subclasses
+        must override; the base raises so an unserializable prior fails loudly.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement to_dict()"
+        )
+
 
 @dataclass(frozen=True)
 class Uniform(Prior):
@@ -155,6 +167,15 @@ class Uniform(Prior):
     def __repr__(self) -> str:
         return f"Uniform({self.low}, {self.high})"
 
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'uniform',
+            'loc': None,
+            'scale': None,
+            'low': float(self.low),
+            'high': float(self.high),
+        }
+
 
 @dataclass(frozen=True)
 class Gaussian(Prior):
@@ -197,6 +218,15 @@ class Gaussian(Prior):
 
     def __repr__(self) -> str:
         return f"Gaussian({self.mu}, {self.sigma})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'gaussian',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': None,
+            'high': None,
+        }
 
 
 # Alias for clarity
@@ -250,6 +280,15 @@ class LogUniform(Prior):
 
     def __repr__(self) -> str:
         return f"LogUniform({self.low}, {self.high})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'loguniform',
+            'loc': None,
+            'scale': None,
+            'low': float(self.low),
+            'high': float(self.high),
+        }
 
 
 @dataclass(frozen=True)
@@ -332,6 +371,15 @@ class TruncatedNormal(Prior):
     def __repr__(self) -> str:
         return f"TruncatedNormal({self.mu}, {self.sigma}, {self.low}, {self.high})"
 
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'truncated_normal',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': float(self.low),
+            'high': float(self.high),
+        }
+
 
 @dataclass(frozen=True)
 class LogNormal(Prior):
@@ -393,6 +441,16 @@ class LogNormal(Prior):
 
     def __repr__(self) -> str:
         return f"LogNormal({self.mu}, {self.sigma})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        # mu, sigma are in natural-log space (see make_tf_prior for the TF case)
+        return {
+            'dist': 'lognormal',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': None,
+            'high': None,
+        }
 
 
 def make_tf_prior(v_center_kms: float, sigma_tf_dex: float) -> LogNormal:
@@ -540,6 +598,28 @@ class PriorDict:
             v = self._fixed[name]
             return (v, v)
         return (None, None)
+
+    def describe(self) -> Dict[str, Dict[str, Optional[float]]]:
+        """
+        Serialize every parameter's prior to a flat provenance record.
+
+        Returns a dict mapping each parameter name (sampled and fixed) to the
+        flat ``{dist, loc, scale, low, high}`` schema. Fixed parameters use
+        ``dist='fixed'`` with ``loc`` holding the pinned value. Lossless for
+        all built-in priors; records exactly how each param was set per fit.
+        """
+        out: Dict[str, Dict[str, Optional[float]]] = {}
+        for name in self._sampled_names:
+            out[name] = self._priors[name].to_dict()
+        for name in self._fixed_names:
+            out[name] = {
+                'dist': 'fixed',
+                'loc': float(self._fixed[name]),
+                'scale': None,
+                'low': None,
+                'high': None,
+            }
+        return out
 
     def log_prior(self, theta: jnp.ndarray) -> jnp.ndarray:
         """

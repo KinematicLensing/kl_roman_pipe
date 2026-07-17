@@ -7,7 +7,7 @@ expand   spec.yaml -> run directory (manifest + provenance + ledger dirs)
 run      execute the campaign locally (serial or N worker subprocesses)
 worker   single worker loop (the SLURM/subprocess entrypoint)
 status   derived-status tally (succeeded/failed/in_progress/stale/never_run)
-collate  merge per-fit results -> results.parquet (+ tally)
+collate  merge per-fit results -> results.parquet + <run>_collated.parquet (+ tally)
 slurm    emit submit.slurm into the run directory
 reclaim  release stale claims (and optionally clear failed markers) so a
          re-run picks those fits up again
@@ -126,10 +126,16 @@ def main(argv=None) -> int:
         return 0 if not (groups['failed'] or groups['stale']) else 1
 
     if args.command == 'collate':
-        from kl_pipe.ensemble.collate import collate_results, print_tally
+        from kl_pipe.ensemble.collate import (
+            collate_results,
+            print_tally,
+            write_collated_table,
+        )
 
         results = collate_results(args.run_dir)
         print(f'collated {len(results)} rows -> results.parquet')
+        collated_path = write_collated_table(args.run_dir)
+        print(f'wrote analysis table -> {collated_path.name}')
         print_tally(args.run_dir)
         return 0
 
