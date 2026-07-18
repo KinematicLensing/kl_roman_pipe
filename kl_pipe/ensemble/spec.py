@@ -91,12 +91,25 @@ class PSFSpec:
             )
 
 
+def _require_yaml_int(block: dict, key: str, default: int, context: str) -> int:
+    """Fetch an integer key, rejecting floats/strings instead of coercing."""
+    val = block.get(key, default)
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise ValueError(
+            f"{context}: '{key}' must be an integer, got {val!r} "
+            f"({type(val).__name__})"
+        )
+    return val
+
+
 def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
     _reject_unknown(block, ('type', 'sca', 'pupil_bin'), context)
     return PSFSpec(
         psf_type='roman_wfi',
-        sca=int(block.get('sca', _ROMAN_WFI_DEFAULT_SCA)),
-        pupil_bin=int(block.get('pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN)),
+        sca=_require_yaml_int(block, 'sca', _ROMAN_WFI_DEFAULT_SCA, context),
+        pupil_bin=_require_yaml_int(
+            block, 'pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN, context
+        ),
     )
 
 

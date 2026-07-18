@@ -39,7 +39,10 @@ DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
 # canonical geometry (matches the observing-config registry)
 PIXEL_SCALE = 0.11  # arcsec/pix
 
-# ensemble z range endpoints (specs draw z uniform on [1.0, 1.9])
+# wavelength-scaling test endpoints: Z_HI matches the current spec z-draw
+# upper bound (uniform on [1.0, 1.9], the pinning reference); Z_LO = 0.55 is
+# the planned ensemble lower bound (Halpha enters G150 at z~0.52), used here
+# as a low-z reference to exercise the full kernel-size spread
 Z_LO = 0.55
 Z_HI = 1.9
 
@@ -143,6 +146,14 @@ class TestRomanPSFConfig:
         d['psf']['grism'] = {'type': 'roman_wfi', 'pupil_bin': 0}
         with pytest.raises(ValueError, match='pupil_bin'):
             ObservingConfig.from_yaml(_write_config(tmp_path, d))
+
+    def test_non_integer_sca_pupil_bin_rejected(self, tmp_path):
+        # YAML floats/strings must raise, not silently truncate via int()
+        for key, val in (('sca', 10.9), ('sca', '10'), ('pupil_bin', 4.5)):
+            d = _config_dict()
+            d['psf']['grism'] = {'type': 'roman_wfi', key: val}
+            with pytest.raises(ValueError, match='must be an integer'):
+                ObservingConfig.from_yaml(_write_config(tmp_path, d))
 
     def test_psfspec_cross_field_validation(self):
         with pytest.raises(ValueError, match='roman_wfi-only'):
@@ -311,6 +322,49 @@ class TestRomanObs:
             )
             shapes[z] = (obs.psf_data.padded_shape, obs.psf_data.kernel_fft.shape)
         assert shapes[Z_LO] == shapes[Z_HI]
+
+    def test_with_render_config_preserves_pinned_kernel(self):
+        # regression: InferenceTask.from_obs rebuilds explicit-rc grism obs via
+        # with_render_config to fill line_window_halfwidth on the analytic
+        # path; the rebuild must keep the pinned kernel size, else shapes
+        # vary with z again
+        import dataclasses
+
+        from kl_pipe.dispersion import build_grism_pars_for_line
+
+        pin = _pinned_kernel_size(PIXEL_SCALE)
+        z = Z_LO  # far from the pinning reference so auto size != pin
+        grism_pars = build_grism_pars_for_line(
+            LINE_LAMBDAS['Halpha'],
+            redshift=z,
+            image_pars=ImagePars(
+                shape=(32, 32), pixel_scale=PIXEL_SCALE, indexing='ij'
+            ),
+            dispersion=1.1,
+        )
+        rc = RenderConfig(oversample=1)
+        obs = build_grism_obs(
+            grism_pars,
+            z=z,
+            psf=_build_grism_psf(ROMAN_SPEC, z),
+            render_config=rc,
+            psf_kernel_size=pin,
+        )
+        rebuilt = obs.with_render_config(
+            dataclasses.replace(rc, line_window_halfwidth=3)
+        )
+        assert rebuilt.psf_kernel_size == pin
+        assert rebuilt.psf_data.padded_shape == obs.psf_data.padded_shape
+        assert rebuilt.psf_data.kernel_fft.shape == obs.psf_data.kernel_fft.shape
+
+    def test_roman_psf_cache_bounded(self):
+        from kl_pipe.ensemble import mocks as mocks_mod
+
+        mocks_mod._ROMAN_PSF_CACHE.clear()
+        n = mocks_mod._ROMAN_PSF_CACHE_MAX + 5
+        for i in range(n):
+            _build_grism_psf(ROMAN_SPEC, 1.0 + 0.01 * i)
+        assert len(mocks_mod._ROMAN_PSF_CACHE) <= mocks_mod._ROMAN_PSF_CACHE_MAX
 
 
 @pytest.mark.slow

@@ -78,8 +78,12 @@ def _build_gaussian_psf(fwhm_arcsec: float):
 
 # process-level cache: getPSF is expensive (~0.5 s) and the worker builds
 # several obs per fit (bands + rolls) plus the pinned-size reference PSF, so
-# repeated wavelengths must not re-run the optics computation
+# repeated wavelengths must not re-run the optics computation. Bounded FIFO:
+# a long-lived worker claims many fits at distinct redshifts, so an unbounded
+# cache would accumulate one GSObject per fit; within-fit reuse only needs a
+# handful of entries.
 _ROMAN_PSF_CACHE: Dict[Tuple[int, int, float, Optional[str]], object] = {}
+_ROMAN_PSF_CACHE_MAX = 16
 
 
 def _get_roman_wfi_psf(
@@ -109,6 +113,8 @@ def _get_roman_wfi_psf(
 
     key = (int(sca), int(pupil_bin), round(float(wavelength_nm), 1), bandpass)
     if key not in _ROMAN_PSF_CACHE:
+        while len(_ROMAN_PSF_CACHE) >= _ROMAN_PSF_CACHE_MAX:
+            _ROMAN_PSF_CACHE.pop(next(iter(_ROMAN_PSF_CACHE)))
         _ROMAN_PSF_CACHE[key] = roman.getPSF(
             SCA=key[0], bandpass=bandpass, wavelength=key[2], pupil_bin=key[1]
         )

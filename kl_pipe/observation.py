@@ -105,6 +105,9 @@ class ImageObs:
     kspace_psf_fft: Optional[jnp.ndarray] = None
     pixel_response: Optional[PixelResponse] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # psf_kernel_size: pinned kernel stamp size (fine pixels); preserved by
+    # with_render_config so rebuilds keep the pinned shape. None = auto size.
+    psf_kernel_size: Optional[int] = None
     # broadband_key: key into source.broadband_models that this obs renders
     # (used by SourceModel-based inference; None for rendering-only obs).
     broadband_key: Optional[str] = None
@@ -168,6 +171,7 @@ class ImageObs:
                 self.psf,
                 image_pars=self.image_pars,
                 oversample=oversample,
+                kernel_size=self.psf_kernel_size,
             )
 
             if int_model is not None and hasattr(int_model, '_kspace_pad_factor'):
@@ -284,6 +288,9 @@ class GrismObs:
     mask: Optional[jnp.ndarray] = None
     pixel_response_fft: Optional[jnp.ndarray] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # psf_kernel_size: pinned kernel stamp size (fine pixels); preserved by
+    # with_render_config so rebuilds keep the pinned shape. None = auto size.
+    psf_kernel_size: Optional[int] = None
     # _rc_was_default: internal flag — True when build_grism_obs supplied the
     # default render_config (caller passed render_config=None), False when the
     # caller passed an explicit one. Read by InferenceTask.from_obs to decide
@@ -387,6 +394,7 @@ class GrismObs:
                 self.psf,
                 image_pars=self.cube_pars.image_pars,
                 oversample=oversample,
+                kernel_size=self.psf_kernel_size,
             )
 
         if oversample > 1:
@@ -428,6 +436,7 @@ def _image_obs_flatten(obs):
         obs.psf,
         obs.broadband_key,
         obs._rc_was_default,
+        obs.psf_kernel_size,
     )
     return children, aux
 
@@ -448,6 +457,7 @@ def _image_obs_unflatten(aux, children):
         pixel_response=children[9],
         psf=aux[2],
         broadband_key=aux[3],
+        psf_kernel_size=aux[5],
     )
     # _rc_was_default is field(init=False); restore via frozen-dataclass bypass.
     object.__setattr__(obs, '_rc_was_default', aux[4])
@@ -527,6 +537,7 @@ def _grism_obs_flatten(obs):
         obs.fine_image_pars,
         obs.psf,
         obs._rc_was_default,
+        obs.psf_kernel_size,
     )
     return children, aux
 
@@ -543,6 +554,7 @@ def _grism_obs_unflatten(aux, children):
         mask=children[3],
         pixel_response_fft=children[4],
         psf=aux[4],
+        psf_kernel_size=aux[6],
     )
     object.__setattr__(obs, '_rc_was_default', aux[5])
     return obs
@@ -627,8 +639,11 @@ def _validate_psf_kernel_size_args(
     fine-scale pixels (pixel_scale / oversample), so it must be tied to an
     explicitly chosen render_config: builder-default configs are rebuilt by
     ``InferenceTask`` at a priors-derived oversample via
-    ``with_render_config``, which does not carry the pinned size and would
-    silently drop it.
+    ``with_render_config``, which preserves the pinned size but at a
+    DIFFERENT fine pixel scale -- the pinned pixel count would then denote a
+    different angular size than the caller computed. Explicit-rc rebuilds
+    (e.g. the analytic-path line_window_halfwidth fill) keep the oversample,
+    so preserving the pinned size there is exact.
     """
     if psf_kernel_size is None:
         return
@@ -763,6 +778,7 @@ def build_image_obs(
         kspace_psf_fft=kspace_psf_fft,
         pixel_response=pixel_response,
         psf=psf,
+        psf_kernel_size=psf_kernel_size,
         broadband_key=broadband_key,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor
@@ -1039,6 +1055,7 @@ def build_grism_obs(
         mask=mask,
         pixel_response_fft=pixel_response_fft,
         psf=psf,
+        psf_kernel_size=psf_kernel_size,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor
     # kwargs; set it here via the standard frozen-dataclass escape hatch.
