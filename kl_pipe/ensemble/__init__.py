@@ -22,6 +22,6 @@ python -m kl_pipe.ensemble status --run-dir runs/<run_name>
 python -m kl_pipe.ensemble collate --run-dir runs/<run_name>
 """
 
-from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
+from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig, PSFSpec
 
-__all__ = ['EnsembleSpec', 'ObservingConfig']
+__all__ = ['EnsembleSpec', 'ObservingConfig', 'PSFSpec']

@@ -34,15 +34,20 @@ if TYPE_CHECKING:
     from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
     from kl_pipe.source import SourceModel
 
-# per-band scene defaults (flagship values)
+# per-band scene defaults (flagship values; H158/F184 are real Roman WFI
+# bandpasses mirroring the flagship F158/F087 values, F184 slightly fainter)
 _BAND_TRUTH = {
     'F087': {'flux': 100.0, 'rscale': 0.3},
     'F158': {'flux': 120.0, 'rscale': 0.35},
+    'H158': {'flux': 120.0, 'rscale': 0.35},
+    'F184': {'flux': 100.0, 'rscale': 0.35},
 }
 # per-band flux prior (mu, sigma, low, high)
 _BAND_FLUX_PRIOR = {
     'F087': (100.0, 20.0, 30.0, 250.0),
     'F158': (120.0, 25.0, 30.0, 300.0),
+    'H158': (120.0, 25.0, 30.0, 300.0),
+    'F184': (100.0, 20.0, 30.0, 250.0),
 }
 
 # shared scene defaults (flagship values)

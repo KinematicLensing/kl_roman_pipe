@@ -82,6 +82,7 @@ def gsobj_to_kernel(
     image_shape: Tuple[int, int] = None,
     pixel_scale: float = None,
     gsparams: 'galsim.GSParams' = None,
+    kernel_size: int = None,
 ) -> Tuple[np.ndarray, tuple]:
     """
     Convert galsim.GSObject to a normalized, FFT-ready numpy kernel.
@@ -104,6 +105,12 @@ def gsobj_to_kernel(
         Override GSParams for kernel rendering. Controls truncation radius
         (folding_threshold) and accuracy. Default None uses the GSObject's
         own GSParams.
+    kernel_size : int, optional
+        Explicit kernel stamp size (pixels at ``pixel_scale``), overriding
+        GalSim's automatic good image size. Must be an odd int and at least
+        the automatic size -- a smaller value would truncate the PSF and
+        raises. Use to pin the kernel array shape across a set of PSFs
+        whose automatic sizes differ (e.g. wavelength-dependent PSFs).
 
     Returns
     -------
@@ -135,6 +142,21 @@ def gsobj_to_kernel(
     # ensure odd so center pixel is well-defined
     if kern_size % 2 == 0:
         kern_size += 1
+
+    # explicit size override: never truncate below the automatic good size
+    if kernel_size is not None:
+        if not isinstance(kernel_size, (int, np.integer)) or kernel_size % 2 == 0:
+            raise ValueError(
+                f"kernel_size must be an odd positive int, got {kernel_size!r}"
+            )
+        if kernel_size < kern_size:
+            raise ValueError(
+                f"explicit kernel_size ({kernel_size}) is smaller than "
+                f"GalSim's good image size ({kern_size}) at "
+                f"pixel_scale={pixel_scale}; this would truncate the PSF. "
+                f"Increase kernel_size."
+            )
+        kern_size = int(kernel_size)
 
     # render PSF kernel (pixel-integrated via default method)
     kern_img = gsobj.drawImage(nx=kern_size, ny=kern_size, scale=pixel_scale)
@@ -224,6 +246,7 @@ def precompute_psf_fft(
     pixel_scale: float = None,
     oversample: int = 1,
     gsparams: 'galsim.GSParams' = None,
+    kernel_size: int = None,
 ) -> PSFData:
     """
     Full PSF setup: GSObject -> JAX-ready PSFData.
@@ -252,6 +275,12 @@ def precompute_psf_fft(
     gsparams : galsim.GSParams, optional
         Override GSParams for kernel rendering. Controls truncation radius
         (folding_threshold) and accuracy. Passed through to gsobj_to_kernel.
+    kernel_size : int, optional
+        Explicit kernel stamp size in FINE-scale pixels (i.e. at
+        ``pixel_scale / oversample`` when oversampled). Passed through to
+        ``gsobj_to_kernel``; must be odd and at least the automatic good
+        image size (raises otherwise). Pins the kernel (and padded FFT)
+        shape across PSFs whose automatic sizes differ.
 
     Returns
     -------
@@ -293,6 +322,7 @@ def precompute_psf_fft(
         image_shape=fine_shape,
         pixel_scale=fine_pixel_scale,
         gsparams=gsparams,
+        kernel_size=kernel_size,
     )
     kernel_fft = jnp.fft.fft2(jnp.array(kernel_shifted))
 

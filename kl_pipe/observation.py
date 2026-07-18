@@ -618,6 +618,31 @@ def _fine_pixel_response_fft(fine_image_pars, coarse_pixel_scale):
     return BoxPixel(coarse_pixel_scale).ft(KX, KY)
 
 
+def _validate_psf_kernel_size_args(
+    psf_kernel_size: Optional[int], psf, rc_was_default: bool
+) -> None:
+    """Guard psf_kernel_size usage in the obs builders.
+
+    A pinned kernel size is meaningless without a PSF, and it is defined in
+    fine-scale pixels (pixel_scale / oversample), so it must be tied to an
+    explicitly chosen render_config: builder-default configs are rebuilt by
+    ``InferenceTask`` at a priors-derived oversample via
+    ``with_render_config``, which does not carry the pinned size and would
+    silently drop it.
+    """
+    if psf_kernel_size is None:
+        return
+    if psf is None:
+        raise ValueError("psf_kernel_size given without a psf")
+    if rc_was_default:
+        raise ValueError(
+            "psf_kernel_size requires an explicit render_config; the "
+            "builder-default render_config is rebuilt by InferenceTask via "
+            "with_render_config, which would silently drop the pinned "
+            "kernel size"
+        )
+
+
 def build_image_obs(
     image_pars: ImagePars,
     *,
@@ -630,6 +655,7 @@ def build_image_obs(
     pixel_response=_PIXEL_RESPONSE_UNSET,
     render_config=None,
     broadband_key: Optional[str] = None,
+    psf_kernel_size: Optional[int] = None,
 ) -> ImageObs:
     """Build imaging observation. Replaces Model.configure_psf().
 
@@ -663,11 +689,19 @@ def build_image_obs(
         priors-sized rc and rebuild the obs internally. For bespoke
         (non-inference) rendering with tight priors, pass an explicit
         ``build_image_render_config(...)`` result.
+    psf_kernel_size : int, optional
+        Explicit PSF kernel stamp size in fine-scale pixels
+        (``pixel_scale / oversample``), passed to ``precompute_psf_fft``.
+        Pins the kernel array shape (odd, >= automatic good size; raises
+        otherwise). Requires an explicit ``render_config``: the
+        builder-default config is rebuilt by ``InferenceTask`` via
+        ``with_render_config``, which would silently drop the pinned size.
     """
     rc_was_default = render_config is None
     if rc_was_default:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample
+    _validate_psf_kernel_size_args(psf_kernel_size, psf, rc_was_default)
 
     X, Y = build_map_grid_from_image_pars(image_pars)
 
@@ -688,6 +722,7 @@ def build_image_obs(
             image_pars=image_pars,
             oversample=oversample,
             gsparams=gsparams,
+            kernel_size=psf_kernel_size,
         )
 
         # fused k-space PSF kernel for k-space intensity models
@@ -897,6 +932,7 @@ def build_grism_obs(
     velocity_window_kms: float = 3000.0,
     n_lambda: Optional[int] = None,
     slice_width_kms: Optional[float] = None,
+    psf_kernel_size: Optional[int] = None,
 ) -> GrismObs:
     """Build grism observation.
 
@@ -943,11 +979,21 @@ def build_grism_obs(
         largest line-of-sight velocity span the priors allow -- about 40
         km/s for vcirc priors reaching ~300 km/s, 60-80 km/s for
         exploration. Mutually exclusive with ``n_lambda``.
+    psf_kernel_size : int, optional
+        Explicit PSF kernel stamp size in fine-scale pixels
+        (``pixel_scale / oversample``), passed to ``precompute_psf_fft``.
+        Pins the kernel array shape (odd, >= automatic good size; raises
+        otherwise) -- e.g. to keep wavelength-dependent PSF kernels at one
+        shape across an ensemble of redshifts. Requires an explicit
+        ``render_config``: the builder-default config is rebuilt by
+        ``InferenceTask`` via ``with_render_config``, which would silently
+        drop the pinned size.
     """
     rc_was_default = render_config is None
     if rc_was_default:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample  # canonical
+    _validate_psf_kernel_size_args(psf_kernel_size, psf, rc_was_default)
 
     cube_pars = grism_pars.to_cube_pars(
         z,
@@ -968,6 +1014,7 @@ def build_grism_obs(
             image_pars=cube_pars.image_pars,
             oversample=oversample,
             gsparams=gsparams,
+            kernel_size=psf_kernel_size,
         )
 
     # fine grid: create when oversample > 1, regardless of PSF. The BoxPixel

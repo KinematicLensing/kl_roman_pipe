@@ -134,6 +134,20 @@ class TestObservingConfig:
         with pytest.raises(NotImplementedError, match='gaussian'):
             ObservingConfig.from_yaml(path)
 
+    def test_gaussian_psf_properties(self, canonical_q):
+        # backward-compat accessors for gaussian configs
+        assert canonical_q.band_psf_fwhm == {'F087': 0.18}
+        assert canonical_q.grism_psf_fwhm == 0.18
+        assert canonical_q.band_psf['F087'].psf_type == 'gaussian'
+        assert canonical_q.grism_psf.psf_type == 'gaussian'
+
+    def test_canonical_p_roman_loads(self):
+        config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
+        assert config.bands == ('H158', 'F184')
+        assert config.grism_rolls_deg == (0.0, 45.0, 90.0, 135.0)
+        assert config.grism_psf.psf_type == 'roman_wfi'
+        assert all(psf.psf_type == 'roman_wfi' for psf in config.band_psf.values())
+
 
 # ==============================================================================
 # Scene

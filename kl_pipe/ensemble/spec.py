@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import yaml
 
@@ -44,6 +44,107 @@ def _reject_unknown(d: dict, allowed: Tuple[str, ...], context: str) -> None:
 # Observing-config registry
 # =============================================================================
 
+_PSF_TYPES = ('gaussian', 'roman_wfi')
+_ROMAN_WFI_DEFAULT_SCA = 10
+_ROMAN_WFI_DEFAULT_PUPIL_BIN = 4
+
+
+@dataclass(frozen=True)
+class PSFSpec:
+    """One channel's PSF specification (a broadband band or the grism).
+
+    ``gaussian`` carries ``fwhm_arcsec``; ``roman_wfi`` (realistic WFI PSF
+    via ``galsim.roman.getPSF``, monochromatic) carries ``sca`` and
+    ``pupil_bin``. Cross-type fields must be None (raises otherwise).
+    """
+
+    psf_type: str
+    fwhm_arcsec: Optional[float] = None  # gaussian only, arcsec
+    sca: Optional[int] = None  # roman_wfi only, 1-18
+    pupil_bin: Optional[int] = None  # roman_wfi only
+
+    def __post_init__(self):
+        if self.psf_type == 'gaussian':
+            if self.fwhm_arcsec is None or self.fwhm_arcsec <= 0:
+                raise ValueError(
+                    f"gaussian psf needs a positive fwhm_arcsec, got "
+                    f"{self.fwhm_arcsec!r}"
+                )
+            if self.sca is not None or self.pupil_bin is not None:
+                raise ValueError("sca/pupil_bin are roman_wfi-only psf fields")
+        elif self.psf_type == 'roman_wfi':
+            if self.fwhm_arcsec is not None:
+                raise ValueError("fwhm_arcsec is a gaussian-only psf field")
+            if not isinstance(self.sca, int) or not (1 <= self.sca <= 18):
+                raise ValueError(
+                    f"roman_wfi sca must be an int in [1, 18], got {self.sca!r}"
+                )
+            if not isinstance(self.pupil_bin, int) or self.pupil_bin < 1:
+                raise ValueError(
+                    f"roman_wfi pupil_bin must be a positive int, got "
+                    f"{self.pupil_bin!r}"
+                )
+        else:
+            raise NotImplementedError(
+                f"psf type {self.psf_type!r} not supported; supported types: "
+                f"{list(_PSF_TYPES)}"
+            )
+
+
+def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
+    _reject_unknown(block, ('type', 'sca', 'pupil_bin'), context)
+    return PSFSpec(
+        psf_type='roman_wfi',
+        sca=int(block.get('sca', _ROMAN_WFI_DEFAULT_SCA)),
+        pupil_bin=int(block.get('pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN)),
+    )
+
+
+def _parse_broadband_psf(
+    block: dict, bands: Tuple[str, ...], context: str
+) -> Dict[str, PSFSpec]:
+    psf_type = block.get('type')
+    if psf_type == 'gaussian':
+        _reject_unknown(block, ('type', 'fwhm_arcsec'), context)
+        _require_keys(block, ('type', 'fwhm_arcsec'), context)
+        fwhm = block['fwhm_arcsec']
+        if not isinstance(fwhm, dict):
+            raise ValueError(
+                f"{context}: broadband gaussian fwhm_arcsec must be a "
+                f"band -> arcsec mapping, got {fwhm!r}"
+            )
+        return {
+            band: PSFSpec(psf_type='gaussian', fwhm_arcsec=float(value))
+            for band, value in fwhm.items()
+        }
+    if psf_type == 'roman_wfi':
+        spec = _parse_roman_wfi_psf(block, context)
+        return {band: spec for band in bands}
+    raise NotImplementedError(
+        f"{context}: psf type {psf_type!r} not supported; supported types: "
+        f"{list(_PSF_TYPES)}"
+    )
+
+
+def _parse_grism_psf(block: dict, context: str) -> PSFSpec:
+    psf_type = block.get('type')
+    if psf_type == 'gaussian':
+        _reject_unknown(block, ('type', 'fwhm_arcsec'), context)
+        _require_keys(block, ('type', 'fwhm_arcsec'), context)
+        fwhm = block['fwhm_arcsec']
+        if isinstance(fwhm, dict):
+            raise ValueError(
+                f"{context}: grism gaussian fwhm_arcsec must be a scalar, "
+                f"got {fwhm!r}"
+            )
+        return PSFSpec(psf_type='gaussian', fwhm_arcsec=float(fwhm))
+    if psf_type == 'roman_wfi':
+        return _parse_roman_wfi_psf(block, context)
+    raise NotImplementedError(
+        f"{context}: psf type {psf_type!r} not supported; supported types: "
+        f"{list(_PSF_TYPES)}"
+    )
+
 
 @dataclass(frozen=True)
 class ObservingConfig:
@@ -51,10 +152,10 @@ class ObservingConfig:
 
     id: str
     bands: Tuple[str, ...]
-    band_psf_fwhm: Dict[str, float]  # arcsec, per band
+    band_psf: Dict[str, PSFSpec]  # per band
     grism_rolls_deg: Tuple[float, ...]
     grism_dispersion_nm_per_pix: float
-    grism_psf_fwhm: float  # arcsec (gaussian; complex WFI PSF is a future gap)
+    grism_psf: PSFSpec
     lines: Tuple[str, ...]
     pixel_scale_arcsec: float
     stamp_broadband_pix: int
@@ -66,8 +167,12 @@ class ObservingConfig:
         if not self.bands:
             raise ValueError("observing config needs at least one band")
         for band in self.bands:
-            if band not in self.band_psf_fwhm:
-                raise ValueError(f"band '{band}' has no psf fwhm in broadband psf spec")
+            if band not in self.band_psf:
+                raise ValueError(f"band '{band}' has no entry in broadband psf spec")
+            if not isinstance(self.band_psf[band], PSFSpec):
+                raise ValueError(f"band '{band}' psf entry must be a PSFSpec")
+        if not isinstance(self.grism_psf, PSFSpec):
+            raise ValueError("grism_psf must be a PSFSpec")
         if not self.grism_rolls_deg:
             raise ValueError("observing config needs at least one grism roll")
         if tuple(self.lines) != ('Halpha',):
@@ -76,7 +181,6 @@ class ObservingConfig:
             )
         for name, value in [
             ('grism_dispersion_nm_per_pix', self.grism_dispersion_nm_per_pix),
-            ('grism_psf_fwhm', self.grism_psf_fwhm),
             ('pixel_scale_arcsec', self.pixel_scale_arcsec),
         ]:
             if value <= 0:
@@ -88,6 +192,27 @@ class ObservingConfig:
         ]:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} ({value}) must be a positive int")
+
+    @property
+    def band_psf_fwhm(self) -> Dict[str, float]:
+        """Per-band gaussian FWHM (arcsec). Raises for non-gaussian PSFs."""
+        for band, psf in self.band_psf.items():
+            if psf.psf_type != 'gaussian':
+                raise ValueError(
+                    f"band_psf_fwhm is defined for gaussian PSFs only; band "
+                    f"'{band}' has psf type '{psf.psf_type}' (use band_psf)"
+                )
+        return {band: psf.fwhm_arcsec for band, psf in self.band_psf.items()}
+
+    @property
+    def grism_psf_fwhm(self) -> float:
+        """Grism gaussian FWHM (arcsec). Raises for non-gaussian PSFs."""
+        if self.grism_psf.psf_type != 'gaussian':
+            raise ValueError(
+                f"grism_psf_fwhm is defined for gaussian PSFs only; grism "
+                f"psf type is '{self.grism_psf.psf_type}' (use grism_psf)"
+            )
+        return self.grism_psf.fwhm_arcsec
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'ObservingConfig':
@@ -116,13 +241,10 @@ class ObservingConfig:
         psf = raw['psf']
         _reject_unknown(psf, ('broadband', 'grism'), f"{path}:psf")
         _require_keys(psf, ('broadband', 'grism'), f"{path}:psf")
-        for key in ('broadband', 'grism'):
-            if psf[key].get('type') != 'gaussian':
-                raise NotImplementedError(
-                    f"{path}:psf.{key}: only type 'gaussian' is supported in v1 "
-                    f"(complex WFI grism PSF is a known gap), got "
-                    f"{psf[key].get('type')!r}"
-                )
+        band_psf = _parse_broadband_psf(
+            psf['broadband'], tuple(raw['bands']), f"{path}:psf.broadband"
+        )
+        grism_psf = _parse_grism_psf(psf['grism'], f"{path}:psf.grism")
 
         stamp = raw['stamp']
         _reject_unknown(stamp, ('broadband_pix', 'grism_pix'), f"{path}:stamp")
@@ -135,12 +257,10 @@ class ObservingConfig:
         return cls(
             id=str(raw['id']),
             bands=tuple(raw['bands']),
-            band_psf_fwhm={
-                k: float(v) for k, v in psf['broadband']['fwhm_arcsec'].items()
-            },
+            band_psf=band_psf,
             grism_rolls_deg=tuple(float(a) for a in grism['rolls_deg']),
             grism_dispersion_nm_per_pix=float(grism['dispersion_nm_per_pix']),
-            grism_psf_fwhm=float(psf['grism']['fwhm_arcsec']),
+            grism_psf=grism_psf,
             lines=tuple(raw['lines']),
             pixel_scale_arcsec=float(raw['pixel_scale_arcsec']),
             stamp_broadband_pix=int(stamp['broadband_pix']),
