@@ -11,6 +11,7 @@ Current contents
   map.
 - ``add_velocity_noise``: Gaussian-only on a (signed) velocity map. Poisson
   enters at the spectral-cube layer, never on the moment.
+- ``add_fiberspec_noise``: Poisson + Gaussian on a one-dimensional spectrum.
 
 SNR convention (current baseline: matched-filter)
 -------------------------------------------------
@@ -191,3 +192,70 @@ def add_velocity_noise(
     noisy_velocity = velocity + rng.normal(0, sigma, velocity.shape)
     variance = np.full_like(velocity, sigma**2, dtype=float)
     return noisy_velocity, variance
+
+def add_fiberspec_noise(
+    spectrum: np.ndarray,
+    target_snr: float,
+    include_poisson: bool = False,
+    gain: float = 1.0,
+    seed: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Add Poisson and Gaussian noise to a one-dimensional fiber spectrum.
+    
+    The input is interpreted as the expected signal in each wavelength bin.
+    With Poisson noise enabled, ``spectrum * gain`` must therefore be a
+    non-negative expected photon count. Negative, background-subtracted
+    values must not be converted with ``abs``; use Gaussian-only noise or
+    model the non-negative source plus background counts before subtraction.
+    
+    Parameters
+    ----------
+    spectrum : ndarray
+        Noiseless one-dimensional spectrum.
+    target_snr : float
+        Matched-filter amplitude SNR (see the module docstring).
+    include_poisson : bool, default False
+        Include photon shot noise. The Poisson contribution must not already
+        exceed the requested target variance.
+    gain : float, default 1.0
+        Conversion from spectrum units to expected photon counts.
+    seed : int, optional
+        RNG seed.
+        
+    Returns
+    -------
+    noisy_spectrum : ndarray
+    variance : ndarray
+        Per-wavelength-bin variance, with the same shape as ``spectrum``.
+    """
+    
+    spectrum = np.asarray(spectrum)
+
+    if spectrum.ndim != 1:
+        raise ValueError(
+            f"spectrum must be one-dimensional, got shape {spectrum.shape}"
+        )
+    if spectrum.size == 0:
+        raise ValueError("spectrum must not be empty")
+    if not np.all(np.isfinite(spectrum)):
+        raise ValueError("spectrum must contain only finite values")
+    if not np.isfinite(target_snr) or target_snr <= 0:
+        raise ValueError(f"target_snr must be positive and finite, got {target_snr}")
+    if not np.isfinite(gain) or gain <= 0:
+        raise ValueError(f"gain must be positive and finite, got {gain}")
+    if include_poisson and np.any(spectrum < 0):
+        raise ValueError(
+            "add_fiberspec_noise(include_poisson=True) requires a "
+            "non-negative expected photon signal; do not use abs() on a "
+            "signed or background-subtracted spectrum"
+        )
+    
+    # A spectrum is a one-dimensional intensity array, so the detector model
+    # and matched-filter SNR calibration are identical to the image case.
+    return add_intensity_noise(
+        spectrum,
+        target_snr=target_snr,
+        include_poisson=include_poisson,
+        gain=gain,
+        seed=seed,
+    )

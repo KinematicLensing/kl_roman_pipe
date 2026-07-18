@@ -27,6 +27,7 @@ from kl_pipe.intensity import (
 from kl_pipe.observation import build_image_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.utils import get_test_dir, build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 # maximum GB for a single GalSim FFT allocation in tests
 _MAX_FFT_GB = 8.0
@@ -83,14 +84,14 @@ def galsim_image_pars():
 @pytest.fixture
 def spergel_theta():
     """Standard theta for InclinedSpergelModel (10 params)."""
-    # (cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, nu, int_x0, int_y0)
+    # (cosi, theta_int, g1, g2, flux, rscale, h_over_r, nu, x0, y0)
     return jnp.array([0.7, 0.785, 0.02, -0.01, 1.0, 3.0, 0.1, 0.5, 0.0, 0.0])
 
 
 @pytest.fixture
 def devaucouleurs_theta():
     """Standard theta for InclinedDeVaucouleursModel (9 params)."""
-    # (cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0)
+    # (cosi, theta_int, g1, g2, flux, rscale, h_over_r, x0, y0)
     return jnp.array([0.7, 0.785, 0.02, -0.01, 1.0, 3.0, 0.1, 0.0, 0.0])
 
 
@@ -109,7 +110,7 @@ def test_spergel_parameter_names():
     """Test that nu is at index 7 and all expected params exist."""
     model = InclinedSpergelModel()
     assert model.PARAMETER_NAMES[7] == 'nu'
-    for name in ('flux', 'int_rscale', 'cosi', 'theta_int', 'nu', 'int_x0', 'int_y0'):
+    for name in ('flux', 'rscale', 'cosi', 'theta_int', 'nu', 'x0', 'y0'):
         assert name in model.PARAMETER_NAMES
 
 
@@ -121,11 +122,11 @@ def test_spergel_theta_roundtrip():
         'g1': 0.02,
         'g2': -0.01,
         'flux': 1.0,
-        'int_rscale': 3.0,
-        'int_h_over_r': 0.1,
+        'rscale': 3.0,
+        'h_over_r': 0.1,
         'nu': 0.5,
-        'int_x0': 0.0,
-        'int_y0': 0.0,
+        'x0': 0.0,
+        'y0': 0.0,
     }
     theta = InclinedSpergelModel.pars2theta(pars)
     pars_back = InclinedSpergelModel.theta2pars(theta)
@@ -193,7 +194,7 @@ def test_spergel_flux_conservation(nu, cosi, g1, g2, galsim_image_pars):
 
 
 @pytest.mark.parametrize(
-    "nu,cosi,int_h_over_r,tol",
+    "nu,cosi,h_over_r,tol",
     [
         (0.5, 0.7, 0.1, 5e-3),
         (2.0, 0.7, 0.1, 5e-3),
@@ -201,7 +202,7 @@ def test_spergel_flux_conservation(nu, cosi, g1, g2, galsim_image_pars):
     ],
 )
 def test_spergel_render_image_vs_call_consistency(
-    nu, cosi, int_h_over_r, tol, galsim_image_pars
+    nu, cosi, h_over_r, tol, galsim_image_pars
 ):
     """K-space render_image vs real-space __call__ consistency.
 
@@ -210,9 +211,7 @@ def test_spergel_render_image_vs_call_consistency(
     Matches the existing exponential render_vs_call test convention.
     """
     model = InclinedSpergelModel()
-    theta = jnp.array(
-        [cosi, np.pi / 6, 0.02, -0.01, 1.0, 2.0, int_h_over_r, nu, 0.3, -0.2]
-    )
+    theta = jnp.array([cosi, np.pi / 6, 0.02, -0.01, 1.0, 2.0, h_over_r, nu, 0.3, -0.2])
 
     X, Y = build_map_grid_from_image_pars(
         galsim_image_pars, unit='arcsec', centered=True
@@ -231,7 +230,7 @@ def test_spergel_render_image_vs_call_consistency(
 
     assert max_frac < tol, (
         f"render vs call: max|resid|/peak = {max_frac:.2e} "
-        f"(nu={nu}, cosi={cosi}, h/r={int_h_over_r}, tol={tol})"
+        f"(nu={nu}, cosi={cosi}, h/r={h_over_r}, tol={tol})"
     )
 
 
@@ -386,7 +385,7 @@ def test_spergel_psf_path_consistency(galsim_image_pars):
     obs_kspace = build_image_obs(
         galsim_image_pars,
         psf=psf_obj,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
     )
     img_kspace = np.array(model.render_image(theta, obs=obs_kspace))
@@ -397,7 +396,7 @@ def test_spergel_psf_path_consistency(galsim_image_pars):
     obs_realspace = build_image_obs(
         galsim_image_pars,
         psf=psf_obj,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         pixel_response=None,
     )
     img_realspace = np.array(model.render_image(theta, obs=obs_realspace))
@@ -408,27 +407,54 @@ def test_spergel_psf_path_consistency(galsim_image_pars):
     assert max_frac < 1e-3, f"PSF path consistency: max|resid|/peak = {max_frac:.2e}"
 
 
-def test_spergel_klmodel_composition():
-    """Spergel + CenteredVelocityModel in KLModel: param slicing correct."""
-    from kl_pipe.model import KLModel
+def test_spergel_source_composition():
+    """Spergel + CenteredVelocityModel in SourceModel: dotted-key namespace + per-component theta extraction."""
+    from kl_pipe.source import SourceModel, _build_component_theta
     from kl_pipe.velocity import CenteredVelocityModel
+    from kl_pipe.priors import Uniform, PriorDict
 
     vel = CenteredVelocityModel()
     int_model = InclinedSpergelModel()
 
-    kl = KLModel(vel, int_model, shared_pars={'cosi', 'theta_int', 'g1', 'g2'})
+    source = SourceModel(
+        velocity_model=vel,
+        broadband_models={'F087': int_model},
+    )
 
-    # vel(7) + int(10) - shared(4) = 13 composite params
+    # 4 shared geo + 3 vel-only + 6 F087-only = 13 sampled params
+    # (matches legacy KLModel(vel, int, shared_pars={'cosi','theta_int','g1','g2'})
+    #  which gave vel(7) + int(10) - shared(4) = 13)
+    priors = PriorDict(
+        {
+            'cosi': Uniform(0.1, 0.99),
+            'theta_int': Uniform(0.0, 2 * np.pi),
+            'g1': Uniform(-0.1, 0.1),
+            'g2': Uniform(-0.1, 0.1),
+            'vel.v0': Uniform(0.0, 50.0),
+            'vel.vcirc': Uniform(100.0, 350.0),
+            'vel.rscale': Uniform(1.0, 20.0),
+            'F087.flux': Uniform(0.1, 10.0),
+            'F087.rscale': Uniform(0.5, 10.0),
+            'F087.h_over_r': Uniform(0.05, 0.5),
+            'F087.nu': Uniform(-0.5, 0.5),
+            'F087.x0': Uniform(-1.0, 1.0),
+            'F087.y0': Uniform(-1.0, 1.0),
+        }
+    )
+
     assert (
-        len(kl.PARAMETER_NAMES) == 13
-    ), f"Expected 13, got {len(kl.PARAMETER_NAMES)}: {kl.PARAMETER_NAMES}"
-    assert kl.PARAMETER_NAMES.count('cosi') == 1
-    assert kl.PARAMETER_NAMES.count('theta_int') == 1
-    assert 'nu' in kl.PARAMETER_NAMES
+        len(priors.sampled_names) == 13
+    ), f"Expected 13 sampled, got {len(priors.sampled_names)}: {priors.sampled_names}"
+    # shared geometry appears exactly once (dedup invariant)
+    assert list(priors.sampled_names).count('cosi') == 1
+    assert list(priors.sampled_names).count('theta_int') == 1
+    # spergel nu lives under the F087 namespace
+    assert 'F087.nu' in priors.sampled_names
 
-    theta_kl = jnp.arange(13, dtype=float)
-    theta_vel = kl.get_velocity_pars(theta_kl)
-    theta_int = kl.get_intensity_pars(theta_kl)
+    # per-component theta extraction (analog of legacy get_velocity_pars/get_intensity_pars)
+    pars_dotted = {name: 1.0 for name in priors.sampled_names}
+    theta_vel = _build_component_theta(pars_dotted, 'vel', vel.PARAMETER_NAMES)
+    theta_int = _build_component_theta(pars_dotted, 'F087', int_model.PARAMETER_NAMES)
     assert len(theta_vel) == 7
     assert len(theta_int) == 10
 
@@ -577,35 +603,33 @@ def test_spergel_scipy_vs_render_image_consistency(galsim_image_pars):
 
     cosi = 0.7
     flux = 1.0
-    int_rscale = 2.0
-    int_h_over_r = 0.1
+    rscale = 2.0
+    h_over_r = 0.1
     nu = 0.5
     theta_int = np.pi / 6
     g1 = 0.02
     g2 = -0.01
-    int_x0 = 0.3
-    int_y0 = -0.2
+    x0 = 0.3
+    y0 = -0.2
 
     # pixel_response=None on both sides: point-sampled method comparison
     scipy_image = _generate_spergel_scipy(
         galsim_image_pars,
         flux=flux,
-        int_rscale=int_rscale,
+        rscale=rscale,
         nu=nu,
         cosi=cosi,
         theta_int=theta_int,
         g1=g1,
         g2=g2,
-        int_x0=int_x0,
-        int_y0=int_y0,
-        int_h_over_r=int_h_over_r,
+        x0=x0,
+        y0=y0,
+        h_over_r=h_over_r,
         pixel_response=None,
     )
 
     model = InclinedSpergelModel()
-    theta = jnp.array(
-        [cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, nu, int_x0, int_y0]
-    )
+    theta = jnp.array([cosi, theta_int, g1, g2, flux, rscale, h_over_r, nu, x0, y0])
     render = np.array(
         model.render_image(theta, image_pars=galsim_image_pars, pixel_response=None)
     )
@@ -693,7 +717,7 @@ def test_galsim_regression_spergel_faceon_cuspy(nu, galsim_image_pars):
     obs = build_image_obs(
         galsim_image_pars,
         psf=psf,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
         gsparams=gsp,
     )
@@ -799,7 +823,7 @@ def test_galsim_regression_spergel_faceon_with_shear_negative_nu(
     obs = build_image_obs(
         galsim_image_pars,
         psf=psf,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
         gsparams=gsp,
     )
@@ -850,7 +874,7 @@ def test_galsim_regression_devaucouleurs_faceon(galsim_image_pars):
     obs = build_image_obs(
         galsim_image_pars,
         psf=psf,
-        oversample=5,
+        render_config=RenderConfig(oversample=5),
         int_model=model,
         gsparams=gsp,
     )
@@ -911,15 +935,15 @@ def test_galsim_regression_spergel_inclined_nu05(cosi, theta_int, galsim_image_p
     gs_image = _generate_sersic_galsim(
         galsim_image_pars,
         flux=flux,
-        int_rscale=rscale,
+        rscale=rscale,
         n_sersic=1.0,
         cosi=cosi,
         theta_int=theta_int,
         g1=0.0,
         g2=0.0,
-        int_x0=0.0,
-        int_y0=0.0,
-        int_h_over_r=h_over_r,
+        x0=0.0,
+        y0=0.0,
+        h_over_r=h_over_r,
         gsparams=gsp,
         method='auto',
     )
@@ -957,15 +981,15 @@ def test_spergel_nu05_vs_inclined_sersic_n1(galsim_image_pars):
     gs_image = _generate_sersic_galsim(
         galsim_image_pars,
         flux=flux,
-        int_rscale=rscale,
+        rscale=rscale,
         n_sersic=1.0,
         cosi=cosi,
         theta_int=0.0,
         g1=0.0,
         g2=0.0,
-        int_x0=0.0,
-        int_y0=0.0,
-        int_h_over_r=h_over_r,
+        x0=0.0,
+        y0=0.0,
+        h_over_r=h_over_r,
         gsparams=gsp,
         method='auto',
     )
@@ -1042,7 +1066,13 @@ def test_spergel_vs_inclined_sersic_devac_mismatch(galsim_image_pars):
     theta = jnp.array(
         [cosi, 0.0, 0.0, 0.0, flux, spergel_rscale, h_over_r, -0.6, 0.0, 0.0]
     )
-    obs = build_image_obs(ip, psf=psf, oversample=5, int_model=model, gsparams=gsp)
+    obs = build_image_obs(
+        ip,
+        psf=psf,
+        render_config=RenderConfig(oversample=5),
+        int_model=model,
+        gsparams=gsp,
+    )
     our_image = np.array(model.render_image(theta, obs=obs))
 
     peak = np.max(np.abs(gs_sb))
@@ -1188,7 +1218,7 @@ def _render_spergel_vs_sersic_panel(
                 obs = build_image_obs(
                     ip,
                     psf=psf_obj,
-                    oversample=oversample,
+                    render_config=RenderConfig(oversample=oversample),
                     int_model=model,
                     gsparams=gsp,
                 )
@@ -1464,7 +1494,7 @@ def _n4_2d_diagnostic(spergel_output_dir, psf_fwhm=None, cosi=1.0):
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=oversample,
+                render_config=RenderConfig(oversample=oversample),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -1778,7 +1808,7 @@ def _faceon_n4_diagnostic(
             obs = build_image_obs(
                 ip,
                 psf=psf_obj,
-                oversample=oversample,
+                render_config=RenderConfig(oversample=oversample),
                 int_model=model,
                 gsparams=gsp,
             )
@@ -1971,7 +2001,11 @@ def test_oversample_convergence(spergel_output_dir):
             ref_label = 'GalSim'
         else:
             obs_ref = build_image_obs(
-                ip, psf=psf, oversample=ref_osamp, int_model=model, gsparams=gsp
+                ip,
+                psf=psf,
+                render_config=RenderConfig(oversample=ref_osamp),
+                int_model=model,
+                gsparams=gsp,
             )
             ref_sb = np.array(model.render_image(theta, obs=obs_ref))
             ref_label = f'oversample={ref_osamp}'
@@ -1983,7 +2017,11 @@ def test_oversample_convergence(spergel_output_dir):
         print(f'\n  cosi={cosi} (ref={ref_label}):')
         for osamp in oversamples:
             obs = build_image_obs(
-                ip, psf=psf, oversample=osamp, int_model=model, gsparams=gsp
+                ip,
+                psf=psf,
+                render_config=RenderConfig(oversample=osamp),
+                int_model=model,
+                gsparams=gsp,
             )
             our_sb = np.array(model.render_image(theta, obs=obs))
             diff = our_sb - ref_sb

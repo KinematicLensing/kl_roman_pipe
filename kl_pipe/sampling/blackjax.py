@@ -189,8 +189,9 @@ class BlackJAXSampler(Sampler):
         # Convert to numpy
         samples_np = np.array(samples)
 
-        # Compute log_prob for final samples
-        log_prob_vals = np.array([float(log_prob_fn(s)) for s in samples_np])
+        # Compute log_prob for final samples (batched via vmap)
+        _batched_log_prob = jax.jit(jax.vmap(self.task._log_posterior_jittable))
+        log_prob_vals = np.asarray(_batched_log_prob(jnp.array(samples_np)))
 
         elapsed = time.time() - start_time
 

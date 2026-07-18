@@ -305,9 +305,22 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
     init_strategy: str = 'prior'
 
+    # Laplace preconditioning (opt-in). 'none' = standard model-based NUTS
+    # (unchanged). 'laplace' = find MAP + regularized inverse Hessian, use as a
+    # fixed NUTS mass matrix initialized at the MAP, skipping the expensive
+    # early-warmup transient. See experiments/sweverett/flagship_speedup.
+    precondition: str = 'none'
+    n_map_starts: int = 4
+
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
             raise ValueError("target_accept_prob must be in (0, 1)")
+        if self.precondition not in ('none', 'laplace'):
+            raise ValueError(
+                f"precondition must be 'none' or 'laplace', got '{self.precondition}'"
+            )
+        if self.n_map_starts < 1:
+            raise ValueError("n_map_starts must be >= 1")
         if self.n_chains < 1:
             raise ValueError("n_chains must be >= 1")
         if self.chain_method not in ('sequential', 'parallel', 'vectorized'):

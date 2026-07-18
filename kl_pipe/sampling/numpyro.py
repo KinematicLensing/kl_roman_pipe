@@ -46,7 +46,7 @@ from kl_pipe.sampling.configs import NumpyroSamplerConfig, ReparamStrategy
 from kl_pipe.priors import Prior, Gaussian, TruncatedNormal, Uniform, LogUniform
 
 if TYPE_CHECKING:
-    from kl_pipe.sampling.task import InferenceTask
+    from kl_pipe.sampling.task import InferenceTask, LaplacePreconditioner
 
 
 def compute_reparam_scales(prior: Prior, name: str) -> Tuple[float, float]:
@@ -177,6 +177,49 @@ def compute_empirical_scales(
     return empirical_scales
 
 
+# Chunk size for end-of-sampling log-posterior evaluation. vmap-ing the full
+# log-posterior over ALL samples at once gives every intermediate in the
+# likelihood (notably the oversampled k-space FFT render grids) a batch
+# dimension equal to n_samples*n_chains -- a transient allocation that scales
+# with the total sample count and spikes to tens of GB at the end of a large
+# run, triggering an OOM SIGKILL ("zsh: killed" at 100%). Evaluating in fixed
+# chunks bounds the peak to ~chunk-size evaluations regardless of sample count.
+_LOG_PROB_CHUNK_SIZE = 256
+
+
+def _batched_log_posterior_chunked(
+    log_posterior_jittable: Callable,
+    samples: np.ndarray,
+    chunk_size: int = _LOG_PROB_CHUNK_SIZE,
+) -> np.ndarray:
+    """Evaluate the log-posterior over many samples in fixed-size chunks.
+
+    Equivalent result to ``jax.vmap(fn)(samples)`` but with peak memory bounded
+    by ``chunk_size`` rather than ``len(samples)``. See ``_LOG_PROB_CHUNK_SIZE``.
+
+    Parameters
+    ----------
+    log_posterior_jittable : callable
+        Single-sample log-posterior ``theta -> scalar``.
+    samples : np.ndarray
+        Array of shape ``(n_total, n_params)``.
+    chunk_size : int
+        Number of samples evaluated per vmap call.
+
+    Returns
+    -------
+    np.ndarray
+        Log-posterior values, shape ``(n_total,)``.
+    """
+    fn = jax.jit(jax.vmap(log_posterior_jittable))
+    n = samples.shape[0]
+    out = []
+    for start in range(0, n, chunk_size):
+        chunk = jnp.asarray(samples[start : start + chunk_size])
+        out.append(np.asarray(fn(chunk)))
+    return np.concatenate(out)
+
+
 class NumpyroSampler(Sampler):
     """
     NumPyro gradient-based sampler with Z-score reparameterization.
@@ -223,6 +266,19 @@ class NumpyroSampler(Sampler):
     >>> sampler = NumpyroSampler(task, config)
     >>> result = sampler.run()
 
+    Laplace preconditioning (opt-in) -- ~2x faster warmup on correlated joint
+    posteriors by initializing NUTS at the MAP with a fixed inverse-Hessian
+    mass matrix (see experiments/sweverett/flagship_speedup):
+
+    >>> # config flag: sampler computes the MAP + Hessian internally
+    >>> config = NumpyroSamplerConfig(precondition='laplace', n_warmup=100)
+    >>> result = build_sampler('numpyro', task, config).run()
+    >>>
+    >>> # composable: compute the preconditioner once, reuse / inspect it
+    >>> pre = task.laplace_preconditioner()
+    >>> sampler = NumpyroSampler(task, config, preconditioner=pre)
+    >>> result = sampler.run()
+
     See Also
     --------
     BlackJAXSampler : Simpler but less robust gradient-based sampler.
@@ -232,9 +288,17 @@ class NumpyroSampler(Sampler):
     provides_evidence = False
     config_class = NumpyroSamplerConfig
 
-    def __init__(self, task: 'InferenceTask', config: NumpyroSamplerConfig):
+    def __init__(
+        self,
+        task: 'InferenceTask',
+        config: NumpyroSamplerConfig,
+        preconditioner: Optional['LaplacePreconditioner'] = None,
+    ):
         super().__init__(task, config)
         self._reparam_scales: Optional[Dict[str, Tuple[float, float]]] = None
+        # Optional precomputed Laplace preconditioner. If config.precondition
+        # == 'laplace' and none is supplied, run() computes one.
+        self._preconditioner = preconditioner
 
     def _compute_reparam_scales(
         self, rng_key: jax.Array
@@ -385,7 +449,8 @@ class NumpyroSampler(Sampler):
     def _collect_diagnostics(
         self,
         mcmc,
-        reparam_scales: Dict[str, Tuple[float, float]],
+        reparam_scales: Optional[Dict[str, Tuple[float, float]]],
+        samples_by_chain: Optional[Dict[str, np.ndarray]] = None,
     ) -> Dict:
         """
         Collect all diagnostics from NumPyro MCMC run.
@@ -405,13 +470,20 @@ class NumpyroSampler(Sampler):
         from numpyro.diagnostics import summary as numpyro_summary
 
         extra_fields = mcmc.get_extra_fields()
-        samples = mcmc.get_samples(group_by_chain=True)
 
-        # Get physical-space samples for diagnostics
-        physical_samples = {}
-        for name in self.task.sampled_names:
-            if name in samples:
-                physical_samples[name] = np.array(samples[name])
+        # Physical-space per-chain samples for R-hat/ESS. The preconditioned
+        # (potential_fn) path supplies these explicitly since get_samples()
+        # returns a flat array there rather than named sites.
+        if samples_by_chain is not None:
+            physical_samples = {
+                name: np.array(arr) for name, arr in samples_by_chain.items()
+            }
+        else:
+            samples = mcmc.get_samples(group_by_chain=True)
+            physical_samples = {}
+            for name in self.task.sampled_names:
+                if name in samples:
+                    physical_samples[name] = np.array(samples[name])
 
         # Compute R-hat and ESS using numpyro's built-in functions
         summary_dict = numpyro_summary(physical_samples)
@@ -494,6 +566,13 @@ class NumpyroSampler(Sampler):
         import numpyro
         from numpyro.infer import MCMC, NUTS
 
+        # Laplace-preconditioned path (opt-in). Physical-space potential_fn NUTS
+        # with a fixed inverse-Hessian mass matrix + MAP init -- skips the
+        # expensive early-warmup transient. Isolated from the standard
+        # model-based path below (which is unchanged).
+        if self.config.precondition == 'laplace' or self._preconditioner is not None:
+            return self._run_preconditioned()
+
         start_time = time.time()
 
         # Setup random key
@@ -557,10 +636,10 @@ class NumpyroSampler(Sampler):
 
         samples = np.column_stack(samples_list)
 
-        # Compute log probabilities for samples
-        log_posterior_fn = self.task.get_log_posterior_fn()
-        log_probs = np.array(
-            [float(log_posterior_fn(jnp.array(theta))) for theta in samples]
+        # Compute log probabilities for samples (chunked to bound peak memory;
+        # see _batched_log_posterior_chunked).
+        log_probs = _batched_log_posterior_chunked(
+            self.task._log_posterior_jittable, samples
         )
 
         # Collect diagnostics
@@ -588,6 +667,126 @@ class NumpyroSampler(Sampler):
             'reparam_strategy': self.config.reparam_strategy.value,
         }
 
+        return SamplerResult(
+            samples=samples,
+            log_prob=log_probs,
+            param_names=self.task.sampled_names,
+            fixed_params=self.task.fixed_params,
+            acceptance_fraction=acceptance_fraction,
+            converged=converged,
+            diagnostics=diagnostics,
+            metadata=metadata,
+        )
+
+    def _run_preconditioned(self) -> SamplerResult:
+        """Laplace-preconditioned NUTS (opt-in via ``precondition='laplace'``).
+
+        Computes (or reuses) a Laplace preconditioner -- MAP + regularized
+        inverse Hessian -- then runs physical-space ``potential_fn`` NUTS with
+        that as a FIXED mass matrix, initialized at the MAP. This skips the
+        expensive early-warmup transient (an identity-metric chain climbing
+        from scratch) and the dense-mass adaptation cost. ~2x faster than
+        adapted dense mass with better convergence on the flagship; see
+        ``experiments/sweverett/flagship_speedup``. The standard model-based
+        ``run`` path is untouched.
+        """
+        from numpyro.infer import MCMC, NUTS
+
+        start_time = time.time()
+        seed = self.config.seed if self.config.seed is not None else int(time.time())
+
+        pre = self._preconditioner
+        if pre is None:
+            pre = self.task.laplace_preconditioner(
+                n_starts=self.config.n_map_starts, seed=seed
+            )
+            self._preconditioner = pre
+
+        sampled_names = self.task.sampled_names
+        n_params = len(sampled_names)
+        log_posterior_fn = self.task.get_log_posterior_fn()
+
+        def potential_fn(theta):
+            return -log_posterior_fn(theta)
+
+        inv_mass = jnp.asarray(pre.inverse_mass_matrix)
+        theta_map = jnp.asarray(pre.map_point)
+
+        # Init each chain at the MAP; jitter across chains (for n_chains > 1) by
+        # 1% of the per-dim posterior scale (sqrt of the mass-matrix diagonal).
+        n_chains = self.config.n_chains
+        if n_chains == 1:
+            init_params = theta_map
+        else:
+            post_scale = jnp.sqrt(jnp.diag(inv_mass))
+            jit = (
+                0.01
+                * post_scale[None, :]
+                * random.normal(random.PRNGKey(seed), (n_chains, n_params))
+            )
+            init_params = theta_map[None, :] + jit
+
+        kernel = NUTS(
+            potential_fn=potential_fn,
+            dense_mass=True,
+            inverse_mass_matrix=inv_mass,
+            adapt_mass_matrix=False,  # fixed Laplace metric (validated recipe)
+            adapt_step_size=True,
+            max_tree_depth=self.config.max_tree_depth,
+            target_accept_prob=self.config.target_accept_prob,
+        )
+        mcmc = MCMC(
+            kernel,
+            num_warmup=self.config.n_warmup,
+            num_samples=self.config.n_samples,
+            num_chains=n_chains,
+            chain_method=self.config.chain_method,
+            progress_bar=self.config.progress,
+        )
+        mcmc.run(
+            random.PRNGKey(seed + 1),
+            init_params=init_params,
+            extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
+        )
+
+        # potential_fn samples come back as a flat array, already in physical
+        # sampled_names order (no reparam to undo).
+        samples = np.asarray(mcmc.get_samples())
+        grouped = np.asarray(mcmc.get_samples(group_by_chain=True))
+
+        log_probs = _batched_log_posterior_chunked(
+            self.task._log_posterior_jittable, samples
+        )
+
+        samples_by_chain = {
+            name: grouped[:, :, i] for i, name in enumerate(sampled_names)
+        }
+        diagnostics = self._collect_diagnostics(
+            mcmc, reparam_scales=None, samples_by_chain=samples_by_chain
+        )
+        diagnostics['preconditioner'] = {
+            'method': 'laplace',
+            'condition_number': pre.condition_number,
+            'n_starts_converged': pre.n_starts_converged,
+        }
+
+        acceptance_fraction = diagnostics.get('mean_accept_prob', None)
+        r_hats = diagnostics.get('r_hat', {})
+        max_rhat = max(r_hats.values()) if r_hats else 1.0
+        converged = max_rhat < 1.1 and diagnostics.get('divergence_rate', 0) < 0.1
+
+        elapsed = time.time() - start_time
+        metadata = {
+            'sampler': 'numpyro',
+            'algorithm': 'nuts',
+            'elapsed_seconds': elapsed,
+            'n_chains': n_chains,
+            'n_warmup': self.config.n_warmup,
+            'n_samples_per_chain': self.config.n_samples,
+            'seed': seed,
+            'dense_mass': True,
+            'precondition': 'laplace',
+        }
         return SamplerResult(
             samples=samples,
             log_prob=log_probs,

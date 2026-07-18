@@ -79,30 +79,31 @@ def get_test_params(test_name: str, config: Optional[dict] = None) -> dict:
 
 
 def _build_emission_lines(obs_lines):
-    """Convert YAML line dicts to kl_pipe EmissionLine objects."""
-    from kl_pipe.spectral import (
-        EmissionLine,
-        LineSpec,
-        halpha_line,
-    )
+    """Convert YAML line dicts to a SourceModel ``emission_lines`` dict.
 
-    lines = []
+    Returns ``{line_key: EmissionLine}``. The first line carries its own
+    intensity profile; subsequent lines share it via ``intensity_key`` (per-line
+    flux stays independent). ``'Ha'`` maps to the canonical ``'Halpha'`` key.
+    """
+    from kl_pipe.intensity import InclinedExponentialModel
+    from kl_pipe.lines import EmissionLine
+
+    lines = {}
+    first_key = None
     for ldict in obs_lines:
         name = ldict['name']
         lam_rest = ldict['lambda_rest']
+        key = 'Halpha' if name == 'Ha' else name
 
-        if name == 'Ha':
-            lines.append(halpha_line())
-        else:
-            # generic line with param_prefix = name
-            spec = LineSpec(
-                lambda_rest=lam_rest,
-                name=name,
-                param_prefix=name,
+        if first_key is None:
+            lines[key] = EmissionLine(
+                intensity=InclinedExponentialModel(), lambda_rest=lam_rest
             )
-            lines.append(EmissionLine(line_spec=spec, own_params=frozenset({'flux'})))
+            first_key = key
+        else:
+            lines[key] = EmissionLine(intensity_key=first_key, lambda_rest=lam_rest)
 
-    return tuple(lines)
+    return lines
 
 
 def get_kl_pipe_params(test_name: str, config: Optional[dict] = None) -> dict:
@@ -141,20 +142,14 @@ def get_kl_pipe_params(test_name: str, config: Optional[dict] = None) -> dict:
         'int_y0': 0.0,
     }
 
-    # spectral pars: z, vel_dispersion, per-line flux + cont
+    # spectral pars: z (top-level), per-line flux + intrinsic dispersion + cont,
+    # keyed by SourceModel dotted names.
     lines = _build_emission_lines(obs['lines'])
-    spectral_pars = {
-        'z': p['z'],
-        'vel_dispersion': p['vel_dispersion'],
-    }
-    for line in lines:
-        prefix = line.line_spec.param_prefix
-        for own_p in sorted(line.own_params):
-            if own_p == 'flux':
-                spectral_pars[f'{prefix}_flux'] = p['flux']
-            else:
-                spectral_pars[f'{prefix}_{own_p}'] = p.get(own_p, 0.0)
-        spectral_pars[f'{prefix}_cont'] = p['continuum']
+    spectral_pars = {'z': p['z']}
+    for key in lines:
+        spectral_pars[f'{key}.flux'] = p['flux']
+        spectral_pars[f'{key}.dispersion'] = p['vel_dispersion']
+        spectral_pars[f'{key}.cont.flux'] = p['continuum']
 
     image_pars_kwargs = {
         'shape': (obs['Nrow'], obs['Ncol']),
@@ -182,7 +177,7 @@ def get_kl_pipe_params(test_name: str, config: Optional[dict] = None) -> dict:
         }
 
     # collect rest wavelengths for cube_pars construction
-    line_lambdas_rest = tuple(l.line_spec.lambda_rest for l in lines)
+    line_lambdas_rest = tuple(line.lambda_rest for line in lines.values())
 
     return {
         'vel_pars': vel_pars,

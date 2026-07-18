@@ -1136,12 +1136,12 @@ class InclinedExponentialModel(IntensityModel):
         Shear components
     flux : float
         Total integrated flux (conserved quantity)
-    int_rscale : float
+    rscale : float
         Exponential scale length (arcsec)
-    int_h_over_r : float
+    h_over_r : float
         Ratio of vertical scale height to radial scale length.
-        h_z = int_h_over_r * int_rscale. GalSim default is 0.1.
-    int_x0, int_y0 : float
+        h_z = h_over_r * rscale. GalSim default is 0.1.
+    x0, y0 : float
         Centroid position (arcsec)
     """
 
@@ -1151,10 +1151,10 @@ class InclinedExponentialModel(IntensityModel):
         'g1',
         'g2',
         'flux',
-        'int_rscale',
-        'int_h_over_r',
-        'int_x0',
-        'int_y0',
+        'rscale',
+        'h_over_r',
+        'x0',
+        'y0',
     )
 
     # anti-aliasing pad factor for k-space FFT rendering;
@@ -1178,7 +1178,7 @@ class InclinedExponentialModel(IntensityModel):
 
         For exponential: (1 + k²r²cosi²)^{-3/2} along ky (compressed axis).
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         cosi = params['cosi']
         return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** 1.5
 
@@ -1192,7 +1192,7 @@ class InclinedExponentialModel(IntensityModel):
         (1 + k²r²cosi²)^{-3/2} = threshold →
         k = sqrt(threshold^{-2/3} - 1) / (r * cosi).
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         cosi = params['cosi']
         return np.sqrt(threshold ** (-2.0 / 3.0) - 1.0) / (rscale * cosi)
 
@@ -1201,14 +1201,14 @@ class InclinedExponentialModel(IntensityModel):
 
         stepk = π / (stepk_min_hlr × hlr). For exponential, hlr ≈ 1.678 × rscale.
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         hlr = 1.6783469900166605 * rscale  # ln(2) * ... exact for exponential
         return np.pi / (_STEPK_MIN_HLR * hlr)
 
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         Calls _render_kspace without psf_kernel_fft.
         """
         return self._render_kspace(
@@ -1244,7 +1244,7 @@ class InclinedExponentialModel(IntensityModel):
         """
 
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
+        rscale = self.get_param('rscale', theta)
 
         # compute radius in disk plane
         r_disk = jnp.sqrt(x**2 + y**2)
@@ -1273,15 +1273,15 @@ class InclinedExponentialModel(IntensityModel):
         line of sight at each pixel in the galaxy frame (obs → cen → source → gal,
         but NOT deprojected to disk).
         """
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         theta_int = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
-        h_over_r = self.get_param('int_h_over_r', theta)
+        rscale = self.get_param('rscale', theta)
+        h_over_r = self.get_param('h_over_r', theta)
 
         sini = jnp.sqrt(jnp.maximum(1.0 - cosi**2, 0.0))
         h_z = h_over_r * rscale
@@ -1396,15 +1396,15 @@ class InclinedExponentialModel(IntensityModel):
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
         """Evaluate exponential FT: radial ``(1 + k^2)^{-3/2}``."""
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
-        h_over_r = self.get_param('int_h_over_r', theta)
+        rscale = self.get_param('rscale', theta)
+        h_over_r = self.get_param('h_over_r', theta)
 
         return _inclined_sech2_ft(
             KX,
@@ -1546,7 +1546,7 @@ class InclinedExponentialModel(IntensityModel):
         # warn if cusp aliasing likely exceeds 1% even with current oversample
         eff_os = rc.oversample if rc is not None else oversample
         try:
-            rscale_val = float(self.get_param('int_rscale', theta))
+            rscale_val = float(self.get_param('rscale', theta))
             ps_val = float(pixel_scale)
             k_ny_eff = eff_os * np.pi / ps_val
             alias_frac = 1.0 / (1.0 + (k_ny_eff * rscale_val) ** 2) ** 1.5
@@ -1625,16 +1625,16 @@ class InclinedSpergelModel(IntensityModel):
         Shear components
     flux : float
         Total integrated flux
-    int_rscale : float
+    rscale : float
         Spergel scale length c (arcsec). For nu=0.5, equals exponential r_s.
-    int_h_over_r : float
+    h_over_r : float
         Vertical scale height / radial scale length.
-        h_z = int_h_over_r * int_rscale.
+        h_z = h_over_r * rscale.
     nu : float
         Spergel index. nu=0.5 is exponential (Sersic n=1),
         nu=-0.6 approximates de Vaucouleurs (Sersic n=4).
         Must satisfy nu > -1 for the profile to be physical.
-    int_x0, int_y0 : float
+    x0, y0 : float
         Centroid position (arcsec)
     """
 
@@ -1644,11 +1644,11 @@ class InclinedSpergelModel(IntensityModel):
         'g1',
         'g2',
         'flux',
-        'int_rscale',
-        'int_h_over_r',
+        'rscale',
+        'h_over_r',
         'nu',
-        'int_x0',
-        'int_y0',
+        'x0',
+        'y0',
     )
 
     _kspace_pad_factor = 2
@@ -1699,7 +1699,7 @@ class InclinedSpergelModel(IntensityModel):
 
         For Spergel: (1 + k²r²cosi²)^{-(1+ν)} along ky (compressed axis).
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         nu = params['nu']
         cosi = params['cosi']
         return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** (1.0 + nu)
@@ -1711,7 +1711,7 @@ class InclinedSpergelModel(IntensityModel):
         (1 + k²r²cosi²)^{-(1+ν)} = threshold →
         k = sqrt(threshold^{-1/(1+ν)} - 1) / (r * cosi).
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         nu = params['nu']
         cosi = params['cosi']
         return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
@@ -1723,7 +1723,7 @@ class InclinedSpergelModel(IntensityModel):
         half-light radius, then stepk = π / (stepk_min_hlr × hlr).
         For simplicity, uses conservative bound: hlr ~ rscale for most ν.
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         # conservative: hlr >= rscale for all ν > -1
         hlr = rscale
         return np.pi / (_STEPK_MIN_HLR * hlr)
@@ -1731,7 +1731,7 @@ class InclinedSpergelModel(IntensityModel):
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         """
         return self._render_kspace(
             theta,
@@ -1766,7 +1766,7 @@ class InclinedSpergelModel(IntensityModel):
             Currently unused.
         """
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
+        rscale = self.get_param('rscale', theta)
         nu = self.get_param('nu', theta)
         return _spergel_evaluate_faceon(flux, rscale, nu, x, y)
 
@@ -1787,15 +1787,15 @@ class InclinedSpergelModel(IntensityModel):
         NOT auto-differentiable (uses scipy K_nu via pure_callback);
         use render_image for gradient-based inference.
         """
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
-        h_over_r = self.get_param('int_h_over_r', theta)
+        rscale = self.get_param('rscale', theta)
+        h_over_r = self.get_param('h_over_r', theta)
         nu = self.get_param('nu', theta)
         if not isinstance(theta, jax.core.Tracer) and float(nu) <= -1.0:
             raise ValueError(
@@ -1886,15 +1886,15 @@ class InclinedSpergelModel(IntensityModel):
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
         """Evaluate Spergel FT: radial ``(1 + k^2)^{-(1+nu)}``."""
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
-        h_over_r = self.get_param('int_h_over_r', theta)
+        rscale = self.get_param('rscale', theta)
+        h_over_r = self.get_param('h_over_r', theta)
         nu = self.get_param('nu', theta)
 
         return _inclined_sech2_ft(
@@ -1992,11 +1992,11 @@ class InclinedDeVaucouleursModel(IntensityModel):
         Shear components
     flux : float
         Total integrated flux
-    int_rscale : float
+    rscale : float
         Spergel scale length c (arcsec).
-    int_h_over_r : float
+    h_over_r : float
         Vertical scale height / radial scale length.
-    int_x0, int_y0 : float
+    x0, y0 : float
         Centroid position (arcsec)
     """
 
@@ -2006,10 +2006,10 @@ class InclinedDeVaucouleursModel(IntensityModel):
         'g1',
         'g2',
         'flux',
-        'int_rscale',
-        'int_h_over_r',
-        'int_x0',
-        'int_y0',
+        'rscale',
+        'h_over_r',
+        'x0',
+        'y0',
     )
 
     _kspace_pad_factor = 2
@@ -2054,7 +2054,7 @@ class InclinedDeVaucouleursModel(IntensityModel):
 
     def _ft_envelope(self, k: float, params: dict) -> float:
         """Profile FT amplitude along worst-case direction at wavenumber k."""
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         cosi = params['cosi']
         nu = self._fixed_nu
         return 1.0 / (1.0 + (k * rscale * cosi) ** 2) ** (1.0 + nu)
@@ -2064,14 +2064,14 @@ class InclinedDeVaucouleursModel(IntensityModel):
 
         Delegates to Spergel formula with fixed nu, accounts for cosi.
         """
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         cosi = params['cosi']
         nu = self._fixed_nu
         return np.sqrt(threshold ** (-1.0 / (1.0 + nu)) - 1.0) / (rscale * cosi)
 
     def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
         """Minimum k-spacing for de Vaucouleurs profile."""
-        rscale = params['int_rscale']
+        rscale = params['rscale']
         return np.pi / (_STEPK_MIN_HLR * rscale)
 
     def render_unconvolved(self, theta, image_pars, oversample=5):
@@ -2107,7 +2107,7 @@ class InclinedDeVaucouleursModel(IntensityModel):
             Currently unused.
         """
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
+        rscale = self.get_param('rscale', theta)
         return _spergel_evaluate_faceon(flux, rscale, self._fixed_nu, x, y)
 
     def __call__(
@@ -2124,15 +2124,15 @@ class InclinedDeVaucouleursModel(IntensityModel):
         Delegates to Spergel LOS integration with fixed ``nu``.
         NOT auto-differentiable; use render_image for inference.
         """
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
-        h_over_r = self.get_param('int_h_over_r', theta)
+        rscale = self.get_param('rscale', theta)
+        h_over_r = self.get_param('h_over_r', theta)
 
         if plane == 'disk':
             return _spergel_evaluate_faceon(flux, rscale, self._fixed_nu, x, y)
@@ -2214,15 +2214,15 @@ class InclinedDeVaucouleursModel(IntensityModel):
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
         """Evaluate de Vaucouleurs FT: Spergel with fixed nu=-0.6."""
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        rscale = self.get_param('int_rscale', theta)
-        h_over_r = self.get_param('int_h_over_r', theta)
+        rscale = self.get_param('rscale', theta)
+        h_over_r = self.get_param('h_over_r', theta)
         nu = self._fixed_nu
 
         return _inclined_sech2_ft(
@@ -2332,13 +2332,13 @@ class InclinedSersicModel(IntensityModel):
         Shear components.
     flux : float
         Total integrated flux.
-    int_hlr : float
+    hlr : float
         Half-light radius R_e (arcsec).
-    int_h_over_hlr : float
-        Vertical scale height / half-light radius. h_z = int_h_over_hlr * int_hlr.
+    h_over_hlr : float
+        Vertical scale height / half-light radius. h_z = h_over_hlr * hlr.
     n_sersic : float
         Sersic index. Valid range: [0.5, 6.0].
-    int_x0, int_y0 : float
+    x0, y0 : float
         Centroid position (arcsec).
     """
 
@@ -2348,11 +2348,11 @@ class InclinedSersicModel(IntensityModel):
         'g1',
         'g2',
         'flux',
-        'int_hlr',
-        'int_h_over_hlr',
+        'hlr',
+        'h_over_hlr',
         'n_sersic',
-        'int_x0',
-        'int_y0',
+        'x0',
+        'y0',
     )
 
     _kspace_pad_factor = 2
@@ -2375,7 +2375,7 @@ class InclinedSersicModel(IntensityModel):
         Evaluates Sersic emulator at dimensionless k_eff = k * hlr * cosi
         (along the compressed ky axis for inclined profiles).
         """
-        hlr = params['int_hlr']
+        hlr = params['hlr']
         n = params['n_sersic']
         cosi = params['cosi']
         k_dim_eff = k * hlr * cosi
@@ -2391,13 +2391,13 @@ class InclinedSersicModel(IntensityModel):
         Parameters
         ----------
         params : dict
-            Must contain 'int_hlr', 'n_sersic', and 'cosi'.
+            Must contain 'hlr', 'n_sersic', and 'cosi'.
         threshold : float
             FT amplitude threshold.
         """
         from scipy.optimize import brentq
 
-        hlr = params['int_hlr']
+        hlr = params['hlr']
         n = params['n_sersic']
         cosi = params['cosi']
 
@@ -2427,13 +2427,13 @@ class InclinedSersicModel(IntensityModel):
 
         stepk = π / (stepk_min_hlr × hlr).
         """
-        hlr = params['int_hlr']
+        hlr = params['hlr']
         return np.pi / (_STEPK_MIN_HLR * hlr)
 
     def render_unconvolved(self, theta, image_pars, oversample=5):
         """Render intensity image WITHOUT PSF, using k-space FT.
 
-        For use by SpectralModel.build_cube() — fast, anti-aliased, no PSF.
+        For use by cube assembly — fast, anti-aliased, no PSF.
         """
         return self._render_kspace(
             theta,
@@ -2465,7 +2465,7 @@ class InclinedSersicModel(IntensityModel):
             Currently unused.
         """
         flux = self.get_param('flux', theta)
-        hlr = self.get_param('int_hlr', theta)
+        hlr = self.get_param('hlr', theta)
         n = self.get_param('n_sersic', theta)
         return _sersic_evaluate_faceon(flux, hlr, n, x, y)
 
@@ -2483,15 +2483,15 @@ class InclinedSersicModel(IntensityModel):
         Integrates rho(R, z) = rho0 * exp(-b_n*(R/R_e)^{1/n}) * sech²(z/h_z)
         along the line of sight at each pixel in the galaxy frame.
         """
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        hlr = self.get_param('int_hlr', theta)
-        h_over_hlr = self.get_param('int_h_over_hlr', theta)
+        hlr = self.get_param('hlr', theta)
+        h_over_hlr = self.get_param('h_over_hlr', theta)
         n = self.get_param('n_sersic', theta)
 
         if not isinstance(theta, jax.core.Tracer):
@@ -2590,15 +2590,15 @@ class InclinedSersicModel(IntensityModel):
 
     def _ft_image(self, theta, KX, KY, pixel_scale, Nrow, Ncol):
         """Evaluate Sersic FT via Miller & Pasha emulator."""
-        x0 = self.get_param('int_x0', theta)
-        y0 = self.get_param('int_y0', theta)
+        x0 = self.get_param('x0', theta)
+        y0 = self.get_param('y0', theta)
         g1 = self.get_param('g1', theta)
         g2 = self.get_param('g2', theta)
         pa = self.get_param('theta_int', theta)
         cosi = self.get_param('cosi', theta)
         flux = self.get_param('flux', theta)
-        hlr = self.get_param('int_hlr', theta)
-        h_over_hlr = self.get_param('int_h_over_hlr', theta)
+        hlr = self.get_param('hlr', theta)
+        h_over_hlr = self.get_param('h_over_hlr', theta)
         n = self.get_param('n_sersic', theta)
 
         # safe-where: sqrt(0) has gradient inf — substitute dummy=1
@@ -2711,8 +2711,8 @@ class CompositeIntensityModel(IntensityModel):
     ``1 - sum(other fracs)``, so the sum of all component fluxes equals
     ``total_flux`` exactly.
 
-    When used as the intensity model in KLModel, the composite's total
-    flux weights the velocity PSF convolution. The flux-weighted velocity
+    When used as a flux-weighting intensity model for velocity rendering,
+    the composite's total flux weights the velocity PSF convolution. The flux-weighted velocity
     field shows reduced ``V_circ`` near the center. Two physical effects
     compound to produce this: (i) per-pixel velocity values are flux-
     weighted, and a centrally-concentrated bulge component pulls the
@@ -2729,7 +2729,7 @@ class CompositeIntensityModel(IntensityModel):
     shared_pars : set of str, optional
         Original model param names to share across components.
         Default: ``{'cosi', 'theta_int', 'g1', 'g2'}``.
-        Centroids NOT shared by default; add ``'int_x0', 'int_y0'``
+        Centroids NOT shared by default; add ``'x0', 'y0'``
         to share them.
     meta_pars : dict, optional
         Model metadata.
@@ -3016,7 +3016,7 @@ class BulgeDiskModel(CompositeIntensityModel):
     Parameters
     ----------
     shared_centroids : bool
-        If True, share centroid (int_x0, int_y0) between components.
+        If True, share centroid (x0, y0) between components.
         Default False: disk and bulge have independent centroids.
     shear_bulge : bool
         If True (default), the bulge component is sheared by the same
@@ -3037,7 +3037,7 @@ class BulgeDiskModel(CompositeIntensityModel):
     ):
         shared = {'cosi', 'theta_int', 'g1', 'g2'}
         if shared_centroids:
-            shared |= {'int_x0', 'int_y0'}
+            shared |= {'x0', 'y0'}
 
         # n_sersic always fixed at 4 (de Vaucouleurs); optionally also
         # zero out shear for the bulge (fixed-overrides-shared semantics).

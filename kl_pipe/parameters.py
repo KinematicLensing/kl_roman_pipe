@@ -287,9 +287,11 @@ class ImagePars(object):
         A tuple of the form (Naxis1, Naxis2) that defines the size of the image.
         If indexing='ij', this is (Nrow, Ncol) = (Ny, Nx) to match numpy. If
         indexing='xy', this is (Ncol, Nrow) = (Nx, Ny) to match FITS convention.
-    indexing: str; default='ij'
-        The indexing convention for the passed image shape. Can be 'ij' (numpy)
-        or 'xy' (FITS)
+    indexing: str; default=None
+        The indexing convention for the passed image shape: 'ij' (numpy,
+        (Nrow, Ncol)) or 'xy' (FITS, (Ncol, Nrow)). Required when pixel_scale
+        is given (there is no coordinate system to disambiguate the axis order).
+        When a wcs is passed instead, may be omitted and defaults to 'ij'.
     pixel_scale: float; default=None
         The pixel scale, typically in arcseconds/pixel (but other Astropy
         units are allowed). This is used to define the WCS coordinate system if
@@ -299,7 +301,7 @@ class ImagePars(object):
         Can only be passed if pixel_scale is None.
     '''
 
-    def __init__(self, shape, indexing, pixel_scale=None, wcs=None):
+    def __init__(self, shape, indexing=None, pixel_scale=None, wcs=None):
 
         if not isinstance(shape, tuple):
             raise TypeError('shape must be a tuple!')
@@ -313,14 +315,25 @@ class ImagePars(object):
             raise ValueError('shape[1] must be > 0!')
         self.shape = shape
 
-        if indexing not in ['ij', 'xy']:
-            raise ValueError('indexing must be "ij" or "xy"!')
-        self.indexing = indexing
-
         if (pixel_scale is None) and (wcs is None):
             raise ValueError('Either pixel_scale or wcs must be passed!')
         if (pixel_scale is not None) and (wcs is not None):
             raise ValueError('Only one of pixel_scale or wcs can be passed!')
+
+        # indexing is required when there is no WCS to disambiguate the axis
+        # order. A WCS fixes the FITS convention, so when one is passed indexing
+        # may be omitted; we then interpret the passed shape in numpy 'ij'
+        # (Nrow, Ncol) order (pass indexing='xy' if it is FITS-ordered instead).
+        if indexing is None:
+            if wcs is None:
+                raise ValueError(
+                    'indexing must be specified ("ij" or "xy") when no WCS is '
+                    'passed (no coordinate system to disambiguate the axis order)'
+                )
+            indexing = 'ij'
+        if indexing not in ['ij', 'xy']:
+            raise ValueError('indexing must be "ij" or "xy"!')
+        self.indexing = indexing
 
         if pixel_scale is not None:
             if not isinstance(pixel_scale, (int, float)):

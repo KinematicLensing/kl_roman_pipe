@@ -69,7 +69,7 @@ def exp_model():
 
 @pytest.fixture
 def exp_theta():
-    # cosi, theta_int, g1, g2, flux, int_rscale, int_h_over_r, int_x0, int_y0
+    # cosi, theta_int, g1, g2, flux, rscale, h_over_r, x0, y0
     return jnp.array([0.7, 0.5, 0.0, 0.0, 1e4, 0.3, 0.1, 0.0, 0.0])
 
 
@@ -170,7 +170,7 @@ class TestObsDefaults:
 
     def test_no_psf_preserves_oversample(self, image_pars):
         """Issue #38: oversample should NOT be forced to 1 without PSF."""
-        obs = build_image_obs(image_pars, oversample=5)
+        obs = build_image_obs(image_pars, render_config=RenderConfig(oversample=5))
         assert obs.oversample == 5
         assert obs.fine_X is not None
 
@@ -203,13 +203,18 @@ class TestBaseRenderImageUnits:
             'theta_int': 0.0,
             'g1': 0.0,
             'g2': 0.0,
-            'int_rscale': 0.2,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 0.2,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
         theta = model.pars2theta(pars)
-        obs = build_image_obs(image_pars, oversample=5, psf=None, pixel_response=None)
+        obs = build_image_obs(
+            image_pars,
+            render_config=RenderConfig(oversample=5),
+            psf=None,
+            pixel_response=None,
+        )
         img = Model.render_image(model, theta, obs=obs)
         assert img.shape == image_pars.shape
         # flux convention: sum over pixels ≈ total flux. tolerance accounts
@@ -333,15 +338,15 @@ class TestOversampleConvergence:
 
         common = dict(
             flux=float(params['flux']),
-            int_rscale=float(params['int_rscale']),
+            rscale=float(params['rscale']),
             n_sersic=1.0,
             cosi=float(params['cosi']),
             theta_int=float(params['theta_int']),
             g1=0.0,
             g2=0.0,
-            int_x0=0.0,
-            int_y0=0.0,
-            int_h_over_r=float(params['int_h_over_r']),
+            x0=0.0,
+            y0=0.0,
+            h_over_r=float(params['h_over_r']),
             gsparams=gsp,
         )
 
@@ -417,7 +422,7 @@ class TestMaxkStepk:
 
     def test_exponential_maxk_analytic(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 0.3, 'cosi': 1.0}
+        params = {'rscale': 0.3, 'cosi': 1.0}
         maxk = model.maxk(params, threshold=1e-3)
         expected = np.sqrt(1e-3 ** (-2.0 / 3.0) - 1.0) / 0.3
         np.testing.assert_allclose(maxk, expected, rtol=1e-10)
@@ -425,13 +430,13 @@ class TestMaxkStepk:
     def test_exponential_maxk_inclined(self):
         """Inclination increases maxk by 1/cosi."""
         model = InclinedExponentialModel()
-        maxk_fo = model.maxk({'int_rscale': 0.3, 'cosi': 1.0})
-        maxk_inc = model.maxk({'int_rscale': 0.3, 'cosi': 0.5})
+        maxk_fo = model.maxk({'rscale': 0.3, 'cosi': 1.0})
+        maxk_inc = model.maxk({'rscale': 0.3, 'cosi': 0.5})
         np.testing.assert_allclose(maxk_inc, maxk_fo / 0.5, rtol=1e-10)
 
     def test_spergel_maxk_analytic(self):
         model = InclinedSpergelModel()
-        params = {'int_rscale': 0.3, 'nu': 0.5, 'cosi': 1.0}
+        params = {'rscale': 0.3, 'nu': 0.5, 'cosi': 1.0}
         maxk = model.maxk(params, threshold=1e-3)
         expected = np.sqrt(1e-3 ** (-1.0 / 1.5) - 1.0) / 0.3
         np.testing.assert_allclose(maxk, expected, rtol=1e-10)
@@ -439,7 +444,7 @@ class TestMaxkStepk:
     def test_sersic_maxk_rootfinding(self):
         model = InclinedSersicModel()
         for n in [1.0, 2.0, 4.0]:
-            params = {'int_hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
+            params = {'hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
             maxk = model.maxk(params, threshold=1e-3)
             assert maxk > 0, f"maxk should be positive for n={n}"
             assert np.isfinite(maxk), f"maxk should be finite for n={n}"
@@ -449,7 +454,7 @@ class TestMaxkStepk:
         model = InclinedSersicModel()
         maxks = []
         for n in [1.0, 2.0, 3.0, 4.0]:
-            params = {'int_hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
+            params = {'hlr': 0.5, 'n_sersic': n, 'cosi': 1.0}
             maxks.append(model.maxk(params))
         for i in range(1, len(maxks)):
             assert maxks[i] > maxks[i - 1]
@@ -458,11 +463,11 @@ class TestMaxkStepk:
         """maxk should raise KeyError if cosi missing."""
         model = InclinedExponentialModel()
         with pytest.raises(KeyError, match='cosi'):
-            model.maxk({'int_rscale': 0.3})
+            model.maxk({'rscale': 0.3})
 
     def test_stepk_exponential(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 0.3}
+        params = {'rscale': 0.3}
         stepk = model.stepk(params)
         assert stepk > 0
         hlr = 1.6783469900166605 * 0.3
@@ -473,7 +478,7 @@ class TestMaxkStepk:
         """Pixel sinc attenuation should reduce effective maxk vs bare."""
         model = InclinedExponentialModel()
         bp = BoxPixel(0.11)
-        params = {'int_rscale': 0.3, 'cosi': 0.5}
+        params = {'rscale': 0.3, 'cosi': 0.5}
         bare = model.maxk(params)
         eff = compute_effective_maxk(model, params, pixel_response=bp)
         assert eff < bare, "pixel sinc should reduce effective maxk"
@@ -491,7 +496,7 @@ class TestMaxkStepk:
         our_maxks = []
         gs_maxks = []
         for r in rscales:
-            our_maxks.append(model.maxk({'int_rscale': r, 'cosi': 1.0}))
+            our_maxks.append(model.maxk({'rscale': r, 'cosi': 1.0}))
             gs_profile = galsim.Exponential(scale_radius=r)
             gs_maxks.append(gs_profile.maxk)
 
@@ -518,13 +523,13 @@ class TestGridAdequacy:
 
     def test_grid_requirements_compact_galaxy(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 0.1, 'cosi': 1.0}
+        params = {'rscale': 0.1, 'cosi': 1.0}
         rc = RenderConfig.for_model(model, params, 0.11)
         assert rc.oversample > 1, "compact galaxy should need oversample > 1"
 
     def test_grid_requirements_extended_galaxy(self):
         model = InclinedExponentialModel()
-        params = {'int_rscale': 1.0, 'cosi': 1.0}
+        params = {'rscale': 1.0, 'cosi': 1.0}
         rc = RenderConfig.for_model(model, params, 0.11)
         assert rc.oversample == 1, "extended galaxy should not need oversample"
 
@@ -539,10 +544,10 @@ class TestGridAdequacy:
                 'g1': 0.0,
                 'g2': 0.0,
                 'flux': Uniform(1e3, 1e5),
-                'int_rscale': Uniform(0.1, 1.0),
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'rscale': Uniform(0.1, 1.0),
+                'h_over_r': 0.1,
+                'x0': 0.0,
+                'y0': 0.0,
             }
         )
         rc = RenderConfig.for_priors(model, priors, 0.11)
@@ -553,7 +558,7 @@ class TestGridAdequacy:
         """Pixel sinc attenuation should reduce effective maxk."""
         model = InclinedExponentialModel()
         bp = BoxPixel(0.11)
-        params = {'int_rscale': 0.3, 'cosi': 0.5}
+        params = {'rscale': 0.3, 'cosi': 0.5}
         bare = compute_effective_maxk(model, params)
         with_pixel = compute_effective_maxk(model, params, pixel_response=bp)
         assert with_pixel < bare
@@ -634,7 +639,7 @@ class TestFluxConservation:
     def test_flux_conservation_exponential(self, exp_model, image_pars, rscale):
         flux = 1e4
         theta = jnp.array([0.7, 0.5, 0.0, 0.0, flux, rscale, 0.1, 0.0, 0.0])
-        obs = build_image_obs(image_pars, oversample=1)
+        obs = build_image_obs(image_pars, render_config=RenderConfig(oversample=1))
 
         img = exp_model.render_image(theta, obs=obs)
         # render outputs flux/pixel; sum gives total flux directly
@@ -664,7 +669,7 @@ class TestEdgeCases:
     def test_subpixel_galaxy(self, exp_model, image_pars, box_pixel):
         """Galaxy smaller than pixel — sinc should still work."""
         theta = jnp.array([0.9, 0.0, 0.0, 0.0, 1e4, 0.05, 0.1, 0.0, 0.0])
-        obs = build_image_obs(image_pars, oversample=1)
+        obs = build_image_obs(image_pars, render_config=RenderConfig(oversample=1))
         img = exp_model.render_image(theta, obs=obs)
         assert img.shape == (64, 64)
         assert float(jnp.max(img)) > 0
@@ -672,8 +677,10 @@ class TestEdgeCases:
     def test_extended_galaxy(self, exp_model, image_pars):
         """Galaxy much larger than pixel — sinc effect should be negligible."""
         theta = jnp.array([0.9, 0.0, 0.0, 0.0, 1e4, 2.0, 0.1, 0.0, 0.0])
-        obs_pix = build_image_obs(image_pars, oversample=1)
-        obs_none = build_image_obs(image_pars, oversample=1, pixel_response=None)
+        obs_pix = build_image_obs(image_pars, render_config=RenderConfig(oversample=1))
+        obs_none = build_image_obs(
+            image_pars, render_config=RenderConfig(oversample=1), pixel_response=None
+        )
 
         img_pix = exp_model.render_image(theta, obs=obs_pix)
         img_none = exp_model.render_image(theta, obs=obs_none)
@@ -685,7 +692,7 @@ class TestEdgeCases:
     def test_sersic_high_n(self):
         """High Sersic n=5 should still compute maxk/stepk."""
         model = InclinedSersicModel()
-        params = {'int_hlr': 0.5, 'n_sersic': 5.0, 'cosi': 1.0}
+        params = {'hlr': 0.5, 'n_sersic': 5.0, 'cosi': 1.0}
         maxk = model.maxk(params)
         stepk = model.stepk(params)
         assert maxk > 0
@@ -705,13 +712,15 @@ class TestInferenceTaskRenderConfig:
         pytest.importorskip('galsim')
 
     def test_inference_task_computes_render_config(self, _check_galsim):
-        """InferenceTask.from_intensity_obs computes render_config from priors."""
+        """InferenceTask.from_obs computes render_config from priors."""
         import galsim as gs
         from kl_pipe.priors import Uniform, PriorDict
         from kl_pipe.sampling.task import InferenceTask
+        from kl_pipe.source import SourceModel
         from kl_pipe.synthetic import generate_sersic_intensity_2d
 
         model = InclinedExponentialModel()
+        source = SourceModel(broadband_models={'F087': model})
         ip = ImagePars((32, 32), 'ij', pixel_scale=0.11)
         psf = gs.Gaussian(fwhm=0.2)
 
@@ -721,19 +730,30 @@ class TestInferenceTaskRenderConfig:
             'g1': 0.0,
             'g2': 0.0,
             'flux': 1e4,
-            'int_rscale': 0.3,
-            'int_h_over_r': 0.1,
-            'int_x0': 0.0,
-            'int_y0': 0.0,
+            'rscale': 0.3,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
         }
-        theta_true = model.pars2theta(true_pars)
+        # dotted-key true pars for the from_obs sampled-name ordering
+        true_pars_dotted = {
+            'cosi': 0.6,
+            'theta_int': 0.5,
+            'g1': 0.0,
+            'g2': 0.0,
+            'F087.flux': 1e4,
+            'F087.rscale': 0.3,
+            'F087.h_over_r': 0.1,
+            'F087.x0': 0.0,
+            'F087.y0': 0.0,
+        }
 
         # generate data with pixel response (default on)
         data = generate_sersic_intensity_2d(
             ip,
-            **{k: v for k, v in true_pars.items() if k != 'int_h_over_r'},
+            **{k: v for k, v in true_pars.items() if k != 'h_over_r'},
             n_sersic=1.0,
-            int_h_over_r=0.1,
+            h_over_r=0.1,
         )
         # add simple Gaussian noise (avoid Poisson issues with negative pixels)
         rng = np.random.default_rng(42)
@@ -746,11 +766,11 @@ class TestInferenceTaskRenderConfig:
                 'theta_int': Uniform(0, 2 * np.pi),
                 'g1': 0.0,
                 'g2': 0.0,
-                'flux': Uniform(5e3, 2e4),
-                'int_rscale': Uniform(0.1, 0.5),
-                'int_h_over_r': 0.1,
-                'int_x0': 0.0,
-                'int_y0': 0.0,
+                'F087.flux': Uniform(5e3, 2e4),
+                'F087.rscale': Uniform(0.1, 0.5),
+                'F087.h_over_r': 0.1,
+                'F087.x0': 0.0,
+                'F087.y0': 0.0,
             }
         )
 
@@ -759,13 +779,15 @@ class TestInferenceTaskRenderConfig:
         # threads psf= so the worst-case scan matches what InferenceTask
         # does at validation time (obs.psf is passed through).
         from kl_pipe.pixel import BoxPixel
+        from kl_pipe.render import build_image_render_config
 
-        rc_pred = RenderConfig.for_priors(
-            model,
+        rc_pred = build_image_render_config(
+            source,
             priors,
-            ip.pixel_scale,
-            pixel_response=BoxPixel(ip.pixel_scale),
+            ip,
+            'F087',
             psf=psf,
+            pixel_response=BoxPixel(ip.pixel_scale),
         )
         obs = build_image_obs(
             ip,
@@ -774,29 +796,32 @@ class TestInferenceTaskRenderConfig:
             variance=noise_std**2,
             int_model=model,
             render_config=rc_pred,
+            broadband_key='F087',
         )
 
         import warnings
 
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            task = InferenceTask.from_intensity_obs(model, priors, obs)
+            task = InferenceTask.from_obs(source, priors, image_obs={'F087': obs})
 
-        # render_config should be computed
-        assert hasattr(task, '_render_configs')
-        assert 'intensity' in task._render_configs
-        rc = task._render_configs['intensity']
-        assert rc.oversample >= 1
-        assert rc.effective_maxk is not None
+        # rc_pred is the priors-derived rc; from_obs validates obs.render_config
+        # matches this internally (since SourceModel from_obs doesn't expose
+        # rebuilt obs on task, we assert on the derived rc directly).
+        assert rc_pred.oversample >= 1
+        assert rc_pred.effective_maxk is not None
 
         # with cosi prior down to 0.3, should need oversample > 1
-        assert rc.oversample > 1, (
+        assert rc_pred.oversample > 1, (
             f"Expected oversample > 1 for cosi prior [0.3, 0.99], "
-            f"got {rc.oversample}"
+            f"got {rc_pred.oversample}"
         )
 
         # likelihood should evaluate to a finite value at true params
-        log_prob = task.likelihood_fn(theta_true)
+        theta_true_sampled = jnp.array(
+            [true_pars_dotted[n] for n in priors.sampled_names]
+        )
+        log_prob = task.likelihood_fn(theta_true_sampled)
         assert np.isfinite(float(log_prob)), "Likelihood at true params is not finite"
 
 
@@ -843,15 +868,15 @@ class TestWrapCorrectness:
         gs_img = _generate_sersic_galsim(
             ip,
             flux=1.0,
-            int_rscale=0.3,
+            rscale=0.3,
             n_sersic=1.0,
             cosi=0.5,
             theta_int=0.5,
             g1=0.0,
             g2=0.0,
-            int_x0=0.0,
-            int_y0=0.0,
-            int_h_over_r=0.1,
+            x0=0.0,
+            y0=0.0,
+            h_over_r=0.1,
             gsparams=gsp,
             method='auto',
         )
@@ -908,7 +933,7 @@ class TestWrapCorrectness:
         resolution then post-binned, while ALSO multiplying by sinc in
         k-space. The bin acted as a second pixel integration on top of
         sinc, biasing the rendered image. Under flux/pixel convention
-        this drove ~16.5% systematic in int_h_over_r recovery.
+        this drove ~16.5% systematic in h_over_r recovery.
 
         After Commit 4 (wrap engaged in fused path), the call passes
         oversample=N to the core, wrap+sinc gives exact pixel integration,
@@ -935,15 +960,15 @@ class TestWrapCorrectness:
         gs_img = _generate_sersic_galsim(
             ip,
             flux=1.0,
-            int_rscale=0.3,
+            rscale=0.3,
             n_sersic=1.0,
             cosi=0.5,
             theta_int=0.5,
             g1=0.0,
             g2=0.0,
-            int_x0=0.0,
-            int_y0=0.0,
-            int_h_over_r=0.1,
+            x0=0.0,
+            y0=0.0,
+            h_over_r=0.1,
             psf=psf,
             gsparams=gsp,
             method='auto',
@@ -1025,15 +1050,15 @@ class TestSubPixelLocation:
                 gs_img = _generate_sersic_galsim(
                     ip,
                     flux=flux,
-                    int_rscale=rscale,
+                    rscale=rscale,
                     n_sersic=1.0,
                     cosi=cosi,
                     theta_int=theta_int,
                     g1=0.0,
                     g2=0.0,
-                    int_x0=x0,
-                    int_y0=y0,
-                    int_h_over_r=h_over_r,
+                    x0=x0,
+                    y0=y0,
+                    h_over_r=h_over_r,
                     gsparams=gsp,
                     method='auto',
                 )

@@ -29,21 +29,16 @@ import galsim as gs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.intensity import InclinedExponentialModel
-from kl_pipe.model import KLModel
-from kl_pipe.spectral import (
-    SpectralConfig,
-    SpectralModel,
-    CubePars,
-    halpha_line,
-    C_KMS,
-    HALPHA,
-)
+from kl_pipe.source import SourceModel, _build_component_theta
+from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
+from kl_pipe.spectral import CubePars, C_KMS
 from kl_pipe.dispersion import GrismPars, disperse_cube, build_grism_pars_for_line
 from kl_pipe.psf import precompute_psf_fft, convolve_fft
 from kl_pipe.observation import GrismObs, build_image_obs, build_grism_obs
 from kl_pipe.pixel import BoxPixel
-from kl_pipe.model import _apply_post_dispersion_pixel_response
+from kl_pipe.grism import _apply_post_dispersion_pixel_response
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.render import RenderConfig
 
 # =============================================================================
 # Output directory
@@ -53,14 +48,18 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), 'out', 'cube_psf')
 
 
 def _bin_cube_to_coarse(cube_fine, Nrow_c, Ncol_c, N):
-    """Sum-bin a fine 3D cube (Nrow_c*N, Ncol_c*N, Nlam) to coarse spatial grid.
+    """Mean-bin a fine 3D cube (Nrow_c*N, Ncol_c*N, Nlam) to coarse spatial grid.
 
-    Pass-through for N == 1.
+    Mean-binning is SB-preserving: source cubes from ``SourceModel.build_cube``
+    are in SB per arcsec² per nm, and ``mean(fine_SB)`` equals the coarse-pixel-
+    averaged SB. To convert to flux per coarse pixel, multiply by
+    ``coarse_ps²`` at the site of comparison with a flux/pixel reference (e.g.
+    GalSim ``drawImage`` output). Pass-through for N == 1.
     """
     if N == 1:
         return np.asarray(cube_fine)
     arr = np.asarray(cube_fine)
-    return arr.reshape(Nrow_c, N, Ncol_c, N, -1).sum(axis=(1, 3))
+    return arr.reshape(Nrow_c, N, Ncol_c, N, -1).mean(axis=(1, 3))
 
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -71,44 +70,78 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 _IMAGE_PARS = ImagePars(shape=(32, 48), pixel_scale=0.11, indexing='ij')
 
-_VEL_PARS = {
+# SourceModel-native dotted-key parameters. Shared geometry (cosi, theta_int,
+# g1, g2, z) is top-level; velocity params live under vel.*; emission-line
+# Halpha owns the spatial profile via its own intensity model, with optional
+# continuum sharing the same spatial shape (Halpha.cont.* namespace).
+_MERGED_PARS_DOTTED = {
+    # shared geometry
     'cosi': 0.5,
     'theta_int': 0.7,
     'g1': 0.0,
     'g2': 0.0,
-    'v0': 10.0,
-    'vcirc': 200.0,
-    'vel_rscale': 0.5,
-}
-
-_INT_PARS = {
-    'cosi': 0.5,
-    'theta_int': 0.7,
-    'g1': 0.0,
-    'g2': 0.0,
-    'flux': 100.0,
-    'int_rscale': 0.3,
-    'int_h_over_r': 0.1,
-    'int_x0': 0.0,
-    'int_y0': 0.0,
-}
-
-_SPEC_PARS = {
     'z': 1.0,
-    'vel_dispersion': 50.0,
-    'Ha_flux': 100.0,
-    'Ha_cont': 0.01,
+    # velocity
+    'vel.v0': 10.0,
+    'vel.vcirc': 200.0,
+    'vel.rscale': 0.5,
+    # Halpha emission line (intensity profile + flux + dispersion)
+    'Halpha.flux': 100.0,
+    'Halpha.rscale': 0.3,
+    'Halpha.h_over_r': 0.1,
+    'Halpha.x0': 0.0,
+    'Halpha.y0': 0.0,
+    'Halpha.dispersion': 50.0,
+    # Halpha continuum (same spatial profile via continuum=int_model below;
+    # cont.flux is the per-line continuum amplitude)
+    'Halpha.cont.flux': 0.01,
+    'Halpha.cont.rscale': 0.3,
+    'Halpha.cont.h_over_r': 0.1,
+    'Halpha.cont.x0': 0.0,
+    'Halpha.cont.y0': 0.0,
 }
 
-_SHARED_PARS = {'cosi', 'theta_int', 'g1', 'g2'}
+
+def _build_test_cube(source, pars, cube_pars_or_obs):
+    """Test helper: build SB cube + optional per-slice PSF convolution.
+
+    Returns the cube in SB per arcsec² per nm (the canonical units of
+    ``SourceModel.build_cube``); ``_bin_cube_to_coarse`` is SB-preserving
+    (mean-bin). For comparison with flux/pixel references (e.g. GalSim
+    ``drawImage`` output), multiply by ``coarse_ps²`` at the comparison site.
+
+    Accepts either ``GrismObs`` (PSF path; uses fine grid when
+    ``oversample > 1``) or ``CubePars`` (no-PSF path).
+    """
+    if isinstance(cube_pars_or_obs, GrismObs):
+        obs = cube_pars_or_obs
+        if obs.psf_data is not None and obs.oversample > 1:
+            build_cube_pars = CubePars(
+                image_pars=obs.fine_image_pars,
+                lambda_grid=obs.cube_pars.lambda_grid,
+            )
+        else:
+            build_cube_pars = obs.cube_pars
+        psf_data = obs.psf_data
+    else:
+        build_cube_pars = cube_pars_or_obs
+        psf_data = None
+
+    cube = source.build_cube(pars, build_cube_pars)
+
+    if psf_data is not None:
+        cube_transposed = jnp.moveaxis(cube, -1, 0)
+        cube_transposed = jax.vmap(lambda s: convolve_fft(s, psf_data, bin=False))(
+            cube_transposed
+        )
+        cube = jnp.moveaxis(cube_transposed, 0, -1)
+
+    return cube
 
 
-def _merged_pars():
-    merged = {}
-    merged.update(_VEL_PARS)
-    merged.update(_INT_PARS)
-    merged.update(_SPEC_PARS)
-    return merged
+def _render_psf_cube(source, pars, obs):
+    """Backward-compatible alias for the PSF-path of ``_build_test_cube``."""
+    return _build_test_cube(source, pars, obs)
 
 
 # =============================================================================
@@ -117,10 +150,15 @@ def _merged_pars():
 
 
 def _make_grism_obs(cube_pars, psf, oversample, grism_pars=None):
-    """Build GrismObs for testing."""
-    psf_data = precompute_psf_fft(
-        psf, image_pars=cube_pars.image_pars, oversample=oversample
-    )
+    """Build GrismObs for testing. Pass ``psf=None`` for a no-PSF obs."""
+    from kl_pipe.render import RenderConfig
+
+    if psf is not None:
+        psf_data = precompute_psf_fft(
+            psf, image_pars=cube_pars.image_pars, oversample=oversample
+        )
+    else:
+        psf_data = None
     fine_ip = (
         cube_pars.image_pars.make_fine_scale(oversample) if oversample > 1 else None
     )
@@ -128,7 +166,7 @@ def _make_grism_obs(cube_pars, psf, oversample, grism_pars=None):
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
-        oversample=oversample,
+        render_config=RenderConfig(oversample=oversample),
         fine_image_pars=fine_ip,
     )
 
@@ -155,26 +193,22 @@ def int_model():
 
 
 @pytest.fixture(scope='module')
-def ha_config():
-    return SpectralConfig(lines=(halpha_line(),), spectral_oversample=5)
-
-
-@pytest.fixture(scope='module')
-def spec_model(vel_model, int_model, ha_config):
-    return SpectralModel(ha_config, int_model, vel_model)
-
-
-@pytest.fixture(scope='module')
-def kl_model(vel_model, int_model, spec_model):
-    return KLModel(
-        vel_model, int_model, shared_pars=_SHARED_PARS, spectral_model=spec_model
+def source(vel_model, int_model):
+    # emission line owns the spatial profile via its own intensity model;
+    # continuum=int_model gives the continuum the same spatial shape as the
+    # line, with independent flux via Halpha.cont.flux
+    return SourceModel(
+        velocity_model=vel_model,
+        emission_lines={
+            'Halpha': EmissionLine(intensity=int_model, continuum=int_model),
+        },
     )
 
 
 @pytest.fixture(scope='module')
 def cube_pars():
     z = 1.0
-    lam_center = HALPHA.lambda_rest * (1 + z)
+    lam_center = LINE_LAMBDAS['Halpha'] * (1 + z)
     dlam = lam_center * 2000.0 / C_KMS
     return CubePars.from_range(_IMAGE_PARS, lam_center - dlam, lam_center + dlam, 1.1)
 
@@ -182,7 +216,7 @@ def cube_pars():
 @pytest.fixture(scope='module')
 def grism_pars():
     return build_grism_pars_for_line(
-        HALPHA.lambda_rest,
+        LINE_LAMBDAS['Halpha'],
         redshift=1.0,
         image_pars=_IMAGE_PARS,
         dispersion=1.1,
@@ -190,8 +224,8 @@ def grism_pars():
 
 
 @pytest.fixture(scope='module')
-def theta(kl_model):
-    return kl_model.pars2theta(_merged_pars())
+def merged_pars():
+    return dict(_MERGED_PARS_DOTTED)
 
 
 @pytest.fixture(scope='module')
@@ -230,22 +264,22 @@ class TestGrismObsConstruction:
 
 
 class TestRenderCubeWithPsf:
-    def test_render_cube_no_psf_shape(self, kl_model, cube_pars, theta):
+    def test_render_cube_no_psf_shape(self, source, cube_pars, merged_pars):
         """Baseline: no PSF configured, correct shape."""
-        cube = kl_model.render_cube(theta, cube_pars)
+        cube = _build_test_cube(source, merged_pars, cube_pars)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
 
     def test_render_cube_psf_oversample_1(
-        self, kl_model, cube_pars, theta, gaussian_psf
+        self, source, cube_pars, merged_pars, gaussian_psf
     ):
         """oversample=1: no shape mismatch, output shape == coarse."""
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
-        cube = kl_model.render_cube(theta, obs)
+        cube = _render_psf_cube(source, merged_pars, obs)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
 
     def test_render_cube_psf_oversample_5(
-        self, kl_model, cube_pars, theta, gaussian_psf
+        self, source, cube_pars, merged_pars, gaussian_psf
     ):
         """oversample=5: fine-scale rendering, cube returned at fine shape.
 
@@ -256,19 +290,19 @@ class TestRenderCubeWithPsf:
         """
         N = 5
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
-        cube = kl_model.render_cube(theta, obs)
+        cube = _render_psf_cube(source, merged_pars, obs)
         assert cube.shape == (32 * N, 48 * N, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
         assert float(jnp.sum(cube)) > 0
 
     def test_render_grism_with_psf(
-        self, kl_model, grism_pars, cube_pars, theta, gaussian_psf
+        self, source, grism_pars, cube_pars, merged_pars, gaussian_psf
     ):
         """Full pipeline: GrismObs -> render_grism -> 2D output."""
         obs = _make_grism_obs(
             cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        grism = kl_model.render_grism(theta, obs)
+        grism = source.render_grism(merged_pars, obs)
         assert grism.shape == (32, 48)
         assert jnp.isfinite(grism).all()
         assert float(jnp.sum(grism)) > 0
@@ -280,14 +314,16 @@ class TestRenderCubeWithPsf:
 
 
 class TestPhysicalCorrectness:
-    def test_cube_psf_flux_conservation(self, kl_model, cube_pars, theta, gaussian_psf):
+    def test_cube_psf_flux_conservation(
+        self, source, cube_pars, merged_pars, gaussian_psf
+    ):
         """sum(slice_psf) ~ sum(slice_no_psf) per wavelength slice."""
         # no PSF
-        cube_no_psf = kl_model.render_cube(theta, cube_pars)
+        cube_no_psf = _build_test_cube(source, merged_pars, cube_pars)
 
         # with PSF oversample=1
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
-        cube_psf = kl_model.render_cube(theta, obs)
+        cube_psf = _render_psf_cube(source, merged_pars, obs)
 
         # per-slice flux conservation
         for k in range(cube_pars.n_lambda):
@@ -299,12 +335,12 @@ class TestPhysicalCorrectness:
                     f"no_psf={flux_no_psf:.6e}, psf={flux_psf:.6e}"
                 )
 
-    def test_cube_psf_broadening(self, kl_model, cube_pars, theta, gaussian_psf):
+    def test_cube_psf_broadening(self, source, cube_pars, merged_pars, gaussian_psf):
         """PSF widens spatial profile: std(psf_slice) > std(no_psf_slice) at peak."""
-        cube_no_psf = kl_model.render_cube(theta, cube_pars)
+        cube_no_psf = _build_test_cube(source, merged_pars, cube_pars)
 
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
-        cube_psf = kl_model.render_cube(theta, obs)
+        cube_psf = _render_psf_cube(source, merged_pars, obs)
 
         # find peak wavelength slice
         slice_flux = jnp.sum(cube_no_psf, axis=(0, 1))
@@ -330,14 +366,14 @@ class TestPhysicalCorrectness:
             f"sigma2_psf={sigma2_psf:.4f} <= sigma2_no_psf={sigma2_no_psf:.4f}"
         )
 
-    def test_cube_psf_slice_vs_2d(self, kl_model, cube_pars, theta, gaussian_psf):
+    def test_cube_psf_slice_vs_2d(self, source, cube_pars, merged_pars, gaussian_psf):
         """Monochromatic cube slice should closely match 2D render_image with PSF.
 
         This is the key regression test: if the cube PSF path diverges from
         the known-good 2D path, something is wrong.
         """
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
-        cube_psf = kl_model.render_cube(theta, obs)
+        cube_psf = _render_psf_cube(source, merged_pars, obs)
 
         # find peak slice
         slice_flux = jnp.sum(cube_psf, axis=(0, 1))
@@ -363,18 +399,18 @@ class TestPhysicalCorrectness:
 
 class TestJaxCompatibility:
     def test_render_cube_psf_jit_oversample_1(
-        self, kl_model, cube_pars, theta, gaussian_psf
+        self, source, cube_pars, merged_pars, gaussian_psf
     ):
         """jax.jit through render_cube with PSF oversample=1."""
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
 
-        render_jit = jax.jit(partial(kl_model.render_cube, obs_or_cube_pars=obs))
-        cube = render_jit(theta)
+        render_jit = jax.jit(lambda pars: _render_psf_cube(source, pars, obs))
+        cube = render_jit(merged_pars)
         assert cube.shape == (32, 48, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
 
     def test_render_cube_psf_jit_oversample_5(
-        self, kl_model, cube_pars, theta, gaussian_psf
+        self, source, cube_pars, merged_pars, gaussian_psf
     ):
         """jax.jit through render_cube with PSF oversample=5.
 
@@ -384,36 +420,37 @@ class TestJaxCompatibility:
         N = 5
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
 
-        render_jit = jax.jit(partial(kl_model.render_cube, obs_or_cube_pars=obs))
-        cube = render_jit(theta)
+        render_jit = jax.jit(lambda pars: _render_psf_cube(source, pars, obs))
+        cube = render_jit(merged_pars)
         assert cube.shape == (32 * N, 48 * N, cube_pars.n_lambda)
         assert jnp.isfinite(cube).all()
 
     def test_render_grism_psf_jit(
-        self, kl_model, grism_pars, cube_pars, theta, gaussian_psf
+        self, source, grism_pars, cube_pars, merged_pars, gaussian_psf
     ):
         """jax.jit through full grism+PSF pipeline."""
         obs = _make_grism_obs(
             cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
 
-        render_jit = jax.jit(partial(kl_model.render_grism, obs_or_grism_pars=obs))
-        grism = render_jit(theta)
+        render_jit = jax.jit(lambda pars: source.render_grism(pars, obs))
+        grism = render_jit(merged_pars)
         assert grism.shape == (32, 48)
         assert jnp.isfinite(grism).all()
 
-    def test_render_cube_psf_grad(self, kl_model, cube_pars, theta, gaussian_psf):
+    def test_render_cube_psf_grad(self, source, cube_pars, merged_pars, gaussian_psf):
         """jax.grad of total flux through PSF-convolved cube."""
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
 
-        def loss(th):
-            cube = kl_model.render_cube(th, obs)
+        def loss(pars):
+            cube = _render_psf_cube(source, pars, obs)
             return jnp.sum(cube**2)
 
         grad_fn = jax.grad(loss)
-        g = grad_fn(theta)
-        assert g.shape == theta.shape
-        assert jnp.isfinite(g).all()
+        g = grad_fn(merged_pars)
+        # gradient pytree mirrors pars dict
+        assert set(g.keys()) == set(merged_pars.keys())
+        assert all(jnp.isfinite(jnp.asarray(v)).all() for v in g.values())
 
 
 # =============================================================================
@@ -423,7 +460,7 @@ class TestJaxCompatibility:
 
 class TestGalSimRegression:
     def test_cube_psf_galsim_regression(
-        self, kl_model, cube_pars, theta, gaussian_psf, output_dir
+        self, source, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """Compare oversampled cube slice to GalSim native convolution.
 
@@ -435,11 +472,14 @@ class TestGalSimRegression:
         weight) convolved with our PSF pipeline vs the same slice convolved
         natively by GalSim. This isolates the PSF convolution accuracy.
         """
-        # render cube without PSF to get intrinsic slices
-        cube_no_psf = kl_model.render_cube(theta, cube_pars)
+        # render cube without PSF to get intrinsic slices (SB units)
+        cube_no_psf = _build_test_cube(source, merged_pars, cube_pars)
         slice_flux = jnp.sum(cube_no_psf, axis=(0, 1))
         peak_k = int(jnp.argmax(slice_flux))
-        intrinsic_slice = np.array(cube_no_psf[:, :, peak_k])
+        # convert SB → flux per coarse pixel at the comparison boundary so the
+        # JAX path matches GalSim's drawImage output convention.
+        coarse_ps2 = _IMAGE_PARS.pixel_scale**2
+        intrinsic_slice = np.array(cube_no_psf[:, :, peak_k]) * coarse_ps2
 
         # our pipeline: convolve intrinsic slice with PSF at oversample=5
         N = 5
@@ -516,13 +556,13 @@ class TestGalSimRegression:
 
 class TestDiagnostics:
     def test_cube_psf_slice_comparison_diagnostic(
-        self, kl_model, cube_pars, theta, gaussian_psf, output_dir
+        self, source, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """3-row grid: no-PSF slices, PSF slices, residuals across wavelength."""
-        cube_no_psf = kl_model.render_cube(theta, cube_pars)
+        cube_no_psf = _build_test_cube(source, merged_pars, cube_pars)
 
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
-        cube_psf = kl_model.render_cube(theta, obs)
+        cube_psf = _render_psf_cube(source, merged_pars, obs)
 
         # select ~5 representative wavelength slices
         n_lam = cube_pars.n_lambda
@@ -570,22 +610,28 @@ class TestDiagnostics:
         plt.close(fig)
 
     def test_cube_psf_slice_vs_2d_diagnostic(
-        self, kl_model, cube_pars, theta, gaussian_psf, output_dir
+        self, source, int_model, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """2x2 panel comparing cube peak slice (PSF) to 2D render_image (PSF)."""
         # cube path with PSF
         obs = _make_grism_obs(cube_pars, gaussian_psf, oversample=1)
-        cube_psf = kl_model.render_cube(theta, obs)
+        cube_psf = _render_psf_cube(source, merged_pars, obs)
 
         slice_flux = jnp.sum(cube_psf, axis=(0, 1))
         peak_k = int(jnp.argmax(slice_flux))
         cube_slice = np.array(cube_psf[:, :, peak_k])
 
-        # 2D intensity render with same PSF (broadband, different from per-line)
-        int_model_fresh = InclinedExponentialModel()
-        theta_int = kl_model.get_intensity_pars(theta)
-        img_obs = build_image_obs(cube_pars.image_pars, psf=gaussian_psf, oversample=1)
-        img_2d = np.array(int_model_fresh.render_image(theta_int, obs=img_obs))
+        # 2D intensity render with same PSF (intensity profile only, no spectral
+        # broadening). Extract Halpha intensity params from dotted pars dict.
+        theta_int = _build_component_theta(
+            merged_pars, 'Halpha', int_model.PARAMETER_NAMES
+        )
+        img_obs = build_image_obs(
+            cube_pars.image_pars,
+            psf=gaussian_psf,
+            render_config=RenderConfig(oversample=1),
+        )
+        img_2d = np.array(int_model.render_image(theta_int, obs=img_obs))
 
         # note: these aren't expected to match exactly (cube slice = line flux,
         # 2D = broadband) — this is a qualitative diagnostic
@@ -615,7 +661,7 @@ class TestDiagnostics:
         plt.close(fig)
 
     def test_cube_psf_oversample_convergence(
-        self, kl_model, cube_pars, theta, gaussian_psf, output_dir
+        self, source, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """Multi-row convergence grid: cube slices at N=1,3,5,7 vs N=9 reference.
 
@@ -629,7 +675,7 @@ class TestDiagnostics:
         N_ref = 9
         obs_ref = _make_grism_obs(cube_pars, gaussian_psf, oversample=N_ref)
         cube_ref = _bin_cube_to_coarse(
-            kl_model.render_cube(theta, obs_ref), Nrow_c, Ncol_c, N_ref
+            _render_psf_cube(source, merged_pars, obs_ref), Nrow_c, Ncol_c, N_ref
         )
 
         # find peak slice for comparison
@@ -646,7 +692,7 @@ class TestDiagnostics:
         for N in ns:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
             cube_n = _bin_cube_to_coarse(
-                kl_model.render_cube(theta, obs_n), Nrow_c, Ncol_c, N
+                _render_psf_cube(source, merged_pars, obs_n), Nrow_c, Ncol_c, N
             )
             test_slice = cube_n[:, :, peak_k]
             slices[N] = test_slice
@@ -727,7 +773,7 @@ class TestDiagnostics:
                 ), f"N={N} RMS resid ({rms_residuals[N]:.2e}) exceeds {rms_thresh:.0e}"
 
     def test_cube_psf_radial_profiles(
-        self, kl_model, cube_pars, theta, gaussian_psf, output_dir
+        self, source, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """Semilogy azimuthal average of peak slice: no-PSF vs PSF oversample=1,5.
 
@@ -736,7 +782,7 @@ class TestDiagnostics:
         """
         Nrow_c, Ncol_c = cube_pars.image_pars.Nrow, cube_pars.image_pars.Ncol
 
-        cube_no_psf = np.array(kl_model.render_cube(theta, cube_pars))
+        cube_no_psf = np.array(_build_test_cube(source, merged_pars, cube_pars))
         slice_flux = np.sum(cube_no_psf, axis=(0, 1))
         peak_k = int(np.argmax(slice_flux))
 
@@ -753,7 +799,7 @@ class TestDiagnostics:
         for N in [1, 5]:
             obs_n = _make_grism_obs(cube_pars, gaussian_psf, oversample=N)
             cube_n = _bin_cube_to_coarse(
-                kl_model.render_cube(theta, obs_n), Nrow_c, Ncol_c, N
+                _render_psf_cube(source, merged_pars, obs_n), Nrow_c, Ncol_c, N
             )
             profiles[f'N={N}'] = cube_n[:, :, peak_k]
             labels[f'N={N}'] = f'PSF N={N}'
@@ -797,19 +843,20 @@ class TestDiagnostics:
         plt.close(fig)
 
     def test_grism_psf_trace_diagnostic(
-        self, kl_model, grism_pars, cube_pars, theta, gaussian_psf, output_dir
+        self, source, grism_pars, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """2x2: grism no-PSF, grism PSF, cross-dispersion cut, spectral extraction."""
         # no PSF
-        grism_no_psf = np.array(
-            kl_model.render_grism(theta, grism_pars, cube_pars=cube_pars)
+        obs_no_psf = _make_grism_obs(
+            cube_pars, psf=None, oversample=1, grism_pars=grism_pars
         )
+        grism_no_psf = np.array(source.render_grism(merged_pars, obs_no_psf))
 
         # with PSF
         obs = _make_grism_obs(
             cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        grism_psf = np.array(kl_model.render_grism(theta, obs))
+        grism_psf = np.array(source.render_grism(merged_pars, obs))
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -854,17 +901,18 @@ class TestDiagnostics:
         plt.close(fig)
 
     def test_grism_psf_residual_map(
-        self, kl_model, grism_pars, cube_pars, theta, gaussian_psf, output_dir
+        self, source, grism_pars, cube_pars, merged_pars, gaussian_psf, output_dir
     ):
         """1x3: grism no-PSF, grism PSF, difference map."""
-        grism_no_psf = np.array(
-            kl_model.render_grism(theta, grism_pars, cube_pars=cube_pars)
+        obs_no_psf = _make_grism_obs(
+            cube_pars, psf=None, oversample=1, grism_pars=grism_pars
         )
+        grism_no_psf = np.array(source.render_grism(merged_pars, obs_no_psf))
 
         obs = _make_grism_obs(
             cube_pars, gaussian_psf, oversample=1, grism_pars=grism_pars
         )
-        grism_psf = np.array(kl_model.render_grism(theta, obs))
+        grism_psf = np.array(source.render_grism(merged_pars, obs))
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
@@ -920,19 +968,20 @@ class TestPostDispersionPixelResponsePrecompute:
 
     @staticmethod
     def _inline_apply_post_dispersion(dispersed, coarse_image_pars, oversample):
-        """Reference: rebuild fine k-grid + BoxPixel sinc inline, apply, sum-bin.
+        """Reference: rebuild fine k-grid + BoxPixel sinc inline, mean-bin, SB->flux.
 
-        Mimics the pre-3301d3a path with no precompute. Any divergence from
-        ``_apply_post_dispersion_pixel_response(..., obs.pixel_response_fft, ...)``
-        means the precompute and the rebuild don't agree.
+        Mimics the pre-3301d3a path with no precompute. Mirrors the production
+        function's convention: mean-bin SB then multiply by coarse_area to
+        convert to flux per coarse pixel.
         """
+        coarse_ps = coarse_image_pars.pixel_scale
+        coarse_area = coarse_ps * coarse_ps
         if oversample <= 1:
-            return dispersed
+            return dispersed * coarse_area
         fine_ip = coarse_image_pars.make_fine_scale(oversample)
         Nrow_c, Ncol_c = coarse_image_pars.Nrow, coarse_image_pars.Ncol
         Nrow_f, Ncol_f = fine_ip.Nrow, fine_ip.Ncol
         fine_ps = fine_ip.pixel_scale
-        coarse_ps = coarse_image_pars.pixel_scale
         kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
         ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
         KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
@@ -940,17 +989,20 @@ class TestPostDispersionPixelResponsePrecompute:
         img_fft = jnp.fft.fft2(dispersed)
         fine_integrated = jnp.fft.ifft2(img_fft * sinc_ft).real
         N = oversample
-        return fine_integrated.reshape(Nrow_c, N, Ncol_c, N).sum(axis=(1, 3))
+        sb_coarse = fine_integrated.reshape(Nrow_c, N, Ncol_c, N).mean(axis=(1, 3))
+        return sb_coarse * coarse_area
 
     def _build_grism_obs_via_factory(self, cube_pars, oversample):
         """Build a GrismObs via the production factory (precomputes pixel_response_fft)."""
         gp = build_grism_pars_for_line(
-            HALPHA.lambda_rest,
+            LINE_LAMBDAS['Halpha'],
             redshift=1.0,
             image_pars=cube_pars.image_pars,
             dispersion=1.1,
         )
-        return build_grism_obs(gp, z=1.0, psf=None, oversample=oversample)
+        return build_grism_obs(
+            gp, z=1.0, psf=None, render_config=RenderConfig(oversample=oversample)
+        )
 
     @pytest.mark.parametrize('oversample', [3, 5, 7])
     def test_precompute_matches_inline_rebuild(self, cube_pars, oversample):
@@ -968,6 +1020,7 @@ class TestPostDispersionPixelResponsePrecompute:
             obs.pixel_response_fft,
             (coarse_ip.Nrow, coarse_ip.Ncol),
             oversample,
+            coarse_ip.pixel_scale,
         )
         coarse_via_inline = self._inline_apply_post_dispersion(
             dispersed, coarse_ip, oversample
@@ -981,8 +1034,8 @@ class TestPostDispersionPixelResponsePrecompute:
             atol=1e-15,
         )
 
-    def test_oversample_one_is_passthrough(self, cube_pars):
-        """At oversample=1 the function returns the input unchanged."""
+    def test_oversample_one_applies_sb_to_flux_conversion(self, cube_pars):
+        """At oversample=1 the function multiplies by coarse_area (SB->flux/pixel)."""
         coarse_ip = cube_pars.image_pars
         dispersed = jnp.ones((coarse_ip.Nrow, coarse_ip.Ncol))
         out = _apply_post_dispersion_pixel_response(
@@ -990,8 +1043,12 @@ class TestPostDispersionPixelResponsePrecompute:
             None,  # pixel_response_fft unused at oversample=1
             (coarse_ip.Nrow, coarse_ip.Ncol),
             1,
+            coarse_ip.pixel_scale,
         )
-        np.testing.assert_array_equal(np.asarray(out), np.asarray(dispersed))
+        np.testing.assert_array_equal(
+            np.asarray(out),
+            np.asarray(dispersed) * coarse_ip.pixel_scale**2,
+        )
 
     def test_grid_alignment_uses_coarse_pixel_scale(self, cube_pars):
         """Sinc must use the COARSE pixel_scale (detector), not the fine one.
@@ -1017,6 +1074,7 @@ class TestPostDispersionPixelResponsePrecompute:
             obs.pixel_response_fft,
             (coarse_ip.Nrow, coarse_ip.Ncol),
             oversample,
+            coarse_ip.pixel_scale,
         )
 
         # wrong convention: fine-pixel sinc (much narrower)
@@ -1029,9 +1087,10 @@ class TestPostDispersionPixelResponsePrecompute:
         img_fft = jnp.fft.fft2(dispersed)
         wrong_fine = jnp.fft.ifft2(img_fft * wrong_sinc).real
         N = oversample
-        coarse_wrong = wrong_fine.reshape(coarse_ip.Nrow, N, coarse_ip.Ncol, N).sum(
+        coarse_wrong_sb = wrong_fine.reshape(coarse_ip.Nrow, N, coarse_ip.Ncol, N).mean(
             axis=(1, 3)
         )
+        coarse_wrong = coarse_wrong_sb * coarse_ip.pixel_scale**2
 
         # the two must disagree non-trivially — pins the convention
         diff = np.max(np.abs(np.asarray(coarse_correct) - np.asarray(coarse_wrong)))

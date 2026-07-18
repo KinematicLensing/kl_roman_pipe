@@ -14,7 +14,7 @@ Factory functions replace the old Model.configure_psf() family.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import jax
@@ -30,7 +30,14 @@ from kl_pipe.psf import PSFData
 from kl_pipe.render import RenderConfig
 from kl_pipe.utils import build_map_grid_from_image_pars
 
-import galsim
+import galsim as gs
+
+# default oversample for builders when no explicit RenderConfig is supplied.
+# RenderConfig is the single source of truth for oversampling; this constant
+# only sets the fallback recipe used for bespoke (non-inference) rendering.
+# inference ignores it (InferenceTask.from_obs rebuilds with a priors-sized rc
+# whenever the obs was built with a default RenderConfig).
+DEFAULT_OVERSAMPLE = 5
 
 
 # ============================================================================
@@ -50,11 +57,16 @@ class ImageObs:
         Pre-computed coarse-scale coordinate grids.
     render_config : RenderConfig
         Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
-        SINGLE SOURCE OF TRUTH for grid sizing -- ``obs.oversample`` is a
-        property that reads from this. Bare ``RenderConfig()`` defaults to
-        ``oversample=1, pad_factor=2`` (point-sampled, no oversampling);
-        for inference, pass ``RenderConfig.for_priors(...)`` to size the
-        grid against prior bounds.
+        Canonical source for grid sizing -- ``obs.oversample`` is a
+        property that reads from this. When ``build_image_obs`` is called
+        without ``render_config``, the obs carries a builder-default rc
+        marked ``_rc_was_default=True`` on the obs: ``InferenceTask.from_obs`` detects
+        this and rebuilds the obs internally with a priors-sized rc via
+        ``obs.with_render_config(...)``. For bespoke rendering outside
+        ``from_obs``, either accept the builder default or pass an
+        explicit ``RenderConfig`` (e.g.
+        ``build_image_render_config(source, priors, image_pars,
+        broadband_key, psf=psf)``).
     psf_data : PSFData, optional
         Pre-computed PSF FFT for convolve_fft.
     fine_X, fine_Y : jnp.ndarray, optional
@@ -77,8 +89,7 @@ class ImageObs:
         can include PSF damping in the worst-case maxk product scan. The
         rendered/precomputed PSF lives in ``psf_data``/``kspace_psf_fft``;
         this field is the source-of-truth galsim object kept for off-grid
-        evaluation (e.g., ``RenderConfig.for_priors(..., psf=obs.psf)``).
-        Stored as static pytree aux.
+        evaluation. Stored as static pytree aux.
     """
 
     image_pars: ImagePars
@@ -94,11 +105,97 @@ class ImageObs:
     kspace_psf_fft: Optional[jnp.ndarray] = None
     pixel_response: Optional[PixelResponse] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # broadband_key: key into source.broadband_models that this obs renders
+    # (used by SourceModel-based inference; None for legacy KLModel-based use).
+    broadband_key: Optional[str] = None
+    # _rc_was_default: internal flag — True when build_image_obs supplied the
+    # default render_config (caller passed render_config=None), False when the
+    # caller passed an explicit one. Read by InferenceTask.from_obs to decide
+    # whether to auto-derive a priors-sized rc + rebuild via with_render_config.
+    # init=False keeps it out of the constructor kwargs; build_image_obs sets
+    # it via object.__setattr__ (the standard escape hatch for frozen
+    # dataclasses), and pytree unflatten restores it the same way.
+    _rc_was_default: bool = field(default=False, init=False, repr=False)
 
     @property
     def oversample(self) -> int:
         """Oversample factor; canonical source is render_config.oversample."""
         return self.render_config.oversample if self.render_config is not None else 1
+
+    def with_render_config(
+        self, new_rc: 'RenderConfig', *, int_model=None
+    ) -> 'ImageObs':
+        """Return a new ImageObs with ``new_rc`` and freshly-recomputed grids.
+
+        Used by ``InferenceTask.from_obs`` when the obs was constructed with
+        a builder-default ``render_config`` (``obs._rc_was_default=True``) and the
+        priors imply a different oversample. The returned obs has fresh
+        ``psf_data`` (PSF FFT at ``new_rc.oversample``), fresh ``fine_X`` /
+        ``fine_Y``, and fresh ``kspace_psf_fft`` (when ``int_model`` is
+        supplied and supports k-space rendering). All other fields
+        (``image_pars``, ``X``, ``Y``, ``data``, ``variance``, ``mask``,
+        ``pixel_response``, ``psf``, ``broadband_key``) are preserved.
+
+        Parameters
+        ----------
+        new_rc : RenderConfig
+            The replacement rendering recipe. Determines the new
+            ``oversample`` for grid sizing.
+        int_model : IntensityModel, optional
+            When supplied and the model has ``_kspace_pad_factor``, the
+            fused k-space PSF kernel is recomputed for the band's rendering
+            pipeline. Mirrors the ``int_model`` arg on ``build_image_obs``.
+
+        Returns
+        -------
+        ImageObs
+            A new instance (same dataclass type) with ``new_rc`` and
+            recomputed precomputed grids.
+        """
+        import dataclasses
+
+        oversample = new_rc.oversample
+
+        new_psf_data = None
+        new_fine_X = None
+        new_fine_Y = None
+        new_kspace_psf_fft = None
+
+        if self.psf is not None:
+            from kl_pipe.psf import precompute_psf_fft
+
+            new_psf_data = precompute_psf_fft(
+                self.psf,
+                image_pars=self.image_pars,
+                oversample=oversample,
+            )
+
+            if int_model is not None and hasattr(int_model, '_kspace_pad_factor'):
+                from kl_pipe.psf import precompute_psf_kspace_fft
+
+                N = max(oversample, 1)
+                fine_ps = self.image_pars.pixel_scale / N
+                base_pad_sq = next_fast_len(
+                    int_model._kspace_pad_factor
+                    * max(self.image_pars.Nrow, self.image_pars.Ncol)
+                )
+                pad_sq = base_pad_sq * N
+                new_kspace_psf_fft = precompute_psf_kspace_fft(
+                    self.psf, (pad_sq, pad_sq), fine_ps
+                )
+
+        if oversample > 1:
+            new_fine_image_pars = self.image_pars.make_fine_scale(oversample)
+            new_fine_X, new_fine_Y = build_map_grid_from_image_pars(new_fine_image_pars)
+
+        return dataclasses.replace(
+            self,
+            render_config=new_rc,
+            psf_data=new_psf_data,
+            fine_X=new_fine_X,
+            fine_Y=new_fine_Y,
+            kspace_psf_fft=new_kspace_psf_fft,
+        )
 
 
 @dataclass(frozen=True)
@@ -106,21 +203,35 @@ class VelocityObs(ImageObs):
     """2D velocity observation with flux weighting for PSF convolution.
 
     Velocity PSF requires: v_obs = Conv(I*v, PSF) / Conv(I, PSF).
-    Three modes for intensity source:
+    Two modes for intensity source:
 
     - flux_model + flux_theta: evaluate intensity model with fixed params
     - flux_image: pre-rendered intensity map (upsampled to fine scale if needed)
-    - flux_model + flux_theta_override at render time: joint inference
     """
 
     flux_model: Optional['IntensityModel'] = None
     flux_theta: Optional[jnp.ndarray] = None
     flux_image: Optional[jnp.ndarray] = None
+    # flux_weight_key: key into source.emission_lines whose intensity profile
+    # weights the PSF for velocity rendering. None means no flux weighting
+    # (velocity-only inference; mirrors flux_image=None semantics).
+    flux_weight_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class GrismObs:
     """Grism observation — dispersed spectroscopy.
+
+    .. note::
+       The current implementation uses one shared PSF (``psf_data`` /
+       ``psf``) and one shared spatial+spectral cube across **all** emission
+       lines on the source. Real instruments have wavelength-dependent PSFs
+       and may benefit from per-line sub-cubes (to avoid wasted slices
+       between widely-separated lines). Both are tracked as an open
+       architectural item — see issue #51 — and require substantive
+       changes to ``GrismObs`` (e.g. ``psf_data: Dict[line_key, PSFData]``),
+       ``SourceModel.build_cube``, and ``SourceModel.render_grism``.
+       Deferred past Phase 3.
 
     Parameters
     ----------
@@ -130,8 +241,17 @@ class GrismObs:
         Pre-computed wavelength grid at concrete redshift.
     psf_data : PSFData, optional
         Pre-computed PSF FFT for per-slice convolution.
-    oversample : int
-        Spatial oversampling factor.
+    render_config : RenderConfig
+        Rendering recipe (oversample, pad_factor, maxk_threshold, etc.).
+        Canonical source for grid sizing -- ``obs.oversample`` is a
+        property that reads from this. When ``build_grism_obs`` is called
+        without ``render_config``, the obs carries a builder-default rc
+        marked ``_rc_was_default=True`` on the obs: ``InferenceTask.from_obs`` detects
+        this and rebuilds the obs internally with a priors-sized rc via
+        ``obs.with_render_config(...)``. For bespoke rendering outside
+        ``from_obs``, either accept the builder default or pass an
+        explicit ``RenderConfig`` (e.g.
+        ``build_grism_render_config(source, priors, grism_pars, psf=psf)``).
     fine_image_pars : ImagePars, optional
         Fine spatial grid (oversample > 1).
     data : jnp.ndarray, optional
@@ -142,34 +262,136 @@ class GrismObs:
         Boolean mask (True=valid).
     pixel_response_fft : jnp.ndarray, optional
         Precomputed BoxPixel sinc on the fine k-grid, used by the
-        post-dispersion 2D pixel-response step in ``KLModel.render_grism``.
+        post-dispersion 2D pixel-response step in ``SourceModel.render_grism``.
         Set by ``build_grism_obs`` when ``oversample > 1``; None at
         ``oversample == 1`` (no fine-grid sinc needed).
+    psf : galsim.GSObject, optional
+        Original galsim PSF retained for prior-grid validation so the
+        worst-case maxk scan can include PSF damping (mirrors
+        ``ImageObs.psf``). The rendered/precomputed PSF lives in
+        ``psf_data``; this field is the source-of-truth galsim object
+        used for off-grid evaluation.
     """
 
     grism_pars: object  # GrismPars — avoid circular import
     cube_pars: object  # CubePars — avoid circular import
     psf_data: Optional[PSFData] = None
-    oversample: int = 1
+    render_config: RenderConfig = None  # set by build_grism_obs; never None at runtime
     fine_image_pars: Optional[ImagePars] = None
     data: Optional[jnp.ndarray] = None
     variance: Optional[jnp.ndarray] = None
     mask: Optional[jnp.ndarray] = None
     pixel_response_fft: Optional[jnp.ndarray] = None
+    psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # _rc_was_default: internal flag — True when build_grism_obs supplied the
+    # default render_config (caller passed render_config=None), False when the
+    # caller passed an explicit one. Read by InferenceTask.from_obs to decide
+    # whether to auto-derive a priors-sized rc + rebuild via with_render_config.
+    # init=False keeps it out of the constructor kwargs; build_grism_obs sets
+    # it via object.__setattr__ (the standard escape hatch for frozen
+    # dataclasses), and pytree unflatten restores it the same way.
+    _rc_was_default: bool = field(default=False, init=False, repr=False)
 
+    @property
+    def oversample(self) -> int:
+        """Oversample factor; canonical source is render_config.oversample."""
+        return self.render_config.oversample if self.render_config is not None else 1
+
+    @property
+    def spectral_oversample(self) -> int:
+        """Wavelength sub-bin count; canonical source is render_config.spectral_oversample."""
+        return (
+            self.render_config.spectral_oversample
+            if self.render_config is not None
+            else 15
+        )
+
+    def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
+        """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
+
+        Used by ``InferenceTask.from_obs`` when the obs was constructed with
+        a builder-default ``render_config`` (``obs._rc_was_default=True``) and the
+        priors imply a different oversample. The returned obs has fresh
+        ``psf_data`` (PSF FFT at ``new_rc.oversample``), fresh
+        ``fine_image_pars``, and fresh ``pixel_response_fft``. All other
+        fields (``grism_pars``, ``cube_pars``, ``data``, ``variance``,
+        ``mask``, ``psf``) are preserved.
+
+        Parameters
+        ----------
+        new_rc : RenderConfig
+            The replacement rendering recipe. Determines the new
+            ``oversample`` for grid sizing.
+
+        Returns
+        -------
+        GrismObs
+            A new instance with ``new_rc`` and recomputed precomputed grids.
+        """
+        import dataclasses
+
+        oversample = new_rc.oversample
+
+        new_psf_data = None
+        new_fine_image_pars = None
+        new_pixel_response_fft = None
+
+        if self.psf is not None:
+            from kl_pipe.psf import precompute_psf_fft
+
+            new_psf_data = precompute_psf_fft(
+                self.psf,
+                image_pars=self.cube_pars.image_pars,
+                oversample=oversample,
+            )
+
+        if oversample > 1:
+            new_fine_image_pars = self.cube_pars.image_pars.make_fine_scale(oversample)
+            coarse_ps = self.cube_pars.image_pars.pixel_scale
+            fine_ps = new_fine_image_pars.pixel_scale
+            Nrow_f, Ncol_f = new_fine_image_pars.Nrow, new_fine_image_pars.Ncol
+            kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+            ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+            KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+            new_pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
+
+        return dataclasses.replace(
+            self,
+            render_config=new_rc,
+            psf_data=new_psf_data,
+            fine_image_pars=new_fine_image_pars,
+            pixel_response_fft=new_pixel_response_fft,
+        )
+
+#I need to understand the render config stuff better
 @dataclass(frozen=True)
-class FiberObs: #wip
-    fiber_pars: object #cubepars are within fiberpars for now
-    cube_pars: object
+class FiberObs:
+    fiber_pars: object  # FiberPars — avoid circular import
+    cube_pars: object  # CubePars — avoid circular import
     psf_data: Optional[PSFData] = None
-    oversample: int = 1
+    render_config: RenderConfig = None  # set by build_grism_obs; never None at runtime
     fine_image_pars: Optional[ImagePars] = None
     data: Optional[jnp.ndarray] = None
     variance: Optional[jnp.ndarray] = None
+    mask: Optional[jnp.ndarray] = None
+    pixel_response_fft: Optional[jnp.ndarray] = None
+    psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # _rc_was_default: internal flag — True when build_grism_obs supplied the
+    # default render_config (caller passed render_config=None), False when the
+    # caller passed an explicit one. Read by InferenceTask.from_obs to decide
+    # whether to auto-derive a priors-sized rc + rebuild via with_render_config.
+    # init=False keeps it out of the constructor kwargs; build_grism_obs sets
+    # it via object.__setattr__ (the standard escape hatch for frozen
+    # dataclasses), and pytree unflatten restores it the same way.
+    bp_array: Optional[jnp.ndarray] = None
     ATMPSF_conv_fiber_mask: Optional[jnp.ndarray] = None
     resolution_matrix: Optional[jnp.ndarray] = None
+    _rc_was_default: bool = field(default=False, init=False, repr=False)
 
 
+
+
+#I don't know what the heck these are
 # ============================================================================
 # JAX pytree registration
 # ============================================================================
@@ -188,13 +410,18 @@ def _image_obs_flatten(obs):
         obs.kspace_psf_fft,
         obs.pixel_response,
     )
-    aux = (obs.image_pars, obs.render_config, obs.psf)
+    aux = (
+        obs.image_pars,
+        obs.render_config,
+        obs.psf,
+        obs.broadband_key,
+        obs._rc_was_default,
+    )
     return children, aux
 
 
-
 def _image_obs_unflatten(aux, children):
-    return ImageObs(
+    obs = ImageObs(
         image_pars=aux[0],
         render_config=aux[1],
         X=children[0],
@@ -208,7 +435,12 @@ def _image_obs_unflatten(aux, children):
         kspace_psf_fft=children[8],
         pixel_response=children[9],
         psf=aux[2],
+        broadband_key=aux[3],
     )
+    # _rc_was_default is field(init=False); restore via frozen-dataclass bypass.
+    object.__setattr__(obs, '_rc_was_default', aux[4])
+    return obs
+
 
 jax.tree_util.register_pytree_node(ImageObs, _image_obs_flatten, _image_obs_unflatten)
 
@@ -227,12 +459,20 @@ def _velocity_obs_flatten(obs):
         obs.flux_theta,
         obs.flux_image,
     )
-    aux = (obs.image_pars, obs.render_config, obs.flux_model, obs.psf)
+    aux = (
+        obs.image_pars,
+        obs.render_config,
+        obs.flux_model,
+        obs.psf,
+        obs.broadband_key,
+        obs.flux_weight_key,
+        obs._rc_was_default,
+    )
     return children, aux
 
 
 def _velocity_obs_unflatten(aux, children):
-    return VelocityObs(
+    obs = VelocityObs(
         image_pars=aux[0],
         render_config=aux[1],
         X=children[0],
@@ -248,7 +488,11 @@ def _velocity_obs_unflatten(aux, children):
         flux_theta=children[9],
         flux_image=children[10],
         psf=aux[3],
+        broadband_key=aux[4],
+        flux_weight_key=aux[5],
     )
+    object.__setattr__(obs, '_rc_was_default', aux[6])
+    return obs
 
 
 jax.tree_util.register_pytree_node(
@@ -264,22 +508,32 @@ def _grism_obs_flatten(obs):
         obs.mask,
         obs.pixel_response_fft,
     )
-    aux = (obs.grism_pars, obs.cube_pars, obs.oversample, obs.fine_image_pars)
+    aux = (
+        obs.grism_pars,
+        obs.cube_pars,
+        obs.render_config,
+        obs.fine_image_pars,
+        obs.psf,
+        obs._rc_was_default,
+    )
     return children, aux
 
 
 def _grism_obs_unflatten(aux, children):
-    return GrismObs(
+    obs = GrismObs(
         grism_pars=aux[0],
         cube_pars=aux[1],
-        oversample=aux[2],
+        render_config=aux[2],
         fine_image_pars=aux[3],
         psf_data=children[0],
         data=children[1],
         variance=children[2],
         mask=children[3],
         pixel_response_fft=children[4],
+        psf=aux[4],
     )
+    object.__setattr__(obs, '_rc_was_default', aux[5])
+    return obs
 
 
 jax.tree_util.register_pytree_node(GrismObs, _grism_obs_flatten, _grism_obs_unflatten)
@@ -294,7 +548,6 @@ def build_image_obs(
     image_pars: ImagePars,
     *,
     psf=None,
-    oversample: int = 5,
     gsparams=None,
     data=None,
     variance=None,
@@ -302,6 +555,7 @@ def build_image_obs(
     int_model=None,
     pixel_response=_PIXEL_RESPONSE_UNSET,
     render_config=None,
+    broadband_key: Optional[str] = None,
 ) -> ImageObs:
     """Build imaging observation. Replaces Model.configure_psf().
 
@@ -311,14 +565,6 @@ def build_image_obs(
         Pixel grid metadata.
     psf : galsim.GSObject, optional
         PSF profile. None = no PSF convolution.
-    oversample : int
-        Oversampling factor for source evaluation (positive odd int).
-        Used for velocity models (spatial oversampling) and as legacy
-        anti-aliasing for k-space models. For k-space intensity models,
-        pixel integration is handled by ``pixel_response`` in k-space;
-        most users should rely on adaptive grid sizing via
-        ``folding_threshold`` rather than manual ``oversample``.
-        Default 5.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -336,16 +582,17 @@ def build_image_obs(
         ``pixel_response=None`` explicitly to disable pixel integration
         (for testing or point-sampled comparisons).
     render_config : RenderConfig, optional
-        When provided, ``render_config.oversample`` takes precedence over
-        the bare ``oversample`` parameter for PSF FFT sizing and fine-grid
-        construction.
+        Rendering recipe (single source of truth for oversampling, PSF FFT
+        sizing, and fine-grid construction). When omitted, defaults to
+        ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)`` and the obs is marked
+        ``_rc_was_default=True``: ``InferenceTask.from_obs`` will derive a
+        priors-sized rc and rebuild the obs internally. For bespoke
+        (non-inference) rendering with tight priors, pass an explicit
+        ``build_image_render_config(...)`` result.
     """
-    # render_config is the canonical source of truth; if both render_config
-    # and bare oversample are provided, render_config wins (and oversample
-    # arg is effectively ignored). Default: construct from oversample for
-    # backward-compatible API.
-    if render_config is None:
-        render_config = RenderConfig(oversample=oversample)
+    rc_was_default = render_config is None
+    if rc_was_default:
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample
 
     X, Y = build_map_grid_from_image_pars(image_pars)
@@ -399,7 +646,7 @@ def build_image_obs(
     if mask is not None:
         mask = jnp.asarray(mask, dtype=bool)
 
-    return ImageObs(
+    obs = ImageObs(
         image_pars=image_pars,
         X=X,
         Y=Y,
@@ -413,14 +660,19 @@ def build_image_obs(
         kspace_psf_fft=kspace_psf_fft,
         pixel_response=pixel_response,
         psf=psf,
+        broadband_key=broadband_key,
     )
+    # _rc_was_default is field(init=False) so it stays out of the constructor
+    # kwargs; set it here via the standard frozen-dataclass escape hatch.
+    if rc_was_default:
+        object.__setattr__(obs, '_rc_was_default', True)
+    return obs
 
 
 def build_velocity_obs(
     image_pars: ImagePars,
     *,
     psf=None,
-    oversample: int = 5,
     gsparams=None,
     data=None,
     variance=None,
@@ -430,6 +682,7 @@ def build_velocity_obs(
     flux_image=None,
     flux_image_pars=None,
     render_config=None,
+    flux_weight_key: Optional[str] = None,
 ) -> VelocityObs:
     """Build velocity observation. Replaces VelocityModel.configure_velocity_psf().
 
@@ -439,8 +692,6 @@ def build_velocity_obs(
         Pixel grid metadata.
     psf : galsim.GSObject, optional
         PSF profile.
-    oversample : int
-        Oversampling factor. Default 5.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -458,10 +709,11 @@ def build_velocity_obs(
     flux_image_pars : ImagePars, optional
         Image parameters of flux_image (for resampling if shape differs).
     render_config : RenderConfig, optional
-        Rendering recipe; default constructs from ``oversample``.
+        Rendering recipe (single source of truth for oversampling). When
+        omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``.
     """
     if render_config is None:
-        render_config = RenderConfig(oversample=oversample)
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample
 
     X, Y = build_map_grid_from_image_pars(image_pars)
@@ -481,10 +733,11 @@ def build_velocity_obs(
             gsparams=gsparams,
         )
 
-        if flux_model is None and flux_image is None:
+        if flux_model is None and flux_image is None and flux_weight_key is None:
             raise ValueError(
-                "Velocity PSF requires flux weighting. Provide flux_model + "
-                "flux_theta, or flux_image. For joint inference use build_joint_obs."
+                "Velocity PSF requires a flux source. Provide flux_model + "
+                "flux_theta, flux_image (pre-rendered), or flux_weight_key "
+                "(SourceModel emission line reference)."
             )
 
         # process flux_image: resample + upsample if needed
@@ -558,136 +811,7 @@ def build_velocity_obs(
         flux_theta=flux_theta,
         flux_image=processed_flux_image,
         psf=psf,
-    )
-
-
-def build_joint_obs(
-    image_pars_vel: ImagePars,
-    image_pars_int: ImagePars,
-    intensity_model: 'IntensityModel',
-    *,
-    psf_vel=None,
-    psf_int=None,
-    oversample: int = 5,
-    gsparams=None,
-    data_vel=None,
-    variance_vel=None,
-    mask_vel=None,
-    data_int=None,
-    variance_int=None,
-    mask_int=None,
-    pixel_response=_PIXEL_RESPONSE_UNSET,
-    render_config_vel=None,
-    render_config_int=None,
-) -> tuple:
-    """Build paired velocity+intensity obs for joint inference.
-
-    Velocity gets flux_model=intensity_model (joint mode: flux_theta
-    provided at render time via flux_theta_override).
-
-    Parameters
-    ----------
-    pixel_response : PixelResponse or None, optional
-        Passed through to build_image_obs for the intensity obs.
-        Default (sentinel): auto-construct BoxPixel. Pass None to disable.
-    render_config_vel, render_config_int : RenderConfig, optional
-        Per-channel rendering recipes; default constructs from ``oversample``.
-
-    Returns
-    -------
-    obs_vel : VelocityObs
-    obs_int : ImageObs
-    """
-    # velocity obs: flux_model set for joint mode, no flux_theta/flux_image
-    obs_vel = _build_velocity_obs_joint(
-        image_pars_vel,
-        psf=psf_vel,
-        oversample=oversample,
-        gsparams=gsparams,
-        data=data_vel,
-        variance=variance_vel,
-        mask=mask_vel,
-        flux_model=intensity_model,
-        render_config=render_config_vel,
-    )
-
-    obs_int = build_image_obs(
-        image_pars_int,
-        psf=psf_int,
-        oversample=oversample,
-        gsparams=gsparams,
-        data=data_int,
-        variance=variance_int,
-        mask=mask_int,
-        int_model=intensity_model,
-        pixel_response=pixel_response,
-        render_config=render_config_int,
-    )
-
-    return obs_vel, obs_int
-
-
-def _build_velocity_obs_joint(
-    image_pars,
-    *,
-    psf=None,
-    oversample=5,
-    gsparams=None,
-    data=None,
-    variance=None,
-    mask=None,
-    flux_model=None,
-    render_config=None,
-):
-    """Build VelocityObs for joint mode (flux_model set, no flux_theta/flux_image)."""
-    if render_config is None:
-        render_config = RenderConfig(oversample=oversample)
-    oversample = render_config.oversample
-
-    X, Y = build_map_grid_from_image_pars(image_pars)
-
-    psf_data = None
-    fine_X = None
-    fine_Y = None
-
-    if psf is not None:
-        from kl_pipe.psf import precompute_psf_fft
-
-        psf_data = precompute_psf_fft(
-            psf,
-            image_pars=image_pars,
-            oversample=oversample,
-            gsparams=gsparams,
-        )
-
-    # fine grids: create when oversample > 1, regardless of PSF
-    if oversample > 1:
-        fine_image_pars = image_pars.make_fine_scale(oversample)
-        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
-
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
-
-    return VelocityObs(
-        image_pars=image_pars,
-        X=X,
-        Y=Y,
-        render_config=render_config,
-        psf_data=psf_data,
-        fine_X=fine_X,
-        fine_Y=fine_Y,
-        data=data,
-        variance=variance,
-        mask=mask,
-        kspace_psf_fft=None,
-        flux_model=flux_model,
-        flux_theta=None,
-        flux_image=None,
-        psf=psf,
+        flux_weight_key=flux_weight_key,
     )
 
 
@@ -696,11 +820,11 @@ def build_grism_obs(
     z: float,
     *,
     psf=None,
-    oversample: int = 5,
     gsparams=None,
     data=None,
     variance=None,
     mask=None,
+    render_config: Optional[RenderConfig] = None,
 ) -> GrismObs:
     """Build grism observation. Replaces KLModel.configure_grism_psf().
 
@@ -712,8 +836,6 @@ def build_grism_obs(
         Concrete redshift for pre-computing cube_pars.
     psf : galsim.GSObject, optional
         PSF profile for per-slice convolution.
-    oversample : int
-        Spatial oversampling factor. Default 5.
     gsparams : galsim.GSParams, optional
         GalSim rendering parameters.
     data : jnp.ndarray, optional
@@ -722,7 +844,21 @@ def build_grism_obs(
         Noise variance.
     mask : jnp.ndarray, optional
         Boolean mask.
+    render_config : RenderConfig, optional
+        Rendering recipe (single source of truth for oversampling). When
+        omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``
+        and the obs is marked ``_rc_was_default=True``:
+        ``InferenceTask.from_obs`` will derive a priors-sized rc and
+        rebuild the obs internally. For bespoke (non-inference) rendering
+        with tight priors, pass an explicit
+        ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
+        result (from ``kl_pipe.render``).
     """
+    rc_was_default = render_config is None
+    if rc_was_default:
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
+    oversample = render_config.oversample  # canonical
+
     cube_pars = grism_pars.to_cube_pars(z)
 
     psf_data = None
@@ -760,124 +896,79 @@ def build_grism_obs(
     if mask is not None:
         mask = jnp.asarray(mask, dtype=bool)
 
-    return GrismObs(
+    obs = GrismObs(
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
-        oversample=oversample,
+        render_config=render_config,
         fine_image_pars=fine_image_pars,
         data=data,
         variance=variance,
         mask=mask,
         pixel_response_fft=pixel_response_fft,
+        psf=psf,
     )
-
-def get_fiber_mask(fiber_pars):
-    from photutils.geometry import (
-        circular_overlap_grid as cog,
-    )  # is it alright for me to still use this?
-
-    mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
-    mscale = fiber_pars.pix_scale
-    if fiber_pars.is_dispersed:
-        fiber_cen = [
-            fiber_pars.obs_conf['FIBERDX'],
-            fiber_pars.obs_conf['FIBERDY'],
-        ]  # dx, dy in arcsec
-        fiber_rad = fiber_pars.obs_conf['FIBERRAD']  # radius in arcsec
-        xmin, xmax = -mNx / 2 * mscale, mNx / 2 * mscale
-        ymin, ymax = -mNy / 2 * mscale, mNy / 2 * mscale
-        mask = cog(
-            xmin - fiber_cen[0],
-            xmax - fiber_cen[0],
-            ymin - fiber_cen[1],
-            ymax - fiber_cen[1],
-            mNx,
-            mNy,
-            fiber_rad,
-            1,
-            2,
-        )
-    else:
-        mask = jnp.ones([mNy, mNx])
-    return mask
-
-def precompute_PSF_convolved_fiber_mask(fiber_pars, galsim_psf):  # precompute fiber mask and make it a jax array
-    '''get atm-PSF convolved fiber mask'''
-    mNx, mNy = fiber_pars.spatial_shape[1], fiber_pars.spatial_shape[0]
-    mscale = fiber_pars.pix_scale
-
-    #galsim_psf = _build_PSF_model_fiber(
-    #fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff
-    #)
-
-    mask = galsim.InterpolatedImage(
-    galsim.Image(array=get_fiber_mask(fiber_pars)), scale=mscale
-    )
-
-    # convolve fiber mask with atmospheric PSF
-    maskC = mask if galsim_psf is None else galsim.Convolve([mask, galsim_psf])
-    ary = maskC.drawImage(nx=mNx, ny=mNy, scale=mscale).array
-
-    # replace galsim convolution?
-    # fiber_psf_data = self.configure_fiber_psf(galsim_psf, fiber_pars.cube_pars)
-    # if self._fiber_psf_data is not None:
-    # from kl_pipe.psf import convolve_fft
-    # oversample = self._fiber_psf_data.oversample
-    # maskC = convolve_fft(self.get_fiber_mask(fiber_pars), self._fiber_psf_data) #mask needs to be 5x bigger in size if oversampling = 5
-    ##maskC = convolve_fft(self.get_fiber_mask(fiber_pars), fiber_psf_data)
-    # else:
-    # maskC = self.get_fiber_mask(fiber_pars)
-    # print('maskC', maskC)
-    # ary=maskC
-
-    ATMPSF_conv_fiber_mask = jnp.array(ary)
-    return ATMPSF_conv_fiber_mask
-
-def get_resolution_matrix_fiber(fiber_pars):
-    from scipy.sparse import dia_matrix
-
-    if fiber_pars.is_dispersed:
-        diameter_in_pixel = fiber_pars.obs_conf['FIBRBLUR']
-        sigma = diameter_in_pixel / 4.0
-        x_in_pixel = jnp.arange(-5, 6)
-        # assume Gaussian for now
-        kernel = jnp.exp(-0.5 * (x_in_pixel / sigma) ** 2) / (
-            (2 * jnp.pi) ** 0.5 * sigma
-        )
-        # get the resolution matrix (sparse matrix)
-        band = jnp.array([kernel]).repeat(fiber_pars.n_lambda, axis=0).T
-        offset = jnp.arange(kernel.shape[0] // 2, -(kernel.shape[0] // 2) - 1, -1)
-        Rmat = dia_matrix(
-            (band, offset), shape=(fiber_pars.n_lambda, fiber_pars.n_lambda)
-        )
-    else:
-        Rmat = None
-    resolution_mat = jnp.array(Rmat.toarray())  # need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
-    return resolution_mat
-
+    # _rc_was_default is field(init=False) so it stays out of the constructor
+    # kwargs; set it here via the standard frozen-dataclass escape hatch.
+    if rc_was_default:
+        object.__setattr__(obs, '_rc_was_default', True)
+    return obs
 
 def build_fiber_obs(
     fiber_pars,
-    psf=None, #galsim object
-    oversample: int = 1,
+    z: float,
+    *,
+    psf=None,
     gsparams=None,
     data=None,
     variance=None,
-    ATMPSF_conv_fiber_mask=None,
-    resolution_matrix=None,
-    #sky_array=None,
+    mask=None, #need to figure out exactly what this is
+    render_config: Optional[RenderConfig] = None,
+    ATMPSF_conv_fiber_mask = None,
+    resolution_matrix = None,
 ) -> FiberObs:
-    cube_pars = fiber_pars.cube_pars
+    """Build fiber spectrograph observation
+
+    Parameters
+    ----------
+    fiber_pars : FiberPars
+        Dispersion parameters.
+    z : float
+        Concrete redshift for pre-computing cube_pars.
+    psf : galsim.GSObject, optional
+        PSF profile for per-slice convolution.
+    gsparams : galsim.GSParams, optional
+        GalSim rendering parameters.
+    data : jnp.ndarray, optional
+        Observed fiber spectrum data.
+    variance : jnp.ndarray or float, optional
+        Noise variance.
+    mask : jnp.ndarray, optional
+        Boolean mask.
+    render_config : RenderConfig, optional
+        Rendering recipe (single source of truth for oversampling). When
+        omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``
+        and the obs is marked ``_rc_was_default=True``:
+        ``InferenceTask.from_obs`` will derive a priors-sized rc and
+        rebuild the obs internally. For bespoke (non-inference) rendering
+        with tight priors, pass an explicit
+        ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
+        result (from ``kl_pipe.render``).
+    """
+    rc_was_default = render_config is None
+    if rc_was_default:
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
+    oversample = render_config.oversample # canonical
+
+    cube_pars = fiber_pars.to_cube_pars(z)
+    #cube_pars = fiber_pars.cube_pars
 
     psf_data = None
     fine_image_pars = None
+    pixel_response_fft = None
 
-    if psf is not None: #galsim psf object
+    if psf is not None:
         from kl_pipe.psf import precompute_psf_fft
-
-        #added by me
-        #psf = _build_PSF_model_fiber(fiber_pars.obs_conf, lam_mean=fiber_pars.lambda_eff)
 
         psf_data = precompute_psf_fft(
             psf,
@@ -886,43 +977,140 @@ def build_fiber_obs(
             gsparams=gsparams,
         )
 
-        if oversample > 1:
-            fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
-    else:
-        oversample = 1
+    # fine grid: create when oversample > 1, regardless of PSF
+    if oversample > 1:
+        fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
+        # precompute BoxPixel sinc on fine k-grid for post-dispersion pixel
+        # response (consumed by KLModel.render_grism). pixel response is a
+        # coarse-detector property; sinc uses the coarse pixel_scale.
+        coarse_ps = cube_pars.image_pars.pixel_scale
+        fine_ps = fine_image_pars.pixel_scale
+        Nrow_f, Ncol_f = fine_image_pars.Nrow, fine_image_pars.Ncol
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
 
     if data is not None:
         data = jnp.asarray(data)
     if variance is not None:
         variance = jnp.asarray(variance)
-    #if mask is not None: #for masking out part of the data I'm guessing
+    if mask is not None:
+        mask = jnp.asarray(mask, dtype=bool) #don't know how to use the mask yet
 
-    if ATMPSF_conv_fiber_mask is None and fiber_pars.is_dispersed:
-        ATMPSF_conv_fiber_mask = precompute_PSF_convolved_fiber_mask(fiber_pars, psf)
-        #fiber_mask = get_fiber_mask(fiber_pars)
-        ATMPSF_conv_fiber_mask = jnp.asarray(ATMPSF_conv_fiber_mask)#, dtype=bool)
-    if resolution_matrix is None and fiber_pars.is_dispersed:
-        resolution_matrix = get_resolution_matrix_fiber(fiber_pars)
+    throughput = gs.Bandpass(
+        fiber_pars.obs_conf['BANDPASS'],'nm',
+        blue_limit=cube_pars.lambda_grid[0],
+        red_limit=cube_pars.lambda_grid[-1],
+    )
+    bp_array = jnp.array(throughput(cube_pars.lambda_grid))
+
+    if ATMPSF_conv_fiber_mask is None:
+        if oversample > 1:
+            ATMPSF_conv_fiber_mask = precompute_PSF_convolved_fiber_mask(fine_image_pars, fiber_pars, psf)
+        else:
+            ATMPSF_conv_fiber_mask = precompute_PSF_convolved_fiber_mask(cube_pars.image_pars, fiber_pars, psf)
+        ATMPSF_conv_fiber_mask = jnp.asarray(ATMPSF_conv_fiber_mask)
+    if resolution_matrix is None:
+        resolution_matrix = get_resolution_matrix_fiber(fiber_pars, cube_pars)
         resolution_matrix = jnp.asarray(resolution_matrix)
 
-    #read in sky model here? no I did it in FiberPars
-    #if sky_array is None: #read in sky spectrum model
-        #skysb = galsim.LookupTable.from_file(fiber_pars.obs_conf["SKYMODEL"], f_log=True) #is this a galsim object?
-        #sky_array = skysb(fiber_pars.lambda_grid)
-    #else:
-        #skysb = None
-        #sky_array = None
-    #sky_array = None
-
-    return FiberObs(
+    obs = FiberObs(
         fiber_pars=fiber_pars,
         cube_pars=cube_pars,
         psf_data=psf_data,
-        oversample=oversample,
+        render_config=render_config,
         fine_image_pars=fine_image_pars,
         data=data,
         variance=variance,
+        mask=mask,
+        pixel_response_fft=pixel_response_fft,
+        psf=psf, #this is the galsim psf object
+        bp_array = bp_array,
         ATMPSF_conv_fiber_mask=ATMPSF_conv_fiber_mask,
         resolution_matrix=resolution_matrix,
-        #skymodel_array=sky_array
     )
+    # _rc_was_default is field(init=False) so it stays out of the constructor
+    # kwargs; set it here via the standard frozen-dataclass escape hatch.
+    if rc_was_default:
+        object.__setattr__(obs, '_rc_was_default', True)
+    return obs
+
+#maybe put these in the fiber.py file
+def get_fiber_mask(image_pars, fiber_pars):
+    from photutils.geometry import (
+        circular_overlap_grid as cog,
+    )
+
+    #print(Nrow_f, Ncol_f)
+    #spatial_shape = fiber_pars.output_shape
+    #mNx, mNy = spatial_shape[1], spatial_shape[0]
+
+    mNx, mNy = image_pars.Nrow, image_pars.Ncol
+    mscale = image_pars.pixel_scale #is this in arcsec/pixel?
+    fiber_cen = [
+        fiber_pars.fiber_dx,#fiber_pars.obs_conf['FIBERDX'],
+        fiber_pars.fiber_dy,#fiber_pars.obs_conf['FIBERDY'],
+    ]  # dx, dy in arcsec
+    fiber_rad = fiber_pars.fiber_radius #fiber_pars.obs_conf['FIBERRAD']  # radius in arcsec
+    xmin, xmax = -mNx / 2 * mscale, mNx / 2 * mscale
+    ymin, ymax = -mNy / 2 * mscale, mNy / 2 * mscale
+    mask = cog(
+        xmin - fiber_cen[0],
+        xmax - fiber_cen[0],
+        ymin - fiber_cen[1],
+        ymax - fiber_cen[1],
+        mNx,
+        mNy,
+        fiber_rad,
+        1,
+        2,
+    )
+    return mask
+
+import matplotlib.pyplot as plt
+def precompute_PSF_convolved_fiber_mask(image_pars, fiber_pars, galsim_psf):
+    '''get atm-PSF convolved fiber mask'''
+    mNx, mNy = image_pars.Nrow, image_pars.Ncol
+    mscale = image_pars.pixel_scale
+
+    mask = gs.InterpolatedImage(
+    gs.Image(array=get_fiber_mask(image_pars, fiber_pars)), scale=mscale
+    )
+
+    # convolve fiber mask with atmospheric PSF
+    maskC = mask if galsim_psf is None else gs.Convolve([mask, galsim_psf])
+    ary = maskC.drawImage(nx=mNx, ny=mNy, scale=mscale).array
+
+    # replace galsim convolution?
+    # fiber_psf_data = self.configure_fiber_psf(galsim_psf, fiber_pars.cube_pars)
+    # if self._fiber_psf_data is not None:
+    # from kl_pipe.psf import convolve_fft
+    # oversample = self._fiber_psf_data.oversample
+    # maskC = convolve_fft(self.get_fiber_mask(fiber_pars), self._fiber_psf_data) #mask needs to be 5x bigger in size if oversampling = 5
+    # else:
+    # maskC = self.get_fiber_mask(fiber_pars)
+    # print('maskC', maskC)
+    # ary=maskC
+
+    ATMPSF_conv_fiber_mask = jnp.array(ary)
+    return ATMPSF_conv_fiber_mask
+
+def get_resolution_matrix_fiber(fiber_pars, cube_pars):
+    from scipy.sparse import dia_matrix
+
+    diameter_in_pixel = fiber_pars.fiber_blur #fiber_pars.obs_conf['FIBRBLUR']
+    sigma = diameter_in_pixel / 4.0
+    x_in_pixel = jnp.arange(-5, 6)
+    # assume Gaussian for now
+    kernel = jnp.exp(-0.5 * (x_in_pixel / sigma) ** 2) / (
+        (2 * jnp.pi) ** 0.5 * sigma
+    )
+    # get the resolution matrix (sparse matrix)
+    band = jnp.array([kernel]).repeat(cube_pars.n_lambda, axis=0).T
+    offset = jnp.arange(kernel.shape[0] // 2, -(kernel.shape[0] // 2) - 1, -1)
+    Rmat = dia_matrix(
+        (band, offset), shape=(cube_pars.n_lambda, cube_pars.n_lambda)
+    )
+    resolution_mat = jnp.array(Rmat.toarray())  # need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
+    return resolution_mat

@@ -30,10 +30,16 @@ make test-basic  # Skips TNG50 tests
 
 ```
 kl_pipe/              # Main pipeline package
-├── model.py          # Model base classes (Model, VelocityModel, IntensityModel, KLModel)
+├── model.py          # Model base classes (Model, VelocityModel, IntensityModel)
+├── source.py         # SourceModel: composes velocity + broadband + emission-line components
+├── lines.py          # EmissionLine + LINE_LAMBDAS registry
+├── coordinates.py    # WCS-derived celestial-to-detector rotation, shear rotation
 ├── velocity.py       # Velocity field models (e.g., CenteredVelocityModel)
 ├── intensity.py      # Surface brightness models (e.g., InclinedExponentialModel)
+├── observation.py    # Observation types (ImageObs, VelocityObs, GrismObs) + factories
 ├── likelihood.py     # Likelihood construction and optimization
+├── spectral.py       # Datacube grid (CubePars)
+├── dispersion.py     # Grism dispersion (GrismPars, 3D->2D projection)
 ├── transformation.py # Multi-plane coordinate transformations
 ├── parameters.py     # Parameter and coordinate handling (ImagePars, Pars, etc.)
 ├── priors.py         # Prior distributions (Uniform, Gaussian, TruncatedNormal, etc.)
