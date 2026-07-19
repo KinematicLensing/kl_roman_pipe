@@ -653,8 +653,10 @@ def _validate_psf_kernel_size_args(
         raise ValueError(
             "psf_kernel_size requires an explicit render_config; the "
             "builder-default render_config is rebuilt by InferenceTask via "
-            "with_render_config, which would silently drop the pinned "
-            "kernel size"
+            "with_render_config at a priors-derived oversample, which "
+            "preserves the pinned pixel count but at a different fine pixel "
+            "scale -- so the same count would denote a different angular "
+            "size than the caller computed"
         )
 
 
@@ -710,7 +712,9 @@ def build_image_obs(
         Pins the kernel array shape (odd, >= automatic good size; raises
         otherwise). Requires an explicit ``render_config``: the
         builder-default config is rebuilt by ``InferenceTask`` via
-        ``with_render_config``, which would silently drop the pinned size.
+        ``with_render_config`` at a priors-derived oversample, which
+        preserves the pinned pixel count but at a different fine pixel
+        scale, so the same count would denote a different angular size.
     """
     rc_was_default = render_config is None
     if rc_was_default:

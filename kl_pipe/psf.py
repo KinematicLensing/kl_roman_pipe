@@ -41,7 +41,9 @@ if TYPE_CHECKING:
 class PSFData:
     """Pre-computed PSF arrays for JAX FFT convolution."""
 
-    kernel_fft: jnp.ndarray  # pre-rFFT'd kernel (padded); shape (P, P//2+1)
+    kernel_fft: (
+        jnp.ndarray
+    )  # pre-rFFT'd kernel (padded); shape (Nrow_pad, Ncol_pad//2 + 1)
     padded_shape: tuple  # (Nrow_pad, Ncol_pad) — fine-scale when oversampled
     original_shape: tuple  # (Nrow, Ncol) — fine-scale when oversampled
     oversample: int  # oversampling factor (1 = no oversampling)
