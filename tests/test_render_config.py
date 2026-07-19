@@ -457,6 +457,10 @@ class TestEffectiveMaxkLoudGuard:
 
         class _DeadPSF:
             # FT well below threshold at every k, including k=0 (not normalized)
+            maxk = (
+                100.0  # band limit above the scan range; real GSObjects always have one
+            )
+
             def kValue(self, pos):
                 return 1e-9 + 0j
 

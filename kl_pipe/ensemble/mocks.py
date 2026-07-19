@@ -22,8 +22,10 @@ wavelength, grism at the observed Halpha wavelength). Roman grism kernels
 are rendered at a stamp size pinned to the ensemble's largest observed
 wavelength so the PSF array shape is constant across z. On hosts without
 galsim (e.g. Vista NGC containers), the vista_kit GaussianPSFShim mechanism
-applies; this module raises a clear ImportError rather than silently
-substituting.
+applies to GAUSSIAN configs only; roman_wfi needs the real galsim (the
+pupil-plane and aberration data ship inside the galsim package itself, so
+any working install suffices). This module raises a clear ImportError
+rather than silently substituting.
 """
 
 from __future__ import annotations
@@ -82,12 +84,18 @@ def _build_gaussian_psf(fwhm_arcsec: float):
 # a long-lived worker claims many fits at distinct redshifts, so an unbounded
 # cache would accumulate one GSObject per fit; within-fit reuse only needs a
 # handful of entries.
-_ROMAN_PSF_CACHE: Dict[Tuple[int, int, float, Optional[str]], object] = {}
+_ROMAN_PSF_CACHE: Dict[
+    Tuple[int, int, float, Optional[str], Optional[float]], object
+] = {}
 _ROMAN_PSF_CACHE_MAX = 16
 
 
 def _get_roman_wfi_psf(
-    sca: int, pupil_bin: int, wavelength_nm: float, bandpass: Optional[str]
+    sca: int,
+    pupil_bin: int,
+    wavelength_nm: float,
+    bandpass: Optional[str],
+    folding_threshold: Optional[float] = None,
 ):
     """Monochromatic Roman WFI PSF via galsim.roman.getPSF, cached.
 
@@ -104,36 +112,75 @@ def _get_roman_wfi_psf(
     wavelength_nm : float
         Wavelength in nm (galsim.roman.getPSF takes nm).
     bandpass : str or None
-        Roman bandpass name selecting the pupil-plane configuration
+        galsim.roman bandpass key selecting the pupil-plane configuration
         (F184 is the only long-wavelength band); None uses the
         short-wavelength pupil image.
+    folding_threshold : float, optional
+        GSParams folding_threshold applied to the returned PSF; controls
+        the rendered kernel stamp size (and hence the padded convolution
+        FFT). None keeps GalSim's default (5e-3).
     """
     _import_galsim()
+    import galsim
     from galsim import roman
 
-    key = (int(sca), int(pupil_bin), round(float(wavelength_nm), 1), bandpass)
+    key = (
+        int(sca),
+        int(pupil_bin),
+        round(float(wavelength_nm), 1),
+        bandpass,
+        folding_threshold,
+    )
     if key not in _ROMAN_PSF_CACHE:
         while len(_ROMAN_PSF_CACHE) >= _ROMAN_PSF_CACHE_MAX:
             _ROMAN_PSF_CACHE.pop(next(iter(_ROMAN_PSF_CACHE)))
-        _ROMAN_PSF_CACHE[key] = roman.getPSF(
+        psf = roman.getPSF(
             SCA=key[0], bandpass=bandpass, wavelength=key[2], pupil_bin=key[1]
         )
+        if folding_threshold is not None:
+            psf = psf.withGSParams(galsim.GSParams(folding_threshold=folding_threshold))
+        _ROMAN_PSF_CACHE[key] = psf
     return _ROMAN_PSF_CACHE[key]
+
+
+# official Roman WFI filter names -> galsim.roman bandpass keys. galsim
+# kept the legacy WFIRST names (H158, Z087, ...); the official filter set is
+# F062-F213 (roman-docs.stsci.edu), so configs may use either.
+_OFFICIAL_TO_GALSIM_BAND = {
+    'F062': 'R062',
+    'F087': 'Z087',
+    'F106': 'Y106',
+    'F129': 'J129',
+    'F146': 'W146',
+    'F158': 'H158',
+    'F184': 'F184',
+    'F213': 'K213',
+}
+
+
+def _galsim_roman_band(band: str) -> str:
+    """Resolve an official Roman WFI filter name or a galsim legacy key to
+    the galsim.roman bandpass key."""
+    if band in _OFFICIAL_TO_GALSIM_BAND:
+        return _OFFICIAL_TO_GALSIM_BAND[band]
+    if band in _OFFICIAL_TO_GALSIM_BAND.values():
+        return band
+    raise ValueError(
+        f"band '{band}' is not a Roman WFI filter; official names: "
+        f"{sorted(_OFFICIAL_TO_GALSIM_BAND)} (galsim legacy keys "
+        f"{sorted(_OFFICIAL_TO_GALSIM_BAND.values())} also accepted)"
+    )
 
 
 @lru_cache(maxsize=None)
 def _band_effective_wavelength_nm(band: str) -> float:
-    """Effective wavelength (nm) of a Roman WFI bandpass."""
+    """Effective wavelength (nm) of a Roman WFI bandpass (official or
+    galsim legacy name)."""
     _import_galsim()
     from galsim import roman
 
-    bandpasses = roman.getBandpasses()
-    if band not in bandpasses:
-        raise ValueError(
-            f"band '{band}' is not a Roman WFI bandpass; a roman_wfi "
-            f"broadband psf requires one of {sorted(bandpasses)}"
-        )
-    return float(bandpasses[band].effective_wavelength)
+    key = _galsim_roman_band(band)
+    return float(roman.getBandpasses()[key].effective_wavelength)
 
 
 def _build_band_psf(psf_spec: 'PSFSpec', band: str):
@@ -147,7 +194,8 @@ def _build_band_psf(psf_spec: 'PSFSpec', band: str):
             psf_spec.sca,
             psf_spec.pupil_bin,
             _band_effective_wavelength_nm(band),
-            bandpass=band,
+            bandpass=_galsim_roman_band(band),
+            folding_threshold=psf_spec.folding_threshold,
         )
     raise NotImplementedError(f"psf type '{psf_spec.psf_type}' has no mock PSF builder")
 
@@ -165,6 +213,7 @@ def _build_grism_psf(psf_spec: 'PSFSpec', z: float):
             psf_spec.pupil_bin,
             LINE_LAMBDAS['Halpha'] * (1.0 + z),
             bandpass=None,
+            folding_threshold=psf_spec.folding_threshold,
         )
     raise NotImplementedError(f"psf type '{psf_spec.psf_type}' has no mock PSF builder")
 

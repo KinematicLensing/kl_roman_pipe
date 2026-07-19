@@ -55,13 +55,19 @@ class PSFSpec:
 
     ``gaussian`` carries ``fwhm_arcsec``; ``roman_wfi`` (realistic WFI PSF
     via ``galsim.roman.getPSF``, monochromatic) carries ``sca`` and
-    ``pupil_bin``. Cross-type fields must be None (raises otherwise).
+    ``pupil_bin``, plus an optional ``folding_threshold`` (GalSim GSParams;
+    None keeps GalSim's default 5e-3). A looser threshold shrinks the
+    rendered kernel stamp -- and with it the padded convolution FFT --
+    at the cost of truncating more far-wing flux; see the accuracy/speed
+    table in the PR notes before loosening for production. Cross-type
+    fields must be None (raises otherwise).
     """
 
     psf_type: str
     fwhm_arcsec: Optional[float] = None  # gaussian only, arcsec
     sca: Optional[int] = None  # roman_wfi only, 1-18
     pupil_bin: Optional[int] = None  # roman_wfi only
+    folding_threshold: Optional[float] = None  # roman_wfi only, None = galsim default
 
     def __post_init__(self):
         if self.psf_type == 'gaussian':
@@ -72,6 +78,8 @@ class PSFSpec:
                 )
             if self.sca is not None or self.pupil_bin is not None:
                 raise ValueError("sca/pupil_bin are roman_wfi-only psf fields")
+            if self.folding_threshold is not None:
+                raise ValueError("folding_threshold is a roman_wfi-only psf field")
         elif self.psf_type == 'roman_wfi':
             if self.fwhm_arcsec is not None:
                 raise ValueError("fwhm_arcsec is a gaussian-only psf field")
@@ -84,6 +92,13 @@ class PSFSpec:
                     f"roman_wfi pupil_bin must be a positive int, got "
                     f"{self.pupil_bin!r}"
                 )
+            if self.folding_threshold is not None:
+                ft = self.folding_threshold
+                if not isinstance(ft, float) or not (0.0 < ft < 1.0):
+                    raise ValueError(
+                        f"roman_wfi folding_threshold must be a float in "
+                        f"(0, 1), got {ft!r}"
+                    )
         else:
             raise NotImplementedError(
                 f"psf type {self.psf_type!r} not supported; supported types: "
@@ -103,13 +118,17 @@ def _require_yaml_int(block: dict, key: str, default: int, context: str) -> int:
 
 
 def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
-    _reject_unknown(block, ('type', 'sca', 'pupil_bin'), context)
+    _reject_unknown(block, ('type', 'sca', 'pupil_bin', 'folding_threshold'), context)
+    folding_threshold = block.get('folding_threshold')
+    if folding_threshold is not None:
+        folding_threshold = float(folding_threshold)
     return PSFSpec(
         psf_type='roman_wfi',
         sca=_require_yaml_int(block, 'sca', _ROMAN_WFI_DEFAULT_SCA, context),
         pupil_bin=_require_yaml_int(
             block, 'pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN, context
         ),
+        folding_threshold=folding_threshold,
     )
 
 
@@ -205,27 +224,6 @@ class ObservingConfig:
         ]:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} ({value}) must be a positive int")
-
-    @property
-    def band_psf_fwhm(self) -> Dict[str, float]:
-        """Per-band gaussian FWHM (arcsec). Raises for non-gaussian PSFs."""
-        for band, psf in self.band_psf.items():
-            if psf.psf_type != 'gaussian':
-                raise ValueError(
-                    f"band_psf_fwhm is defined for gaussian PSFs only; band "
-                    f"'{band}' has psf type '{psf.psf_type}' (use band_psf)"
-                )
-        return {band: psf.fwhm_arcsec for band, psf in self.band_psf.items()}
-
-    @property
-    def grism_psf_fwhm(self) -> float:
-        """Grism gaussian FWHM (arcsec). Raises for non-gaussian PSFs."""
-        if self.grism_psf.psf_type != 'gaussian':
-            raise ValueError(
-                f"grism_psf_fwhm is defined for gaussian PSFs only; grism "
-                f"psf type is '{self.grism_psf.psf_type}' (use grism_psf)"
-            )
-        return self.grism_psf.fwhm_arcsec
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'ObservingConfig':

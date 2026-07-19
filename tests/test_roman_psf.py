@@ -76,7 +76,7 @@ def _pinned_kernel_size(pixel_scale: float, z_max: float = Z_HI) -> int:
 class TestRomanPSFConfig:
     def test_registry_roman_config_loads(self):
         config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
-        assert config.bands == ('H158', 'F184')
+        assert config.bands == ('F158', 'F184')
         assert config.grism_rolls_deg == (0.0, 45.0, 90.0, 135.0)
         for band in config.bands:
             assert config.band_psf[band].psf_type == 'roman_wfi'
@@ -106,20 +106,16 @@ class TestRomanPSFConfig:
         d['psf']['grism'] = {'type': 'roman_wfi'}
         config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
         assert config.band_psf['F087'].psf_type == 'gaussian'
-        assert config.band_psf_fwhm == {'F087': 0.18}
+        assert config.band_psf['F087'].fwhm_arcsec == 0.18
         assert config.grism_psf.psf_type == 'roman_wfi'
 
     def test_gaussian_configs_unchanged(self):
         config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
-        assert config.band_psf_fwhm == {'F087': 0.18, 'F158': 0.18}
-        assert config.grism_psf_fwhm == 0.18
-
-    def test_fwhm_properties_raise_for_roman(self):
-        config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
-        with pytest.raises(ValueError, match='gaussian PSFs only'):
-            config.band_psf_fwhm
-        with pytest.raises(ValueError, match='gaussian PSFs only'):
-            config.grism_psf_fwhm
+        assert {b: p.fwhm_arcsec for b, p in config.band_psf.items()} == {
+            'F087': 0.18,
+            'F158': 0.18,
+        }
+        assert config.grism_psf.fwhm_arcsec == 0.18
 
     def test_unknown_type_raises(self, tmp_path):
         for channel in ('broadband', 'grism'):
@@ -165,6 +161,32 @@ class TestRomanPSFConfig:
         with pytest.raises(NotImplementedError, match='not supported'):
             PSFSpec(psf_type='airy')
 
+    def test_folding_threshold_parsing(self, tmp_path):
+        d = _config_dict()
+        d['psf']['grism'] = {'type': 'roman_wfi', 'folding_threshold': 0.02}
+        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        assert config.grism_psf.folding_threshold == 0.02
+        d['psf']['grism'] = {'type': 'roman_wfi'}
+        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        assert config.grism_psf.folding_threshold is None  # galsim default
+
+    def test_folding_threshold_roman_only(self, tmp_path):
+        d = _config_dict()
+        d['psf']['grism'] = {
+            'type': 'gaussian',
+            'fwhm_arcsec': 0.18,
+            'folding_threshold': 0.02,
+        }
+        with pytest.raises(ValueError, match='unknown keys'):
+            ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        with pytest.raises(ValueError, match='roman_wfi-only'):
+            PSFSpec(psf_type='gaussian', fwhm_arcsec=0.18, folding_threshold=0.02)
+
+    def test_folding_threshold_bad_value_raises(self):
+        for ft in (0.0, 1.0, -0.01):
+            with pytest.raises(ValueError, match='folding_threshold'):
+                PSFSpec(psf_type='roman_wfi', sca=10, pupil_bin=4, folding_threshold=ft)
+
 
 # ==============================================================================
 # Kernel construction (monochromatic getPSF)
@@ -182,17 +204,25 @@ class TestRomanKernel:
         assert _build_grism_psf(ROMAN_SPEC, Z_HI) is _build_grism_psf(ROMAN_SPEC, Z_HI)
 
     def test_band_effective_wavelengths(self):
-        # galsim.roman effective wavelengths are in nm; H158/F184 pivots
+        # galsim.roman effective wavelengths are in nm; F158/F184 pivots
         # are ~1.58/1.84 um, a loose bracket guards a silent unit change
-        lam_h158 = _band_effective_wavelength_nm('H158')
+        lam_f158 = _band_effective_wavelength_nm('F158')
         lam_f184 = _band_effective_wavelength_nm('F184')
-        assert 1500.0 < lam_h158 < 1650.0
+        assert 1500.0 < lam_f158 < 1650.0
         assert 1750.0 < lam_f184 < 1900.0
 
+    def test_official_and_galsim_band_names_agree(self):
+        # official Roman filter names map onto galsim's legacy WFIRST keys
+        assert _band_effective_wavelength_nm('F158') == (
+            _band_effective_wavelength_nm('H158')
+        )
+        assert _band_effective_wavelength_nm('F087') == (
+            _band_effective_wavelength_nm('Z087')
+        )
+
     def test_non_roman_band_raises(self):
-        # flagship band names (F087/F158) are not Roman WFI bandpasses
-        with pytest.raises(ValueError, match='not a Roman WFI bandpass'):
-            _build_band_psf(ROMAN_SPEC, 'F087')
+        with pytest.raises(ValueError, match='not a Roman WFI filter'):
+            _build_band_psf(ROMAN_SPEC, 'F999')
 
     def test_kernel_unit_normalized_and_finite(self):
         psf = _build_grism_psf(ROMAN_SPEC, 1.2)
@@ -292,7 +322,7 @@ class TestRomanObs:
 
     def test_image_obs_with_roman_psf(self):
         image_pars = ImagePars(shape=(32, 32), pixel_scale=PIXEL_SCALE, indexing='ij')
-        psf = _build_band_psf(ROMAN_SPEC, 'H158')
+        psf = _build_band_psf(ROMAN_SPEC, 'F158')
         obs = build_image_obs(
             image_pars, psf=psf, render_config=RenderConfig(oversample=1)
         )
@@ -366,17 +396,167 @@ class TestRomanObs:
             _build_grism_psf(ROMAN_SPEC, 1.0 + 0.01 * i)
         assert len(mocks_mod._ROMAN_PSF_CACHE) <= mocks_mod._ROMAN_PSF_CACHE_MAX
 
+    def test_folding_threshold_shrinks_pinned_kernel(self):
+        # a looser folding threshold trades far-wing truncation for a much
+        # smaller kernel stamp (and padded convolution FFT); measured at
+        # z=1.9, fine scale 0.11/3: 992 -> 252 px with 99.93% of flux still
+        # inside the stamp
+        loose = PSFSpec(
+            psf_type='roman_wfi', sca=10, pupil_bin=4, folding_threshold=0.02
+        )
+        fine_ps = PIXEL_SCALE / 3
+        size_default = _build_grism_psf(ROMAN_SPEC, Z_HI).getGoodImageSize(fine_ps)
+        size_loose = _build_grism_psf(loose, Z_HI).getGoodImageSize(fine_ps)
+        assert size_loose < size_default / 2
+        # distinct cache entries: threshold is part of the key
+        assert _build_grism_psf(loose, Z_HI) is not _build_grism_psf(ROMAN_SPEC, Z_HI)
+
+    def test_effective_maxk_ignores_kvalue_sidelobes(self):
+        # regression: the interpolated-pupil roman PSF's kValue bounces back
+        # above the 1e-3 threshold beyond its physical band limit (psf.maxk:
+        # the measured optical FT is ~5e-7 at the aperture cutoff but ~2e-2
+        # at k=70). The grism scan must not follow those sidelobes, else the
+        # priors-implied oversample explodes (7 vs the config's 3) and every
+        # production roman fit raises in InferenceTask.from_obs.
+        from kl_pipe.intensity import build_intensity_model
+        from kl_pipe.render import compute_effective_maxk_grism
+
+        psf = _build_grism_psf(ROMAN_SPEC, 1.2)
+        model = build_intensity_model('default')
+        params = {
+            'flux': 1.0,
+            'rscale': 0.35,
+            'cosi': 0.5,
+            'h_over_r': 0.1,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+        }
+        # grad_v_max/sigma_v chosen so the bare cube bandwidth (~370
+        # rad/arcsec) is far beyond the PSF band limit (~49): the scan
+        # result must be capped by the PSF, not the sidelobes
+        maxk = compute_effective_maxk_grism(
+            model, params, sigma_v=20.0, grad_v_max=2000.0, psf=psf
+        )
+        assert maxk <= float(psf.maxk) + 1e-9
+
+
+@pytest.mark.slow
+def test_folding_threshold_render_fidelity(tmp_path):
+    """Render distortion from a loosened kernel folding threshold, against
+    the default-threshold reference on the same scene. Bounds are 10x the
+    measured distortion (2026-07-18, canonical_P_roman geometry, z=1.2,
+    kernel pinned at z=1.9, line SNR 100): grism max|d|/peak = 3.3e-4 ->
+    4e-3; whole-stamp chi at SNR 100 = 0.51 -> 6.0. The knob does not touch
+    the broadband path (its kernel FT is evaluated analytically in k-space,
+    independent of the drawn stamp), pinned here by exact equality."""
+
+    def _clean_renders(ft):
+        d = _config_dict()
+        d['id'] = f'roman_fidelity_{ft}'
+        d['bands'] = ['F158']
+        d['psf'] = {
+            'broadband': {'type': 'roman_wfi'},
+            'grism': {'type': 'roman_wfi'},
+        }
+        if ft is not None:
+            d['psf']['broadband']['folding_threshold'] = ft
+            d['psf']['grism']['folding_threshold'] = ft
+        d['render'] = {'oversample': 3}
+        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        truth = scene_truth_defaults(config, spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 0.6,
+                'g1': 0.02,
+                'g2': -0.01,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        inputs = build_fit_inputs(
+            truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
+        )
+        grism = np.asarray(inputs.source.render_grism(truth, inputs.grism_obs['roll0']))
+        band = np.asarray(
+            inputs.source.render_broadband(truth, inputs.image_obs['F158'], 'F158')
+        )
+        sigma = float(np.sqrt(float(np.asarray(inputs.grism_obs['roll0'].variance))))
+        return grism, band, sigma
+
+    grism_ref, band_ref, sigma = _clean_renders(None)
+    grism_ft, band_ft, _ = _clean_renders(0.02)
+
+    diff = grism_ft - grism_ref
+    assert np.max(np.abs(diff)) / np.max(grism_ref) < 4e-3
+    assert np.sqrt(np.sum(diff**2)) / sigma < 6.0
+    np.testing.assert_array_equal(band_ft, band_ref)
+
+
+@pytest.mark.slow
+def test_from_obs_roman_production_path(tmp_path):
+    """The worker's exact fit-construction path with roman PSFs on both
+    channels: build_fit_inputs at the config oversample, then
+    InferenceTask.from_obs, then one finite log-posterior + gradient.
+    Regression: the priors-implied render config once demanded oversample 7
+    (kValue sidelobes beyond the PSF band limit) and from_obs raised on
+    every production roman fit."""
+    import jax
+
+    from kl_pipe.sampling import InferenceTask
+
+    spec = EnsembleSpec.from_yaml(DEV_SPEC)
+    d = _config_dict()
+    d['id'] = 'roman_prod_path'
+    d['bands'] = ['F158']
+    d['psf'] = {
+        'broadband': {'type': 'roman_wfi'},
+        'grism': {'type': 'roman_wfi'},
+    }
+    d['render'] = {'oversample': 3}
+    config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+
+    truth = scene_truth_defaults(config, spec.fixed)
+    truth.update(
+        {
+            'cosi': 0.5,
+            'theta_int': 0.6,
+            'g1': 0.02,
+            'g2': -0.01,
+            'vel.vcirc': 200.0,
+            'z': 1.2,
+        }
+    )
+    inputs = build_fit_inputs(
+        truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
+    )
+    task = InferenceTask.from_obs(
+        inputs.source,
+        inputs.priors,
+        image_obs=inputs.image_obs,
+        grism_obs=inputs.grism_obs,
+    )
+    fn = task.get_log_posterior_and_grad_fn()
+    theta0 = task.sample_prior(jax.random.PRNGKey(0), 1)[0]
+    val, grad = fn(theta0)
+    assert np.isfinite(float(val))
+    assert np.all(np.isfinite(np.asarray(grad)))
+
 
 @pytest.mark.slow
 def test_build_fit_inputs_roman_smoke(tmp_path):
     """End-to-end mock construction with roman_wfi PSFs on both channels:
-    one H158 band + one grism roll, oversample 1 to keep the kernel grids
+    one F158 band + one grism roll, oversample 1 to keep the kernel grids
     small. Asserts valid PSFData on every obs, finite noisy data, and a
     finite truth render through the fit's own obs."""
     spec = EnsembleSpec.from_yaml(DEV_SPEC)
     d = _config_dict()
     d['id'] = 'roman_smoke'
-    d['bands'] = ['H158']
+    d['bands'] = ['F158']
     d['psf'] = {
         'broadband': {'type': 'roman_wfi'},
         'grism': {'type': 'roman_wfi'},
@@ -399,7 +579,7 @@ def test_build_fit_inputs_roman_smoke(tmp_path):
         truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
     )
 
-    assert set(inputs.image_obs) == {'H158'}
+    assert set(inputs.image_obs) == {'F158'}
     assert set(inputs.grism_obs) == {'roll0'}
     for obs in list(inputs.image_obs.values()) + list(inputs.grism_obs.values()):
         assert obs.psf_data is not None
@@ -407,7 +587,7 @@ def test_build_fit_inputs_roman_smoke(tmp_path):
         assert float(np.asarray(obs.variance)) > 0
 
     band_render = np.asarray(
-        inputs.source.render_broadband(truth, inputs.image_obs['H158'], 'H158')
+        inputs.source.render_broadband(truth, inputs.image_obs['F158'], 'F158')
     )
     grism_render = np.asarray(
         inputs.source.render_grism(truth, inputs.grism_obs['roll0'])
