@@ -443,6 +443,178 @@ class TestRomanObs:
         assert maxk <= float(psf.maxk) + 1e-9
 
 
+def _folding_scan_inputs(tmp_path, ft, seed=11):
+    """FitInputs for the folding-threshold scan scene (single F158 band +
+    single roll, roman PSFs, oversample 3, z=1.2, line SNR 100)."""
+    d = _config_dict()
+    d['id'] = f'roman_folding_{ft}'
+    d['bands'] = ['F158']
+    d['psf'] = {
+        'broadband': {'type': 'roman_wfi'},
+        'grism': {'type': 'roman_wfi'},
+    }
+    if ft is not None:
+        d['psf']['broadband']['folding_threshold'] = ft
+        d['psf']['grism']['folding_threshold'] = ft
+    d['render'] = {'oversample': 3}
+    config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+    spec = EnsembleSpec.from_yaml(DEV_SPEC)
+    truth = scene_truth_defaults(config, spec.fixed)
+    truth.update(
+        {
+            'cosi': 0.5,
+            'theta_int': 0.6,
+            'g1': 0.02,
+            'g2': -0.01,
+            'vel.vcirc': 200.0,
+            'z': 1.2,
+        }
+    )
+    return (
+        build_fit_inputs(
+            truth, seed, spec, config, broadband_snr=100.0, line_snr=100.0
+        ),
+        truth,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic_plots
+def test_folding_threshold_diagnostic_plot(tmp_path):
+    """Diagnostic figure for the roman_wfi folding_threshold knob: kernel
+    stamp / padded-FFT size, log-posterior+gradient eval time, and render
+    distortion vs the default-threshold reference, plus per-threshold grism
+    residual maps in noise units (line SNR 100). Values are measured fresh
+    each run; the figure and CSV land in tests/out/roman_psf_folding/."""
+    import time
+
+    import matplotlib
+
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    import jax
+
+    from kl_pipe.sampling import InferenceTask
+
+    out_dir = REPO_ROOT / 'tests' / 'out' / 'roman_psf_folding'
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    thresholds = [None, 0.01, 0.02, 0.05]
+    fine_ps = PIXEL_SCALE / 3
+    rows = []
+    renders = {}
+    for ft in thresholds:
+        inputs, truth = _folding_scan_inputs(tmp_path, ft)
+        roll0 = inputs.grism_obs['roll0']
+        renders[ft] = np.asarray(inputs.source.render_grism(truth, roll0))
+
+        spec_ft = (
+            ROMAN_SPEC
+            if ft is None
+            else PSFSpec(
+                psf_type='roman_wfi', sca=10, pupil_bin=4, folding_threshold=ft
+            )
+        )
+        stamp = int(_build_grism_psf(spec_ft, Z_HI).getGoodImageSize(fine_ps))
+
+        task = InferenceTask.from_obs(
+            inputs.source,
+            inputs.priors,
+            image_obs=inputs.image_obs,
+            grism_obs=inputs.grism_obs,
+        )
+        fn = task.get_log_posterior_and_grad_fn()
+        theta0 = np.asarray(task.sample_prior(jax.random.PRNGKey(0), 1))[0]
+        val, grad = fn(theta0)  # compile
+        float(val), np.asarray(grad)
+        times = []
+        for i in range(10):
+            t0 = time.perf_counter()
+            v, g = fn(theta0 * (1.0 + 1e-4 * (i + 1)))
+            float(v), np.asarray(g)
+            times.append(time.perf_counter() - t0)
+
+        rows.append(
+            {
+                'folding_threshold': 5e-3 if ft is None else ft,
+                'kernel_stamp_fine_px': stamp,
+                'padded_fft_side': int(roll0.psf_data.padded_shape[0]),
+                'eval_median_ms': 1e3 * float(np.median(times)),
+                'sigma_pix': float(np.sqrt(float(np.asarray(roll0.variance)))),
+            }
+        )
+
+    ref = renders[None]
+    sigma = rows[0]['sigma_pix']
+    for row, ft in zip(rows, thresholds):
+        diff = renders[ft] - ref
+        row['maxabs_over_peak'] = float(np.max(np.abs(diff)) / np.max(ref))
+        row['stamp_chi_snr100'] = float(np.sqrt(np.sum(diff**2)) / sigma)
+
+    with open(out_dir / 'folding_scan.csv', 'w') as f:
+        keys = list(rows[0])
+        f.write(','.join(keys) + '\n')
+        for row in rows:
+            f.write(','.join(str(row[k]) for k in keys) + '\n')
+
+    fts = [r['folding_threshold'] for r in rows]
+    fig = plt.figure(figsize=(15, 8))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1, 1])
+
+    ax = fig.add_subplot(gs[0, 0])
+    ax.plot(fts, [r['kernel_stamp_fine_px'] for r in rows], 'o-', label='kernel stamp')
+    ax.plot(fts, [r['padded_fft_side'] for r in rows], 's--', label='padded FFT side')
+    ax.set_xscale('log')
+    ax.set_xlabel('folding_threshold')
+    ax.set_ylabel('size [fine px]')
+    ax.legend()
+    ax.set_title('grism kernel / FFT size (pin z=1.9)')
+
+    ax = fig.add_subplot(gs[0, 1])
+    ax.plot(fts, [r['eval_median_ms'] for r in rows], 'o-')
+    ax.set_xscale('log')
+    ax.set_xlabel('folding_threshold')
+    ax.set_ylabel('logpost+grad eval [ms]')
+    ax.set_title('eval time (this host, this run)')
+
+    ax = fig.add_subplot(gs[0, 2])
+    ax.plot(
+        fts[1:], [r['maxabs_over_peak'] for r in rows[1:]], 'o-', label='max|d|/peak'
+    )
+    ax.plot(
+        fts[1:],
+        [r['stamp_chi_snr100'] for r in rows[1:]],
+        's--',
+        label='whole-stamp chi @ line SNR 100',
+    )
+    ax.axhline(1.0, color='k', lw=0.8, ls=':', label='chi = 1')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('folding_threshold')
+    ax.set_title('render distortion vs default kernel')
+    ax.legend()
+
+    for i, ft in enumerate(thresholds[1:]):
+        ax = fig.add_subplot(gs[1, i])
+        resid = (renders[ft] - ref) / sigma
+        vmax = max(1e-12, float(np.max(np.abs(resid))))
+        im = ax.imshow(resid, cmap='RdBu_r', vmin=-vmax, vmax=vmax, origin='lower')
+        fig.colorbar(im, ax=ax, shrink=0.8)
+        ax.set_title(f'(render - ref) / sigma, ft={ft}')
+
+    fig.suptitle(
+        'roman_wfi PSF folding_threshold: cost vs fidelity '
+        '(1-band + 1-roll scan scene, z=1.2, kernel pinned at z=1.9)'
+    )
+    fig.tight_layout()
+    fig.savefig(out_dir / 'folding_threshold_diagnostics.png', dpi=130)
+    plt.close(fig)
+
+    assert (out_dir / 'folding_threshold_diagnostics.png').exists()
+    assert (out_dir / 'folding_scan.csv').exists()
+
+
 @pytest.mark.slow
 def test_folding_threshold_render_fidelity(tmp_path):
     """Render distortion from a loosened kernel folding threshold, against
@@ -454,33 +626,7 @@ def test_folding_threshold_render_fidelity(tmp_path):
     independent of the drawn stamp), pinned here by exact equality."""
 
     def _clean_renders(ft):
-        d = _config_dict()
-        d['id'] = f'roman_fidelity_{ft}'
-        d['bands'] = ['F158']
-        d['psf'] = {
-            'broadband': {'type': 'roman_wfi'},
-            'grism': {'type': 'roman_wfi'},
-        }
-        if ft is not None:
-            d['psf']['broadband']['folding_threshold'] = ft
-            d['psf']['grism']['folding_threshold'] = ft
-        d['render'] = {'oversample': 3}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
-        spec = EnsembleSpec.from_yaml(DEV_SPEC)
-        truth = scene_truth_defaults(config, spec.fixed)
-        truth.update(
-            {
-                'cosi': 0.5,
-                'theta_int': 0.6,
-                'g1': 0.02,
-                'g2': -0.01,
-                'vel.vcirc': 200.0,
-                'z': 1.2,
-            }
-        )
-        inputs = build_fit_inputs(
-            truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
-        )
+        inputs, truth = _folding_scan_inputs(tmp_path, ft)
         grism = np.asarray(inputs.source.render_grism(truth, inputs.grism_obs['roll0']))
         band = np.asarray(
             inputs.source.render_broadband(truth, inputs.image_obs['F158'], 'F158')
