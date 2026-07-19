@@ -25,7 +25,12 @@ from kl_pipe.ensemble.mocks import (
     build_fit_inputs,
 )
 from kl_pipe.ensemble.scene import scene_truth_defaults
-from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig, PSFSpec
+from kl_pipe.ensemble.spec import (
+    EnsembleSpec,
+    FoldingThresholdTier,
+    ObservingConfig,
+    PSFSpec,
+)
 from kl_pipe.lines import LINE_LAMBDAS
 from kl_pipe.observation import build_grism_obs, build_image_obs
 from kl_pipe.parameters import ImagePars
@@ -78,15 +83,24 @@ class TestRomanPSFConfig:
         config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
         assert config.bands == ('F158', 'F184')
         assert config.grism_rolls_deg == (0.0, 45.0, 90.0, 135.0)
+        # 2026-07-19 ruling: fit kernels follow the z-tiered schedule
+        # (ft=0.01 for z<=1.2, tighter 5e-3 above == the mock default, so
+        # mock == fit at the tight tier); scalar folding_threshold retired
+        # from this config. Pin the FULL schedule; mock kernels at default.
+        ruling_tiers = (
+            FoldingThresholdTier(z_max=1.2, ft=0.01),
+            FoldingThresholdTier(z_max=None, ft=5.0e-3),
+        )
         for band in config.bands:
             assert config.band_psf[band].psf_type == 'roman_wfi'
             assert config.band_psf[band].sca == 10
             assert config.band_psf[band].pupil_bin == 4
-            # fit kernels loosened to 0.01 (gated); mock kernels at default
-            assert config.band_psf[band].folding_threshold == 0.01
+            assert config.band_psf[band].folding_threshold is None
+            assert config.band_psf[band].folding_threshold_tiers == ruling_tiers
             assert config.band_psf[band].mock_folding_threshold is None
         assert config.grism_psf.psf_type == 'roman_wfi'
-        assert config.grism_psf.folding_threshold == 0.01
+        assert config.grism_psf.folding_threshold is None
+        assert config.grism_psf.folding_threshold_tiers == ruling_tiers
         assert config.grism_psf.mock_folding_threshold is None
 
     def test_roman_defaults_applied(self, tmp_path):
