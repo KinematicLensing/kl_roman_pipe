@@ -370,6 +370,180 @@ class TestRomanKernel:
 
 
 # ==============================================================================
+# Kernel conventions: orientation, parity, centering, normalization, pixel
+# contract -- with the real (asymmetric) roman kernel. Round-PSF tests are
+# blind to a transpose/flip bug; the roman diffraction spikes are not.
+# ==============================================================================
+
+
+class TestRomanKernelConventions:
+    """Both PSF pathways against GalSim references on an asymmetric kernel.
+
+    Bounds provenance (measured 2026-07-18, SCA 10, pupil_bin 4, H158
+    effective wavelength, 32 px stamp at 0.11 arcsec, oversample 3, sheared
+    inclined-exponential scene rscale=0.35, g=(0.05,-0.03), offset
+    (0.11,-0.055)):
+    - k-space fused path vs galsim native: max|d|/peak = 7.0e-4; bound 2e-3
+      (~3x measured) chosen deliberately BELOW the measured residual of a
+      transposed kernel (8.0e-3) so a parity bug cannot pass; the transpose
+      control asserts that failure mode stays detectable.
+    - delta-image patch identity (real-space kernel path): 7.1e-8 (FFT
+      roundoff); bound 1e-6 (~10x). Flipped/transposed comparisons measured
+      6.6e-2 / 2.5e-2; controls assert > 1e-2.
+    - real-space path end-to-end vs galsim: 2.7e-3 (dominated by the
+      point-sampled-SB quadrature at oversample 3, not orientation);
+      bound 3e-2 (10x, rounded up).
+    """
+
+    def _scene(self):
+        return dict(
+            cosi=0.6,
+            theta_int=np.pi / 4,
+            g1=0.05,
+            g2=-0.03,
+            flux=1.0,
+            rscale=0.35,
+            h_over_r=0.1,
+            x0=0.11,
+            y0=-0.055,
+        )
+
+    def _psf(self):
+        return _build_band_psf(ROMAN_SPEC, 'F158')
+
+    def test_kspace_path_matches_galsim_and_catches_transpose(self):
+        import dataclasses
+
+        import jax.numpy as jnp
+
+        from kl_pipe.intensity import InclinedExponentialModel
+        from kl_pipe.synthetic import _generate_sersic_galsim
+
+        pars = self._scene()
+        psf = self._psf()
+        image_pars = ImagePars(shape=(32, 32), pixel_scale=PIXEL_SCALE, indexing='ij')
+        model = InclinedExponentialModel()
+        obs = build_image_obs(
+            image_pars,
+            psf=psf,
+            render_config=RenderConfig(oversample=3),
+            int_model=model,
+        )
+        theta = jnp.array(
+            [
+                pars['cosi'],
+                pars['theta_int'],
+                pars['g1'],
+                pars['g2'],
+                pars['flux'],
+                pars['rscale'],
+                pars['h_over_r'],
+                pars['x0'],
+                pars['y0'],
+            ]
+        )
+        ours = np.array(model.render_image(theta, obs=obs))
+        ref = _generate_sersic_galsim(
+            image_pars,
+            flux=pars['flux'],
+            rscale=pars['rscale'],
+            n_sersic=1.0,
+            cosi=pars['cosi'],
+            theta_int=pars['theta_int'],
+            g1=pars['g1'],
+            g2=pars['g2'],
+            x0=pars['x0'],
+            y0=pars['y0'],
+            h_over_r=pars['h_over_r'],
+            psf=psf,
+            method='auto',
+        )
+        peak = np.max(np.abs(ref))
+        assert np.max(np.abs(ours - ref)) / peak < 2e-3
+
+        # parity control: a transposed fused kernel must fail the same bound,
+        # proving the comparison is sensitive to an orientation bug
+        obs_t = dataclasses.replace(obs, kspace_psf_fft=obs.kspace_psf_fft.T)
+        ours_t = np.array(model.render_image(theta, obs=obs_t))
+        assert np.max(np.abs(ours_t - ref)) / peak > 2e-3
+
+    def test_realspace_kernel_delta_identity_and_parity(self):
+        import jax.numpy as jnp
+
+        from kl_pipe.psf import convolve_fft
+
+        psf = self._psf()
+        oversample = 3
+        fine_ps = PIXEL_SCALE / oversample
+        psf_data = precompute_psf_fft(
+            psf, image_shape=(32, 32), pixel_scale=PIXEL_SCALE, oversample=oversample
+        )
+        fine_n = 32 * oversample
+        delta = np.zeros((fine_n, fine_n))
+        r0, c0 = fine_n // 2 + 7, fine_n // 2 - 5
+        delta[r0, c0] = 1.0
+        conv = np.array(convolve_fft(jnp.asarray(delta), psf_data, bin=False))
+
+        kern_size = psf.getGoodImageSize(fine_ps)
+        if kern_size % 2 == 0:
+            kern_size += 1
+        kimg = psf.drawImage(nx=kern_size, ny=kern_size, scale=fine_ps).array
+        kimg = kimg / kimg.sum()
+        h = 20
+        kc = kern_size // 2
+        patch = conv[r0 - h : r0 + h + 1, c0 - h : c0 + h + 1]
+        kpatch = kimg[kc - h : kc + h + 1, kc - h : kc + h + 1]
+        kpeak = np.max(kpatch)
+
+        # a delta convolved with the kernel must reproduce the drawn kernel
+        # stamp at the delta position: validates centering (no half-pixel
+        # offset from the pad+roll) and array orientation of the FFT path
+        assert np.max(np.abs(patch - kpatch)) / kpeak < 1e-6
+        # parity controls: flipped or transposed stamps must NOT match
+        assert np.max(np.abs(patch - kpatch[::-1, ::-1])) / kpeak > 1e-2
+        assert np.max(np.abs(patch - kpatch.T)) / kpeak > 1e-2
+
+    def test_realspace_path_matches_galsim(self):
+        import galsim as gs
+        import jax.numpy as jnp
+
+        from kl_pipe.psf import convolve_fft
+
+        pars = self._scene()
+        psf = self._psf()
+        oversample = 3
+        fine_ps = PIXEL_SCALE / oversample
+        fine_n = 32 * oversample
+        psf_data = precompute_psf_fft(
+            psf, image_shape=(32, 32), pixel_scale=PIXEL_SCALE, oversample=oversample
+        )
+        gal = (
+            gs.InclinedExponential(
+                inclination=np.arccos(pars['cosi']) * gs.radians,
+                scale_radius=pars['rscale'],
+                scale_h_over_r=pars['h_over_r'],
+                flux=pars['flux'],
+            )
+            .rotate(pars['theta_int'] * gs.radians)
+            .shear(g1=pars['g1'], g2=pars['g2'])
+            .shift(pars['x0'], pars['y0'])
+        )
+        # point-sampled SB through our kernel: the drawImage kernel's own
+        # fine-pixel factor is the quadrature weight that turns the discrete
+        # convolution into the continuous one (NOT a pixel double-count; the
+        # detector coarse pixel is applied exactly once, downstream)
+        sb = gal.drawImage(nx=fine_n, ny=fine_n, scale=fine_ps, method='sb').array
+        conv_sb = np.array(convolve_fft(jnp.asarray(sb), psf_data, bin=False))
+        ref = (
+            gs.Convolve(gal, psf)
+            .drawImage(nx=fine_n, ny=fine_n, scale=fine_ps, method='auto')
+            .array
+            / fine_ps**2
+        )
+        assert np.max(np.abs(conv_sb - ref)) / np.max(np.abs(ref)) < 3e-2
+
+
+# ==============================================================================
 # Obs construction
 # ==============================================================================
 
