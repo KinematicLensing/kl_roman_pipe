@@ -82,7 +82,12 @@ class TestRomanPSFConfig:
             assert config.band_psf[band].psf_type == 'roman_wfi'
             assert config.band_psf[band].sca == 10
             assert config.band_psf[band].pupil_bin == 4
+            # fit kernels loosened to 0.01 (gated); mock kernels at default
+            assert config.band_psf[band].folding_threshold == 0.01
+            assert config.band_psf[band].mock_folding_threshold is None
         assert config.grism_psf.psf_type == 'roman_wfi'
+        assert config.grism_psf.folding_threshold == 0.01
+        assert config.grism_psf.mock_folding_threshold is None
 
     def test_roman_defaults_applied(self, tmp_path):
         d = _config_dict()
@@ -186,6 +191,68 @@ class TestRomanPSFConfig:
         for ft in (0.0, 1.0, -0.01):
             with pytest.raises(ValueError, match='folding_threshold'):
                 PSFSpec(psf_type='roman_wfi', sca=10, pupil_bin=4, folding_threshold=ft)
+
+    def test_mock_folding_threshold_rules(self, tmp_path):
+        # mock (truth-render) kernels must be at least as accurate as fit
+        # kernels; None means the galsim default 5e-3
+        with pytest.raises(ValueError, match='at least as accurate'):
+            PSFSpec(
+                psf_type='roman_wfi', sca=10, pupil_bin=4, mock_folding_threshold=0.02
+            )
+        with pytest.raises(ValueError, match='at least as accurate'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                folding_threshold=0.01,
+                mock_folding_threshold=0.02,
+            )
+        with pytest.raises(ValueError, match='roman_wfi-only'):
+            PSFSpec(psf_type='gaussian', fwhm_arcsec=0.18, mock_folding_threshold=0.005)
+        # equal and tighter-than-fit are both allowed
+        PSFSpec(
+            psf_type='roman_wfi',
+            sca=10,
+            pupil_bin=4,
+            folding_threshold=0.01,
+            mock_folding_threshold=0.01,
+        )
+        spec = PSFSpec(
+            psf_type='roman_wfi',
+            sca=10,
+            pupil_bin=4,
+            folding_threshold=0.01,
+            mock_folding_threshold=0.001,
+        )
+        assert spec.mock_folding_threshold == 0.001
+        # YAML parsing round-trip
+        d = _config_dict()
+        d['psf']['grism'] = {
+            'type': 'roman_wfi',
+            'folding_threshold': 0.01,
+            'mock_folding_threshold': 0.005,
+        }
+        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        assert config.grism_psf.mock_folding_threshold == 0.005
+
+    def test_dual_fidelity_kernel_split(self):
+        # a spec with a loosened fit threshold builds DIFFERENT mock vs fit
+        # PSF objects (cache keys differ); an unsplit spec shares one object
+        split = PSFSpec(
+            psf_type='roman_wfi', sca=10, pupil_bin=4, folding_threshold=0.01
+        )
+        assert _build_grism_psf(split, 1.2, mock=True) is not _build_grism_psf(
+            split, 1.2
+        )
+        unsplit = PSFSpec(psf_type='roman_wfi', sca=10, pupil_bin=4)
+        assert _build_grism_psf(unsplit, 1.2, mock=True) is _build_grism_psf(
+            unsplit, 1.2
+        )
+        # mock kernels are the larger (more accurate) ones
+        fine_ps = PIXEL_SCALE / 3
+        assert _build_grism_psf(split, 1.2, mock=True).getGoodImageSize(
+            fine_ps
+        ) > _build_grism_psf(split, 1.2).getGoodImageSize(fine_ps)
 
 
 # ==============================================================================
@@ -641,6 +708,56 @@ def test_folding_threshold_render_fidelity(tmp_path):
     assert np.max(np.abs(diff)) / np.max(grism_ref) < 4e-3
     assert np.sqrt(np.sum(diff**2)) / sigma < 6.0
     np.testing.assert_array_equal(band_ft, band_ref)
+
+
+@pytest.mark.slow
+def test_dual_fidelity_data_uses_mock_kernel(tmp_path):
+    """build_fit_inputs renders the mock DATA through the mock-fidelity
+    kernel while the fit obs carries the loosened fit kernel: a split config
+    (fit ft=0.01, mock default) and a matched config (both 0.01) with the
+    same noise seed must produce different grism data but identical fit-obs
+    kernel shapes."""
+
+    def _inputs(mock_ft):
+        d = _config_dict()
+        d['id'] = f'dual_fid_{mock_ft}'
+        d['bands'] = ['F158']
+        d['psf'] = {
+            'broadband': {'type': 'roman_wfi', 'folding_threshold': 0.01},
+            'grism': {'type': 'roman_wfi', 'folding_threshold': 0.01},
+        }
+        if mock_ft is not None:
+            d['psf']['grism']['mock_folding_threshold'] = mock_ft
+            d['psf']['broadband']['mock_folding_threshold'] = mock_ft
+        d['render'] = {'oversample': 3}
+        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        truth = scene_truth_defaults(config, spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 0.6,
+                'g1': 0.02,
+                'g2': -0.01,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        return build_fit_inputs(
+            truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
+        )
+
+    split = _inputs(None)  # mock at galsim default, fit at 0.01
+    matched = _inputs(0.01)  # both at 0.01
+
+    roll_split = split.grism_obs['roll0']
+    roll_matched = matched.grism_obs['roll0']
+    # same fit-kernel shapes either way
+    assert roll_split.psf_data.padded_shape == roll_matched.psf_data.padded_shape
+    # but the data was rendered through different (mock) kernels
+    assert not np.array_equal(
+        np.asarray(roll_split.data), np.asarray(roll_matched.data)
+    )
 
 
 @pytest.mark.slow

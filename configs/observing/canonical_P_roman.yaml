@@ -12,9 +12,14 @@ grism:
   rolls_deg: [0.0, 45.0, 90.0, 135.0]
   dispersion_nm_per_pix: 1.1
 lines: [Halpha]
+# folding_threshold 0.01 applies to the FIT kernels only (2.8x cheaper
+# evals; parameter-level bias gated at <= 0.07 sigma vs matched kernels);
+# mock/truth renders keep the galsim default 5e-3 kernels
+# (mock_folding_threshold unset), so mock data is always rendered at higher
+# kernel fidelity than the inference model.
 psf:
-  broadband: {type: roman_wfi, sca: 10, pupil_bin: 4}
-  grism: {type: roman_wfi, sca: 10, pupil_bin: 4}
+  broadband: {type: roman_wfi, sca: 10, pupil_bin: 4, folding_threshold: 0.01}
+  grism: {type: roman_wfi, sca: 10, pupil_bin: 4, folding_threshold: 0.01}
 pixel_scale_arcsec: 0.11
 stamp: {broadband_pix: 32, grism_pix: 32}
 render: {oversample: 3}

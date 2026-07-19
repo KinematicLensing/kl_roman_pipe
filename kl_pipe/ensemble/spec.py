@@ -47,6 +47,7 @@ def _reject_unknown(d: dict, allowed: Tuple[str, ...], context: str) -> None:
 _PSF_TYPES = ('gaussian', 'roman_wfi')
 _ROMAN_WFI_DEFAULT_SCA = 10
 _ROMAN_WFI_DEFAULT_PUPIL_BIN = 4
+_GALSIM_DEFAULT_FOLDING_THRESHOLD = 5e-3
 
 
 @dataclass(frozen=True)
@@ -55,19 +56,29 @@ class PSFSpec:
 
     ``gaussian`` carries ``fwhm_arcsec``; ``roman_wfi`` (realistic WFI PSF
     via ``galsim.roman.getPSF``, monochromatic) carries ``sca`` and
-    ``pupil_bin``, plus an optional ``folding_threshold`` (GalSim GSParams;
-    None keeps GalSim's default 5e-3). A looser threshold shrinks the
-    rendered kernel stamp -- and with it the padded convolution FFT --
-    at the cost of truncating more far-wing flux; see the accuracy/speed
-    table in the PR notes before loosening for production. Cross-type
-    fields must be None (raises otherwise).
+    ``pupil_bin``, plus two optional GSParams folding thresholds (None keeps
+    GalSim's default 5e-3). A looser threshold shrinks the rendered kernel
+    stamp -- and with it the padded convolution FFT -- at the cost of
+    truncating more far-wing flux.
+
+    ``folding_threshold`` applies to the FIT-model kernels (the per-eval
+    convolution cost); ``mock_folding_threshold`` applies to the TRUTH
+    (mock-data) render kernels, paid once per fit. Leaving
+    ``mock_folding_threshold`` at None while loosening ``folding_threshold``
+    gives the realistic asymmetry: mock data is rendered at higher kernel
+    fidelity than the inference model. The mock kernels must be at least as
+    accurate as the fit kernels (raises otherwise). Parameter-level bias
+    from the split was gated at folding_threshold=0.01 (all MAP shifts
+    <= 0.07 sigma vs a matched-kernel control at line SNR 100); 0.02 fails
+    that gate. Cross-type fields must be None (raises otherwise).
     """
 
     psf_type: str
     fwhm_arcsec: Optional[float] = None  # gaussian only, arcsec
     sca: Optional[int] = None  # roman_wfi only, 1-18
     pupil_bin: Optional[int] = None  # roman_wfi only
-    folding_threshold: Optional[float] = None  # roman_wfi only, None = galsim default
+    folding_threshold: Optional[float] = None  # roman_wfi only, fit kernels
+    mock_folding_threshold: Optional[float] = None  # roman_wfi only, truth kernels
 
     def __post_init__(self):
         if self.psf_type == 'gaussian':
@@ -78,8 +89,14 @@ class PSFSpec:
                 )
             if self.sca is not None or self.pupil_bin is not None:
                 raise ValueError("sca/pupil_bin are roman_wfi-only psf fields")
-            if self.folding_threshold is not None:
-                raise ValueError("folding_threshold is a roman_wfi-only psf field")
+            if (
+                self.folding_threshold is not None
+                or self.mock_folding_threshold is not None
+            ):
+                raise ValueError(
+                    "folding_threshold/mock_folding_threshold are "
+                    "roman_wfi-only psf fields"
+                )
         elif self.psf_type == 'roman_wfi':
             if self.fwhm_arcsec is not None:
                 raise ValueError("fwhm_arcsec is a gaussian-only psf field")
@@ -92,13 +109,32 @@ class PSFSpec:
                     f"roman_wfi pupil_bin must be a positive int, got "
                     f"{self.pupil_bin!r}"
                 )
-            if self.folding_threshold is not None:
-                ft = self.folding_threshold
-                if not isinstance(ft, float) or not (0.0 < ft < 1.0):
+            for name in ('folding_threshold', 'mock_folding_threshold'):
+                ft = getattr(self, name)
+                if ft is not None and (
+                    not isinstance(ft, float) or not (0.0 < ft < 1.0)
+                ):
                     raise ValueError(
-                        f"roman_wfi folding_threshold must be a float in "
-                        f"(0, 1), got {ft!r}"
+                        f"roman_wfi {name} must be a float in (0, 1), got {ft!r}"
                     )
+            # mock kernels must be at least as accurate as fit kernels
+            # (None = galsim default 5e-3)
+            mock_eff = (
+                self.mock_folding_threshold
+                if self.mock_folding_threshold is not None
+                else _GALSIM_DEFAULT_FOLDING_THRESHOLD
+            )
+            fit_eff = (
+                self.folding_threshold
+                if self.folding_threshold is not None
+                else _GALSIM_DEFAULT_FOLDING_THRESHOLD
+            )
+            if mock_eff > fit_eff:
+                raise ValueError(
+                    f"mock_folding_threshold ({mock_eff}) must be <= the fit "
+                    f"folding_threshold ({fit_eff}): truth-render kernels "
+                    f"must be at least as accurate as fit kernels"
+                )
         else:
             raise NotImplementedError(
                 f"psf type {self.psf_type!r} not supported; supported types: "
@@ -118,17 +154,22 @@ def _require_yaml_int(block: dict, key: str, default: int, context: str) -> int:
 
 
 def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
-    _reject_unknown(block, ('type', 'sca', 'pupil_bin', 'folding_threshold'), context)
-    folding_threshold = block.get('folding_threshold')
-    if folding_threshold is not None:
-        folding_threshold = float(folding_threshold)
+    _reject_unknown(
+        block,
+        ('type', 'sca', 'pupil_bin', 'folding_threshold', 'mock_folding_threshold'),
+        context,
+    )
+    thresholds = {}
+    for key in ('folding_threshold', 'mock_folding_threshold'):
+        value = block.get(key)
+        thresholds[key] = float(value) if value is not None else None
     return PSFSpec(
         psf_type='roman_wfi',
         sca=_require_yaml_int(block, 'sca', _ROMAN_WFI_DEFAULT_SCA, context),
         pupil_bin=_require_yaml_int(
             block, 'pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN, context
         ),
-        folding_threshold=folding_threshold,
+        **thresholds,
     )
 
 
