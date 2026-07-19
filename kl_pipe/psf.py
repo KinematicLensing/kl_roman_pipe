@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 class PSFData:
     """Pre-computed PSF arrays for JAX FFT convolution."""
 
-    kernel_fft: jnp.ndarray  # pre-FFT'd kernel (padded)
+    kernel_fft: jnp.ndarray  # pre-rFFT'd kernel (padded); shape (P, P//2+1)
     padded_shape: tuple  # (Nrow_pad, Ncol_pad) — fine-scale when oversampled
     original_shape: tuple  # (Nrow, Ncol) — fine-scale when oversampled
     oversample: int  # oversampling factor (1 = no oversampling)
@@ -112,12 +112,25 @@ def gsobj_to_kernel(
         raises. Use to pin the kernel array shape across a set of PSFs
         whose automatic sizes differ (e.g. wavelength-dependent PSFs).
 
+    Padding
+    -------
+    The kernel is placed on the minimum FFT grid for which the circular
+    convolution equals the linear convolution EXACTLY on the retained
+    ``[0, N)`` crop (the only region any caller keeps): with a centered
+    kernel of half-width ``H = K//2`` and corner-placed image, wrap-around
+    only touches output pixels with ``|y - x| >= P - H``, and ``P >= N + H``
+    pushes that past the crop. Kernel tails that exceed the padded grid are
+    folded modulo ``P``, which is exact under the same condition. For
+    kernels much wider than the image (e.g. Roman WFI wings) this shrinks
+    the FFT grid several-fold at zero accuracy cost relative to the classic
+    ``N + K - 1`` full-linear padding.
+
     Returns
     -------
     kernel_shifted : np.ndarray
-        ifftshift'd, zero-padded kernel ready for FFT.
+        Wrapped (modulo-P), minimally-padded kernel ready for FFT.
     padded_shape : tuple
-        (Nrow_pad, Ncol_pad) after padding for linear (non-circular) convolution.
+        (Nrow_pad, Ncol_pad) of the minimal exact FFT grid.
     """
     import galsim as gs
 
@@ -165,19 +178,21 @@ def gsobj_to_kernel(
     # normalize to unit sum
     kernel /= kernel.sum()
 
-    # compute padded shape for linear convolution (avoid wrap-around)
-    nrow_pad = next_fast_len(image_shape[0] + kernel.shape[0] - 1)
-    ncol_pad = next_fast_len(image_shape[1] + kernel.shape[1] - 1)
-    padded_shape = (nrow_pad, ncol_pad)
-
-    # zero-pad kernel then roll center to (0,0) for FFT convention.
-    # np.roll correctly wraps negative-offset values to the end of
-    # the padded array, unlike ifftshift+place which mispositions them.
-    padded_kernel = np.zeros(padded_shape, dtype=np.float64)
-    padded_kernel[: kernel.shape[0], : kernel.shape[1]] = kernel
     row_half = kernel.shape[0] // 2
     col_half = kernel.shape[1] // 2
-    padded_kernel = np.roll(padded_kernel, (-row_half, -col_half), axis=(0, 1))
+
+    # minimum padding exact on the retained [0, N) crop (see docstring)
+    nrow_pad = next_fast_len(image_shape[0] + row_half)
+    ncol_pad = next_fast_len(image_shape[1] + col_half)
+    padded_shape = (nrow_pad, ncol_pad)
+
+    # wrapped (modulo-P) kernel placement with center at (0,0): folds any
+    # kernel tails that exceed the padded grid (np.add.at accumulates
+    # colliding entries). Exact on the retained crop under P >= N + H.
+    padded_kernel = np.zeros(padded_shape, dtype=np.float64)
+    idx_r = (np.arange(kernel.shape[0]) - row_half) % nrow_pad
+    idx_c = (np.arange(kernel.shape[1]) - col_half) % ncol_pad
+    np.add.at(padded_kernel, (idx_r[:, None], idx_c[None, :]), kernel)
 
     return padded_kernel, padded_shape
 
@@ -324,7 +339,9 @@ def precompute_psf_fft(
         gsparams=gsparams,
         kernel_size=kernel_size,
     )
-    kernel_fft = jnp.fft.fft2(jnp.array(kernel_shifted))
+    # rfft2: the kernel and every convolved image are real, so the
+    # half-spectrum transform halves the FFT work at identical values
+    kernel_fft = jnp.fft.rfft2(jnp.array(kernel_shifted))
 
     return PSFData(
         kernel_fft=kernel_fft,
@@ -363,11 +380,11 @@ def _convolve_fft_raw(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
     padded = jnp.zeros((prow, pcol), dtype=image.dtype)
     padded = padded.at[:nrow, :ncol].set(image)
 
-    # FFT multiply IFFT
-    result = jnp.fft.ifft2(jnp.fft.fft2(padded) * psf_data.kernel_fft)
+    # real-input FFT multiply inverse (kernel_fft is rfft2'd)
+    result = jnp.fft.irfft2(jnp.fft.rfft2(padded) * psf_data.kernel_fft, s=(prow, pcol))
 
-    # crop to original shape and take real part
-    return result[:nrow, :ncol].real
+    # crop to original shape
+    return result[:nrow, :ncol]
 
 
 def convolve_fft(
