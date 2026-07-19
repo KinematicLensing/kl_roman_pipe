@@ -27,7 +27,12 @@ from kl_pipe.ensemble.expander import (
 )
 from kl_pipe.ensemble.mocks import build_fit_inputs
 from kl_pipe.ensemble.scene import scene_priors, scene_truth_defaults
-from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
+from kl_pipe.ensemble.spec import (
+    EnsembleSpec,
+    FoldingThresholdTier,
+    ObservingConfig,
+    PSFSpec,
+)
 from kl_pipe.priors import LogNormal, Uniform
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -146,6 +151,177 @@ class TestObservingConfig:
         assert config.grism_rolls_deg == (0.0, 45.0, 90.0, 135.0)
         assert config.grism_psf.psf_type == 'roman_wfi'
         assert all(psf.psf_type == 'roman_wfi' for psf in config.band_psf.values())
+
+
+# ==============================================================================
+# z-tiered fit folding_threshold (PSFSpec.folding_threshold_tiers)
+# ==============================================================================
+
+
+class TestFoldingThresholdTiers:
+    """The z-tiered fit-kernel folding_threshold schedule and its validation.
+
+    The rigor audit (docs/sessions/2026-07-18_roman_psf_rigor_audit.md) found
+    ft=0.01 fit kernels safe for z <= 1.2 but wing-truncation-biased at z=1.9;
+    the ruling is a two-tier schedule (ft=0.01 for z<=1.2, ft=5e-3 above). At
+    the tight tier ft == the mock default 5e-3, so mock == fit by construction.
+    """
+
+    def _roman_block(self, **overrides) -> dict:
+        block = {'type': 'roman_wfi', 'sca': 10, 'pupil_bin': 4}
+        block.update(overrides)
+        return block
+
+    def _load_grism_psf(self, tmp_path, grism_block) -> PSFSpec:
+        raw = yaml.safe_load((REGISTRY / 'canonical_P_roman.yaml').read_text())
+        raw['psf']['grism'] = grism_block
+        path = tmp_path / 'obs.yaml'
+        path.write_text(yaml.safe_dump(raw))
+        return ObservingConfig.from_yaml(path).grism_psf
+
+    def test_two_tier_resolution(self, tmp_path):
+        # ruling schedule: ft=0.01 for z<=1.2, tighter 5e-3 above
+        block = self._roman_block(
+            folding_threshold_tiers=[
+                {'z_max': 1.2, 'ft': 0.01},
+                {'z_max': None, 'ft': 5.0e-3},
+            ]
+        )
+        psf = self._load_grism_psf(tmp_path, block)
+        assert psf.folding_threshold is None
+        assert len(psf.folding_threshold_tiers) == 2
+        # z <= 1.2 -> loose tier (boundary inclusive)
+        assert psf.resolve_fit_folding_threshold(0.55) == 0.01
+        assert psf.resolve_fit_folding_threshold(1.2) == 0.01
+        # z > 1.2 -> tight tier == mock default (zero mismatch by construction)
+        assert psf.resolve_fit_folding_threshold(1.9) == 5.0e-3
+        assert psf.resolve_fit_folding_threshold(2.5) == 5.0e-3
+
+    def test_scalar_option_unchanged(self, tmp_path):
+        psf = self._load_grism_psf(tmp_path, self._roman_block(folding_threshold=0.01))
+        assert psf.folding_threshold == 0.01
+        assert psf.folding_threshold_tiers is None
+        # scalar is z-independent
+        assert psf.resolve_fit_folding_threshold(0.5) == 0.01
+        assert psf.resolve_fit_folding_threshold(1.9) == 0.01
+        # unset defaults resolve to None (galsim default) at any z
+        default_psf = self._load_grism_psf(tmp_path, self._roman_block())
+        assert default_psf.resolve_fit_folding_threshold(1.9) is None
+
+    def test_scalar_and_tiers_mutually_exclusive(self):
+        with pytest.raises(ValueError, match='mutually exclusive'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                folding_threshold=0.01,
+                folding_threshold_tiers=(
+                    FoldingThresholdTier(z_max=1.2, ft=0.01),
+                    FoldingThresholdTier(z_max=None, ft=5.0e-3),
+                ),
+            )
+
+    def test_final_tier_must_be_open(self):
+        with pytest.raises(ValueError, match='final tier must have z_max: null'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                folding_threshold_tiers=(
+                    FoldingThresholdTier(z_max=1.2, ft=0.01),
+                    FoldingThresholdTier(z_max=2.0, ft=5.0e-3),
+                ),
+            )
+
+    def test_only_final_tier_may_be_open(self):
+        with pytest.raises(ValueError, match='only the final tier'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                folding_threshold_tiers=(
+                    FoldingThresholdTier(z_max=None, ft=0.01),
+                    FoldingThresholdTier(z_max=None, ft=5.0e-3),
+                ),
+            )
+
+    def test_z_max_must_increase(self):
+        with pytest.raises(ValueError, match='strictly increasing'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                folding_threshold_tiers=(
+                    FoldingThresholdTier(z_max=1.5, ft=0.01),
+                    FoldingThresholdTier(z_max=1.2, ft=8.0e-3),
+                    FoldingThresholdTier(z_max=None, ft=5.0e-3),
+                ),
+            )
+
+    def test_tier_ft_out_of_range_rejected(self):
+        with pytest.raises(ValueError, match='ft must be a float in'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                folding_threshold_tiers=(
+                    FoldingThresholdTier(z_max=1.2, ft=1.5),
+                    FoldingThresholdTier(z_max=None, ft=5.0e-3),
+                ),
+            )
+
+    def test_mock_must_be_at_least_as_accurate_as_tightest_tier(self):
+        # mock (0.008) looser than the tight tier ft (5e-3) -> mock less
+        # accurate than the fit at high z -> reject
+        with pytest.raises(ValueError, match='at least as accurate'):
+            PSFSpec(
+                psf_type='roman_wfi',
+                sca=10,
+                pupil_bin=4,
+                mock_folding_threshold=8.0e-3,
+                folding_threshold_tiers=(
+                    FoldingThresholdTier(z_max=1.2, ft=0.01),
+                    FoldingThresholdTier(z_max=None, ft=5.0e-3),
+                ),
+            )
+
+    def test_tiers_rejected_for_gaussian(self):
+        with pytest.raises(ValueError, match='roman_wfi-only'):
+            PSFSpec(
+                psf_type='gaussian',
+                fwhm_arcsec=0.18,
+                folding_threshold_tiers=(FoldingThresholdTier(z_max=None, ft=5.0e-3),),
+            )
+
+    def test_resolve_requires_finite_z_for_tiers(self):
+        psf = PSFSpec(
+            psf_type='roman_wfi',
+            sca=10,
+            pupil_bin=4,
+            folding_threshold_tiers=(
+                FoldingThresholdTier(z_max=1.2, ft=0.01),
+                FoldingThresholdTier(z_max=None, ft=5.0e-3),
+            ),
+        )
+        with pytest.raises(ValueError, match='finite numeric z'):
+            psf.resolve_fit_folding_threshold(None)
+
+    def test_yaml_tier_missing_ft_rejected(self, tmp_path):
+        block = self._roman_block(
+            folding_threshold_tiers=[{'z_max': 1.2}, {'z_max': None, 'ft': 5.0e-3}]
+        )
+        with pytest.raises(ValueError, match='missing required keys'):
+            self._load_grism_psf(tmp_path, block)
+
+    def test_yaml_tier_unknown_key_rejected(self, tmp_path):
+        block = self._roman_block(
+            folding_threshold_tiers=[
+                {'z_max': 1.2, 'ft': 0.01, 'bogus': 1},
+                {'z_max': None, 'ft': 5.0e-3},
+            ]
+        )
+        with pytest.raises(ValueError, match='unknown keys'):
+            self._load_grism_psf(tmp_path, block)
 
 
 # ==============================================================================

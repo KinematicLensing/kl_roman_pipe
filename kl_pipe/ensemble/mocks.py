@@ -186,18 +186,30 @@ def _band_effective_wavelength_nm(band: str) -> float:
     return float(roman.getBandpasses()[key].effective_wavelength)
 
 
-def _spec_folding_threshold(psf_spec: 'PSFSpec', mock: bool) -> Optional[float]:
-    """Folding threshold for the requested role: fit kernels use
-    ``folding_threshold``, truth-render kernels use ``mock_folding_threshold``
-    (both None = galsim default; mock validated at least as accurate)."""
-    return psf_spec.mock_folding_threshold if mock else psf_spec.folding_threshold
+def _spec_folding_threshold(
+    psf_spec: 'PSFSpec', mock: bool, z: Optional[float] = None
+) -> Optional[float]:
+    """Folding threshold for the requested role: fit kernels resolve
+    ``folding_threshold``/``folding_threshold_tiers`` at the scene redshift
+    ``z``, truth-render kernels use ``mock_folding_threshold`` (all None =
+    galsim default; mock validated at least as accurate at every z).
+
+    ``z`` is consulted only for a tiered fit schedule; a scalar/None fit
+    threshold ignores it, and a tiered schedule with ``z is None`` raises
+    loudly (rather than silently picking a tier)."""
+    if mock:
+        return psf_spec.mock_folding_threshold
+    return psf_spec.resolve_fit_folding_threshold(z)
 
 
-def _build_band_psf(psf_spec: 'PSFSpec', band: str, mock: bool = False):
+def _build_band_psf(
+    psf_spec: 'PSFSpec', band: str, z: Optional[float] = None, mock: bool = False
+):
     """Broadband PSF for one band from its PSFSpec.
 
     mock=True selects the truth-render kernel fidelity
-    (``mock_folding_threshold``); mock=False the fit-kernel fidelity.
+    (``mock_folding_threshold``); mock=False the fit-kernel fidelity, whose
+    folding_threshold may depend on the scene redshift ``z`` (tier schedule).
     """
     if psf_spec.psf_type == 'gaussian':
         return _build_gaussian_psf(psf_spec.fwhm_arcsec)
@@ -209,7 +221,7 @@ def _build_band_psf(psf_spec: 'PSFSpec', band: str, mock: bool = False):
             psf_spec.pupil_bin,
             _band_effective_wavelength_nm(band),
             bandpass=_galsim_roman_band(band),
-            folding_threshold=_spec_folding_threshold(psf_spec, mock),
+            folding_threshold=_spec_folding_threshold(psf_spec, mock, z),
         )
     raise NotImplementedError(f"psf type '{psf_spec.psf_type}' has no mock PSF builder")
 
@@ -218,7 +230,8 @@ def _build_grism_psf(psf_spec: 'PSFSpec', z: float, mock: bool = False):
     """Grism PSF from its PSFSpec, at the observed Halpha wavelength.
 
     mock=True selects the truth-render kernel fidelity
-    (``mock_folding_threshold``); mock=False the fit-kernel fidelity.
+    (``mock_folding_threshold``); mock=False the fit-kernel fidelity, whose
+    folding_threshold may depend on the scene redshift ``z`` (tier schedule).
     """
     if psf_spec.psf_type == 'gaussian':
         return _build_gaussian_psf(psf_spec.fwhm_arcsec)
@@ -231,7 +244,7 @@ def _build_grism_psf(psf_spec: 'PSFSpec', z: float, mock: bool = False):
             psf_spec.pupil_bin,
             LINE_LAMBDAS['Halpha'] * (1.0 + z),
             bandpass=None,
-            folding_threshold=_spec_folding_threshold(psf_spec, mock),
+            folding_threshold=_spec_folding_threshold(psf_spec, mock, z),
         )
     raise NotImplementedError(f"psf type '{psf_spec.psf_type}' has no mock PSF builder")
 
@@ -469,8 +482,8 @@ def build_fit_inputs(
         image_obs[band] = _make_band_obs(
             source,
             truth,
-            _build_band_psf(band_spec, band, mock=True),
-            _build_band_psf(band_spec, band),
+            _build_band_psf(band_spec, band, z, mock=True),
+            _build_band_psf(band_spec, band, z),
             image_pars,
             band,
             broadband_snr,
