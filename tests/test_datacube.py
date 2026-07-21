@@ -570,14 +570,23 @@ class TestCorrectness:
             line_fluxes={'Halpha': 100.0},
         )
 
-        # truth at oversample=25
-        cube_truth = source_ha.build_cube(pars, cube_pars, spectral_oversample=25)
+        # truth at oversample=25 (explicit spectral_method: this test
+        # validates the midpoint-oversampling path's convergence; the
+        # default method is now 'erf', which ignores osf entirely)
+        cube_truth = source_ha.build_cube(
+            pars, cube_pars, spectral_oversample=25, spectral_method='oversample'
+        )
 
         sweep = list(range(3, 22, 2))  # odd osfs 3..21 (10 points)
         errors = {}
         cubes = {}
         for osf in sweep:
-            cube_test = source_ha.build_cube(pars, cube_pars, spectral_oversample=osf)
+            cube_test = source_ha.build_cube(
+                pars,
+                cube_pars,
+                spectral_oversample=osf,
+                spectral_method='oversample',
+            )
             cubes[osf] = cube_test
 
             max_err = float(
@@ -856,3 +865,243 @@ class TestDiagnosticPlots:
             save_path=os.path.join(OUT_DIR, 'datacube_overview.png'),
         )
         assert fig is not None
+
+
+# =============================================================================
+# Amplitude-scaled spatial-eval dedupe (build_cube unit-eval cache)
+# =============================================================================
+
+
+class TestIntensityDedupe:
+    """build_cube evaluates each spatial owner once at unit amplitude and
+    scales per line (profiles are linear in flux / flux_per_nm). These tests
+    pin exactness of that algebra against independently-evaluated models."""
+
+    def _cube_pars(self, z=1.0):
+        lam_center = LINE_LAMBDAS['Halpha'] * (1 + z)
+        dlam = lam_center * 3000.0 / C_KMS
+        return CubePars.from_range(
+            _IMAGE_PARS, lam_center - dlam, lam_center + dlam, 1.1
+        )
+
+    def test_shared_intensity_key_matches_independent_models(
+        self, vel_model, int_model, source_ha_nii
+    ):
+        """Shared-key cube == cube from per-line independent model instances
+        with identical spatial params (dedupe algebra is exact)."""
+        source_indep = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(intensity=InclinedExponentialModel()),
+                'NII6548': EmissionLine(intensity=InclinedExponentialModel()),
+                'NII6584': EmissionLine(intensity=InclinedExponentialModel()),
+            },
+        )
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0, 'NII6548': 10.2, 'NII6584': 30.0},
+        )
+        cp = self._cube_pars()
+        cube_shared = source_ha_nii.build_cube(pars, cp)
+        cube_indep = source_indep.build_cube(pars, cp)
+        # same algebra up to flux-scaling round-off (amplitude * unit-eval
+        # vs eval-at-amplitude)
+        np.testing.assert_allclose(
+            np.asarray(cube_shared), np.asarray(cube_indep), rtol=1e-12, atol=0
+        )
+
+    def test_line_contribution_linear_in_flux(self, source_ha_nii):
+        """NII contribution scales exactly linearly with NII flux (the
+        assumption the unit-eval cache relies on, checked end-to-end)."""
+        cp = self._cube_pars()
+
+        def cube_at(f_nii):
+            pars = _make_pars(
+                _VEL_PARS,
+                _INT_PARS,
+                z=1.0,
+                vel_dispersion=50.0,
+                line_fluxes={'Halpha': 100.0, 'NII6548': 0.0, 'NII6584': f_nii},
+            )
+            return np.asarray(source_ha_nii.build_cube(pars, cp))
+
+        base = cube_at(0.0)
+        contrib_8 = cube_at(8.0) - base
+        contrib_6 = cube_at(6.0) - base
+        np.testing.assert_allclose(contrib_6, 0.75 * contrib_8, rtol=1e-12, atol=1e-16)
+
+    def test_shared_continuum_key_matches_independent_models(self, vel_model):
+        """continuum_key sharing: dedupe algebra exact for flux_per_nm too."""
+        source_shared = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+                'NII6584': EmissionLine(intensity_key='Halpha', continuum_key='Halpha'),
+            },
+        )
+        source_indep = SourceModel(
+            velocity_model=vel_model,
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+                'NII6584': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+            },
+        )
+        pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=1.0,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0, 'NII6584': 30.0},
+            line_conts={'Halpha': 25.0, 'NII6584': 10.0},
+        )
+        cp = self._cube_pars()
+        cube_shared = source_shared.build_cube(pars, cp)
+        cube_indep = source_indep.build_cube(pars, cp)
+        np.testing.assert_allclose(
+            np.asarray(cube_shared), np.asarray(cube_indep), rtol=1e-12, atol=0
+        )
+
+    def test_dedupe_grad_flows_to_all_fluxes(self, source_ha_nii):
+        """Gradients w.r.t. every per-line flux are nonzero through the
+        unit-eval cache (no accidental stop-gradient via caching)."""
+        cp = self._cube_pars()
+
+        def total(fluxes):
+            pars = _make_pars(
+                _VEL_PARS,
+                _INT_PARS,
+                z=1.0,
+                vel_dispersion=50.0,
+                line_fluxes={
+                    'Halpha': fluxes[0],
+                    'NII6548': fluxes[1],
+                    'NII6584': fluxes[2],
+                },
+            )
+            return jnp.sum(source_ha_nii.build_cube(pars, cp) ** 2)
+
+        g = jax.grad(total)(jnp.array([100.0, 10.2, 30.0]))
+        assert np.all(np.isfinite(np.asarray(g)))
+        assert np.all(np.abs(np.asarray(g)) > 0.0)
+
+
+# =============================================================================
+# Rematerialized cube assembly (cube_remat)
+# =============================================================================
+
+
+class TestCubeRemat:
+    """cube_remat wraps build_cube in jax.checkpoint; gradients must be
+    identical to the unwrapped path and the toggle must plumb through."""
+
+    def _make_source(self, cube_remat):
+        return SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(intensity=InclinedExponentialModel())
+            },
+            cube_remat=cube_remat,
+        )
+
+    def _make_grism_obs(self, z):
+        from kl_pipe.observation import build_grism_obs
+        from kl_pipe.render import RenderConfig
+
+        image_pars = ImagePars(shape=(24, 24), pixel_scale=0.11, indexing='ij')
+        gp = GrismPars(
+            image_pars=image_pars,
+            dispersion=1.1,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
+            dispersion_angle_detector=0.0,
+        )
+        # cube_remat wraps build_cube; pin the slice (cube-building) path
+        return build_grism_obs(
+            gp,
+            z=z,
+            render_config=RenderConfig(oversample=1, dispersal_method='slice'),
+        )
+
+    def test_toggle_plumbing(self):
+        """cube_remat defaults True, accepts False, and survives a pytree
+        flatten/unflatten round-trip (instance rides in aux)."""
+        source_default = self._make_source(cube_remat=True)
+        assert source_default.cube_remat is True
+        assert (
+            SourceModel(
+                velocity_model=CenteredVelocityModel(),
+                emission_lines={
+                    'Halpha': EmissionLine(intensity=InclinedExponentialModel())
+                },
+            ).cube_remat
+            is True
+        )
+
+        source_off = self._make_source(cube_remat=False)
+        assert source_off.cube_remat is False
+        leaves, treedef = jax.tree_util.tree_flatten(source_off)
+        rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+        assert rebuilt.cube_remat is False
+
+    def test_gradient_equivalence(self):
+        """Posterior-like scalar reduction of render_grism: gradients with
+        cube_remat=True match cube_remat=False to rtol 1e-10."""
+        z = 1.0
+        obs = self._make_grism_obs(z)
+        base_pars = _make_pars(
+            _VEL_PARS,
+            _INT_PARS,
+            z=z,
+            vel_dispersion=50.0,
+            line_fluxes={'Halpha': 100.0},
+        )
+        source_on = self._make_source(cube_remat=True)
+        source_off = self._make_source(cube_remat=False)
+
+        # fixed pseudo-data so the scalar behaves like a chi-squared
+        data = source_off.render_grism(base_pars, obs) * 1.02 + 0.01
+        variance = 0.05**2
+
+        theta0 = jnp.array([200.0, 0.5, 100.0, 0.02])
+
+        def make_loss(source):
+            def loss(theta):
+                pars = dict(base_pars)
+                pars['vel.vcirc'] = theta[0]
+                pars['cosi'] = theta[1]
+                pars['Halpha.flux'] = theta[2]
+                pars['g1'] = theta[3]
+                model_img = source.render_grism(pars, obs)
+                return -0.5 * jnp.sum((data - model_img) ** 2 / variance)
+
+            return loss
+
+        value_on = make_loss(source_on)(theta0)
+        value_off = make_loss(source_off)(theta0)
+        np.testing.assert_allclose(
+            float(value_on), float(value_off), rtol=1e-12, atol=0
+        )
+
+        grad_on = jax.grad(make_loss(source_on))(theta0)
+        grad_off = jax.grad(make_loss(source_off))(theta0)
+        assert np.all(np.isfinite(np.asarray(grad_on)))
+        np.testing.assert_allclose(
+            np.asarray(grad_on), np.asarray(grad_off), rtol=1e-10, atol=0
+        )
+
+        # jit-compiled gradients agree as well (the production pathway)
+        grad_on_jit = jax.jit(jax.grad(make_loss(source_on)))(theta0)
+        np.testing.assert_allclose(
+            np.asarray(grad_on_jit), np.asarray(grad_off), rtol=1e-10, atol=0
+        )

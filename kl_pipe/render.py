@@ -58,13 +58,69 @@ class RenderConfig:
         ``SourceModel.build_cube`` / ``render_grism``. Default 15; the
         former default of 5 was found to produce parameter bias 5-25x
         ``sigma_Fisher`` at SNR=10000 for spectrally-sensitive params
-        (see ``experiments/sweverett/spectral_osf_convergence/`` and
-        ``docs/oversampling_convergence.md``). osf=15 reduces that to
+        (see ``docs/oversampling_convergence.md``). osf=15 reduces that to
         ~sigma_Fisher; cube-pixel convergence at osf=15 vs osf=25 is
         <1e-3. Cost scales linearly with osf. Only consulted when the
-        obs (or render_grism caller) does not pass an explicit value.
-        Applies to grism obs only; ignored for image/velocity obs that
-        carry RenderConfig.
+        obs (or render_grism caller) does not pass an explicit value,
+        and only when ``spectral_method='oversample'``. Applies to
+        grism obs only; ignored for image/velocity obs that carry
+        RenderConfig.
+    spectral_method : str
+        Spectral bin-integration method for cube assembly: ``'erf'``
+        (default; exact analytic Gaussian bin integrals, no spectral
+        discretization error, ``spectral_oversample`` ignored) or
+        ``'oversample'`` (midpoint fine-grid sampling controlled by
+        ``spectral_oversample``; retained for convergence/comparison
+        studies). Applies to grism obs only.
+    psf_mode : str
+        Where the (wavelength-independent) PSF convolution is applied in
+        the grism pathway: ``'post_dispersion'`` (default; disperse the
+        raw cube, then one exact padded convolution of the 2D dispersed
+        image — mathematically identical up to bounded stamp-boundary
+        truncation terms) or
+        ``'per_slice'`` (convolve every wavelength slice before
+        dispersion; the general reference path, required for future
+        wavelength-dependent PSFs). Applies to grism obs only.
+    cube_mode : str
+        Cube-sharing strategy across grism observations of the same
+        emission-line complex (roll angles): ``'shared'`` (default; build
+        one celestial-frame cube per compatible group, fuse each obs's
+        roll rotation into the dispersion sampling — exact change of
+        variables, requires ``psf_mode='post_dispersion'`` for multi-obs
+        groups) or ``'per_roll'`` (reference path; every obs rebuilds its
+        own detector-frame cube with rotated parameters). Applies to
+        grism obs only.
+    dispersal_method : str
+        Grism dispersal pathway: ``'analytic'`` (default; each
+        spaxel's line flux is spread along the dispersion axis by an
+        exact erf/exp profile and the flat continuum by an exact trace
+        kernel, so accuracy does not depend on
+        ``n_lambda``/``slice_width_kms``) or ``'slice'``
+        (wavelength-grid cube + shift-and-add ``disperse_cube``; the
+        reference path, required for a per-slice PSF or a rotated
+        dispersion axis). The analytic path needs
+        ``psf_mode='post_dispersion'`` and axis-aligned dispersion;
+        rolled obs are supported and render independently (no shared
+        cube). Applies to grism obs only.
+    line_window_halfwidth : int, optional
+        Static half-width, in fine pixels, of the window each spaxel's
+        line flux is spread over on the analytic path. Must cover
+        ``max|xi| + ~4 sigma_s`` over the sampled parameter space. When
+        None, standalone renders size it from the concrete parameter
+        values at call time; jitted/inference use must set it
+        explicitly.
+    continuum_fills_stamp : bool
+        Spectral extent of the flat stellar continuum trace. ``True``
+        (default) disperses the continuum over a window wide enough to
+        fill the stamp along the dispersion axis, matching a real slitless
+        grism where the continuum trace spans the whole bandpass (hundreds
+        of pixels) and the stamp is a tiny window on it: within the stamp
+        the continuum is a smooth stripe with no interior edges. ``False``
+        disperses the continuum only over the emission line's velocity
+        window (the legacy behavior), which truncates the continuum to a
+        box narrower than the stamp and leaves sharp trace edges inside
+        it. Applies to grism obs only; the line term is unaffected either
+        way.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -78,8 +134,61 @@ class RenderConfig:
     folding_threshold: float = 5e-3
     maxk_threshold: float = 1e-3
     spectral_oversample: int = 15
+    spectral_method: str = 'erf'
+    psf_mode: str = 'post_dispersion'
+    cube_mode: str = 'shared'
+    dispersal_method: str = 'analytic'
+    line_window_halfwidth: Optional[int] = None
+    continuum_fills_stamp: bool = True
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
+
+    def __post_init__(self):
+        if (
+            not isinstance(self.oversample, (int, np.integer))
+            or self.oversample < 1
+            or self.oversample % 2 == 0
+        ):
+            raise ValueError(
+                f"oversample must be a positive odd integer, got "
+                f"{self.oversample!r}. Odd is required so the fine grid has "
+                f"a cell centered on every coarse pixel: both the PSF kernel "
+                f"centering (precompute_psf_fft) and the post-dispersion "
+                f"pixel-response readout (which samples the sinc-integrated "
+                f"field at coarse pixel centers) rely on that alignment."
+            )
+        if self.spectral_method not in ('erf', 'oversample'):
+            raise ValueError(
+                f"spectral_method must be 'erf' or 'oversample', got "
+                f"{self.spectral_method!r}"
+            )
+        if self.psf_mode not in ('post_dispersion', 'per_slice'):
+            raise ValueError(
+                f"psf_mode must be 'post_dispersion' or 'per_slice', got "
+                f"{self.psf_mode!r}"
+            )
+        if self.cube_mode not in ('shared', 'per_roll'):
+            raise ValueError(
+                f"cube_mode must be 'shared' or 'per_roll', got " f"{self.cube_mode!r}"
+            )
+        if self.dispersal_method not in ('slice', 'analytic'):
+            raise ValueError(
+                f"dispersal_method must be 'slice' or 'analytic', got "
+                f"{self.dispersal_method!r}"
+            )
+        if self.line_window_halfwidth is not None and (
+            not isinstance(self.line_window_halfwidth, (int, np.integer))
+            or self.line_window_halfwidth < 1
+        ):
+            raise ValueError(
+                f"line_window_halfwidth must be a positive int or None, got "
+                f"{self.line_window_halfwidth!r}"
+            )
+        if not isinstance(self.continuum_fills_stamp, bool):
+            raise ValueError(
+                f"continuum_fills_stamp must be a bool, got "
+                f"{self.continuum_fills_stamp!r}"
+            )
 
     @classmethod
     def for_model(
@@ -210,6 +319,7 @@ class RenderConfig:
         psf=None,
         folding_threshold: float = 5e-3,
         maxk_threshold: float = 1e-3,
+        min_oversample: int = 5,
     ) -> 'RenderConfig':
         """Compute worst-case ``RenderConfig`` for one emission line's grism
         cube fine-grid sizing.
@@ -281,7 +391,14 @@ class RenderConfig:
         except (KeyError, NotImplementedError):
             stepk = np.pi / (5.0 * coarse_pixel_scale)  # fallback
 
-        oversample = _oversample_from_maxk(eff_maxk, coarse_pixel_scale)
+        # the bandwidth bound only controls aliasing. Dispersal
+        # interpolation and the pixel readout carry a separate grid
+        # discretization error that measurably biases inferred parameters
+        # at oversample 3, so the derived value is floored (default 5).
+        # Callers preferring speed can pass an explicit RenderConfig.
+        oversample = max(
+            min_oversample, _oversample_from_maxk(eff_maxk, coarse_pixel_scale)
+        )
 
         return cls(
             oversample=oversample,
@@ -296,8 +413,18 @@ class RenderConfig:
         parts = [
             f'oversample={self.oversample}',
             f'pad_factor={self.pad_factor}',
-            f'spectral_oversample={self.spectral_oversample}',
+            f'spectral_method={self.spectral_method}',
         ]
+        if self.spectral_method == 'oversample':
+            parts.append(f'spectral_oversample={self.spectral_oversample}')
+        if self.psf_mode != 'post_dispersion':
+            parts.append(f'psf_mode={self.psf_mode}')
+        if self.cube_mode != 'shared':
+            parts.append(f'cube_mode={self.cube_mode}')
+        if self.dispersal_method != 'analytic':
+            parts.append(f'dispersal_method={self.dispersal_method}')
+        if self.line_window_halfwidth is not None:
+            parts.append(f'line_window_halfwidth={self.line_window_halfwidth}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -318,6 +445,11 @@ def _render_config_flatten(rc):
         rc.folding_threshold,
         rc.maxk_threshold,
         rc.spectral_oversample,
+        rc.spectral_method,
+        rc.psf_mode,
+        rc.cube_mode,
+        rc.dispersal_method,
+        rc.line_window_halfwidth,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -330,8 +462,13 @@ def _render_config_unflatten(aux, children):
         folding_threshold=aux[2],
         maxk_threshold=aux[3],
         spectral_oversample=aux[4],
-        effective_maxk=aux[5],
-        stepk=aux[6],
+        spectral_method=aux[5],
+        psf_mode=aux[6],
+        cube_mode=aux[7],
+        dispersal_method=aux[8],
+        line_window_halfwidth=aux[9],
+        effective_maxk=aux[10],
+        stepk=aux[11],
     )
 
 
@@ -415,6 +552,13 @@ def compute_effective_maxk(
         psf_ft = np.array(
             [abs(psf.kValue(galsim.PositionD(0.0, float(k)))) for k in k_scan]
         )
+        # kValue beyond the profile's own band limit (psf.maxk) is
+        # interpolation noise, not signal: pupil-plane PSFs (e.g.
+        # galsim.roman getPSF) are backed by interpolated images whose
+        # kValue sidelobes bounce back above threshold past the physical
+        # aperture cutoff, which would inflate the scan result and demand
+        # absurd oversampling. Treat the FT as zero past maxk.
+        psf_ft = np.where(k_scan <= float(psf.maxk), psf_ft, 0.0)
         product = product * psf_ft
 
     above = k_scan[product > threshold]
@@ -511,8 +655,14 @@ def compute_effective_maxk_grism(
 
     # PSF damping: post-PSF amplitude at k is bounded by FT[PSF](k). Find the
     # largest k <= k_cube_bare at which FT[PSF] remains above threshold.
+    # The scan stops at the PSF's own band limit (psf.maxk): kValue beyond it
+    # is interpolation noise, not signal -- pupil-plane PSFs (e.g.
+    # galsim.roman getPSF) are backed by interpolated images whose kValue
+    # sidelobes bounce back above threshold past the physical aperture
+    # cutoff, which would inflate the scan result and demand absurd
+    # oversampling.
     n_scan = 500
-    k_scan = np.linspace(0.0, k_cube_bare, n_scan)
+    k_scan = np.linspace(0.0, min(k_cube_bare, float(psf.maxk)), n_scan)
 
     import galsim
 
@@ -724,6 +874,7 @@ def build_grism_render_config(
     psf=None,
     folding_threshold: float = 5e-3,
     maxk_threshold: float = 1e-3,
+    min_oversample: int = 5,
 ) -> RenderConfig:
     """Worst-case ``RenderConfig`` for a ``GrismObs`` cube.
 
@@ -755,6 +906,9 @@ def build_grism_render_config(
         ``compute_effective_maxk_grism``.
     folding_threshold, maxk_threshold : float
         Passed through to ``RenderConfig.for_grism_priors``.
+    min_oversample : int
+        Accuracy floor on the derived oversample (default 5); see
+        ``RenderConfig.for_grism_priors``.
 
     Returns
     -------
@@ -825,6 +979,7 @@ def build_grism_render_config(
             psf=psf,
             folding_threshold=folding_threshold,
             maxk_threshold=maxk_threshold,
+            min_oversample=min_oversample,
         )
         if worst_rc is None or rc.oversample > worst_rc.oversample:
             worst_rc = rc
@@ -835,3 +990,98 @@ def build_grism_render_config(
             "cannot derive grism RenderConfig"
         )
     return worst_rc
+
+
+def _prior_upper(spec, n_sd_unbounded: float) -> float:
+    """Worst-case upper value of a prior spec (or a fixed numeric)."""
+    if not hasattr(spec, 'bounds'):
+        return float(spec)
+    _, high = spec.bounds
+    if high is not None:
+        return float(high)
+    # unbounded (Gaussian): mu + n_sd_unbounded sigma covers all but
+    # erfc-negligible prior mass
+    return float(spec.mu) + n_sd_unbounded * float(spec.sigma)
+
+
+def _prior_abs_max(spec, n_sd_unbounded: float) -> float:
+    """Worst-case |value| of a prior spec (or a fixed numeric)."""
+    if not hasattr(spec, 'bounds'):
+        return abs(float(spec))
+    low, high = spec.bounds
+    if low is not None and high is not None:
+        return max(abs(float(low)), abs(float(high)))
+    return abs(float(spec.mu)) + n_sd_unbounded * float(spec.sigma)
+
+
+def line_window_halfwidth_for_priors(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    grism_pars: 'GrismPars',
+    oversample: int,
+    *,
+    n_sigma: float = 4.0,
+    n_sd_unbounded: float = 6.0,
+) -> int:
+    """Prior-safe ``line_window_halfwidth`` for the analytic dispersal path.
+
+    The analytic line deposit spreads each spaxel's flux over a static
+    window of ``+/- halfwidth`` fine pixels around the source column. The
+    window must cover, for every parameter draw the sampler can visit,
+    the deposit-center offset plus the profile width:
+
+        |xi| <= |lambda_line - lambda_ref| / D * os
+                + lambda_line * v_max / c / D * os
+        n_sigma * sigma_s <= n_sigma * lambda_line * sigma_v_max / c / D * os
+
+    with D the dispersion (nm per coarse pixel) and os the spatial
+    oversample. Worst case over emission lines; ``v_max`` is bounded by
+    ``|vel.v0| + vel.vcirc`` at the prior extremes (any LOS-projected
+    rotation curve satisfies ``|v_los| <= |v0| + vcirc``). Truncating at
+    ``n_sigma = 4`` leaves erfc(4/sqrt(2)) ~ 6e-5 of the line flux, below
+    the external-reference floors; two extra pixels cover the tent
+    support and rounding.
+
+    Unbounded (Gaussian) priors use ``mu +/- n_sd_unbounded * sigma``.
+
+    Raises ``KeyError`` if ``vel.v0``, ``vel.vcirc``, ``z``, or a line's
+    ``<disp_owner>.dispersion`` entry is missing from ``priors``.
+    """
+    from kl_pipe.constants import C_KMS
+
+    spec = priors._param_spec
+    for required in ('vel.v0', 'vel.vcirc', 'z'):
+        if required not in spec:
+            raise KeyError(
+                f"line_window_halfwidth_for_priors requires prior key "
+                f"'{required}'; available: {sorted(spec)}"
+            )
+    v_max = _prior_abs_max(spec['vel.v0'], n_sd_unbounded) + _prior_upper(
+        spec['vel.vcirc'], n_sd_unbounded
+    )
+    z_max = _prior_upper(spec['z'], n_sd_unbounded)
+
+    if not source.emission_lines:
+        raise ValueError(
+            "line_window_halfwidth_for_priors requires non-empty "
+            "source.emission_lines"
+        )
+    scale = oversample / grism_pars.dispersion  # fine px per nm
+    worst = 0.0
+    for line_key, line in source.emission_lines.items():
+        disp_owner = (
+            line.dispersion_key if line.dispersion_key is not None else line_key
+        )
+        disp_key = f'{disp_owner}.dispersion'
+        if disp_key not in spec:
+            raise KeyError(
+                f"emission line '{line_key}' requires prior key '{disp_key}'; "
+                f"available: {sorted(spec)}"
+            )
+        sigma_v_max = _prior_upper(spec[disp_key], n_sd_unbounded)
+        lam_line = line.lambda_rest * (1.0 + z_max)
+        offset_px = abs(lam_line - grism_pars.lambda_ref) * scale
+        vel_px = lam_line * v_max / C_KMS * scale
+        width_px = n_sigma * lam_line * sigma_v_max / C_KMS * scale
+        worst = max(worst, offset_px + vel_px + width_px)
+    return int(np.ceil(worst)) + 2

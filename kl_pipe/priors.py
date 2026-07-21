@@ -23,6 +23,7 @@ Examples
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union, Optional, List
@@ -110,6 +111,18 @@ class Prior(ABC):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
 
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        """
+        Serialize the prior to a flat, provenance-friendly record.
+
+        Returns a dict with the fixed schema ``{dist, loc, scale, low, high}``
+        (unused fields are None), lossless for every built-in prior. Subclasses
+        must override; the base raises so an unserializable prior fails loudly.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement to_dict()"
+        )
+
 
 @dataclass(frozen=True)
 class Uniform(Prior):
@@ -154,6 +167,15 @@ class Uniform(Prior):
     def __repr__(self) -> str:
         return f"Uniform({self.low}, {self.high})"
 
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'uniform',
+            'loc': None,
+            'scale': None,
+            'low': float(self.low),
+            'high': float(self.high),
+        }
+
 
 @dataclass(frozen=True)
 class Gaussian(Prior):
@@ -196,6 +218,15 @@ class Gaussian(Prior):
 
     def __repr__(self) -> str:
         return f"Gaussian({self.mu}, {self.sigma})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'gaussian',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': None,
+            'high': None,
+        }
 
 
 # Alias for clarity
@@ -249,6 +280,15 @@ class LogUniform(Prior):
 
     def __repr__(self) -> str:
         return f"LogUniform({self.low}, {self.high})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'loguniform',
+            'loc': None,
+            'scale': None,
+            'low': float(self.low),
+            'high': float(self.high),
+        }
 
 
 @dataclass(frozen=True)
@@ -330,6 +370,117 @@ class TruncatedNormal(Prior):
 
     def __repr__(self) -> str:
         return f"TruncatedNormal({self.mu}, {self.sigma}, {self.low}, {self.high})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'truncated_normal',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': float(self.low),
+            'high': float(self.high),
+        }
+
+
+@dataclass(frozen=True)
+class LogNormal(Prior):
+    """
+    Log-normal prior: ln(x) ~ Normal(mu, sigma), support x > 0.
+
+    log p(x) = -ln(x) - ln(sigma) - 0.5*ln(2*pi) - (ln(x) - mu)^2 / (2*sigma^2)
+
+    Parameters
+    ----------
+    mu : float
+        Mean of ln(x) (natural log).
+    sigma : float
+        Standard deviation of ln(x) (must be positive).
+
+    Examples
+    --------
+    >>> # Tully-Fisher scatter on circular velocity (see make_tf_prior)
+    >>> import numpy as np
+    >>> prior = LogNormal(np.log(200.0), 0.08 * np.log(10.0))
+    """
+
+    mu: float
+    sigma: float
+
+    def __post_init__(self):
+        if self.sigma <= 0:
+            raise ValueError(f"sigma ({self.sigma}) must be positive")
+
+    def log_prob(self, value: jnp.ndarray) -> jnp.ndarray:
+        # guard log against non-positive values; masked to -inf below
+        safe = jnp.where(value > 0, value, 1.0)
+        log_x = jnp.log(safe)
+        z = (log_x - self.mu) / self.sigma
+        log_pdf = -log_x - jnp.log(self.sigma) - 0.5 * jnp.log(2 * jnp.pi) - 0.5 * z**2
+        return jnp.where(value > 0, log_pdf, -jnp.inf)
+
+    def sample(self, rng_key: jax.Array, shape: Tuple[int, ...] = ()) -> jnp.ndarray:
+        return jnp.exp(self.mu + self.sigma * random.normal(rng_key, shape))
+
+    @property
+    def bounds(self) -> Tuple[float, None]:
+        return (0.0, None)
+
+    @property
+    def mean(self) -> float:
+        """Mean of x: exp(mu + sigma^2 / 2)."""
+        return float(jnp.exp(self.mu + 0.5 * self.sigma**2))
+
+    @property
+    def std(self) -> float:
+        """Standard deviation of x."""
+        return float(self.mean * jnp.sqrt(jnp.expm1(self.sigma**2)))
+
+    @property
+    def median(self) -> float:
+        """Median of x: exp(mu)."""
+        return float(jnp.exp(self.mu))
+
+    def __repr__(self) -> str:
+        return f"LogNormal({self.mu}, {self.sigma})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        # mu, sigma are in natural-log space (see make_tf_prior for the TF case)
+        return {
+            'dist': 'lognormal',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': None,
+            'high': None,
+        }
+
+
+def make_tf_prior(v_center_kms: float, sigma_tf_dex: float) -> LogNormal:
+    """
+    Build a Tully-Fisher LogNormal prior on circular velocity.
+
+    Encodes TF scatter quoted in dex (log10) as a natural-log LogNormal:
+    mu = ln(v_center), sigma = sigma_tf_dex * ln(10).
+
+    Parameters
+    ----------
+    v_center_kms : float
+        Central circular velocity in km/s (must be positive).
+    sigma_tf_dex : float
+        TF scatter in dex (log10 scatter; must be positive).
+
+    Returns
+    -------
+    LogNormal
+        Prior with median v_center_kms and log-scatter sigma_tf_dex dex.
+
+    Examples
+    --------
+    >>> prior = make_tf_prior(200.0, 0.08)  # sigma_ln ~ 0.184
+    """
+    if v_center_kms <= 0:
+        raise ValueError(f"v_center_kms ({v_center_kms}) must be positive")
+    if sigma_tf_dex <= 0:
+        raise ValueError(f"sigma_tf_dex ({sigma_tf_dex}) must be positive")
+    return LogNormal(math.log(v_center_kms), sigma_tf_dex * math.log(10.0))
 
 
 class PriorDict:
@@ -447,6 +598,28 @@ class PriorDict:
             v = self._fixed[name]
             return (v, v)
         return (None, None)
+
+    def describe(self) -> Dict[str, Dict[str, Optional[float]]]:
+        """
+        Serialize every parameter's prior to a flat provenance record.
+
+        Returns a dict mapping each parameter name (sampled and fixed) to the
+        flat ``{dist, loc, scale, low, high}`` schema. Fixed parameters use
+        ``dist='fixed'`` with ``loc`` holding the pinned value. Lossless for
+        all built-in priors; records exactly how each param was set per fit.
+        """
+        out: Dict[str, Dict[str, Optional[float]]] = {}
+        for name in self._sampled_names:
+            out[name] = self._priors[name].to_dict()
+        for name in self._fixed_names:
+            out[name] = {
+                'dist': 'fixed',
+                'loc': float(self._fixed[name]),
+                'scale': None,
+                'low': None,
+                'high': None,
+            }
+        return out
 
     def log_prior(self, theta: jnp.ndarray) -> jnp.ndarray:
         """

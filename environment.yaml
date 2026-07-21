@@ -30,7 +30,6 @@ dependencies:
   - pip:
     - nautilus-sampler
   - cython
-  - sep
   - reproject
   - black=25.12.0
   - ffmpeg

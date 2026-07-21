@@ -1,0 +1,45 @@
+run_name: sigma_eps_gsnr_lo_P_vista
+version: 1
+description: "sigma_eps vs emission-line SNR {10,20,50}, Vista gh queue, config P, wider shear prior (0.2), 90 fits"
+seed: 20260717
+measurement: sigma_eps_vs_line_snr
+bank:
+  stratify:
+    line_snr: {values: [10, 20, 50]}
+  n_gal_per_bin: 30
+  m_noise: 1
+  draw:
+    cosi: {dist: uniform, low: 0.1, high: 1.0}
+    theta_int: {dist: uniform, low: 0.0, high: 3.141592653589793}
+    vcirc: {dist: lognormal_tf, center_kms: 200.0, sigma_tf_dex: 0.08}
+    z: {dist: uniform, low: 1.0, high: 1.9}
+  fixed: {h_over_r: 0.1, x0: 0.0, y0: 0.0}
+shear:
+  scheme: fixed
+  g1: 0.02
+  g2: -0.01
+  fit_prior_sigma: 0.2
+ring:
+  enabled: false
+observed_config: canonical_P
+broadband_snr: 100
+fit:
+  sampler: numpyro
+  n_warmup: 500
+  n_samples: 1000
+  n_chains: 4
+  precondition: laplace
+  target_accept: 0.8
+  n_map_starts: 4
+  pin_z_to_truth: true
+dispatch:
+  backend: slurm
+  mode: dynamic
+  workers_per_node: 4
+  target_task_walltime_min: 90
+  queue: gh
+  account: JPL-SPHEREx
+  max_fit_walltime_min: 20
+output:
+  save_chains: all
+  save_mocks: subset

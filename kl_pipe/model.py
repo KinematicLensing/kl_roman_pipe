@@ -453,6 +453,12 @@ class IntensityModel(Model):
     projection
     """
 
+    # name of the single parameter the model is linear in (its amplitude).
+    # Simple profiles use 'flux'; composites override to 'total_flux'.
+    # Rendering factors this out to cache a unit-amplitude spatial eval, so
+    # it must name the linear amplitude, not a shape parameter.
+    amplitude_param = 'flux'
+
     def __call__(
         self,
         theta: jnp.ndarray,
@@ -647,6 +653,14 @@ class ContinuumModel:
         self.PARAMETER_NAMES = tuple(
             'flux_per_nm' if p == 'flux' else p for p in profile.PARAMETER_NAMES
         )
+
+    @property
+    def amplitude_param(self) -> str:
+        # mirror the PARAMETER_NAMES relabel: a simple profile's 'flux'
+        # amplitude becomes 'flux_per_nm'; a composite's 'total_flux' (which
+        # has no 'flux' to relabel) passes through unchanged.
+        amp = self._profile.amplitude_param
+        return 'flux_per_nm' if amp == 'flux' else amp
 
     def __call__(self, theta, plane, x, y, z=None):
         # theta is positionally identical to the wrapped profile's (only the

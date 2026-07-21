@@ -5,7 +5,7 @@ TEST_DIR = tests
 TEST_DATA_DIR = $(TEST_DIR)/data
 
 # TODO: eventually incorporate conda-lock when it is warranted
-GENERATE_CONDA_LOCK = cd "$(shell dirname "$(1)")"; conda-lock -f "$(shell basename "$(2)")" -p osx-64 -p osx-arm64 -p linux-64
+GENERATE_CONDA_LOCK = cd "$(shell dirname "$(1)")"; conda-lock -f "$(shell basename "$(2)")" -p osx-64 -p osx-arm64 -p linux-64 -p linux-aarch64
 
 # NOTE: we can add any required test data files here that need to be
 # generated or downloaded before running unit tests
@@ -52,6 +52,15 @@ format:
 .PHONY: check-format
 check-format:
 	@$(FORMATTER) --check
+
+#-------------------------------------------------------------------------------
+# Vista (TACC) helpers
+
+# make runs in a subshell and cannot export into your shell; this prints the
+# setup line. One-step alternative: eval "$(make -s env-vista)"
+.PHONY: env-vista
+env-vista:
+	@echo "source experiments/sweverett/vista_kit/env_vista.sh"
 
 #-------------------------------------------------------------------------------
 # documentation targets
@@ -175,8 +184,18 @@ test-flagship:
 
 .PHONY: test-flagship-long
 test-flagship-long:
-	@echo "Running flagship test (long production config -- cleaner posteriors)..."
+	@echo "Running flagship test (long sampler config -- cleaner posteriors)..."
 	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-long --override-ini="markers=slow"
+
+.PHONY: test-flagship-production
+test-flagship-production:
+	@echo "Running flagship test (production obs config -- 2 broadband + 4 grism rolls)..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-production --override-ini="markers=slow"
+
+.PHONY: test-flagship-production-long
+test-flagship-production-long:
+	@echo "Running flagship test (production obs config + long sampler -- cleanest sensitivity posteriors)..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-production --flagship-long --override-ini="markers=slow"
 
 .PHONY: test-basic
 test-basic:
@@ -341,6 +360,15 @@ download-validation-data:
 test-grism-validation:
 	@echo "Running grism cross-code validation tests..."
 	@conda run -n klpipe pytest tests/test_grism_validation.py -v -m grism_validation
+
+#-------------------------------------------------------------------------------
+# GalSim-chromatic reference gate (self-contained, no external env/data —
+# unlike the geko cross-code tier above; see docs/validation/galsim_reference_gate.md)
+
+.PHONY: test-galsim-reference
+test-galsim-reference:
+	@echo "Running GalSim-chromatic reference gate..."
+	@conda run -n klpipe pytest tests/test_galsim_reference.py -v -m galsim_reference
 
 #-------------------------------------------------------------------------------
 # NOTE: These may be useful in the future if we use git submodules

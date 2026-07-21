@@ -150,7 +150,12 @@ def _make_pars(
 
 
 def _make_grism_obs_no_psf(grism_pars, cube_pars, oversample=1):
-    """Build a no-PSF GrismObs for testing."""
+    """Build a no-PSF GrismObs for testing.
+
+    Pinned to the slice dispersal path: this module tests the wavelength-
+    grid cube machinery (rotated dispersion angles, disperse_cube
+    references, cube jit/grad), which the analytic default bypasses.
+    """
     fine_ip = (
         cube_pars.image_pars.make_fine_scale(oversample) if oversample > 1 else None
     )
@@ -158,7 +163,7 @@ def _make_grism_obs_no_psf(grism_pars, cube_pars, oversample=1):
         grism_pars=grism_pars,
         cube_pars=cube_pars,
         psf_data=None,
-        render_config=RenderConfig(oversample=oversample),
+        render_config=RenderConfig(oversample=oversample, dispersal_method='slice'),
         fine_image_pars=fine_ip,
     )
 
@@ -346,6 +351,135 @@ class TestDispersion:
         col_profile = np.array(result[16, :])
         row_profile = np.array(result[:, 16])
         assert np.std(row_profile) > np.std(col_profile)
+
+    def test_throughput_slice_selection(self):
+        """A one-hot throughput selects exactly one wavelength slice.
+
+        The wavelength grid spacing equals the dispersion (nm/pixel), so
+        every slice lands at an integer pixel offset where the bilinear
+        interpolation is exact. The dispersed image must then equal the
+        selected slice shifted by its integer offset, scaled by
+        T_k * dlam * quad_weight_k. Endpoint slices (k=0, k=Nlam-1) carry
+        the trapezoid half weight; interior slices carry weight 1.
+        """
+        Nrow, Ncol, Nlam = 16, 16, 7
+        rng = np.random.default_rng(42)
+        cube_np = rng.uniform(0.1, 1.0, size=(Nrow, Ncol, Nlam))
+        cube = jnp.asarray(cube_np)
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        dispersion = 1.1
+        k_ref = 3
+        lam = 1312.0 + (np.arange(Nlam) - k_ref) * dispersion
+        dlam = dispersion
+
+        for k, weight in [(0, 0.5), (3, 1.0), (Nlam - 1, 0.5)]:
+            throughput = np.zeros(Nlam)
+            throughput[k] = 0.8
+            gp = GrismPars(
+                image_pars=ip,
+                dispersion=dispersion,
+                lambda_ref=float(lam[k_ref]),
+                dispersion_angle=0.0,
+                throughput=jnp.asarray(throughput),
+            )
+            result = np.asarray(disperse_cube(cube, gp, jnp.asarray(lam)))
+
+            offset = k - k_ref
+            expected = np.zeros((Nrow, Ncol))
+            if offset >= 0:
+                expected[:, offset:] = cube_np[:, : Ncol - offset, k]
+            else:
+                expected[:, : Ncol + offset] = cube_np[:, -offset:, k]
+            expected *= throughput[k] * dlam * weight
+
+            np.testing.assert_allclose(result, expected, atol=1e-12)
+
+    def test_throughput_ramp_wavelength_orientation(self):
+        """An asymmetric (ramp) throughput weights each slice by T at that
+        slice's own wavelength -- pinning the index alignment between the
+        throughput array and the wavelength grid (a reversed or shifted
+        alignment produces a grossly different image).
+
+        Integer pixel offsets again make the interpolation exact, so the
+        dispersed image must equal the closed-form sum of shifted slices
+        scaled by T_k * dlam * quad_weight_k.
+        """
+        Nrow, Ncol, Nlam = 16, 16, 9
+        rng = np.random.default_rng(7)
+        cube_np = rng.uniform(0.1, 1.0, size=(Nrow, Ncol, Nlam))
+        cube = jnp.asarray(cube_np)
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        dispersion = 1.1
+        k_ref = 4
+        lam = 1312.0 + (np.arange(Nlam) - k_ref) * dispersion
+        dlam = dispersion
+        # strongly asymmetric: factor ~5 from blue end to red end
+        throughput = np.linspace(0.2, 1.0, Nlam)
+
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=dispersion,
+            lambda_ref=float(lam[k_ref]),
+            dispersion_angle=0.0,
+            throughput=jnp.asarray(throughput),
+        )
+        result = np.asarray(disperse_cube(cube, gp, jnp.asarray(lam)))
+
+        quad_weight = np.ones(Nlam)
+        quad_weight[0] = 0.5
+        quad_weight[-1] = 0.5
+        expected = np.zeros((Nrow, Ncol))
+        for k in range(Nlam):
+            offset = k - k_ref
+            shifted = np.zeros((Nrow, Ncol))
+            if offset >= 0:
+                shifted[:, offset:] = cube_np[:, : Ncol - offset, k]
+            else:
+                shifted[:, : Ncol + offset] = cube_np[:, -offset:, k]
+            expected += shifted * throughput[k] * dlam * quad_weight[k]
+
+        np.testing.assert_allclose(result, expected, atol=1e-12)
+
+    def test_throughput_operator_path_matches_loop_path(self):
+        """The precomputed dispersion operator applies throughput
+        identically to disperse_cube.
+
+        At integer pixel offsets both interpolants (bilinear in
+        disperse_cube, Catmull-Rom in the operator) are exact, so the two
+        pathways must agree to float precision with the same non-flat
+        throughput.
+        """
+        from kl_pipe.dispersion import (
+            apply_dispersion_operator,
+            precompute_dispersion_operator,
+        )
+
+        Nrow, Ncol, Nlam = 16, 16, 9
+        rng = np.random.default_rng(11)
+        cube = jnp.asarray(rng.uniform(0.1, 1.0, size=(Nrow, Ncol, Nlam)))
+
+        ip = ImagePars(shape=(Nrow, Ncol), pixel_scale=0.11, indexing='ij')
+        dispersion = 1.1
+        k_ref = 4
+        lam = 1312.0 + (np.arange(Nlam) - k_ref) * dispersion
+        throughput = np.linspace(0.2, 1.0, Nlam)
+
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=dispersion,
+            lambda_ref=float(lam[k_ref]),
+            dispersion_angle=0.0,
+            throughput=jnp.asarray(throughput),
+        )
+        loop_image = disperse_cube(cube, gp, jnp.asarray(lam))
+        operator = precompute_dispersion_operator(gp, lam)
+        operator_image = apply_dispersion_operator(operator, cube)
+
+        np.testing.assert_allclose(
+            np.asarray(operator_image), np.asarray(loop_image), atol=1e-12
+        )
 
     def test_disperse_oversample_kwarg(self):
         """disperse_cube(oversample=N) on a fine cube reproduces the dispersion
@@ -2714,24 +2848,21 @@ class TestAnalytical:
 
         diff = grism_cont - grism_nocont
 
-        # build expected by explicitly dispersing the continuum contribution
-        # using SourceModel's continuum semantic (Halpha.cont.flux_per_nm is the
-        # continuum's own flux, not a multiplier on the line). Build the
-        # continuum theta + spatial profile the same way source.build_cube
-        # does internally, then mirror the full pipeline (disperse + sinc +
-        # SB→flux/pixel via × coarse_area).
-        cont_theta, cont_model = source._build_emission_continuum_theta(
-            source_pars_cont, 'Halpha'
-        )
-        X_grid, Y_grid = build_map_grid_from_image_pars(_ANALYTICAL_IMAGE_PARS)
-        I_cont = np.array(cont_model(cont_theta, 'obs', X_grid, Y_grid))
-        cont_cube_sb = np.broadcast_to(
-            I_cont[:, :, None], (*I_cont.shape, cp.n_lambda)
-        ).copy()
-        coarse_area = _ANALYTICAL_IMAGE_PARS.pixel_scale**2
-        expected = (
-            np.array(disperse_cube(jnp.array(cont_cube_sb), gp, cp.lambda_grid))
-            * coarse_area
+        # both the line and the continuum are linear in their own amplitudes
+        # and added, so the continuum's contribution (the diff above) must
+        # equal a line-free render at the same continuum flux -- testing the
+        # separability property directly against the actual pipeline, rather
+        # than re-deriving one continuum model's dispersal by hand (which
+        # would pin the test to a specific continuum_fills_stamp mode). Holds
+        # for whichever continuum model is active.
+        source_pars_lineoff = {
+            **base_pars,
+            **cont_spatial,
+            'Halpha.flux': 0.0,
+            'Halpha.cont.flux_per_nm': cont_val,
+        }
+        expected = np.array(
+            source.render_grism(source_pars_lineoff, _make_grism_obs_no_psf(gp, cp))
         )
 
         peak = max(expected.max(), 1e-16)
@@ -2745,7 +2876,7 @@ class TestAnalytical:
         plt.colorbar(im0, ax=axes[0], fraction=0.046)
 
         im1 = axes[1].imshow(expected, origin='lower')
-        axes[1].set_title('Expected (dispersed uniform cube)')
+        axes[1].set_title('Expected (line-free continuum render)')
         plt.colorbar(im1, ax=axes[1], fraction=0.046)
 
         vmax_r = max(residual.max(), 1e-16)
@@ -2770,9 +2901,125 @@ class TestAnalytical:
             rel_max < 1e-4
         ), f"Continuum pedestal rel error {rel_max:.2e} exceeds 1e-4"
 
+    def test_composite_continuum_renders_and_is_linear(self):
+        """A composite (bulge+disk) continuum renders on both dispersal
+        paths and stays linear in its amplitude.
+
+        Regression: the continuum render factors out a scalar amplitude to
+        cache a unit-amplitude spatial eval, and previously hardcoded the
+        amplitude name 'flux_per_nm'. A composite continuum's amplitude is
+        'total_flux' (ContinuumModel only relabels a simple profile's
+        'flux'), so the lookup raised ValueError on both the analytic and
+        slice paths. The amplitude name is now resolved from the model via
+        IntensityModel.amplitude_param.
+        """
+        from kl_pipe.intensity import BulgeDiskModel
+
+        z = 1.0
+        source = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(), continuum=BulgeDiskModel()
+                ),
+            },
+        )
+        # composite continuum: shared bulge+disk morphology (bare keys),
+        # per-line amplitude under the Halpha.cont.* namespace.
+        base_pars = {
+            'cosi': 0.5,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'z': z,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.15,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
+            'bulge_frac': 0.3,
+            'disk_rscale': 0.15,
+            'disk_h_over_r': 0.1,
+            'disk_x0': 0.0,
+            'disk_y0': 0.0,
+            'bulge_hlr': 0.1,
+            'bulge_h_over_hlr': 0.3,
+            'bulge_x0': 0.0,
+            'bulge_y0': 0.0,
+        }
+        gp = GrismPars(
+            image_pars=_ANALYTICAL_IMAGE_PARS,
+            dispersion=1.1,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
+            dispersion_angle=0.0,
+        )
+        cp = gp.to_cube_pars(z=z)
+
+        def _obs(method):
+            return GrismObs(
+                grism_pars=gp,
+                cube_pars=cp,
+                psf_data=None,
+                render_config=RenderConfig(oversample=1, dispersal_method=method),
+                fine_image_pars=None,
+            )
+
+        totals = {}
+        for method in ('analytic', 'slice'):
+            obs = _obs(method)
+            img1 = np.array(
+                source.render_grism({**base_pars, 'Halpha.cont.total_flux': 20.0}, obs)
+            )
+            img2 = np.array(
+                source.render_grism({**base_pars, 'Halpha.cont.total_flux': 40.0}, obs)
+            )
+            img0 = np.array(
+                source.render_grism({**base_pars, 'Halpha.cont.total_flux': 0.0}, obs)
+            )
+            assert np.all(np.isfinite(img1)), f"{method}: non-finite render"
+            cont1 = (img1 - img0).sum()
+            cont2 = (img2 - img0).sum()
+            assert cont1 > 0, f"{method}: composite continuum contributes nothing"
+            ratio = cont2 / cont1
+            assert abs(ratio - 2.0) < 1e-5, (
+                f"{method}: composite continuum not linear in total_flux "
+                f"(doubling gave ratio {ratio:.6f}, expected 2.0)"
+            )
+            totals[method] = float(img1.sum())
+
+        # analytic is the n_lambda -> infinity limit of slice; total flux
+        # agrees (dispersal-shape accuracy is gated by the GalSim reference).
+        rel = abs(totals['analytic'] - totals['slice']) / abs(totals['slice'])
+        assert rel < 1e-3, f"analytic vs slice total flux disagree: rel {rel:.2e}"
+
 
 class TestContinuumModel:
     """ContinuumModel adapter: flux -> flux_per_nm relabel, wrapping, guard."""
+
+    def test_amplitude_param_resolves_by_model(self):
+        """amplitude_param names the linear amplitude the render factors out:
+        'flux' (simple profile), 'total_flux' (composite), relabeled to
+        'flux_per_nm' only when a ContinuumModel wraps a simple 'flux'
+        profile. A wrapped composite keeps 'total_flux' (no 'flux' to
+        relabel)."""
+        from kl_pipe.model import ContinuumModel
+        from kl_pipe.intensity import BulgeDiskModel
+
+        assert InclinedExponentialModel().amplitude_param == 'flux'
+        assert BulgeDiskModel().amplitude_param == 'total_flux'
+
+        cont_simple = ContinuumModel(InclinedExponentialModel())
+        assert cont_simple.amplitude_param == 'flux_per_nm'
+        assert cont_simple.amplitude_param in cont_simple.PARAMETER_NAMES
+
+        cont_comp = ContinuumModel(BulgeDiskModel())
+        assert cont_comp.amplitude_param == 'total_flux'
+        assert 'flux_per_nm' not in cont_comp.PARAMETER_NAMES
+        assert cont_comp.amplitude_param in cont_comp.PARAMETER_NAMES
 
     def test_relabels_flux_to_flux_per_nm(self):
         from kl_pipe.model import ContinuumModel

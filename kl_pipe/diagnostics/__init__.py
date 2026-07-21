@@ -16,6 +16,7 @@ from kl_pipe.diagnostics.grism import (
     plot_grism_overview,
     plot_dispersion_angles,
     plot_dispersion_angle_study,
+    plot_analytic_slice_comparison,
 )
 
 __all__ = [
@@ -31,4 +32,5 @@ __all__ = [
     'plot_grism_overview',
     'plot_dispersion_angles',
     'plot_dispersion_angle_study',
+    'plot_analytic_slice_comparison',
 ]

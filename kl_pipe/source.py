@@ -26,11 +26,17 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
+from kl_pipe._precision import ensure_precision
+
+ensure_precision()
 
 import jax.numpy as jnp  # noqa: E402
 
-from kl_pipe.coordinates import image_rotation_from_wcs, rotate_shear  # noqa: E402
+from kl_pipe.coordinates import (  # noqa: E402
+    image_rotation_from_wcs,
+    rotate_position,
+    rotate_shear,
+)
 from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
 
 if TYPE_CHECKING:
@@ -103,12 +109,14 @@ def _apply_obs_rotation(
     param_names: Tuple[str, ...],
     image_rotation: float,
 ) -> jnp.ndarray:
-    """Rotate celestial-frame ``theta_int`` + ``(g1, g2)`` into the obs's
-    detector frame.
+    """Rotate celestial-frame ``theta_int`` + ``(g1, g2)`` + ``(x0, y0)``
+    into the obs's detector frame.
 
     Sign convention matches ``OrientedAngle._sky2cartesian`` from kl-tools:
     ``theta_int_det = theta_int_celestial - image_rotation``. Shear rotates
-    spin-2 by ``2 * image_rotation`` via ``coordinates.rotate_shear``.
+    spin-2 by ``2 * image_rotation`` via ``coordinates.rotate_shear``;
+    centroid offsets rotate spin-1 via ``coordinates.rotate_position`` (a
+    fixed sky position appears rotated in each roll's detector frame).
 
     ``image_rotation`` is read from frozen obs aux (a Python float). If it is
     exactly zero (default-WCS path), the rotation step is skipped at trace
@@ -123,6 +131,10 @@ def _apply_obs_rotation(
         ig1, ig2 = param_names.index('g1'), param_names.index('g2')
         g1d, g2d = rotate_shear(theta[ig1], theta[ig2], image_rotation)
         theta = theta.at[ig1].set(g1d).at[ig2].set(g2d)
+    if 'x0' in param_names and 'y0' in param_names:
+        ix, iy = param_names.index('x0'), param_names.index('y0')
+        x0d, y0d = rotate_position(theta[ix], theta[iy], image_rotation)
+        theta = theta.at[ix].set(x0d).at[iy].set(y0d)
     return theta
 
 
@@ -147,6 +159,14 @@ class SourceModel:
         in ``LINE_LAMBDAS``, the line's ``lambda_rest`` is auto-resolved
         from the registry; otherwise the line must set ``lambda_rest``
         explicitly.
+    cube_remat : bool, default True
+        Wrap ``build_cube`` in ``jax.checkpoint`` (policy
+        ``dots_saveable``) so the backward pass recomputes the cube
+        assembly instead of storing its intermediates. Rematerializing
+        the cube assembly trades a cheap forward recompute for less
+        memory traffic; measured ~1.2x speedup on posterior gradients on
+        CPU, with gradients identical to the unwrapped path. Set False
+        to disable (e.g. for profiling comparisons).
 
     Validation (in __post_init__):
     - At least one component must be non-empty.
@@ -158,7 +178,7 @@ class SourceModel:
         * If ``continuum_key`` is set, the referenced line must have
           a ``continuum`` set (otherwise there is nothing to share).
         * If ``dispersion_key`` is set, it must reference an existing
-          line key, and that line must NOT itself reference dispersion
+          line key, and that line must not itself reference dispersion
           via its own ``dispersion_key`` (no chained sharing).
         * If ``lambda_rest`` is None, the line's name must be in
           ``LINE_LAMBDAS``; resolved automatically.
@@ -167,6 +187,7 @@ class SourceModel:
     velocity_model: Optional['VelocityModel'] = None
     broadband_models: Dict[str, 'IntensityModel'] = field(default_factory=dict)
     emission_lines: Dict[str, EmissionLine] = field(default_factory=dict)
+    cube_remat: bool = True
 
     # ----------------------------------------------------------------- render
 
@@ -202,6 +223,8 @@ class SourceModel:
         obs: 'GrismObs',
         plane: str = 'obs',
         spectral_oversample: int | None = None,
+        spectral_method: str | None = None,
+        psf_mode: str | None = None,
     ) -> jnp.ndarray:
         """Render the dispersed 2D grism image.
 
@@ -210,34 +233,70 @@ class SourceModel:
              scale when ``obs.oversample > 1``), deriving the celestial-
              to-detector rotation from ``obs.grism_pars.image_pars.wcs``
              to thread celestial-frame priors into detector-frame thetas.
-          2. Per-slice PSF convolution via ``vmap`` over wavelength, with
-             ``bin=False`` so the cube stays at fine resolution.
+          2. PSF convolution, placement set by ``psf_mode``:
+             ``'post_dispersion'`` (default) disperses the raw cube and
+             convolves the 2D dispersed image once (exact padded linear
+             convolution); ``'per_slice'`` convolves every wavelength
+             slice before dispersion via ``vmap``. For a shared
+             wavelength-independent PSF the two are mathematically
+             identical up to stamp-boundary truncation terms bounded by
+             the ``folding_threshold`` flux class. Both use
+             ``bin=False`` so images stay at fine resolution.
           3. Disperse via ``disperse_cube`` (existing kl_pipe.dispersion).
-          4. Apply the precomputed BoxPixel sinc + sum-bin to coarse
-             detector pixels at the 2D output.
+          4. Apply the precomputed BoxPixel sinc (coarse-pixel integration
+             in k-space) and read out the box-averaged field at coarse
+             pixel centers at the 2D output.
 
         .. note::
-           Step 2 applies a **single shared** PSF (``obs.psf_data``) to
-           every wavelength slice. Per-line / wavelength-dependent PSFs
-           and per-line sub-cubes are tracked as an open architectural
-           item — see issue #51. Deferred past Phase 3.
+           Both modes apply a **single shared** PSF (``obs.psf_data``).
+           Per-line / wavelength-dependent PSFs require ``'per_slice'``
+           (or per-line sub-cubes) and are tracked as an open
+           architectural item — see issue #51. Deferred past Phase 3.
 
         Parameters
         ----------
         spectral_oversample : int, optional
-            Wavelength sub-bin count for cube assembly. When ``None``
-            (default), reads ``obs.spectral_oversample`` (which itself
-            reads from ``obs.render_config.spectral_oversample``,
-            default 5). Pass an explicit value only to override the
-            obs-recorded setting (e.g., convergence tests).
+            Wavelength sub-bin count for cube assembly (only used by
+            ``spectral_method='oversample'``). When ``None`` (default),
+            reads ``obs.spectral_oversample`` (which itself reads from
+            ``obs.render_config.spectral_oversample``, default 15). Pass
+            an explicit value only to override the obs-recorded setting
+            (e.g., convergence tests).
+        spectral_method : str, optional
+            Spectral bin-integration method for ``build_cube``: ``'erf'``
+            (exact, default) or ``'oversample'``. When ``None``
+            (default), reads ``obs.spectral_method`` (canonical source
+            ``obs.render_config.spectral_method``). Pass an explicit
+            value only to override (e.g., method-comparison tests).
+        psf_mode : str, optional
+            PSF pathway: ``'post_dispersion'`` (single convolution of
+            the dispersed image; default) or ``'per_slice'`` (reference
+            path). When ``None`` (default), reads ``obs.psf_mode``
+            (canonical source ``obs.render_config.psf_mode``). Pass an
+            explicit value only to override (e.g., equivalence tests).
         """
         from kl_pipe.dispersion import disperse_cube
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.spectral import CubePars
 
-        # resolve spectral_oversample: explicit kwarg wins, else read from obs
+        # resolve spectral_oversample / spectral_method / psf_mode:
+        # explicit kwarg wins, else read from obs
         if spectral_oversample is None:
             spectral_oversample = obs.spectral_oversample
+        if spectral_method is None:
+            spectral_method = obs.spectral_method
+        if psf_mode is None:
+            psf_mode = obs.psf_mode
+        if psf_mode not in ('post_dispersion', 'per_slice'):
+            raise ValueError(
+                f"psf_mode must be 'post_dispersion' or 'per_slice', got "
+                f"{psf_mode!r}"
+            )
+
+        if obs.dispersal_method == 'analytic':
+            return self._render_grism_analytic(
+                pars, obs, plane=plane, psf_mode=psf_mode
+            )
 
         # build_cube spatial grid: fine when oversampling is active
         if obs.psf_data is not None and obs.oversample > 1:
@@ -249,16 +308,23 @@ class SourceModel:
             build_cube_pars = obs.cube_pars
 
         image_rotation = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
+        # realistic continuum is dispersed separately (below) so it can fill
+        # the stamp; keep it out of the line cube in that mode
+        cont_fills = obs.continuum_fills_stamp
         cube = self.build_cube(
             pars,
             build_cube_pars,
             spectral_oversample=spectral_oversample,
             plane=plane,
             image_rotation=image_rotation,
+            spectral_method=spectral_method,
+            include_continuum=not cont_fills,
         )
 
-        # per-slice PSF convolution (vmap over wavelength), bin=False keeps fine
-        if obs.psf_data is not None:
+        # per-slice PSF convolution (vmap over wavelength), bin=False keeps
+        # fine. The general/reference path; required for future
+        # wavelength-dependent PSFs (issue #51).
+        if obs.psf_data is not None and psf_mode == 'per_slice':
             from kl_pipe.psf import convolve_fft
 
             cube_transposed = jnp.moveaxis(cube, -1, 0)
@@ -275,6 +341,45 @@ class SourceModel:
             oversample=obs.oversample,
         )
 
+        # stamp-filling continuum dispersed by the closed-form trace kernel
+        # (no interior box edges); the legacy narrow-window continuum instead
+        # rides inside the cube above
+        cont_disp = None
+        if cont_fills:
+            cont_disp = self._render_continuum_dispersed(
+                pars,
+                obs.grism_pars,
+                plane,
+                image_rotation,
+                build_cube_pars.image_pars,
+                obs.oversample,
+                obs.cube_pars.lambda_grid,
+            )
+
+        # post-dispersion PSF convolution: one exact padded linear
+        # convolution of the dispersed image replaces the 2*Nlambda
+        # per-slice FFTs (a shared PSF commutes with per-slice uniform
+        # shifts and their weighted sum). The unit-sum kernel preserves
+        # SB units.
+        if psf_mode == 'post_dispersion':
+            # the continuum shares the line's single post-dispersion pass
+            if cont_disp is not None:
+                dispersed = dispersed + cont_disp
+            if obs.psf_data is not None:
+                from kl_pipe.psf import convolve_fft
+
+                dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+        else:
+            # per_slice: the line cube is already convolved; convolve the
+            # separately-dispersed continuum with the same shared PSF to
+            # match, then add
+            if cont_disp is not None:
+                if obs.psf_data is not None:
+                    from kl_pipe.psf import convolve_fft
+
+                    cont_disp = convolve_fft(cont_disp, obs.psf_data, bin=False)
+                dispersed = dispersed + cont_disp
+
         # post-dispersion BoxPixel sinc + SB→flux/pixel conversion
         coarse_shape = (
             obs.grism_pars.image_pars.Nrow,
@@ -287,6 +392,450 @@ class SourceModel:
             obs.oversample,
             obs.grism_pars.image_pars.pixel_scale,
         )
+
+    def _render_continuum_dispersed(
+        self,
+        pars: dict,
+        grism_pars: 'GrismPars',
+        plane: str,
+        image_rotation: float,
+        fine_image_pars: 'ImagePars',
+        oversample: int,
+        lam_grid: jnp.ndarray,
+    ):
+        """Disperse the flat stellar continuum to fill the stamp (closed form).
+
+        The continuum is flat in wavelength, so its dispersed trace is a
+        throughput-weighted box convolution of the continuum spatial
+        profile along the dispersion axis. A real slitless-grism continuum
+        trace spans the whole bandpass (hundreds of pixels) while the stamp
+        is a tiny window on it, so within the stamp the continuum is a
+        smooth stripe with no interior edges. This reproduces that by
+        integrating the trace over a window wide enough to cover the stamp
+        (``+/- (Ncol + 2)`` coarse pixels about ``lambda_ref``) rather than
+        the narrow emission-line velocity window. Dispersion is axis-
+        aligned (detector frame); roll is handled by ``image_rotation``
+        rotating the spatial profile into the detector frame, matching the
+        line term. Returns the fine 2D continuum image (pre-PSF, pre-pixel-
+        response), or None when no line carries a continuum.
+
+        See ``RenderConfig.continuum_fills_stamp``.
+        """
+        from kl_pipe.dispersion import (
+            continuum_trace_kernel,
+            disperse_continuum_analytic,
+        )
+        from kl_pipe.utils import build_map_grid_from_image_pars
+
+        X, Y = build_map_grid_from_image_pars(fine_image_pars)
+        I_cont_total = None
+        unit_cache: dict = {}
+        for line_key, line in self.emission_lines.items():
+            cont_theta, cont_model = self._build_emission_continuum_theta(
+                pars, line_key
+            )
+            if cont_model is None:
+                continue
+            cont_theta = _apply_obs_rotation(
+                cont_theta, cont_model.PARAMETER_NAMES, image_rotation
+            )
+            cont_owner = (
+                line.continuum_key if line.continuum_key is not None else line_key
+            )
+            amp_idx = cont_model.PARAMETER_NAMES.index(cont_model.amplitude_param)
+            amplitude = cont_theta[amp_idx]
+            cache_key = f'cont:{cont_owner}'
+            if cache_key not in unit_cache:
+                unit_cache[cache_key] = cont_model(
+                    cont_theta.at[amp_idx].set(1.0), plane, X, Y
+                )
+            I_cont = amplitude * unit_cache[cache_key]
+            I_cont_total = I_cont if I_cont_total is None else I_cont_total + I_cont
+
+        if I_cont_total is None:
+            return None
+
+        # widen the trace integration window so the continuum fills the
+        # stamp along the dispersion axis (no interior box edges)
+        half_nm = (grism_pars.image_pars.Ncol + 2) * grism_pars.dispersion
+        window = (grism_pars.lambda_ref - half_nm, grism_pars.lambda_ref + half_nm)
+        kernel, m_lo = continuum_trace_kernel(
+            grism_pars, lam_grid, oversample, integration_window=window
+        )
+        return disperse_continuum_analytic(I_cont_total, kernel, m_lo)
+
+    def _render_grism_analytic(
+        self,
+        pars: dict,
+        obs,
+        plane: str = 'obs',
+        psf_mode: str = 'post_dispersion',
+    ) -> jnp.ndarray:
+        """Render a grism image via closed-form per-spaxel dispersal.
+
+        Each emission-line spaxel's dispersed footprint is evaluated analytically (a
+        Gaussian convolved with the bilinear tent along the dispersion
+        axis, the exact wavelength-continuum limit of the slice method);
+        the flat continuum disperses through a precomputed exact trace
+        kernel. No wavelength grid enters the line calculation, so
+        accuracy is independent of ``n_lambda``. Shares the
+        post-dispersion PSF and pixel-response stages with the slice
+        path.
+
+        Roll rotation (a nonzero WCS ``image_rotation``) is handled the
+        same way the per-obs slice path handles it: model parameters are
+        rotated into the detector frame before evaluation, and the
+        detector-frame dispersal itself stays axis-aligned. Only the
+        shared-cube group fast path (one celestial cube reused across
+        rolls, rotation fused into the dispersal sampling) is not
+        supported -- there each roll's dispersion direction crosses the
+        shared celestial-frame pixel grid diagonally, and that closed
+        form (piecewise moments of the interpolation kernel along the
+        trace) is not implemented.
+
+        Restrictions (loud): requires ``psf_mode='post_dispersion'`` and
+        axis-aligned dispersion (``dispersion_angle_detector == 0``, true
+        for Roman).
+        """
+        from kl_pipe.dispersion import (
+            continuum_trace_kernel,
+            disperse_continuum_analytic,
+            disperse_line_analytic,
+        )
+        from kl_pipe.grism import _apply_post_dispersion_pixel_response
+        from kl_pipe.utils import build_map_grid_from_image_pars
+
+        gp = obs.grism_pars
+        if psf_mode != 'post_dispersion':
+            raise ValueError(
+                "dispersal_method='analytic' requires "
+                f"psf_mode='post_dispersion', got {psf_mode!r} (per-slice "
+                "PSF needs a wavelength-slice cube)"
+            )
+        if float(gp.dispersion_angle_detector) != 0.0:
+            raise NotImplementedError(
+                "dispersal_method='analytic' supports only axis-aligned "
+                f"dispersion; got dispersion_angle_detector="
+                f"{gp.dispersion_angle_detector}"
+            )
+        image_rotation = image_rotation_from_wcs(gp.image_pars.wcs)
+        if self.velocity_model is None:
+            raise ValueError(
+                "analytic grism dispersal requires velocity_model to be set"
+            )
+        if not self.emission_lines:
+            raise ValueError(
+                "analytic grism dispersal requires non-empty emission_lines"
+            )
+
+        if obs.psf_data is not None and obs.oversample > 1:
+            fine_ip = obs.fine_image_pars
+        else:
+            fine_ip = gp.image_pars
+        X, Y = build_map_grid_from_image_pars(fine_ip)
+
+        vm = self.velocity_model
+        theta_vel = _build_component_theta(pars, 'vel', vm.PARAMETER_NAMES)
+        theta_vel = _apply_obs_rotation(theta_vel, vm.PARAMETER_NAMES, image_rotation)
+        v_los = vm(theta_vel, plane, X, Y)
+
+        z = pars['z']
+        os_f = obs.oversample
+        lam_grid = obs.cube_pars.lambda_grid
+        throughput = gp.throughput
+
+        # evaluate each spatial owner once at unit amplitude (same dedupe
+        # as build_cube; spatial LOS quadrature dominates eval cost)
+        unit_eval_cache: dict = {}
+
+        def _amplitude_scaled_eval(owner_key, theta_c, model, amp_name):
+            amp_idx = model.PARAMETER_NAMES.index(amp_name)
+            amplitude = theta_c[amp_idx]
+            if owner_key not in unit_eval_cache:
+                theta_unit = theta_c.at[amp_idx].set(1.0)
+                unit_eval_cache[owner_key] = model(theta_unit, plane, X, Y)
+            return amplitude * unit_eval_cache[owner_key]
+
+        dispersed = jnp.zeros(X.shape)
+        cont_fills = obs.continuum_fills_stamp
+        I_cont_total = None
+        for line_key, line in self.emission_lines.items():
+            theta_int, int_model = self._build_emission_intensity_theta(pars, line_key)
+            theta_int = _apply_obs_rotation(
+                theta_int, int_model.PARAMETER_NAMES, image_rotation
+            )
+            int_owner = (
+                line.intensity_key if line.intensity_key is not None else line_key
+            )
+            I_line = _amplitude_scaled_eval(
+                f'int:{int_owner}', theta_int, int_model, int_model.amplitude_param
+            )
+
+            lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_los / _C_KMS)
+            disp_owner = (
+                line.dispersion_key if line.dispersion_key is not None else line_key
+            )
+            sigma_kms = pars[f'{disp_owner}.dispersion']
+            sigma_s = lam_obs * sigma_kms / _C_KMS / gp.dispersion * os_f
+            xi = (lam_obs - gp.lambda_ref) / gp.dispersion * os_f
+
+            halfwidth = obs.line_window_halfwidth
+            if halfwidth is None:
+                # standalone sizing from the concrete parameter values;
+                # jitted/inference use must freeze it in RenderConfig
+                try:
+                    halfwidth = (
+                        int(float(jnp.max(jnp.abs(xi))) + 4.0 * float(jnp.max(sigma_s)))
+                        + 3
+                    )
+                except jax.errors.ConcretizationTypeError as err:
+                    raise ValueError(
+                        "line_window_halfwidth must be set on RenderConfig for "
+                        "jitted/inference use of dispersal_method='analytic' "
+                        "(the standalone default sizes the flux-spreading window "
+                        "from concrete parameter values, which is impossible "
+                        "under tracing)"
+                    ) from err
+
+            weight = (
+                jnp.interp(lam_obs, lam_grid, throughput)
+                if throughput is not None
+                else None
+            )
+            dispersed = dispersed + disperse_line_analytic(
+                I_line, xi, sigma_s, halfwidth, weight=weight
+            )
+
+            # legacy line-window continuum accumulation; the realistic
+            # stamp-filling continuum is dispersed after the loop
+            cont_theta, cont_model = self._build_emission_continuum_theta(
+                pars, line_key
+            )
+            if not cont_fills and cont_model is not None:
+                cont_theta = _apply_obs_rotation(
+                    cont_theta, cont_model.PARAMETER_NAMES, image_rotation
+                )
+                cont_owner = (
+                    line.continuum_key if line.continuum_key is not None else line_key
+                )
+                I_cont = _amplitude_scaled_eval(
+                    f'cont:{cont_owner}',
+                    cont_theta,
+                    cont_model,
+                    cont_model.amplitude_param,
+                )
+                I_cont_total = I_cont if I_cont_total is None else I_cont_total + I_cont
+
+        if cont_fills:
+            cont_disp = self._render_continuum_dispersed(
+                pars, gp, plane, image_rotation, fine_ip, os_f, lam_grid
+            )
+            if cont_disp is not None:
+                dispersed = dispersed + cont_disp
+        elif I_cont_total is not None:
+            kernel, m_lo = continuum_trace_kernel(gp, lam_grid, os_f)
+            dispersed = dispersed + disperse_continuum_analytic(
+                I_cont_total, kernel, m_lo
+            )
+
+        if obs.psf_data is not None:
+            from kl_pipe.psf import convolve_fft
+
+            dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+
+        coarse_shape = (gp.image_pars.Nrow, gp.image_pars.Ncol)
+        return _apply_post_dispersion_pixel_response(
+            dispersed,
+            obs.pixel_response_fft,
+            coarse_shape,
+            obs.oversample,
+            gp.image_pars.pixel_scale,
+        )
+
+    def render_grism_group(
+        self,
+        pars: dict,
+        obs_group: dict,
+        plane: str = 'obs',
+        spectral_oversample: int | None = None,
+        spectral_method: str | None = None,
+        psf_mode: str | None = None,
+        operators: dict | None = None,
+    ) -> dict:
+        """Render a group of cube-compatible grism observations from ONE
+        shared cube.
+
+        The unconvolved cube is roll-independent physics: LOS velocity is a
+        scalar field on the sky and all model parameters are celestial-
+        frame. The cube is built in the FIRST obs's detector frame (the
+        anchor roll -- exact parameter-level rotation, and that roll needs
+        no rotational resampling); every obs is then dispersed by a
+        precomputed sparse operator that fuses dispersion, the relative
+        roll rotation, and Catmull-Rom cubic interpolation into a single
+        matvec (``dispersion.precompute_dispersion_operator``). Bilinear
+        resampling is deliberately not used here: its sub-pixel smoothing
+        biases inclination-like posterior modes at the 0.35-sigma level in
+        tight-posterior tests, while cubic measures at the per-roll
+        accuracy floor (Fisher-projected shift 0.005 sigma). The
+        detector-frame PSF + pixel response then apply per obs. PSFs MAY
+        differ across the group (per-detector-position kernels are free);
+        wavelength grids, spatial grids, oversample, and spectral method
+        must be identical (see
+        ``observation.group_grism_obs_by_cube_compat``).
+
+        Parameters
+        ----------
+        pars : dict
+            Celestial-frame parameter dict (dotted SourceModel keys).
+        obs_group : dict[str, GrismObs]
+            Cube-compatible observations keyed by roll name; the FIRST
+            entry defines the anchor frame. Multi-obs groups require
+            ``psf_mode='post_dispersion'`` (the shared cube is unconvolved)
+            and pure-rotation WCSs; violations raise via
+            ``observation.validate_shared_cube_group``.
+        plane, spectral_oversample, spectral_method, psf_mode
+            As in ``render_grism``; resolved from the first obs when None
+            (the group is validated homogeneous in these).
+        operators : dict[str, BCOO], optional
+            Precomputed dispersion operators keyed like ``obs_group``
+            (from ``observation.build_group_dispersion_operators``). When
+            None they are built here -- fine for one-off rendering; for
+            inference the likelihood factory builds them once.
+
+        Returns
+        -------
+        dict[str, jnp.ndarray]
+            Dispersed detector-frame images keyed like ``obs_group``.
+        """
+        # a rotated-frame analytic closed form exists on paper but was
+        # deliberately not implemented: on CPU, independent per-obs renders
+        # measured faster than any shared-evaluation variant could be.
+        # Worth revisiting only if GPU profiling changes that trade-off.
+        for key, obs in obs_group.items():
+            if obs.dispersal_method == 'analytic':
+                raise NotImplementedError(
+                    f"dispersal_method='analytic' (obs {key!r}) is not "
+                    "supported on the shared-cube group path (the analytic "
+                    "path builds no cube to share). Inference routes analytic "
+                    "obs to independent per-obs renders automatically; render "
+                    "each obs with render_grism, or use "
+                    "dispersal_method='slice' for group rendering."
+                )
+        from kl_pipe.dispersion import apply_dispersion_operator
+        from kl_pipe.grism import _apply_post_dispersion_pixel_response
+        from kl_pipe.observation import (
+            build_group_dispersion_operators,
+            group_grism_obs_by_cube_compat,
+            validate_shared_cube_group,
+        )
+        from kl_pipe.spectral import CubePars
+
+        if not obs_group:
+            raise ValueError("render_grism_group requires a non-empty obs_group")
+
+        groups = group_grism_obs_by_cube_compat(obs_group)
+        if len(groups) > 1:
+            raise ValueError(
+                f"obs_group is not cube-compatible: it splits into "
+                f"{[list(g) for g in groups]}. All obs must share identical "
+                f"wavelength grid, spatial grid, oversample, and spectral "
+                f"method; render incompatible groups separately."
+            )
+
+        first = next(iter(obs_group.values()))
+        if spectral_oversample is None:
+            spectral_oversample = first.spectral_oversample
+        if spectral_method is None:
+            spectral_method = first.spectral_method
+        if psf_mode is None:
+            psf_mode = first.psf_mode
+        if psf_mode not in ('post_dispersion', 'per_slice'):
+            raise ValueError(
+                f"psf_mode must be 'post_dispersion' or 'per_slice', got "
+                f"{psf_mode!r}"
+            )
+        validate_shared_cube_group(obs_group, psf_mode)
+
+        # single-obs group: the per-obs path is identical and supports the
+        # per_slice reference mode too
+        if len(obs_group) == 1:
+            (key,) = obs_group
+            return {
+                key: self.render_grism(
+                    pars,
+                    obs_group[key],
+                    plane=plane,
+                    spectral_oversample=spectral_oversample,
+                    spectral_method=spectral_method,
+                    psf_mode=psf_mode,
+                )
+            }
+
+        # shared cube built ONCE in the anchor (first) obs's detector
+        # frame: exact parameter-level rotation, and the anchor roll needs
+        # no rotational resampling. Fine spatial grid when PSF +
+        # oversampling are active (validated homogeneous across the group).
+        anchor_rotation = image_rotation_from_wcs(first.grism_pars.image_pars.wcs)
+        if first.psf_data is not None and first.oversample > 1:
+            build_cube_pars = CubePars(
+                image_pars=first.fine_image_pars,
+                lambda_grid=first.cube_pars.lambda_grid,
+            )
+        else:
+            build_cube_pars = first.cube_pars
+
+        # realistic continuum fills the stamp and is dispersed per obs
+        # (axis-aligned, rotated by that obs's roll) rather than shared
+        # through the operator; keep it out of the shared line cube then.
+        # The group is homogeneous in render settings (resolved from first).
+        cont_fills = first.continuum_fills_stamp
+        cube = self.build_cube(
+            pars,
+            build_cube_pars,
+            spectral_oversample=spectral_oversample,
+            plane=plane,
+            image_rotation=anchor_rotation,
+            spectral_method=spectral_method,
+            include_continuum=not cont_fills,
+        )
+
+        if operators is None:
+            operators = build_group_dispersion_operators(obs_group)
+
+        out = {}
+        for key, obs in obs_group.items():
+            dispersed = apply_dispersion_operator(operators[key], cube)
+            if cont_fills:
+                # multi-obs groups are post_dispersion (validated), so the
+                # continuum joins the line before the single PSF pass
+                obs_rotation = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
+                cont_disp = self._render_continuum_dispersed(
+                    pars,
+                    obs.grism_pars,
+                    plane,
+                    obs_rotation,
+                    build_cube_pars.image_pars,
+                    obs.oversample,
+                    obs.cube_pars.lambda_grid,
+                )
+                if cont_disp is not None:
+                    dispersed = dispersed + cont_disp
+            if obs.psf_data is not None:
+                from kl_pipe.psf import convolve_fft
+
+                dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+            coarse_shape = (
+                obs.grism_pars.image_pars.Nrow,
+                obs.grism_pars.image_pars.Ncol,
+            )
+            out[key] = _apply_post_dispersion_pixel_response(
+                dispersed,
+                obs.pixel_response_fft,
+                coarse_shape,
+                obs.oversample,
+                obs.grism_pars.image_pars.pixel_scale,
+            )
+        return out
 
     def render_velocity(
         self,
@@ -340,6 +889,58 @@ class SourceModel:
         spectral_oversample: int = 15,
         plane: str = 'obs',
         image_rotation: float = 0.0,
+        spectral_method: str = 'erf',
+        include_continuum: bool = True,
+    ) -> jnp.ndarray:
+        """Build the intrinsic 3D datacube ``C(x, y, lambda)`` (no PSF).
+
+        Thin dispatch wrapper around ``_build_cube_impl``. When
+        ``self.cube_remat`` is True (default), the assembly is wrapped in
+        ``jax.checkpoint`` with the ``dots_saveable`` policy:
+        rematerializing the cube assembly in the backward pass trades a
+        cheap forward recompute for less memory traffic; measured ~1.2x
+        speedup on posterior gradients on CPU, gradients identical. Only
+        ``pars`` is treated as traced input; ``cube_pars`` and the
+        remaining arguments are static and closed over.
+
+        See ``_build_cube_impl`` for the full parameter and method
+        documentation.
+        """
+        if not self.cube_remat:
+            return self._build_cube_impl(
+                pars,
+                cube_pars,
+                spectral_oversample=spectral_oversample,
+                plane=plane,
+                image_rotation=image_rotation,
+                spectral_method=spectral_method,
+                include_continuum=include_continuum,
+            )
+
+        def _cube_of_pars(traced_pars: dict) -> jnp.ndarray:
+            return self._build_cube_impl(
+                traced_pars,
+                cube_pars,
+                spectral_oversample=spectral_oversample,
+                plane=plane,
+                image_rotation=image_rotation,
+                spectral_method=spectral_method,
+                include_continuum=include_continuum,
+            )
+
+        return jax.checkpoint(
+            _cube_of_pars, policy=jax.checkpoint_policies.dots_saveable
+        )(pars)
+
+    def _build_cube_impl(
+        self,
+        pars: dict,
+        cube_pars: 'CubePars',
+        spectral_oversample: int = 15,
+        plane: str = 'obs',
+        image_rotation: float = 0.0,
+        spectral_method: str = 'erf',
+        include_continuum: bool = True,
     ) -> jnp.ndarray:
         """Build the intrinsic 3D datacube ``C(x, y, lambda)`` (no PSF).
 
@@ -348,9 +949,22 @@ class SourceModel:
         owning line's spatial/continuum/dispersion data, applies the
         celestial-to-detector rotation, evaluates the per-line intensity
         and (optional) continuum spatial profiles on the cube spatial
-        grid, and accumulates the Gaussian-broadened line + flat-near-line
-        continuum contributions onto a wavelength-oversampled fine grid
-        before binning to the coarse output cube.
+        grid, and accumulates the Gaussian-broadened line +
+        flat-near-line continuum contributions into the coarse output
+        cube. The spectral integral over each coarse wavelength bin is
+        computed by one of two selectable methods (``spectral_method``):
+
+        - ``'erf'`` (default): exact analytic bin integral of the
+          per-pixel Gaussian line kernel via the error function
+          evaluated at the ``Nlambda + 1`` bin edges. Exact for the
+          Gaussian kernel (no spectral discretization error);
+          ``spectral_oversample`` is ignored.
+        - ``'oversample'``: midpoint sampling on a fine grid of
+          ``spectral_oversample`` sub-bins per coarse bin, mean-binned
+          to coarse. Midpoint quadrature carries an
+          ``O(spectral_oversample**-2)`` systematic error (~5e-4
+          relative at the default 15 for Roman-like line widths);
+          retained for convergence/comparison studies.
 
         Parameters
         ----------
@@ -361,9 +975,10 @@ class SourceModel:
             and all per-component intensity / continuum params.
         cube_pars : CubePars
             Spatial grid (``image_pars``) + wavelength array.
-        spectral_oversample : int, default 5
+        spectral_oversample : int, default 15
             Number of fine wavelength sub-bins per coarse lambda pixel.
-            Set to 1 for no spectral oversampling.
+            Only consulted when ``spectral_method='oversample'``; set to
+            1 for center-point sampling with no oversampling.
         plane : str, default 'obs'
             Coordinate plane for velocity + intensity evaluation.
         image_rotation : float, default 0.0
@@ -372,6 +987,9 @@ class SourceModel:
             into the detector-frame thetas the model classes expect.
             ``render_grism`` derives this from ``obs.grism_pars.image_pars.wcs``
             via ``image_rotation_from_wcs`` before passing it through.
+        spectral_method : str, default 'erf'
+            Spectral bin-integration method, ``'erf'`` or
+            ``'oversample'`` (see above).
 
         Returns
         -------
@@ -404,22 +1022,62 @@ class SourceModel:
         theta_vel = _apply_obs_rotation(theta_vel, vm.PARAMETER_NAMES, image_rotation)
         v_los = vm(theta_vel, plane, X, Y)
 
-        # build the fine wavelength grid
+        if spectral_method not in ('erf', 'oversample'):
+            raise ValueError(
+                f"spectral_method must be 'erf' or 'oversample', got "
+                f"{spectral_method!r}"
+            )
+
+        # spectral grids per method
         lambda_coarse = cube_pars.lambda_grid
         n_lam = len(lambda_coarse)
-        osf = spectral_oversample
-        if osf > 1 and n_lam >= 2:
-            dl = lambda_coarse[1] - lambda_coarse[0]
-            half = dl / 2.0
-            fine_offsets = jnp.linspace(-half + half / osf, half - half / osf, osf)
-            lambda_fine = (lambda_coarse[:, None] + fine_offsets[None, :]).reshape(-1)
-        else:
-            lambda_fine = lambda_coarse
-            osf = 1
-
-        n_fine = len(lambda_fine)
         Nrow, Ncol = cube_pars.spatial_shape
-        cube_fine = jnp.zeros((Nrow, Ncol, n_fine))
+
+        if spectral_method == 'erf':
+            if n_lam < 2:
+                raise ValueError(
+                    "spectral_method='erf' requires Nlambda >= 2 to define "
+                    f"bin edges (got Nlambda={n_lam}); use "
+                    "spectral_method='oversample' for single-slice cubes "
+                    "(center-point sampling)."
+                )
+            # coarse bin edges: centers +/- dl/2, shape (n_lam + 1,)
+            dl = lambda_coarse[1] - lambda_coarse[0]
+            bin_edges = jnp.concatenate(
+                [lambda_coarse - dl / 2.0, lambda_coarse[-1:] + dl / 2.0]
+            )
+            cube_fine = jnp.zeros((Nrow, Ncol, n_lam))
+        else:
+            # build the fine wavelength grid (midpoint sub-bins)
+            osf = spectral_oversample
+            if osf > 1 and n_lam >= 2:
+                dl = lambda_coarse[1] - lambda_coarse[0]
+                half = dl / 2.0
+                fine_offsets = jnp.linspace(-half + half / osf, half - half / osf, osf)
+                lambda_fine = (lambda_coarse[:, None] + fine_offsets[None, :]).reshape(
+                    -1
+                )
+            else:
+                lambda_fine = lambda_coarse
+                osf = 1
+            cube_fine = jnp.zeros((Nrow, Ncol, len(lambda_fine)))
+
+        # Spatial evals are the dominant forward-model cost (LOS quadrature
+        # per pixel), and all intensity models are linear in their amplitude
+        # parameter. Lines sharing a spatial owner (intensity_key /
+        # continuum_key) differ from the owner only in amplitude (enforced
+        # by _build_split_owner_theta), so evaluate each owner's profile
+        # once at unit amplitude and scale per line -- exact, and avoids
+        # re-running the quadrature per sharing line.
+        unit_eval_cache: dict = {}
+
+        def _amplitude_scaled_eval(owner_key, theta_c, model, amp_name):
+            amp_idx = model.PARAMETER_NAMES.index(amp_name)
+            amplitude = theta_c[amp_idx]
+            if owner_key not in unit_eval_cache:
+                theta_unit = theta_c.at[amp_idx].set(1.0)
+                unit_eval_cache[owner_key] = model(theta_unit, plane, X, Y)
+            return amplitude * unit_eval_cache[owner_key]
 
         # accumulate emission line contributions
         for line_key, line in self.emission_lines.items():
@@ -428,7 +1086,12 @@ class SourceModel:
             theta_int = _apply_obs_rotation(
                 theta_int, int_model.PARAMETER_NAMES, image_rotation
             )
-            I_line = int_model(theta_int, plane, X, Y)
+            int_owner = (
+                line.intensity_key if line.intensity_key is not None else line_key
+            )
+            I_line = _amplitude_scaled_eval(
+                f'int:{int_owner}', theta_int, int_model, int_model.amplitude_param
+            )
 
             # Doppler-shifted observed wavelength per pixel (full LOS v_los
             # includes systemic v0 + rotation contribution).
@@ -441,19 +1104,33 @@ class SourceModel:
             sigma_kms = pars[f'{disp_owner}.dispersion']
             sigma_lambda = lam_obs * sigma_kms / _C_KMS  # (Nrow, Ncol)
 
-            # normalized Gaussian line kernel, shape (Nrow, Ncol, n_fine)
-            dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
-            sig = sigma_lambda[:, :, None]
-            gauss = (1.0 / (sig * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(
-                -0.5 * (dlam / sig) ** 2
-            )
-            cube_fine = cube_fine + I_line[:, :, None] * gauss
+            if spectral_method == 'erf':
+                # exact bin-averaged Gaussian kernel [1/nm]: the Gaussian
+                # CDF differenced at the coarse bin edges, divided by the
+                # bin width. Matches the oversample path's mean-of-samples
+                # convention exactly in the osf -> inf limit.
+                u = (bin_edges[None, None, :] - lam_obs[:, :, None]) / (
+                    sigma_lambda[:, :, None] * jnp.sqrt(2.0)
+                )
+                cdf = 0.5 * (1.0 + jax.scipy.special.erf(u))
+                kernel = (cdf[:, :, 1:] - cdf[:, :, :-1]) / dl
+            else:
+                # midpoint-sampled normalized Gaussian, shape
+                # (Nrow, Ncol, n_fine)
+                dlam = lambda_fine[None, None, :] - lam_obs[:, :, None]
+                sig = sigma_lambda[:, :, None]
+                kernel = (1.0 / (sig * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(
+                    -0.5 * (dlam / sig) ** 2
+                )
+            cube_fine = cube_fine + I_line[:, :, None] * kernel
 
-            # optional stellar continuum near this line (flat in wavelength)
+            # optional stellar continuum near this line (flat in wavelength).
+            # skipped when the caller disperses the continuum separately to
+            # fill the stamp (see RenderConfig.continuum_fills_stamp)
             cont_theta, cont_model = self._build_emission_continuum_theta(
                 pars, line_key
             )
-            if cont_model is not None:
+            if include_continuum and cont_model is not None:
                 cont_theta = _apply_obs_rotation(
                     cont_theta, cont_model.PARAMETER_NAMES, image_rotation
                 )
@@ -463,11 +1140,19 @@ class SourceModel:
                 # SB/nm -- matching the line term's SB/nm voxel. No extra
                 # per-nm factor needed (that is carried by the parameter's
                 # units, enforced by the flux_per_nm name + the guard below).
-                I_cont = cont_model(cont_theta, plane, X, Y)
+                cont_owner = (
+                    line.continuum_key if line.continuum_key is not None else line_key
+                )
+                I_cont = _amplitude_scaled_eval(
+                    f'cont:{cont_owner}',
+                    cont_theta,
+                    cont_model,
+                    cont_model.amplitude_param,
+                )
                 cube_fine = cube_fine + I_cont[:, :, None]
 
-        # bin fine to coarse
-        if osf > 1 and n_lam >= 2:
+        # bin fine to coarse (oversample path only; erf accumulates coarse)
+        if spectral_method == 'oversample' and osf > 1 and n_lam >= 2:
             cube = cube_fine.reshape(Nrow, Ncol, n_lam, osf).mean(axis=-1)
         else:
             cube = cube_fine
@@ -570,7 +1255,12 @@ class SourceModel:
         """
         values = []
         for p in model.PARAMETER_NAMES:
-            if p == 'flux':
+            # amplitude is per-line ('flux', 'flux_per_nm', or a composite's
+            # 'total_flux'); all other (shape) params come from the spatial
+            # owner. Resolving the amplitude name from the model avoids
+            # silently reading the OWNER's amplitude (a latent bug: matching a
+            # hardcoded {'flux','flux_per_nm'} set missed composite continua).
+            if p == model.amplitude_param:
                 values.append(_lookup_param(pars, own_prefix, p))
             else:
                 values.append(_lookup_param(pars, spatial_owner_prefix, p))
@@ -680,7 +1370,10 @@ class SourceModel:
 
 
 def _source_model_flatten(source):
-    return (), source  # empty children, instance as aux
+    # empty children, instance as aux: every configuration field
+    # (velocity_model, broadband_models, emission_lines, cube_remat)
+    # rides in aux and round-trips unflatten unchanged
+    return (), source
 
 
 def _source_model_unflatten(aux, children):

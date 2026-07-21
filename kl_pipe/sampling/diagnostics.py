@@ -298,6 +298,23 @@ def plot_corner(
     # Extract samples for selected parameters
     samples = np.column_stack([result.get_chain(p) for p in params])
 
+    # Report shear in the galaxy frame: drop sky-frame g1/g2 and append the
+    # per-sample-rotated g+/gx (interpretable KL shear; keeps degeneracies
+    # readable). Only triggers when all of g1/g2/theta_int are sampled.
+    if {'g1', 'g2', 'theta_int'}.issubset(params):
+        from kl_pipe.calibration import galaxy_frame_samples
+
+        th_truth = (true_values or {}).get('theta_int', np.nan)
+        gp_s, gx_s = galaxy_frame_samples(
+            result.get_chain('g1'),
+            result.get_chain('g2'),
+            result.get_chain('theta_int'),
+            th_truth,
+        )
+        keep_cols = [i for i, p in enumerate(params) if p not in ('g1', 'g2')]
+        samples = np.column_stack([samples[:, keep_cols], gp_s, gx_s])
+        params = [p for p in params if p not in ('g1', 'g2')] + ['g_plus', 'g_cross']
+
     # Add derived parameter vcirc*cosi if both are present
     derived_params = []
     if include_derived and 'vcirc' in params and 'cosi' in params:
@@ -317,14 +334,36 @@ def plot_corner(
         # Add derived MAP values
         if 'vcirc*cosi' in params:
             map_values['vcirc*cosi'] = map_values['vcirc'] * map_values['cosi']
+        if 'g_plus' in params:
+            from kl_pipe.calibration import rotate_to_galaxy_frame
+
+            gpm, gxm = rotate_to_galaxy_frame(
+                map_values['g1'], map_values['g2'], map_values['theta_int']
+            )
+            map_values['g_plus'] = float(gpm)
+            map_values['g_cross'] = float(gxm)
 
     # Setup true values if provided
     truths = None
     if true_values is not None:
+        from kl_pipe.calibration import rotate_to_galaxy_frame
+
+        has_shear_truth = {'g1', 'g2', 'theta_int'}.issubset(true_values)
+        gp_t, gx_t = (
+            rotate_to_galaxy_frame(
+                true_values['g1'], true_values['g2'], true_values['theta_int']
+            )
+            if has_shear_truth
+            else (None, None)
+        )
         truths = []
         for p in params:
             if p == 'vcirc*cosi' and 'vcirc' in true_values and 'cosi' in true_values:
                 truths.append(true_values['vcirc'] * true_values['cosi'])
+            elif p == 'g_plus':
+                truths.append(float(gp_t) if gp_t is not None else None)
+            elif p == 'g_cross':
+                truths.append(float(gx_t) if gx_t is not None else None)
             else:
                 truths.append(true_values.get(p))
 
@@ -1551,6 +1590,31 @@ def plot_recovery(
 
         derived_params['vcirc*cosi'] = (true_vcirc_cosi, rec_vcirc_cosi)
         uncertainties['vcirc*cosi'] = (rec_vcirc_cosi - q16, q84 - rec_vcirc_cosi)
+
+    # Report shear in the galaxy frame (g+/gx) instead of sky-frame g1/g2 for
+    # the per-parameter panels. Joint Nsigma is left on the sky-frame samples
+    # below: g+/gx is an orthogonal rotation of g1/g2, so the joint Mahalanobis
+    # distance is unchanged, and recovered_values keeps g1/g2 for that step.
+    if {'g1', 'g2', 'theta_int'}.issubset(params):
+        from kl_pipe.calibration import galaxy_frame_samples, rotate_to_galaxy_frame
+
+        th_truth = true_values['theta_int']
+        gp_c, gx_c = galaxy_frame_samples(
+            result.get_chain('g1'),
+            result.get_chain('g2'),
+            result.get_chain('theta_int'),
+            th_truth,
+        )
+        gp_t, gx_t = rotate_to_galaxy_frame(
+            true_values['g1'], true_values['g2'], true_values['theta_int']
+        )
+        for nm, chain, tval in (('g_plus', gp_c, gp_t), ('g_cross', gx_c, gx_t)):
+            rec = float(np.median(chain))
+            lo = float(np.percentile(chain, 16))
+            hi = float(np.percentile(chain, 84))
+            derived_params[nm] = (float(tval), rec)
+            uncertainties[nm] = (rec - lo, hi - rec)
+        params = [p for p in params if p not in ('g1', 'g2')]
 
     # Compute joint Nσ using covariance from samples
     samples = result.samples

@@ -32,6 +32,14 @@ docs/sessions/
 # Mathematical derivations + working notes; not source-of-truth
 docs/notes/
 
+# LaTeX build artifacts (the .tex source is tracked; these are generated)
+docs/derivations/*.aux
+docs/derivations/*.log
+docs/derivations/*.out
+docs/derivations/*.pdf
+docs/derivations/*.toc
+docs/derivations/*.synctex.gz
+
 # Personal experiment sandbox
 experiments/sweverett/
 
@@ -46,3 +54,6 @@ tests/data/validation/
 
 # macOS
 .DS_Store
+
+# ensemble run outputs
+runs/

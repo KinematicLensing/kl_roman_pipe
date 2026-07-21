@@ -6,9 +6,10 @@ to model-rendered images. PSF kernels are pre-computed from GalSim GSObjects
 and stored as FFT-ready arrays for efficient repeated convolution during
 likelihood evaluation.
 
-Requires JAX float64 mode: ``jax.config.update("jax_enable_x64", True)``
-must be called before any PSF operations. This is enforced at PSFData
-creation time.
+Requires JAX float64 mode (enabled automatically on ``kl_pipe`` import
+unless ``KLPIPE_FP32`` opts into float32; see ``kl_pipe._precision``).
+Enforced at PSFData creation time: missing x64 raises unless float32 mode
+was explicitly requested.
 
 Key functions:
 - precompute_psf_fft: GSObject -> PSFData (one-time setup)
@@ -29,6 +30,8 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.fft import next_fast_len
 
+from kl_pipe._precision import fp32_requested
+
 if TYPE_CHECKING:
     import galsim
     from kl_pipe.parameters import ImagePars
@@ -38,7 +41,9 @@ if TYPE_CHECKING:
 class PSFData:
     """Pre-computed PSF arrays for JAX FFT convolution."""
 
-    kernel_fft: jnp.ndarray  # pre-FFT'd kernel (padded)
+    kernel_fft: (
+        jnp.ndarray
+    )  # pre-rFFT'd kernel (padded); shape (Nrow_pad, Ncol_pad//2 + 1)
     padded_shape: tuple  # (Nrow_pad, Ncol_pad) — fine-scale when oversampled
     original_shape: tuple  # (Nrow, Ncol) — fine-scale when oversampled
     oversample: int  # oversampling factor (1 = no oversampling)
@@ -79,6 +84,7 @@ def gsobj_to_kernel(
     image_shape: Tuple[int, int] = None,
     pixel_scale: float = None,
     gsparams: 'galsim.GSParams' = None,
+    kernel_size: int = None,
 ) -> Tuple[np.ndarray, tuple]:
     """
     Convert galsim.GSObject to a normalized, FFT-ready numpy kernel.
@@ -101,13 +107,32 @@ def gsobj_to_kernel(
         Override GSParams for kernel rendering. Controls truncation radius
         (folding_threshold) and accuracy. Default None uses the GSObject's
         own GSParams.
+    kernel_size : int, optional
+        Explicit kernel stamp size (pixels at ``pixel_scale``), overriding
+        GalSim's automatic good image size. Must be an odd int and at least
+        the automatic size -- a smaller value would truncate the PSF and
+        raises. Use to pin the kernel array shape across a set of PSFs
+        whose automatic sizes differ (e.g. wavelength-dependent PSFs).
+
+    Padding
+    -------
+    The kernel is placed on the minimum FFT grid for which the circular
+    convolution equals the linear convolution EXACTLY on the retained
+    ``[0, N)`` crop (the only region any caller keeps): with a centered
+    kernel of half-width ``H = K//2`` and corner-placed image, wrap-around
+    only touches output pixels with ``|y - x| >= P - H``, and ``P >= N + H``
+    pushes that past the crop. Kernel tails that exceed the padded grid are
+    folded modulo ``P``, which is exact under the same condition. For
+    kernels much wider than the image (e.g. Roman WFI wings) this shrinks
+    the FFT grid several-fold at zero accuracy cost relative to the classic
+    ``N + K - 1`` full-linear padding.
 
     Returns
     -------
     kernel_shifted : np.ndarray
-        ifftshift'd, zero-padded kernel ready for FFT.
+        Wrapped (modulo-P), minimally-padded kernel ready for FFT.
     padded_shape : tuple
-        (Nrow_pad, Ncol_pad) after padding for linear (non-circular) convolution.
+        (Nrow_pad, Ncol_pad) of the minimal exact FFT grid.
     """
     import galsim as gs
 
@@ -133,6 +158,21 @@ def gsobj_to_kernel(
     if kern_size % 2 == 0:
         kern_size += 1
 
+    # explicit size override: never truncate below the automatic good size
+    if kernel_size is not None:
+        if not isinstance(kernel_size, (int, np.integer)) or kernel_size % 2 == 0:
+            raise ValueError(
+                f"kernel_size must be an odd positive int, got {kernel_size!r}"
+            )
+        if kernel_size < kern_size:
+            raise ValueError(
+                f"explicit kernel_size ({kernel_size}) is smaller than "
+                f"GalSim's good image size ({kern_size}) at "
+                f"pixel_scale={pixel_scale}; this would truncate the PSF. "
+                f"Increase kernel_size."
+            )
+        kern_size = int(kernel_size)
+
     # render PSF kernel (pixel-integrated via default method)
     kern_img = gsobj.drawImage(nx=kern_size, ny=kern_size, scale=pixel_scale)
     kernel = kern_img.array.astype(np.float64)
@@ -140,19 +180,21 @@ def gsobj_to_kernel(
     # normalize to unit sum
     kernel /= kernel.sum()
 
-    # compute padded shape for linear convolution (avoid wrap-around)
-    nrow_pad = next_fast_len(image_shape[0] + kernel.shape[0] - 1)
-    ncol_pad = next_fast_len(image_shape[1] + kernel.shape[1] - 1)
-    padded_shape = (nrow_pad, ncol_pad)
-
-    # zero-pad kernel then roll center to (0,0) for FFT convention.
-    # np.roll correctly wraps negative-offset values to the end of
-    # the padded array, unlike ifftshift+place which mispositions them.
-    padded_kernel = np.zeros(padded_shape, dtype=np.float64)
-    padded_kernel[: kernel.shape[0], : kernel.shape[1]] = kernel
     row_half = kernel.shape[0] // 2
     col_half = kernel.shape[1] // 2
-    padded_kernel = np.roll(padded_kernel, (-row_half, -col_half), axis=(0, 1))
+
+    # minimum padding exact on the retained [0, N) crop (see docstring)
+    nrow_pad = next_fast_len(image_shape[0] + row_half)
+    ncol_pad = next_fast_len(image_shape[1] + col_half)
+    padded_shape = (nrow_pad, ncol_pad)
+
+    # wrapped (modulo-P) kernel placement with center at (0,0): folds any
+    # kernel tails that exceed the padded grid (np.add.at accumulates
+    # colliding entries). Exact on the retained crop under P >= N + H.
+    padded_kernel = np.zeros(padded_shape, dtype=np.float64)
+    idx_r = (np.arange(kernel.shape[0]) - row_half) % nrow_pad
+    idx_c = (np.arange(kernel.shape[1]) - col_half) % ncol_pad
+    np.add.at(padded_kernel, (idx_r[:, None], idx_c[None, :]), kernel)
 
     return padded_kernel, padded_shape
 
@@ -221,6 +263,7 @@ def precompute_psf_fft(
     pixel_scale: float = None,
     oversample: int = 1,
     gsparams: 'galsim.GSParams' = None,
+    kernel_size: int = None,
 ) -> PSFData:
     """
     Full PSF setup: GSObject -> JAX-ready PSFData.
@@ -249,16 +292,26 @@ def precompute_psf_fft(
     gsparams : galsim.GSParams, optional
         Override GSParams for kernel rendering. Controls truncation radius
         (folding_threshold) and accuracy. Passed through to gsobj_to_kernel.
+    kernel_size : int, optional
+        Explicit kernel stamp size in FINE-scale pixels (i.e. at
+        ``pixel_scale / oversample`` when oversampled). Passed through to
+        ``gsobj_to_kernel``; must be odd and at least the automatic good
+        image size (raises otherwise). Pins the kernel (and padded FFT)
+        shape across PSFs whose automatic sizes differ.
 
     Returns
     -------
     PSFData
         Pre-computed PSF data for use with convolve_fft.
     """
-    if not jax.config.jax_enable_x64:
+    # x64 is required unless float32 mode was explicitly requested via
+    # KLPIPE_FP32; a missing x64 without that opt-in means precision
+    # configuration was bypassed and must fail loudly.
+    if not jax.config.jax_enable_x64 and not fp32_requested():
         raise ValueError(
             "JAX float64 mode required for PSF convolution. "
-            "Call jax.config.update('jax_enable_x64', True) before using PSF functions."
+            "Call jax.config.update('jax_enable_x64', True) before using PSF "
+            "functions, or set KLPIPE_FP32=1 to opt into float32."
         )
 
     if oversample < 1 or oversample % 2 == 0:
@@ -286,8 +339,11 @@ def precompute_psf_fft(
         image_shape=fine_shape,
         pixel_scale=fine_pixel_scale,
         gsparams=gsparams,
+        kernel_size=kernel_size,
     )
-    kernel_fft = jnp.fft.fft2(jnp.array(kernel_shifted))
+    # rfft2: the kernel and every convolved image are real, so the
+    # half-spectrum transform halves the FFT work at identical values
+    kernel_fft = jnp.fft.rfft2(jnp.array(kernel_shifted))
 
     return PSFData(
         kernel_fft=kernel_fft,
@@ -326,11 +382,11 @@ def _convolve_fft_raw(image: jnp.ndarray, psf_data: PSFData) -> jnp.ndarray:
     padded = jnp.zeros((prow, pcol), dtype=image.dtype)
     padded = padded.at[:nrow, :ncol].set(image)
 
-    # FFT multiply IFFT
-    result = jnp.fft.ifft2(jnp.fft.fft2(padded) * psf_data.kernel_fft)
+    # real-input FFT multiply inverse (kernel_fft is rfft2'd)
+    result = jnp.fft.irfft2(jnp.fft.rfft2(padded) * psf_data.kernel_fft, s=(prow, pcol))
 
-    # crop to original shape and take real part
-    return result[:nrow, :ncol].real
+    # crop to original shape
+    return result[:nrow, :ncol]
 
 
 def convolve_fft(

@@ -73,46 +73,86 @@ Diagnostics validate:
 
 ---
 
+## Test Philosophy
+
+Every pass/fail bound in the recovery tiers is derived from a
+measurement plus a stated rule, never hand-tuned. The design separates
+three questions that a single noisy-recovery check used to conflate:
+
+1. **Is the forward model correct?** Answered deterministically, on
+   noise-free data (slice gates 1 and 2). No random draw can pass or
+   fail these; a failure is a real behavior change.
+2. **Is the noise bookkeeping correct?** Answered directly by chi-square
+   calibration at truth (`test_noise_calibration.py`), not inferred from
+   recovery scatter.
+3. **Does estimation under noise work?** Answered by the optimizer tier,
+   where the bound is the physical noise floor times a multiplier set by
+   a declared suite-wide false-alarm budget.
+
+The old scheme ran one noisy recovery check per parameter against
+hand-tuned x%/y% tolerances. Several of those sat below the physical
+noise floor, so the pinned seed did the passing, not the code. Now:
+green gates 1+2 = the model is correct at the stated accuracy; green
+k-sigma = the fit landed within what the data can deliver; red =
+something real changed. Find the cause, don't retune the number.
+
 ## Test Regimes: Likelihood Slicing vs Optimization
 
 The test suite includes two complementary approaches to validate parameter recovery:
 
-### 1. Likelihood Slicing (`test_likelihood_slices.py`)
-**Method:** Brute-force grid search along each parameter dimension
+### 1. Likelihood Slicing (`test_likelihood_slices.py`) — three-gate design
+**Method:** Brute-force grid search along each parameter dimension on NOISE-FREE data
 
 **Purpose:**
 - Validates that forward models are implemented correctly
 - Ensures likelihoods peak at true parameter values
-- Tests the full likelihood surface (not just gradient descent paths)
+- Guards the information content (constraining power) of the likelihood
 - Most rigorous validation of model correctness
 
-**Characteristics:**
-- Slow but comprehensive
-- Strict tolerances
-- Tests one parameter at a time while holding others fixed (at true values)
-- Independent of optimization algorithms
+**The three gates (all deterministic — no random draw can pass or fail them):**
+1. **Accuracy**: noise-free slice recovery within tight per-parameter budgets
+   (frozen `_GATES` tables; budget rule = 10x measured error, floored at
+   1e-5 of the scan half-range, rounded up to 1 significant figure)
+2. **Information**: each slice's curvature-implied 1-sigma error bar within
+   ±20% of a frozen reference (catches both information loss and fake
+   precision from discretization artifacts)
+3. **Noise plumbing**: `test_noise_calibration.py` checks chi²-per-point at
+   truth through the full likelihood for each obs type
+
+Regenerate frozen tables with `KLPIPE_TEST_MEASURE=1` after a deliberate
+change; record the reason next to the values.
 
 **When to inspect:**
 - Implementing new models
 - Debugging parameter recovery issues
 - Verifying forward model correctness
 
-### 2. Gradient-Based Optimization (`test_optimizer_recovery.py`)
-**Method:** scipy.optimize with JAX automatic differentiation
+### 2. Gradient-Based Optimization (`test_optimizer_recovery.py`) — k-sigma design
+**Method:** scipy.optimize with JAX automatic differentiation on a pinned noisy draw
 
 **Purpose:**
 - Validates gradient implementations
-- Tests realistic inference scenarios (MCMC-like workflows, but faster)
-- Faster feedback during development
+- Tests realistic estimation under noise (MCMC-like workflows, but faster)
 - Complementary to likelihood slicing
 
-**Characteristics:**
-- Fast-ish (at least compared to likelihood slicing)
-- Looser tolerances (10-20× vs likelihood slices) - accounts for local optima and parameter degeneracies
-- Tests full gradient-based inference pipeline
-- Subject to optimizer convergence issues
-- Excludes degenerate parameters (e.g. cosi, g1, g2) from pass/fail checks
-- Tests observable products (e.g. vcirc*sini) instead of degenerate individual parameters
+**Pass criterion:** every sampled parameter must satisfy
+`|recovered - truth| < bias + k * sigma`, where
+- `sigma` is the parameter's marginal noise floor, measured per scene from
+  the likelihood curvature at truth on the model's own noise-free render,
+  with each uniform prior box folded in as a Gaussian of equal variance
+  (frozen `_OPT_SIGMAS` tables; regenerate with `KLPIPE_TEST_MEASURE=1`)
+- `k` is a single suite-wide multiplier derived from a declared 1%
+  false-alarm budget over all bounded checks in the module
+  (`suite_false_alarm_k`)
+- `bias` is a frozen allowance used only where an independent rendering
+  backend (GalSim) disagrees with the model by more than the noise floor
+  (currently only the bulge+disk test)
+
+Degenerate directions (e.g. cosi/g1/g2/vcirc/rscale in velocity-only
+scenes — the kinematic lensing degeneracy) get honest prior-scale floors
+(effectively unchecked) and the observable product `vcirc*sin(i)` is
+checked instead. Exactly-flat directions (e.g. Halpha.flux under
+normalized flux weighting) are pinned by in-test flatness asserts.
 
 **When to inspect:**
 - Validating gradient computations
@@ -123,197 +163,116 @@ The test suite includes two complementary approaches to validate parameter recov
 
 ## Tolerance Configuration
 
-Tolerances are configured in `test_utils.py` within the `TestConfig` class. They control how precisely parameters must be recovered to pass tests.
+The strict tiers no longer use hand-tuned tolerance tables: converted
+likelihood-slice tests carry per-test `{budgets, sigma_refs}` tables and
+optimizer tests carry per-test `{snr_ref, sigmas[, biases]}` tables, each
+frozen with a provenance comment and regenerated via
+`KLPIPE_TEST_MEASURE=1`. Every hard-coded bound must state what was
+measured, when, on what scene, and the rule that turned the measurement
+into the bound.
 
-### Where Tolerances Are Set
+`TestConfig` in `tests/test_utils.py` still holds:
+- `likelihood_slice_tolerance_*` + `likelihood_slice_param_scaling` +
+  `psf_tolerance_multiplier`: used only by the legacy slice pattern (the
+  skipped Spergel de Vaucouleurs test) and the slice plot annotations
+- `absolute_tolerance_floor`: legacy dual-criterion support
+- image/grid geometry shared by the recovery tests
 
-All tolerance settings are in **`tests/test_utils.py`** in the `TestConfig.__init__()` method:
+The optimizer tolerance dicts and `optimizer_param_scaling` were retired
+2026-07-08 in favor of the k-sigma scheme (`get_tolerance` now raises on
+`test_type='optimizer'`).
 
-```python
-class TestConfig:
-    def __init__(self, ...):
-        # LIKELIHOOD SLICE TOLERANCES (lines ~57-68)
-        self.likelihood_slice_tolerance_velocity = {
-            1000: 0.001,  # 0.1%
-            50: 0.01,     # 1%
-            10: 0.05,     # 5%
-        }
-        
-        # OPTIMIZER TOLERANCES (lines ~74-85) - 10-20x looser
-        self.optimizer_tolerance_velocity = {
-            1000: 0.02,   # 2% (20× looser than likelihood slices)
-            50: 0.05,     # 5%
-            10: 0.20,     # 20% (very noisy data)
-        }
-        self.optimizer_tolerance_intensity = {
-            1000: 0.025,  # 2.5% (slightly higher due to intensity-specific degeneracies)
-            50: 0.05,     # 5%
-            10: 0.20,     # 20%
-        }
-        
-        # PARAMETER-SPECIFIC SCALING (lines ~92-119)
-        self.likelihood_slice_param_scaling = {
-            'g1': {1000: 1.0, 50: 1.5, ...},  # Shear harder to constrain
-            'v0': {1000: 1.0, 10: 1.5, ...},  # Small values harder
-        }
-        
-        self.optimizer_param_scaling = {
-            'g1': {1000: 2.0, 50: 3.0, ...},  # Much looser for optimizer
-            'g2': {1000: 2.0, 50: 3.0, ...},
-            'vel_x0': {1000: 1.5, 50: 2.0, ...},
-        }
-        
-        # ABSOLUTE TOLERANCE FLOORS (lines ~122-129)
-        self.absolute_tolerance_floor = {
-            'g1': 0.002,  # If |true| < 0.002, use absolute not relative
-            'g2': 0.002,
-        }
+### Provenance and Regeneration
+
+Every frozen number in the recovery tiers is generated by the test
+modules themselves in measure mode — there is no external script to
+lose. Each table's header comment records the freeze date, the freeze
+commit, and the exact command that regenerates it:
+
+```bash
+# likelihood-slice tier (_GATES budgets + sigma references)
+KLPIPE_TEST_MEASURE=1 pytest tests/test_likelihood_slices.py -s
+
+# optimizer tier (_OPT_SIGMAS floors + bulge_disk biases); the -k
+# selection runs each test only at its reference SNR, where the
+# measurement is exact
+KLPIPE_TEST_MEASURE=1 pytest tests/test_optimizer_recovery.py \
+    -k "10000 or not (1000 or 500)" -s
 ```
 
-### Tolerance Structure
+Measure mode skips the fit and prints ready-to-freeze table entries:
+sigma floors from the likelihood curvature at truth, and (bulge_disk
+only) bias entries from a noiseless multi-start fit of the GalSim
+render. Paste the printed entries over the frozen ones and update the
+provenance comment.
 
-Each test type has:
-1. **Base tolerance** (varies by SNR): The default relative error threshold
-2. **Parameter-specific scaling**: Multipliers for hard-to-constrain parameters
-3. **Absolute floor**: Minimum absolute error tolerance (for parameters near zero)
+**What k is and how to read it.** A correct pipeline fitting noisy data
+recovers each parameter with an error that scatters at its marginal
+noise floor sigma. `|error| < k*sigma` therefore fails a correct
+pipeline with probability 2*Phi(-k) per check. We declare a 1% budget
+for the whole module spuriously failing, split it over the
+`_N_BOUNDED_CHECKS = 184` bounded checks (union bound), and solve for
+k: `k = Phi^-1(1 - 0.01/184/2) = 4.04` (`suite_false_alarm_k` in
+`test_utils.py` carries the derivation). Consequences: k is not a
+tunable — if the check count changes, recount `_N_BOUNDED_CHECKS` and k
+moves on its own (it only grows logarithmically: 149 checks -> 3.99,
+200 -> 4.06); a failure at k=4 means the error is 4x what the data's
+own noise can explain, which pure bad luck produces less than once per
+hundred full suite runs.
 
-**Final tolerance = base_tolerance × param_scaling**
+### Pass Criteria
 
-### SNR-Dependent Tolerances
-
-| SNR  | Likelihood Slice | Optimizer (Velocity) | Optimizer (Intensity) | Use Case |
-|------|-----------------|----------------------|----------------------|----------|
-| 1000 | 0.1%            | 2.0%                 | 2.5%                 | High-quality data, tight constraints |
-| 500  | 0.25%           | 2.5%                 | 3.0%                 | Good data quality |
-| 100  | 0.5%            | 3.0%                 | 3.5%                 | Moderate quality |
-| 50   | 1.0%            | 5.0%                 | 5.0%                 | Realistic observational data |
-| 10   | 5.0%            | 20.0%                | 20.0%                | Low SNR, very weak constraints |
-
-**Note:** Optimizer tolerances are 10-20× looser than likelihood slices to account for local optima, parameter degeneracies (cosi/g1/g2), and gradient noise.
-
-### Parameter-Specific Tolerances
-
-Some parameters are inherently harder to constrain and get looser tolerances:
-
-#### Degenerate Parameters (`cosi`, `g1`, `g2`)
-- Geometrically degenerate - multiple combinations fit data similarly
-- **EXCLUDED from pass/fail checks** (reported but don't cause test failure)
-- Tests `vcirc*sini` product (3-10% tolerance) instead of individual params
-- Line-of-sight velocity depends on `vcirc*sin²`, not `vcirc` and `cosi` independently
-
-#### Shear (`g1`, `g2`)
-- **Why harder:** ~4% of main velocity signal in most tests
-- **Optimizer scaling:** Excluded (see above)
-- **Likelihood scaling:** 1.5× at SNR=50, standard otherwise
-
-#### Systemic Velocity (`v0`)
-- **Why harder:** Small absolute value, can get washed out by noise
-- **Optimizer scaling:** 1.5-2.5× looser
-- **Likelihood scaling:** 1.5× at SNR=10
-
-#### Centroid Offsets (`vel_x0`, `vel_y0`, `int_x0`, `int_y0`)
-- **Why harder:** Shallow likelihood surfaces, weak constraints from data edges
-- **Optimizer scaling:** 1.5-2.5× looser
-- **Absolute floor:** 0.1 arcsec
-
-### Tolerance Pass Criteria
-
-A parameter passes if **EITHER** criterion is met:
-- **Relative error** < relative_tolerance, **OR**
-- **Absolute error** < absolute_tolerance
-
-This dual-criterion approach handles:
-- Large parameters: relative error dominates
-- Small parameters (near zero): absolute error dominates
+- Converted likelihood-slice tests: absolute budgets on noiseless recovery
+  plus the ±20% error-bar band. Deterministic.
+- Optimizer tests: `|error| < bias + k * sigma` per parameter, plus the
+  `vcirc*sin(i)` product checks (SNR-dependent tolerances in
+  `check_degenerate_product_recovery`).
+- Legacy pattern (unconverted tests only): passes if EITHER relative OR
+  absolute tolerance is met.
 
 ---
 
 ## How to Interpret Test Failures
 
-### Likelihood Slice Test Failure
-**Serious issue** - likely indicates:
-- Bug in forward model implementation
-- Incorrect coordinate transformations
-- Numerical precision problems
+### Likelihood Slice Gate Failure
+**Serious issue** — the gates are noiseless and deterministic, so a
+failure is a real behavior change:
+- Gate 1 (budget): forward-model bias or renderer disagreement grew
+- Gate 2 (error-bar band): information content changed — blurred
+  (constraining power lost) or sharpened beyond the physics (a
+  discretization artifact faking precision)
 
-**Action:** Debug the model - don't adjust tolerances unless scientifically justified
+**Action:** Debug the model — never adjust budgets or references without
+root-causing and recording the reason
 
 ### Optimizer Test Failure
-**Less serious** - could indicate:
-- Local optima (optimizer stuck away from true values)
-- Parameter degeneracies (multiple solutions fit data similarly - expected for cosi/g1/g2)
-- Tight tolerances relative to SNR
+Could indicate:
+- A real gradient or model regression (error far above the k-sigma bound)
+- A local optimum (switch to multi-start via
+  `kl_pipe.optimization.multi_start_minimize` — pattern in
+  `test_optimize_bulge_disk` — rather than widening the bound)
+- A renderer-vs-model bias that grew past its frozen allowance
 
-**Note:** Degenerate parameters (cosi, g1, g2) are excluded from causing test failures. They're reported with `[EXCLUDED]` tag if outside tolerance, but tests still pass. The physically meaningful product `vcirc*sini` is checked instead.
-
-**Action:** 
-1. Check if error is small (< 2× tolerance) - may just need looser thresholds (but check with team first)
-2. Check if specific parameters consistently fail - may need parameter-specific scaling
-3. Check if failure only at low SNR - expected behavior
-4. For excluded params showing large errors - this is informational, not a failure
-
-### Marginal Failures
-If a parameter recovers to within ~1.5× tolerance:
-- **Likelihood slices:** Re-run with higher resolution or check for bugs
-- **Optimizer:** Likely acceptable - consider loosening tolerance or adding bounds
+**Action:** Diagnose the cause first (identifiability, local minima,
+renderer bias — in that order). Never re-widen a bound blindly; every
+change to a frozen table needs a stated measurement and rule.
 
 ---
 
-## Modifying Tolerances
+## Modifying Bounds
 
-### When to Loosen Tolerances
+- **Never loosen likelihood slice budgets or error-bar references** to
+  make a test pass — they validate model correctness
+- Regenerate a frozen table only after a deliberate, understood change:
+  run the affected module with `KLPIPE_TEST_MEASURE=1`, paste the printed
+  entry, and record the reason in the provenance comment
+- The optimizer `k` derives from the declared false-alarm budget and the
+  bounded-check count (`_N_BOUNDED_CHECKS`); recount when adding or
+  removing tests or parameters instead of tuning `k`
+- Bias allowances are 2x a measured, deterministic noiseless-recovery
+  offset (rounded up to 1 significant figure), never free parameters
+- **Justify any bound change loudly in your PR**
 
-**Acceptable reasons:**
-- Optimizer consistently fails by small margins (< ~1.5× current tolerance)
-- Parameter has known degeneracies or weak constraints
-- Adding new model with different parameter sensitivities
-
-**Bad reasons:**
-- Making tests pass without understanding failures
-- Likelihood slice tests failing (fix the model instead)
-- Ignoring systematic errors
-
-**Always** point this change out *loudly* in your PR!
-
-### How to Modify
-
-**For a specific parameter at specific SNR:**
-```python
-# In TestConfig.__init__() in test_utils.py
-self.optimizer_param_scaling = {
-    'my_param': {
-        1000: 2.0,  # 2× looser than base
-        50: 3.0,    # 3× looser
-        10: 4.0,    # 4× looser
-    }
-}
-```
-
-**For all parameters at specific SNR:**
-```python
-# In TestConfig.__init__()
-self.optimizer_tolerance_velocity = {
-    1000: 0.01,  # Change from 0.005 to 0.01 (1% instead of 0.5%)
-}
-```
-
-**For absolute error floor:**
-```python
-# In TestConfig.__init__()
-self.absolute_tolerance_floor = {
-    'my_param': 0.05,  # Minimum absolute error threshold
-}
-```
-
-### Design Principles
-
-1. **Never loosen likelihood slice tolerances** - they validate model correctness
-2. **Optimizer tolerances should be ~2-5× looser** than likelihood slices
-3. **Parameter-specific scaling should reflect physics** - not just to make tests pass
-4. **Justify** any tolerance changes to PR reviewers
-5. **Use absolute floors for parameters that can be near zero**
-
----
 
 ## Running Tests
 
@@ -331,10 +290,9 @@ pytest tests/test_likelihood_slices.py -v
 pytest tests/test_optimizer_recovery.py -v
 ```
 
-### Run specific SNR levels
+### Run specific SNR levels (optimizer tests only; slice tests are noiseless)
 ```bash
-pytest tests/test_likelihood_slices.py -k "snr1000" -v
-pytest tests/test_optimizer_recovery.py -k "snr50" -v
+pytest tests/test_optimizer_recovery.py -k "10000" -v
 ```
 
 ### Run tests in parallel (faster)
@@ -360,20 +318,14 @@ Tests report for each parameter:
 - **Recovered value** vs **true value**
 - **Relative error** (percentage)
 - **Absolute error** (in parameter units)
-- **Pass/fail** status with tolerance thresholds
-- **[EXCLUDED]** tag for degenerate parameters (optimizer tests only)
+- **Pass/fail** status against the bound (k-sigma for optimizer tests,
+  budgets/references for slice gates)
 
-Example output:
+Example failure output:
 ```
-️  Optimizer: Centered velocity (base) - Excluded parameters outside tolerance:
-  g1: rel 1.03% (tol 30.0%), abs 0.0103 (tol 0.0025) - recovered -0.0103, true 0.0000 [EXCLUDED]
-  g2: rel 4.85% (tol 30.0%), abs 0.0485 (tol 0.0025) - recovered 0.0485, true 0.0000 [EXCLUDED]
-
-Failed: Optimizer: Offset velocity failed for SNR=50:
-vcirc: rel 1.00% (tol 5.0%), abs 2.00 (tol 10.0) - recovered 202.00, true 200.00
+Failed: Optimizer: Offset velocity failed for SNR=500:
+vel.v0: rel 12.00% (tol 4.5%), abs 1.20 (tol 0.45) - recovered 11.20, true 10.00
 ```
-
-Note: Excluded parameters show warnings but don't cause test failure.
 
 ---
 
@@ -381,14 +333,15 @@ Note: Excluded parameters show warnings but don't cause test failure.
 
 ### For New Models
 1. Add unit tests in existing files (e.g. `test_velocity.py`) or make your own
-2. Add likelihood slice tests in `test_likelihood_slices.py`
-3. Add optimizer tests in `test_optimizer_recovery.py`
-4. Update `TestConfig` with model-specific tolerances if needed
+2. Add likelihood slice tests in `test_likelihood_slices.py` (three-gate
+   pattern: register in `_GATES`, measure with `KLPIPE_TEST_MEASURE=1`)
+3. Add optimizer tests in `test_optimizer_recovery.py` (k-sigma pattern:
+   add an `_OPT_SIGMAS` entry, measure with `KLPIPE_TEST_MEASURE=1`, and
+   recount `_N_BOUNDED_CHECKS`)
 
 ### For New Parameters
-1. Add parameter to tolerance scaling dicts if weakly constrained
-2. Add absolute tolerance floor if parameter can be near zero
-3. Document physical reason for any special tolerance treatment
+1. Re-measure the affected frozen tables (`KLPIPE_TEST_MEASURE=1`)
+2. Document the provenance of every new frozen value
 
 ### Best Practices
 - Use `@pytest.fixture(scope="module")` for expensive setup (coordinate grids, etc.)

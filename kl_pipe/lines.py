@@ -25,7 +25,9 @@ from typing import TYPE_CHECKING, Dict, Optional
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
+from kl_pipe._precision import ensure_precision
+
+ensure_precision()
 
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel

@@ -1,0 +1,10 @@
+{
+  "x64": false,
+  "grism_dtype": "float32",
+  "default_dtype": "float32",
+  "posterior_value": 35.79410171508789,
+  "vg_min_ms": 0.48847496509552,
+  "vg_mean_ms": 0.49628406607856357,
+  "vg_compile_ms": 3785.5884180171415,
+  "nreps": 30
+}

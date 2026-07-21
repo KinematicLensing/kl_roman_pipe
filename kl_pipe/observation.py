@@ -15,10 +15,11 @@ Factory functions replace the old Model.configure_psf() family.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from scipy.fft import next_fast_len
 
 if TYPE_CHECKING:
@@ -104,6 +105,9 @@ class ImageObs:
     kspace_psf_fft: Optional[jnp.ndarray] = None
     pixel_response: Optional[PixelResponse] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # psf_kernel_size: pinned kernel stamp size (fine pixels); preserved by
+    # with_render_config so rebuilds keep the pinned shape. None = auto size.
+    psf_kernel_size: Optional[int] = None
     # broadband_key: key into source.broadband_models that this obs renders
     # (used by SourceModel-based inference; None for rendering-only obs).
     broadband_key: Optional[str] = None
@@ -167,6 +171,7 @@ class ImageObs:
                 self.psf,
                 image_pars=self.image_pars,
                 oversample=oversample,
+                kernel_size=self.psf_kernel_size,
             )
 
             if int_model is not None and hasattr(int_model, '_kspace_pad_factor'):
@@ -283,6 +288,9 @@ class GrismObs:
     mask: Optional[jnp.ndarray] = None
     pixel_response_fft: Optional[jnp.ndarray] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
+    # psf_kernel_size: pinned kernel stamp size (fine pixels); preserved by
+    # with_render_config so rebuilds keep the pinned shape. None = auto size.
+    psf_kernel_size: Optional[int] = None
     # _rc_was_default: internal flag — True when build_grism_obs supplied the
     # default render_config (caller passed render_config=None), False when the
     # caller passed an explicit one. Read by InferenceTask.from_obs to decide
@@ -304,6 +312,58 @@ class GrismObs:
             self.render_config.spectral_oversample
             if self.render_config is not None
             else 15
+        )
+
+    @property
+    def spectral_method(self) -> str:
+        """Spectral bin-integration method; canonical source is render_config.spectral_method."""
+        return (
+            self.render_config.spectral_method
+            if self.render_config is not None
+            else 'erf'
+        )
+
+    @property
+    def psf_mode(self) -> str:
+        """Grism PSF pathway; canonical source is render_config.psf_mode."""
+        return (
+            self.render_config.psf_mode
+            if self.render_config is not None
+            else 'post_dispersion'
+        )
+
+    @property
+    def cube_mode(self) -> str:
+        """Cube-sharing strategy; canonical source is render_config.cube_mode."""
+        return (
+            self.render_config.cube_mode if self.render_config is not None else 'shared'
+        )
+
+    @property
+    def dispersal_method(self) -> str:
+        """Grism dispersal pathway; canonical source is render_config.dispersal_method."""
+        return (
+            self.render_config.dispersal_method
+            if self.render_config is not None
+            else 'slice'
+        )
+
+    @property
+    def line_window_halfwidth(self):
+        """Analytic deposit window half-width; canonical source is render_config."""
+        return (
+            self.render_config.line_window_halfwidth
+            if self.render_config is not None
+            else None
+        )
+
+    @property
+    def continuum_fills_stamp(self) -> bool:
+        """Continuum trace extent; canonical source is render_config."""
+        return (
+            self.render_config.continuum_fills_stamp
+            if self.render_config is not None
+            else True
         )
 
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
@@ -343,6 +403,7 @@ class GrismObs:
                 self.psf,
                 image_pars=self.cube_pars.image_pars,
                 oversample=oversample,
+                kernel_size=self.psf_kernel_size,
             )
 
         if oversample > 1:
@@ -384,6 +445,7 @@ def _image_obs_flatten(obs):
         obs.psf,
         obs.broadband_key,
         obs._rc_was_default,
+        obs.psf_kernel_size,
     )
     return children, aux
 
@@ -404,6 +466,7 @@ def _image_obs_unflatten(aux, children):
         pixel_response=children[9],
         psf=aux[2],
         broadband_key=aux[3],
+        psf_kernel_size=aux[5],
     )
     # _rc_was_default is field(init=False); restore via frozen-dataclass bypass.
     object.__setattr__(obs, '_rc_was_default', aux[4])
@@ -483,6 +546,7 @@ def _grism_obs_flatten(obs):
         obs.fine_image_pars,
         obs.psf,
         obs._rc_was_default,
+        obs.psf_kernel_size,
     )
     return children, aux
 
@@ -499,6 +563,7 @@ def _grism_obs_unflatten(aux, children):
         mask=children[3],
         pixel_response_fft=children[4],
         psf=aux[4],
+        psf_kernel_size=aux[6],
     )
     object.__setattr__(obs, '_rc_was_default', aux[5])
     return obs
@@ -574,6 +639,36 @@ def _fine_pixel_response_fft(fine_image_pars, coarse_pixel_scale):
     return BoxPixel(coarse_pixel_scale).ft(KX, KY)
 
 
+def _validate_psf_kernel_size_args(
+    psf_kernel_size: Optional[int], psf, rc_was_default: bool
+) -> None:
+    """Guard psf_kernel_size usage in the obs builders.
+
+    A pinned kernel size is meaningless without a PSF, and it is defined in
+    fine-scale pixels (pixel_scale / oversample), so it must be tied to an
+    explicitly chosen render_config: builder-default configs are rebuilt by
+    ``InferenceTask`` at a priors-derived oversample via
+    ``with_render_config``, which preserves the pinned size but at a
+    DIFFERENT fine pixel scale -- the pinned pixel count would then denote a
+    different angular size than the caller computed. Explicit-rc rebuilds
+    (e.g. the analytic-path line_window_halfwidth fill) keep the oversample,
+    so preserving the pinned size there is exact.
+    """
+    if psf_kernel_size is None:
+        return
+    if psf is None:
+        raise ValueError("psf_kernel_size given without a psf")
+    if rc_was_default:
+        raise ValueError(
+            "psf_kernel_size requires an explicit render_config; the "
+            "builder-default render_config is rebuilt by InferenceTask via "
+            "with_render_config at a priors-derived oversample, which "
+            "preserves the pinned pixel count but at a different fine pixel "
+            "scale -- so the same count would denote a different angular "
+            "size than the caller computed"
+        )
+
+
 def build_image_obs(
     image_pars: ImagePars,
     *,
@@ -586,6 +681,7 @@ def build_image_obs(
     pixel_response=_PIXEL_RESPONSE_UNSET,
     render_config=None,
     broadband_key: Optional[str] = None,
+    psf_kernel_size: Optional[int] = None,
 ) -> ImageObs:
     """Build imaging observation. Replaces Model.configure_psf().
 
@@ -619,11 +715,21 @@ def build_image_obs(
         priors-sized rc and rebuild the obs internally. For bespoke
         (non-inference) rendering with tight priors, pass an explicit
         ``build_image_render_config(...)`` result.
+    psf_kernel_size : int, optional
+        Explicit PSF kernel stamp size in fine-scale pixels
+        (``pixel_scale / oversample``), passed to ``precompute_psf_fft``.
+        Pins the kernel array shape (odd, >= automatic good size; raises
+        otherwise). Requires an explicit ``render_config``: the
+        builder-default config is rebuilt by ``InferenceTask`` via
+        ``with_render_config`` at a priors-derived oversample, which
+        preserves the pinned pixel count but at a different fine pixel
+        scale, so the same count would denote a different angular size.
     """
     rc_was_default = render_config is None
     if rc_was_default:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample
+    _validate_psf_kernel_size_args(psf_kernel_size, psf, rc_was_default)
 
     X, Y = build_map_grid_from_image_pars(image_pars)
 
@@ -644,6 +750,7 @@ def build_image_obs(
             image_pars=image_pars,
             oversample=oversample,
             gsparams=gsparams,
+            kernel_size=psf_kernel_size,
         )
 
         # fused k-space PSF kernel for k-space intensity models
@@ -684,6 +791,7 @@ def build_image_obs(
         kspace_psf_fft=kspace_psf_fft,
         pixel_response=pixel_response,
         psf=psf,
+        psf_kernel_size=psf_kernel_size,
         broadband_key=broadband_key,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor
@@ -850,6 +958,10 @@ def build_grism_obs(
     variance=None,
     mask=None,
     render_config: Optional[RenderConfig] = None,
+    velocity_window_kms: float = 3000.0,
+    n_lambda: Optional[int] = None,
+    slice_width_kms: Optional[float] = None,
+    psf_kernel_size: Optional[int] = None,
 ) -> GrismObs:
     """Build grism observation.
 
@@ -878,13 +990,46 @@ def build_grism_obs(
         with tight priors, pass an explicit
         ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
         result (from ``kl_pipe.render``).
+    velocity_window_kms : float, optional
+        Half-width of the wavelength-grid velocity window (km/s), passed
+        to ``grism_pars.to_cube_pars``. Default 3000.
+    n_lambda : int, optional
+        Wavelength slice count, passed to ``grism_pars.to_cube_pars``.
+        When neither this nor ``slice_width_kms`` is given, slices are
+        sized ~1 dispersion pixel apart (~250 km/s at Roman-like
+        configs). That default is fine for exploration but too coarse
+        for production: each slice is dispersed rigidly to one detector
+        offset, so the dispersed position of velocity structure is
+        quantized at the slice width. Cost scales linearly with the
+        slice count.
+    slice_width_kms : float, optional
+        Preferred way to size the grid: the slice width in velocity
+        units. Choose a small fraction (roughly 1/20 to 1/30) of the
+        largest line-of-sight velocity span the priors allow -- about 40
+        km/s for vcirc priors reaching ~300 km/s, 60-80 km/s for
+        exploration. Mutually exclusive with ``n_lambda``.
+    psf_kernel_size : int, optional
+        Explicit PSF kernel stamp size in fine-scale pixels
+        (``pixel_scale / oversample``), passed to ``precompute_psf_fft``.
+        Pins the kernel array shape (odd, >= automatic good size; raises
+        otherwise) -- e.g. to keep wavelength-dependent PSF kernels at one
+        shape across an ensemble of redshifts. Requires an explicit
+        ``render_config``: the builder-default config is rebuilt by
+        ``InferenceTask`` via ``with_render_config``, which would silently
+        drop the pinned size.
     """
     rc_was_default = render_config is None
     if rc_was_default:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample  # canonical
+    _validate_psf_kernel_size_args(psf_kernel_size, psf, rc_was_default)
 
-    cube_pars = grism_pars.to_cube_pars(z)
+    cube_pars = grism_pars.to_cube_pars(
+        z,
+        velocity_window_kms=velocity_window_kms,
+        n_lambda=n_lambda,
+        slice_width_kms=slice_width_kms,
+    )
 
     psf_data = None
     fine_image_pars = None
@@ -898,6 +1043,7 @@ def build_grism_obs(
             image_pars=cube_pars.image_pars,
             oversample=oversample,
             gsparams=gsparams,
+            kernel_size=psf_kernel_size,
         )
 
     # fine grid: create when oversample > 1, regardless of PSF. The BoxPixel
@@ -922,9 +1068,193 @@ def build_grism_obs(
         mask=mask,
         pixel_response_fft=pixel_response_fft,
         psf=psf,
+        psf_kernel_size=psf_kernel_size,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor
     # kwargs; set it here via the standard frozen-dataclass escape hatch.
     if rc_was_default:
         object.__setattr__(obs, '_rc_was_default', True)
     return obs
+
+
+# ============================================================================
+# Shared-cube grouping: group grism obs that can share one model cube
+# ============================================================================
+
+
+#: relative tolerance below which two unequal lambda grids are treated as
+#: accidental float drift (loud error) rather than intentionally distinct
+#: line windows, which differ by many orders of magnitude more
+_LAMBDA_NEAR_MISS_RTOL = 1e-9
+
+
+def group_grism_obs_by_cube_compat(
+    grism_obs: Dict[str, 'GrismObs'],
+) -> List[Dict[str, 'GrismObs']]:
+    """Group grism observations that can share one celestial-frame cube.
+
+    Two obs are cube-compatible when their unconvolved model cubes are
+    identical by construction: same wavelength grid, same spatial shape and
+    pixel scale, same oversample factor, and same spectral method. The obs
+    WCS rotation, data, variance, mask, and PSF are deliberately excluded:
+    the roll rotation is fused into the dispersion sampling and the PSF is
+    applied per-roll after dispersion, so neither touches the shared cube.
+
+    Different emission-line complexes have wavelength grids that differ by
+    far more than float noise and simply form separate groups (each gets
+    its own shared cube) -- that is correct behavior, not an error. Grids
+    that are unequal but agree to within ``_LAMBDA_NEAR_MISS_RTOL`` are
+    almost certainly meant to be identical (per-roll construction drift)
+    and raise loudly instead of silently falling back to per-roll cubes.
+
+    Obs with ``dispersal_method='analytic'`` always form singleton
+    groups: the analytic path builds no cube, so each rolled obs
+    renders independently. This is routing, not an approximation --
+    the result matches the per-roll path exactly.
+
+    Parameters
+    ----------
+    grism_obs : dict[str, GrismObs]
+        Per-roll grism observations keyed by name.
+
+    Returns
+    -------
+    list[dict[str, GrismObs]]
+        Groups (insertion-ordered); singleton groups are common and valid.
+    """
+    groups: List[Dict[str, 'GrismObs']] = []
+    group_reps: List['GrismObs'] = []
+
+    for key, obs in grism_obs.items():
+        # analytic dispersal builds no cube; always a singleton group
+        if obs.dispersal_method == 'analytic':
+            groups.append({key: obs})
+            group_reps.append(obs)
+            continue
+        placed = False
+        for group, rep in zip(groups, group_reps):
+            if _cube_compatible(obs, rep):
+                group[key] = obs
+                placed = True
+                break
+        if not placed:
+            # near-miss check against every existing representative
+            for rep_group, rep in zip(groups, group_reps):
+                _check_lambda_near_miss(obs, rep, key, next(iter(rep_group)))
+            groups.append({key: obs})
+            group_reps.append(obs)
+    return groups
+
+
+def _cube_compatible(a: 'GrismObs', b: 'GrismObs') -> bool:
+    """True when two grism obs can share one celestial-frame cube."""
+    # analytic dispersal builds no cube; never joins a shared group
+    if a.dispersal_method == 'analytic' or b.dispersal_method == 'analytic':
+        return False
+    ip_a, ip_b = a.grism_pars.image_pars, b.grism_pars.image_pars
+    if (ip_a.Nrow, ip_a.Ncol) != (ip_b.Nrow, ip_b.Ncol):
+        return False
+    if ip_a.pixel_scale != ip_b.pixel_scale:
+        return False
+    if a.oversample != b.oversample:
+        return False
+    if a.spectral_method != b.spectral_method:
+        return False
+    if a.spectral_oversample != b.spectral_oversample:
+        return False
+    lam_a = np.asarray(a.cube_pars.lambda_grid)
+    lam_b = np.asarray(b.cube_pars.lambda_grid)
+    return lam_a.shape == lam_b.shape and bool((lam_a == lam_b).all())
+
+
+def _check_lambda_near_miss(
+    obs: 'GrismObs', rep: 'GrismObs', obs_key: str, rep_key: str
+) -> None:
+    """Raise when two incompatible obs have suspiciously close lambda grids."""
+    lam_a = np.asarray(obs.cube_pars.lambda_grid)
+    lam_b = np.asarray(rep.cube_pars.lambda_grid)
+    if lam_a.shape != lam_b.shape:
+        return
+    if (lam_a == lam_b).all():
+        return  # identical grids; incompatibility is elsewhere (shape/os/...)
+    rel = np.max(np.abs(lam_a - lam_b) / np.maximum(np.abs(lam_b), 1e-300))
+    if rel < _LAMBDA_NEAR_MISS_RTOL:
+        raise ValueError(
+            f"grism obs '{obs_key}' and '{rep_key}' have wavelength grids "
+            f"that differ by max rel {rel:.2e} (< {_LAMBDA_NEAR_MISS_RTOL}) "
+            f"-- almost certainly accidental float drift in per-roll "
+            f"construction. Build all rolls of a line complex with an "
+            f"identical lambda grid (or set cube_mode='per_roll' to disable "
+            f"sharing)."
+        )
+
+
+def validate_shared_cube_group(obs_group: Dict[str, 'GrismObs'], psf_mode: str) -> None:
+    """Loud-error guards for a multi-obs shared-cube group.
+
+    Raises
+    ------
+    ValueError
+        If psf_mode is not 'post_dispersion' (the shared celestial cube is
+        unconvolved; per-slice convolution requires detector-frame cubes),
+        if any obs WCS carries a parity flip (a flip is not a rotation and
+        cannot be fused into the dispersion sampling), or if PSF presence
+        is mixed across the group (fine/coarse cube grids would differ).
+    """
+    from kl_pipe.coordinates import wcs_is_flipped
+
+    if len(obs_group) < 2:
+        return
+    keys = list(obs_group)
+    if psf_mode != 'post_dispersion':
+        raise ValueError(
+            f"cube_mode='shared' with multiple grism obs {keys} requires "
+            f"psf_mode='post_dispersion' (got {psf_mode!r}): the shared "
+            f"celestial-frame cube is unconvolved, and per-slice "
+            f"convolution needs a detector-frame cube per roll. Use "
+            f"cube_mode='per_roll' for the per_slice reference path."
+        )
+    for key, obs in obs_group.items():
+        wcs = obs.grism_pars.image_pars.wcs
+        if wcs is not None and wcs_is_flipped(wcs):
+            raise ValueError(
+                f"grism obs '{key}' has a parity-flipped WCS (det(PC) < 0); "
+                f"a flip is not a rotation and is not supported by the "
+                f"shared-cube pathway. Use cube_mode='per_roll'."
+            )
+    psf_presence = {key: obs.psf_data is not None for key, obs in obs_group.items()}
+    if len(set(psf_presence.values())) > 1:
+        raise ValueError(
+            f"shared-cube group has mixed PSF presence {psf_presence}; all "
+            f"obs must have a PSF or none (the cube's fine/coarse spatial "
+            f"grid depends on it)."
+        )
+
+
+def build_group_dispersion_operators(
+    obs_group: Dict[str, 'GrismObs'],
+) -> Dict[str, object]:
+    """Precompute the per-obs dispersion operators for a shared-cube group.
+
+    The shared cube is anchored in the FIRST obs's detector frame, so each
+    operator carries the RELATIVE rotation ``rot_obs - rot_anchor`` (zero
+    for the anchor: no rotational resampling for that roll). Operators are
+    model- and galaxy-independent; build once per group at likelihood
+    construction and reuse across every likelihood evaluation (and across
+    galaxies sharing the grid/wavelength configuration).
+    """
+    from kl_pipe.coordinates import image_rotation_from_wcs
+    from kl_pipe.dispersion import precompute_dispersion_operator
+
+    first = next(iter(obs_group.values()))
+    rot_anchor = image_rotation_from_wcs(first.grism_pars.image_pars.wcs)
+    operators = {}
+    for key, obs in obs_group.items():
+        rot = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
+        operators[key] = precompute_dispersion_operator(
+            obs.grism_pars,
+            obs.cube_pars.lambda_grid,
+            oversample=obs.oversample,
+            image_rotation=rot - rot_anchor,
+        )
+    return operators

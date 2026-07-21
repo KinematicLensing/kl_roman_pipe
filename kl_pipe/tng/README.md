@@ -387,13 +387,13 @@ This is mathematically equivalent to the formula above. The 3D rotation matrix n
 ## Known Limitations
 
 1. **Empty velocity pixels**: Pixels with no gas particles are set to 0, not NaN. Cannot distinguish "no data" from "zero velocity"
-2. **No PSF convolution**: Point-spread function effects not yet implemented
-3. **Gaussian noise only**: Poisson noise is available via `include_poisson=True` but adds complexity for intensity map visualization (negative fluctuations)
-4. **TNG sample size**: Only 5 galaxies currently available (SubhaloIDs: 8, 17, 19, 20, 29)
+2. **Gaussian noise only**: Poisson noise is available via `include_poisson=True` but adds complexity for intensity map visualization (negative fluctuations)
+3. **TNG sample size**: Only 5 galaxies currently available (SubhaloIDs: 8, 17, 19, 20, 29)
+
+PSF convolution is supported: pass a `galsim.GSObject` as `TNGRenderConfig.psf` and both `generate_intensity_map` and `generate_velocity_map` convolve with it (flux-weighted for velocity). See `tests/test_psf_tng.py`.
 
 ## TODOs
 
-- [ ] Add PSF convolution
 - [ ] Integrate Poisson noise properly
 - [ ] Add mask support to likelihoods
 - [ ] Expand to more TNG50 galaxies

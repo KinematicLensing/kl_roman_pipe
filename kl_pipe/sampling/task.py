@@ -160,9 +160,28 @@ def _check_source_priors_fit_obs(
         return obs  # k-space grid sizing N/A for spatial-oversampling rendering
 
     if isinstance(obs, GrismObs):
-        from kl_pipe.render import RenderConfig, build_grism_render_config
+        import dataclasses
+
+        from kl_pipe.render import (
+            RenderConfig,
+            build_grism_render_config,
+            line_window_halfwidth_for_priors,
+        )
 
         rc_obs = obs.render_config if obs.render_config is not None else RenderConfig()
+
+        def _fill_line_window_halfwidth(rc):
+            # analytic dispersal needs a static deposit window under JIT;
+            # size it from prior extremes when the caller left it None
+            if (
+                rc.dispersal_method != 'analytic'
+                or rc.line_window_halfwidth is not None
+            ):
+                return rc
+            hw = line_window_halfwidth_for_priors(
+                source, priors, obs.grism_pars, rc.oversample
+            )
+            return dataclasses.replace(rc, line_window_halfwidth=hw)
 
         # auto-derive + rebuild when the obs carries a builder-default rc;
         # the priors-sized rc bounds cube-slice bandwidth via the Minkowski
@@ -172,11 +191,13 @@ def _check_source_priors_fit_obs(
             derived_rc = build_grism_render_config(
                 source, priors, obs.grism_pars, psf=obs.psf
             )
-            return obs.with_render_config(derived_rc)
+            return obs.with_render_config(_fill_line_window_halfwidth(derived_rc))
 
-        # explicit user rc: validate against priors, raise on mismatch
+        # explicit user rc: validate against the aliasing requirement only
+        # (min_oversample=1); the accuracy floor applies to auto-derived
+        # configs, while an explicit rc is an informed speed choice
         priors_rc = build_grism_render_config(
-            source, priors, obs.grism_pars, psf=obs.psf
+            source, priors, obs.grism_pars, psf=obs.psf, min_oversample=1
         )
         if priors_rc.oversample > rc_obs.oversample:
             raise ValueError(
@@ -189,6 +210,12 @@ def _check_source_priors_fit_obs(
                 f"psf=psf)\n"
                 f"    obs = build_grism_obs(grism_pars, z, render_config=rc, psf=psf)"
             )
+        # an explicit rc is an informed speed choice for everything it sets,
+        # but a None line_window_halfwidth on the analytic path would raise
+        # at trace time -- fill it from priors instead
+        filled_rc = _fill_line_window_halfwidth(rc_obs)
+        if filled_rc is not rc_obs:
+            return obs.with_render_config(filled_rc)
         return obs
 
     if isinstance(obs, ImageObs):
@@ -553,8 +580,11 @@ class InferenceTask:
         self,
         n_starts: int = 4,
         eig_floor: float = 1e-4,
-        maxiter: int = 300,
+        maxiter: int = 2000,
         seed: int = 0,
+        hessian_method: str = 'fd',
+        fd_rel_step: float = 1e-5,
+        extra_starts: Optional[np.ndarray] = None,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
@@ -562,8 +592,8 @@ class InferenceTask:
         then the Hessian of the negative log-posterior there is regularized
         (eigenvalue floor) and inverted to serve as a NUTS mass matrix. Lets
         warmup begin near-optimally conditioned, skipping the expensive
-        early-warmup transient. See
-        ``experiments/sweverett/flagship_speedup`` for the validating study.
+        early-warmup transient (~2x faster warmup measured on correlated
+        joint posteriors).
 
         The optimizer runs unbounded in scaled coordinates (``theta = loc +
         scale * u``); out-of-support iterates receive ``-inf`` log-posterior
@@ -580,10 +610,33 @@ class InferenceTask:
             Hessian eigenvalues below ``eig_floor * max_eigenvalue`` are floored
             to that value before inversion, capping the mass-matrix condition
             number at ``1/eig_floor`` (handles near-degenerate directions).
-        maxiter : int, default 300
-            Max L-BFGS-B iterations per start.
+        maxiter : int, default 2000
+            Max L-BFGS-B iterations per start. Sharp high-SNR posteriors need
+            more than a few hundred iterations to reach the mode; too low a cap
+            leaves the mode-finding start unconverged and produces a garbage MAP.
         seed : int, default 0
             PRNG seed for the prior-draw starting points.
+        hessian_method : {'fd', 'ad'}, default 'fd'
+            How to evaluate the Hessian at the MAP. 'fd' (default) uses
+            central finite differences of the already-compiled gradient
+            (2 * n_params grad evaluations, no new compilation); with float64
+            and prior-scaled steps the resulting mass matrix agrees with 'ad'
+            to well below the ``eig_floor`` regularization. 'ad' uses exact
+            second-order autodiff (``jax.hessian``); tracing and compiling
+            that second-order graph is paid on every call and dominates the
+            preconditioner cost on large joint tasks -- use it only for
+            float32 runs or as a cross-check.
+        fd_rel_step : float, default 1e-5
+            Relative step for ``hessian_method='fd'``, in units of the
+            per-parameter prior scale. Steps are shrunk to stay inside prior
+            bounds when the MAP sits near a bound.
+        extra_starts : np.ndarray, optional
+            Additional explicit start points, shape (n_extra, n_sampled), in
+            sampled-parameter order, appended to the prior-draw starts. Use
+            when random prior draws can miss a known multimodal basin (e.g.
+            position-angle-stratified starts: random draws may all land in
+            the wrong PA basin, whose shape-shear-compensated mode then traps
+            the sampler).
 
         Returns
         -------
@@ -593,12 +646,18 @@ class InferenceTask:
         Raises
         ------
         RuntimeError
-            If no optimization start converges to a finite-log-posterior mode.
+            If no optimization start converges to a finite-log-posterior mode,
+            or if the finite-difference Hessian encounters non-finite
+            gradients.
         """
         from scipy.optimize import minimize
 
+        if hessian_method not in ('ad', 'fd'):
+            raise ValueError(
+                f"hessian_method must be 'ad' or 'fd', got '{hessian_method}'"
+            )
+
         val_and_grad = self.get_log_posterior_and_grad_fn()
-        hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
 
         # Per-parameter characteristic scale from prior draws. The physical
         # problem is badly scaled (e.g. vcirc~200 vs g1~0.02); optimizing in
@@ -620,6 +679,22 @@ class InferenceTask:
         starts = np.asarray(
             self.sample_prior(jax.random.PRNGKey(seed + 1), n_samples=n_starts)
         )
+        if extra_starts is not None:
+            extra_starts = np.atleast_2d(np.asarray(extra_starts, dtype=np.float64))
+            if extra_starts.shape[1] != starts.shape[1]:
+                raise ValueError(
+                    f"extra_starts has {extra_starts.shape[1]} columns; task "
+                    f"has {starts.shape[1]} sampled parameters"
+                )
+            starts = np.vstack([starts, extra_starts])
+        # Keep the best finite objective across all starts, converged or not.
+        # A sharp high-SNR posterior can need > maxiter iterations to satisfy
+        # L-BFGS-B's convergence test, so the mode-finding start may return
+        # success=False; discarding it (keeping only success=True starts) lets a
+        # spuriously-"converged" start on a flat plateau win, yielding a garbage
+        # MAP -> a mis-scaled mass matrix -> ~100% NUTS divergence. Lower neg-log
+        # posterior is always closer to the mode, so best-of-finite is the right
+        # pick; warn loudly if it did not formally converge.
         best = None
         n_converged = 0
         for s0 in starts:
@@ -631,20 +706,34 @@ class InferenceTask:
                 method='L-BFGS-B',
                 options={'maxiter': maxiter},
             )
-            if res.success and np.isfinite(res.fun):
+            if not np.isfinite(res.fun):
+                continue
+            if res.success:
                 n_converged += 1
-                if best is None or res.fun < best.fun:
-                    best = res
+            if best is None or res.fun < best.fun:
+                best = res
 
         if best is None:
             raise RuntimeError(
-                "laplace_preconditioner: no optimization start converged to a "
-                "finite-log-posterior mode (tried "
-                f"{n_starts} starts). Check priors/data."
+                "laplace_preconditioner: no optimization start reached a "
+                "finite log-posterior (tried "
+                f"{len(starts)} starts). Check priors/data."
+            )
+        if not best.success:
+            warnings.warn(
+                "laplace_preconditioner: best MAP start did not satisfy "
+                f"L-BFGS-B convergence (neg_logpost={best.fun:.4g}); using it "
+                f"anyway as the closest of {len(starts)} starts to the mode. "
+                f"Raise maxiter (currently {maxiter}) if sampling diverges.",
+                RuntimeWarning,
             )
 
         theta_map = jnp.asarray(loc + scale * best.x)
-        H = np.asarray(hess_fn(theta_map), dtype=np.float64)
+        if hessian_method == 'ad':
+            hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
+            H = np.asarray(hess_fn(theta_map), dtype=np.float64)
+        else:
+            H = self._fd_hessian(val_and_grad, theta_map, scale, fd_rel_step)
         H = 0.5 * (H + H.T)
         # Scale-aware regularization: normalize the Hessian by the per-parameter
         # scale (diag(scale) @ H @ diag(scale)) BEFORE flooring eigenvalues, so
@@ -668,6 +757,66 @@ class InferenceTask:
             n_starts_converged=n_converged,
             condition_number=cond,
         )
+
+    def _fd_hessian(
+        self,
+        val_and_grad: Callable,
+        theta: jnp.ndarray,
+        scale: np.ndarray,
+        rel_step: float,
+    ) -> np.ndarray:
+        """Hessian of the negative log-posterior by central differences.
+
+        Differences the already-compiled gradient (2 * n_params evaluations),
+        so no second-order autodiff graph is traced or compiled. Steps are
+        prior-scaled and shrunk to keep both stencil points strictly inside
+        prior bounds.
+        """
+        if not jax.config.jax_enable_x64:
+            raise RuntimeError(
+                "_fd_hessian requires float64 (jax_enable_x64): float32 "
+                "gradient noise is amplified by the difference quotient and "
+                "silently degrades the mass matrix. Use hessian_method='ad' "
+                "for float32 runs."
+            )
+        th = np.asarray(theta, dtype=np.float64)
+        D = th.size
+        bounds = self.get_bounds()
+        cols = []
+        for j in range(D):
+            h = rel_step * scale[j]
+            low, high = bounds[j]
+            # keep both stencil points strictly in-support (out-of-support
+            # gradients are meaningless through the -inf prior barrier)
+            if low is not None and np.isfinite(low):
+                h = min(h, 0.5 * (th[j] - low))
+            if high is not None and np.isfinite(high):
+                h = min(h, 0.5 * (high - th[j]))
+            if not h > 0:
+                raise RuntimeError(
+                    f"_fd_hessian: MAP is at a prior bound for parameter "
+                    f"index {j} (theta={th[j]:.6g}, bounds=({low}, {high})); "
+                    "cannot take a finite-difference step. Use "
+                    "hessian_method='ad' or check priors/data."
+                )
+            tp = th.copy()
+            tp[j] += h
+            tm = th.copy()
+            tm[j] -= h
+            _, gp = val_and_grad(jnp.asarray(tp))
+            _, gm = val_and_grad(jnp.asarray(tm))
+            gp = np.asarray(gp, dtype=np.float64)
+            gm = np.asarray(gm, dtype=np.float64)
+            if not (np.all(np.isfinite(gp)) and np.all(np.isfinite(gm))):
+                raise RuntimeError(
+                    f"_fd_hessian: non-finite gradient at stencil point for "
+                    f"parameter index {j} (step {h:.3g}). Use "
+                    "hessian_method='ad' or check priors/data."
+                )
+            # grad of +log-posterior; negate for the negative-log-posterior H
+            cols.append((gm - gp) / (2.0 * h))
+        H = np.stack(cols, axis=1)
+        return 0.5 * (H + H.T)
 
     # =========================================================================
     # Grid adequacy validation
@@ -727,6 +876,9 @@ class InferenceTask:
         velocity_obs: Optional['VelocityObs'] = None,
         meta_pars: Optional[Dict] = None,
         spectral_oversample: Optional[int] = None,
+        spectral_method: Optional[str] = None,
+        psf_mode: Optional[str] = None,
+        cube_mode: Optional[str] = None,
     ) -> 'InferenceTask':
         """Unified SourceModel inference factory.
 
@@ -767,11 +919,35 @@ class InferenceTask:
         meta_pars : dict, optional
             User metadata.
         spectral_oversample : int, optional
-            Wavelength sub-bin count for cube assembly. When ``None``
+            Wavelength sub-bin count for cube assembly (only used when
+            the resolved ``spectral_method`` is ``'oversample'``). When
+            ``None`` (default), reads from each grism obs's
+            ``render_config.spectral_oversample`` (default 15); raises
+            if multiple grism obs disagree. Pass an explicit value only
+            to override the obs-recorded settings uniformly.
+        spectral_method : str, optional
+            Spectral bin-integration method, ``'erf'`` (exact, default)
+            or ``'oversample'``. When ``None`` (default), reads from
+            each grism obs's ``render_config.spectral_method``; raises
+            if multiple grism obs disagree. Pass an explicit value only
+            to override uniformly.
+        psf_mode : str, optional
+            Grism PSF pathway, ``'post_dispersion'`` (single convolution
+            of the dispersed image; default) or ``'per_slice'``
+            (reference path). When ``None`` (default), reads from each
+            grism obs's ``render_config.psf_mode``; raises if multiple
+            grism obs disagree. Pass an explicit value only to override
+            uniformly.
+        cube_mode : str, optional
+            Cube-sharing strategy across grism obs, ``'shared'``
+            (default; cube-compatible obs render from one celestial-frame
+            cube -- multi-obs groups require
+            ``psf_mode='post_dispersion'`` and pure-rotation WCSs, loud
+            errors otherwise) or ``'per_roll'`` (reference path; every
+            obs rebuilds its own detector-frame cube). When ``None``
             (default), reads from each grism obs's
-            ``render_config.spectral_oversample`` (default 5); raises if
-            multiple grism obs disagree. Pass an explicit value only to
-            override the obs-recorded settings uniformly.
+            ``render_config.cube_mode``; raises if multiple grism obs
+            disagree. Pass an explicit value only to override uniformly.
         """
         from kl_pipe.likelihood import create_jitted_likelihood_from_obs
         from kl_pipe.source import SourceModel
@@ -903,6 +1079,45 @@ class InferenceTask:
         elif spectral_oversample is None:
             spectral_oversample = 15  # unused (no grism), but pass a concrete int
 
+        # resolve spectral_method the same way (every roll must agree)
+        if spectral_method is None and grism_obs:
+            methods = {k: o.spectral_method for k, o in grism_obs.items()}
+            unique_methods = set(methods.values())
+            if len(unique_methods) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched spectral_method {methods}; "
+                    f"pass spectral_method=... explicitly to override"
+                )
+            spectral_method = unique_methods.pop()
+        elif spectral_method is None:
+            spectral_method = 'erf'  # unused (no grism), but pass a concrete str
+
+        # resolve psf_mode the same way (every roll must agree)
+        if psf_mode is None and grism_obs:
+            modes = {k: o.psf_mode for k, o in grism_obs.items()}
+            unique_modes = set(modes.values())
+            if len(unique_modes) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched psf_mode {modes}; "
+                    f"pass psf_mode=... explicitly to override"
+                )
+            psf_mode = unique_modes.pop()
+        elif psf_mode is None:
+            psf_mode = 'post_dispersion'  # unused (no grism); concrete str
+
+        # resolve cube_mode the same way (every roll must agree)
+        if cube_mode is None and grism_obs:
+            cmodes = {k: o.cube_mode for k, o in grism_obs.items()}
+            unique_cmodes = set(cmodes.values())
+            if len(unique_cmodes) > 1:
+                raise ValueError(
+                    f"grism_obs have mismatched cube_mode {cmodes}; "
+                    f"pass cube_mode=... explicitly to override"
+                )
+            cube_mode = unique_cmodes.pop()
+        elif cube_mode is None:
+            cube_mode = 'shared'  # unused (no grism); concrete str
+
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,
             sampled_names,
@@ -911,6 +1126,9 @@ class InferenceTask:
             grism_obs=grism_obs,
             velocity_obs=velocity_obs,
             spectral_oversample=spectral_oversample,
+            spectral_method=spectral_method,
+            psf_mode=psf_mode,
+            cube_mode=cube_mode,
         )
 
         return cls(

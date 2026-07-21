@@ -263,6 +263,31 @@ class TestConvergence:
             )
 
 
+class TestOversampleFloor:
+    """The inference render config never drops below oversample 5.
+
+    The bandwidth bound only controls aliasing; the dispersal
+    interpolation and pixel readout carry a separate grid discretization
+    error that biases inferred parameters at oversample 3, so
+    build_grism_render_config floors its result at 5.
+    """
+
+    def test_floor_applies(self, source, typical_priors, grism_pars, gauss_psf):
+        rc = build_grism_render_config(
+            source, typical_priors, grism_pars, psf=gauss_psf
+        )
+        assert rc.oversample >= 5
+
+    def test_floor_keeps_larger_requirement(
+        self, source, worst_case_priors, grism_pars, gauss_psf
+    ):
+        rc = build_grism_render_config(
+            source, worst_case_priors, grism_pars, psf=gauss_psf
+        )
+        assert rc.oversample >= 5
+        assert rc.oversample % 2 == 1
+
+
 class TestDefaultAccuracy:
     """Default build_grism_render_config-derived oversample meets accuracy at typical
     parameters."""

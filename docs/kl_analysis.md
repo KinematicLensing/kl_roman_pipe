@@ -15,7 +15,7 @@ The goal is: **accurate shear estimates** (|m| < 0.01, |c| < 0.001). Everything 
 - 5-plane transform chain is correct and well-tested
 - 3D sech² intensity model matches GalSim to ~1e-5 (k-space path)
 - K-space pixel integration (sinc + wrap) achieves <0.02% vs GalSim; PSF fused in single FFT pass
-- Three-tier test hierarchy (likelihood slices → optimizer → MCMC) with SNR-dependent tolerances
+- Three-tier test hierarchy (noiseless three-gate likelihood slices → k-sigma optimizer recovery → MCMC)
 - NumPyro NUTS w/ Z-score reparam handles 14-dim joint posteriors robustly
 
 ### Where it breaks

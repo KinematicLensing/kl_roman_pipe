@@ -665,13 +665,58 @@ def plot_parameter_recovery(
     # Build parameter lists
     common_params = [p for p in true_values.keys() if p in recovered_values]
 
+    # Report shear in the galaxy frame (g+/gx) instead of sky-frame g1/g2 in the
+    # display panels. Per-sample rotation when samples are available, else rotate
+    # the recovered medians by the truth position angle. Joint Nsigma below stays
+    # on the sky-frame samples (orthogonal rotation leaves it unchanged).
+    gframe_derived: Dict[str, Tuple[float, float]] = {}
+    gframe_unc: Dict[str, Tuple[float, float]] = {}
+    if {'g1', 'g2', 'theta_int'}.issubset(true_values) and {'g1', 'g2'}.issubset(
+        recovered_values
+    ):
+        from kl_pipe.calibration import galaxy_frame_samples, rotate_to_galaxy_frame
+
+        gp_t, gx_t = rotate_to_galaxy_frame(
+            true_values['g1'], true_values['g2'], true_values['theta_int']
+        )
+        if (
+            samples is not None
+            and param_names is not None
+            and {'g1', 'g2', 'theta_int'}.issubset(param_names)
+        ):
+            gp_c, gx_c = galaxy_frame_samples(
+                samples[:, param_names.index('g1')],
+                samples[:, param_names.index('g2')],
+                samples[:, param_names.index('theta_int')],
+                true_values['theta_int'],
+            )
+            for nm, chain, tval in (('g_plus', gp_c, gp_t), ('g_cross', gx_c, gx_t)):
+                rec = float(np.median(chain))
+                lo = float(np.percentile(chain, 16))
+                hi = float(np.percentile(chain, 84))
+                gframe_derived[nm] = (float(tval), rec)
+                gframe_unc[nm] = (rec - lo, hi - rec)
+        else:
+            gp_r, gx_r = rotate_to_galaxy_frame(
+                recovered_values['g1'], recovered_values['g2'], true_values['theta_int']
+            )
+            gframe_derived['g_plus'] = (float(gp_t), float(gp_r))
+            gframe_derived['g_cross'] = (float(gx_t), float(gx_r))
+        common_params = [p for p in common_params if p not in ('g1', 'g2')]
+
     # Add derived parameters
     all_params = list(common_params)
     all_true = {p: true_values[p] for p in common_params}
     all_recovered = {p: recovered_values[p] for p in common_params}
 
-    if derived_params:
-        for name, (true_val, rec_val) in derived_params.items():
+    merged_derived = {**(derived_params or {}), **gframe_derived}
+    if uncertainties is not None:
+        uncertainties = {**uncertainties, **gframe_unc}
+    elif gframe_unc:
+        uncertainties = dict(gframe_unc)
+
+    if merged_derived:
+        for name, (true_val, rec_val) in merged_derived.items():
             all_params.append(name)
             all_true[name] = true_val
             all_recovered[name] = rec_val

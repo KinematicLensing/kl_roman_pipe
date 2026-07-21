@@ -20,8 +20,10 @@ from kl_pipe.priors import (
     Gaussian,
     Normal,
     LogUniform,
+    LogNormal,
     TruncatedNormal,
     PriorDict,
+    make_tf_prior,
 )
 
 
@@ -233,6 +235,104 @@ class TestTruncatedNormal:
             TruncatedNormal(0.5, 0, 0.1, 0.9)
         with pytest.raises(ValueError, match="high.*must be > low"):
             TruncatedNormal(0.5, 0.2, 0.9, 0.1)
+
+
+# ==============================================================================
+# LogNormal Prior Tests
+# ==============================================================================
+
+
+class TestLogNormal:
+    """Tests for LogNormal prior."""
+
+    def test_log_prob_formula(self):
+        """Log prob matches the analytic log-normal density."""
+        mu, sigma = np.log(200.0), 0.2
+        prior = LogNormal(mu, sigma)
+
+        x = 250.0
+        z = (np.log(x) - mu) / sigma
+        expected = -np.log(x) - np.log(sigma) - 0.5 * np.log(2 * np.pi) - 0.5 * z**2
+        assert np.isclose(prior.log_prob(x), expected)
+
+    def test_log_prob_nonpositive(self):
+        """Log prob is -inf at and below zero, with no NaNs."""
+        prior = LogNormal(0.0, 1.0)
+        assert prior.log_prob(0.0) == -np.inf
+        assert prior.log_prob(-5.0) == -np.inf
+
+    def test_log_prob_gradient_finite_at_negative(self):
+        """Gradient has no NaN poisoning from the masked log branch."""
+        prior = LogNormal(0.0, 1.0)
+        g = jax.grad(prior.log_prob)(jnp.array(-1.0))
+        assert np.isfinite(g)
+
+    def test_sample_distribution(self):
+        """Sample moments match analytic log-normal moments."""
+        mu, sigma = np.log(200.0), 0.184
+        prior = LogNormal(mu, sigma)
+        key = random.PRNGKey(42)
+        samples = prior.sample(key, (100000,))
+
+        assert jnp.all(samples > 0)
+        mean = np.exp(mu + 0.5 * sigma**2)
+        std = mean * np.sqrt(np.expm1(sigma**2))
+        assert np.isclose(np.mean(samples), mean, rtol=0.01)
+        assert np.isclose(np.std(samples), std, rtol=0.05)
+        assert np.isclose(np.median(samples), np.exp(mu), rtol=0.01)
+
+    def test_moment_properties(self):
+        """mean/std/median properties match analytic values."""
+        mu, sigma = np.log(150.0), 0.3
+        prior = LogNormal(mu, sigma)
+        assert np.isclose(prior.mean, np.exp(mu + 0.5 * sigma**2))
+        assert np.isclose(prior.std, prior.mean * np.sqrt(np.expm1(sigma**2)))
+        assert np.isclose(prior.median, 150.0)
+
+    def test_bounds_property(self):
+        """Support is x > 0, unbounded above."""
+        prior = LogNormal(0.0, 1.0)
+        assert prior.bounds == (0.0, None)
+
+    def test_invalid_sigma(self):
+        """Raises error for non-positive sigma."""
+        with pytest.raises(ValueError, match="sigma.*must be positive"):
+            LogNormal(0.0, 0.0)
+        with pytest.raises(ValueError, match="sigma.*must be positive"):
+            LogNormal(0.0, -1.0)
+
+    def test_normalization(self):
+        """Density integrates to ~1 over the support."""
+        prior = LogNormal(np.log(200.0), 0.184)
+        x = np.linspace(1e-3, 2000.0, 200001)
+        pdf = np.exp(np.asarray(jax.vmap(prior.log_prob)(jnp.asarray(x))))
+        integral = np.trapz(pdf, x)
+        assert np.isclose(integral, 1.0, atol=1e-3)
+
+
+class TestMakeTFPrior:
+    """Tests for the Tully-Fisher prior factory."""
+
+    def test_dex_encoding(self):
+        """sigma_tf_dex is converted to natural log: sigma = dex * ln(10)."""
+        prior = make_tf_prior(200.0, 0.08)
+        assert isinstance(prior, LogNormal)
+        assert np.isclose(prior.mu, np.log(200.0))
+        assert np.isclose(prior.sigma, 0.08 * np.log(10.0))
+        # 0.08 dex -> sigma_ln ~ 0.184
+        assert np.isclose(prior.sigma, 0.184, atol=1e-3)
+
+    def test_median_is_center(self):
+        """Median of the prior equals the TF center velocity."""
+        prior = make_tf_prior(200.0, 0.08)
+        assert np.isclose(prior.median, 200.0)
+
+    def test_invalid_args(self):
+        """Raises for non-positive center or scatter."""
+        with pytest.raises(ValueError, match="v_center_kms.*must be positive"):
+            make_tf_prior(-100.0, 0.08)
+        with pytest.raises(ValueError, match="sigma_tf_dex.*must be positive"):
+            make_tf_prior(200.0, 0.0)
 
 
 # ==============================================================================
@@ -448,3 +548,92 @@ class TestJAXCompatibility:
 
         result = jit_log_prior(theta)
         assert np.isfinite(result)
+
+
+# ==============================================================================
+# Serialization (to_dict / describe) -- provenance
+# ==============================================================================
+
+
+class TestPriorSerialization:
+    """to_dict() is lossless onto the flat {dist,loc,scale,low,high} schema."""
+
+    def test_uniform_to_dict(self):
+        assert Uniform(0.05, 0.9).to_dict() == {
+            'dist': 'uniform',
+            'loc': None,
+            'scale': None,
+            'low': 0.05,
+            'high': 0.9,
+        }
+
+    def test_gaussian_to_dict(self):
+        assert Gaussian(0.0, 0.2).to_dict() == {
+            'dist': 'gaussian',
+            'loc': 0.0,
+            'scale': 0.2,
+            'low': None,
+            'high': None,
+        }
+
+    def test_loguniform_to_dict(self):
+        d = LogUniform(0.1, 100.0).to_dict()
+        assert d['dist'] == 'loguniform'
+        assert (d['low'], d['high']) == (0.1, 100.0)
+        assert d['loc'] is None and d['scale'] is None
+
+    def test_truncated_normal_to_dict(self):
+        assert TruncatedNormal(0.6, 0.15, 0.05, 0.99).to_dict() == {
+            'dist': 'truncated_normal',
+            'loc': 0.6,
+            'scale': 0.15,
+            'low': 0.05,
+            'high': 0.99,
+        }
+
+    def test_lognormal_to_dict_natural_log_params(self):
+        prior = make_tf_prior(200.0, 0.08)
+        d = prior.to_dict()
+        assert d['dist'] == 'lognormal'
+        # mu, sigma are in natural-log space
+        assert d['loc'] == pytest.approx(np.log(200.0))
+        assert d['scale'] == pytest.approx(0.08 * np.log(10.0))
+        assert d['low'] is None and d['high'] is None
+
+    def test_base_to_dict_raises(self):
+        """An unserializable prior must fail loudly, not silently drop."""
+
+        class _CustomPrior(Prior):
+            def log_prob(self, value):
+                return jnp.array(0.0)
+
+            def sample(self, rng_key, shape=()):
+                return jnp.zeros(shape)
+
+            @property
+            def bounds(self):
+                return (None, None)
+
+        with pytest.raises(NotImplementedError, match='to_dict'):
+            _CustomPrior().to_dict()
+
+    def test_describe_covers_sampled_and_fixed(self):
+        priors = PriorDict(
+            {
+                'g1': Gaussian(0.0, 0.2),
+                'cosi': Uniform(0.05, 0.99),
+                'z': 1.3,  # fixed
+            }
+        )
+        desc = priors.describe()
+        assert set(desc) == {'g1', 'cosi', 'z'}
+        assert desc['g1']['dist'] == 'gaussian' and desc['g1']['scale'] == 0.2
+        assert desc['cosi']['dist'] == 'uniform'
+        # fixed param recorded with dist='fixed' and its value in loc
+        assert desc['z'] == {
+            'dist': 'fixed',
+            'loc': 1.3,
+            'scale': None,
+            'low': None,
+            'high': None,
+        }

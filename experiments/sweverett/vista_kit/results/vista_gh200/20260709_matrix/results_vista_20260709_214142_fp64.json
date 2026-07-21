@@ -1,0 +1,93 @@
+{
+  "sections": {
+    "a": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "n_sampled": 17,
+            "build_s": 7.392380015924573
+          },
+          "timings": {
+            "primal": {
+              "compile_ms": 1439.8041176609695,
+              "min_ms": 0.2548149786889553,
+              "mean_ms": 0.2751734107732773,
+              "std_ms": 0.03394107972751327,
+              "nreps": 5
+            },
+            "grad": {
+              "compile_ms": 3734.7479262389243,
+              "min_ms": 0.5881576798856258,
+              "mean_ms": 0.6743461824953556,
+              "std_ms": 0.1446939432752417,
+              "nreps": 5
+            },
+            "value_and_grad": {
+              "compile_ms": 3110.626333858818,
+              "min_ms": 0.5818847566843033,
+              "mean_ms": 0.6027176044881344,
+              "std_ms": 0.02623571818204408,
+              "nreps": 5
+            },
+            "posterior_value": 35.79569755298868
+          }
+        }
+      },
+      "wallclock_s": 17.485738741233945
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-09T21:41:42.548885",
+    "hostname": "c642-022.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260709",
+    "jaxlib": "0.10.1.dev20260709",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "a",
+      "--configs",
+      "Q",
+      "--nreps",
+      "5"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "7f13d86ccc9d1004cffa18b3d0367c22feb4fa7e",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 17.489044231828302
+}

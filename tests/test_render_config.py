@@ -457,6 +457,10 @@ class TestEffectiveMaxkLoudGuard:
 
         class _DeadPSF:
             # FT well below threshold at every k, including k=0 (not normalized)
+            maxk = (
+                100.0  # band limit above the scan range; real GSObjects always have one
+            )
+
             def kValue(self, pos):
                 return 1e-9 + 0j
 
@@ -599,10 +603,12 @@ def source_grism_setup():
             'theta_int': Uniform(0, np.pi),
             'g1': 0.0,
             'g2': 0.0,
+            'vel.v0': 0.0,
             'vel.vcirc': Uniform(80, 300),
             'vel.rscale': Uniform(0.1, 1.0),
             'vel.x0': 0.0,
             'vel.y0': 0.0,
+            'z': 1.0,
             'Halpha.flux': LogUniform(0.01, 100.0),
             'Halpha.rscale': Uniform(0.05, 1.0),
             'Halpha.h_over_r': 0.15,

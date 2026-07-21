@@ -39,6 +39,7 @@ from kl_pipe.spectral import CubePars
 from kl_pipe.dispersion import GrismPars, build_grism_pars_for_line, disperse_cube
 from kl_pipe.source import SourceModel
 from kl_pipe.observation import build_velocity_obs, build_image_obs, build_grism_obs
+from kl_pipe.render import RenderConfig
 ```
 
 | Object | Purpose |
@@ -50,9 +51,13 @@ from kl_pipe.observation import build_velocity_obs, build_image_obs, build_grism
 | `GrismObs` | Observation container: PSF + dispersion + (data + variance) |
 | `SourceModel.build_cube` / `.render_grism` | Cube assembly and dispersion |
 
-The cube-to-grism flow is `build_cube` -> per-slice PSF convolution ->
-`disperse_cube` -> pixel response -> detector image. `SourceModel.render_grism`
-does all of it in one call.
+By default (`dispersal_method='analytic'`) `SourceModel.render_grism` deposits
+each spaxel's line flux along the dispersion axis with an exact erf/exp kernel
+-- no wavelength grid is built -- then applies one post-dispersion PSF
+convolution and the pixel response. The legacy `slice` path
+(`dispersal_method='slice'`) instead assembles a cube (`build_cube`), convolves,
+and shift-and-adds via `disperse_cube`. Either way, `render_grism` does it all
+in one call.
 
 ---
 
@@ -130,7 +135,7 @@ The per-line parameters live under the line's namespace (`Halpha.flux`,
 `Halpha.rscale`, ..., `Halpha.dispersion`); the intrinsic line width in the cube
 is `Halpha.dispersion` only. The slitless instrumental LSF is produced
 downstream by the PSF-per-slice + dispersion geometry, not a separate term;
-`tests/test_lsf_gate.py` checks the resulting resolution against the Roman spec
+`tests/test_spectral_resolution.py` checks the resulting resolution against the Roman spec
 `R = 461 * lambda_um`.
 
 ---
@@ -189,8 +194,9 @@ plt.show()
 
 `GrismPars` specifies the dispersion direction, plate scale, and reference
 wavelength; `build_grism_pars_for_line` is the single-line convenience.
-`SourceModel.render_grism` builds the cube, convolves per slice with the PSF,
-disperses, and applies the pixel response:
+`SourceModel.render_grism` disperses the source and applies the PSF and pixel
+response (by default via the analytic path, which spreads each spaxel's line
+flux by an exact profile rather than building a cube):
 
 ```{code-cell} python
 gp = build_grism_pars_for_line(
@@ -246,7 +252,13 @@ morphological axes, and the joint photometry + grism fit decouples them (see
 
 The dispersion direction sets how strongly the rotation term appears: aligning
 the kinematic major axis with the dispersion axis maximizes it, orthogonal
-alignment suppresses it. The `plot_dispersion_angle_study` diagnostic sweeps this:
+alignment suppresses it. The `plot_dispersion_angle_study` diagnostic sweeps this
+by rotating the dispersion direction with the galaxy held fixed, which isolates
+the effect against a single broadband reference. Rotating the dispersion axis is
+a slice-path capability, so this study sets `dispersal_method='slice'`; the
+analytic default (like Roman) disperses along a fixed detector axis, and in
+production the relative angle varies through the roll angle or the galaxy's
+position angle instead.
 
 ```{code-cell} python
 from kl_pipe.diagnostics.grism import plot_dispersion_angle_study
@@ -258,7 +270,9 @@ broadband = np.sum(cube_aligned, axis=2) * dl
 def render_at_angle(angle):
     gp_a = GrismPars(image_pars=image_pars, dispersion=1.1,
                      lambda_ref=gp.lambda_ref, dispersion_angle_detector=angle)
-    obs_a = build_grism_obs(gp_a, z=Z, psf=psf)
+    obs_a = build_grism_obs(gp_a, z=Z, psf=psf,
+                            render_config=RenderConfig(oversample=3,
+                                                       dispersal_method='slice'))
     return np.asarray(source.render_grism(pars_aligned, obs_a))
 
 fig = plot_dispersion_angle_study(render_at_angle, broadband,
@@ -313,6 +327,17 @@ plt.tight_layout(); plt.show()
 
 Independent per-line fluxes enable line-ratio diagnostics ([N II]/H-alpha for
 metallicity / ionization) alongside the kinematic fit.
+
+**Validity limit: one line complex per fit.** The grism pathway applies a
+single, wavelength-independent PSF to every spectral slice (and, for the
+analytic dispersal path, to every line). This is accurate for a tight line
+complex like H-alpha + [N II] (~5 nm apart; the instrumental PSF varies by
+well under a percent across it), but it is a real bias for widely separated
+lines — over the ~170 nm between H-alpha and H-beta the Roman PSF size
+changes at the several-percent level. Until per-line PSFs land (issue #51),
+fit widely separated lines as separate per-complex posterior runs and
+combine the chains afterwards; when multiplying the posteriors, divide out
+the shared-parameter prior N-1 times so it is not double-counted.
 
 ---
 

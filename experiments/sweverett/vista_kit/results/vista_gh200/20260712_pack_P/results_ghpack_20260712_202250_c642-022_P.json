@@ -1,0 +1,323 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "j": {
+      "status": "ok",
+      "result": {
+        "device": "gpu",
+        "pack_configs": "P",
+        "core_pinning": false,
+        "pack_fit_reps": 1,
+        "vary_seeds": true,
+        "vary_data": true,
+        "points": {
+          "1": {
+            "n_workers": 1,
+            "makespan_s": 357.8254507770762,
+            "fits_completed": 1,
+            "fits_per_node_hour": 10.060771228491474,
+            "child_wallclock_min_s": 339.34165017912164,
+            "child_wallclock_max_s": 339.34165017912164,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 339.34165017912164,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0069375664603497,
+                  "n_divergences": 230,
+                  "min_ess": 1146.0270269348143,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 8307.5625
+                }
+              }
+            }
+          },
+          "2": {
+            "n_workers": 2,
+            "makespan_s": 348.77463539037853,
+            "fits_completed": 2,
+            "fits_per_node_hour": 20.643703037467567,
+            "child_wallclock_min_s": 188.3082156991586,
+            "child_wallclock_max_s": 334.7471280959435,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 188.3082156991586,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0069375664603497,
+                  "n_divergences": 230,
+                  "min_ess": 1146.0270269348143,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 4894.9375
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 334.7471280959435,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0017755076092083,
+                  "n_divergences": 306,
+                  "min_ess": 1397.602934852096,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6922.75
+                }
+              }
+            }
+          },
+          "4": {
+            "n_workers": 4,
+            "makespan_s": 469.2926073661074,
+            "fits_completed": 4,
+            "fits_per_node_hour": 30.684480799345266,
+            "child_wallclock_min_s": 257.59236082434654,
+            "child_wallclock_max_s": 455.1912514520809,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 257.59236082434654,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0069375664603497,
+                  "n_divergences": 230,
+                  "min_ess": 1146.0270269348143,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 4237.0
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 271.7485931147821,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0017755076092083,
+                  "n_divergences": 306,
+                  "min_ess": 1397.602934852096,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 4219.5625
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 455.1912514520809,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001004102498688,
+                  "n_divergences": 385,
+                  "min_ess": 1655.9446854634896,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6285.0
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 398.9945153729059,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001454442213977,
+                  "n_divergences": 273,
+                  "min_ess": 1359.603306863321,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6344.875
+                }
+              }
+            }
+          },
+          "8": {
+            "n_workers": 8,
+            "makespan_s": 674.3023697449826,
+            "fits_completed": 8,
+            "fits_per_node_hour": 42.71080941164718,
+            "child_wallclock_min_s": 406.05546063324437,
+            "child_wallclock_max_s": 659.6157150808722,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 419.1363361380063,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0069375664603497,
+                  "n_divergences": 230,
+                  "min_ess": 1146.0270269348143,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3825.625
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 442.95787058677524,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0017755076092083,
+                  "n_divergences": 306,
+                  "min_ess": 1397.602934852096,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3830.0
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 551.0521171363071,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001004102498688,
+                  "n_divergences": 385,
+                  "min_ess": 1655.9446854634896,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3847.625
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 406.05546063324437,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001454442213977,
+                  "n_divergences": 273,
+                  "min_ess": 1359.603306863321,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3883.125
+                }
+              },
+              "4": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 597.529792340938,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0008560900569574,
+                  "n_divergences": 250,
+                  "min_ess": 1767.423550623796,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5993.875
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 659.6157150808722,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.002537065186963,
+                  "n_divergences": 1074,
+                  "min_ess": 1005.6784525636834,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5982.3125
+                }
+              },
+              "6": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 608.2449734387919,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0087720857155402,
+                  "n_divergences": 281,
+                  "min_ess": 921.3718163239555,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5937.75
+                }
+              },
+              "7": {
+                "returncode": 0,
+                "P": {
+                  "wallclock_s": 608.214239211753,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0021397085675041,
+                  "n_divergences": 311,
+                  "min_ess": 1451.8205248024926,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5941.875
+                }
+              }
+            }
+          }
+        }
+      },
+      "wallclock_s": 1850.195841514971
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-12T20:22:54.644931",
+    "hostname": "c642-022.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260712",
+    "jaxlib": "0.10.1.dev20260712",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--sections",
+      "j",
+      "--pack-configs",
+      "P",
+      "--pack-workers",
+      "1,2,4,8",
+      "--pack-device",
+      "gpu",
+      "--pack-mem-fraction",
+      "0.85",
+      "--pack-vary-data",
+      "--pack-vary-seeds",
+      "--x64",
+      "1",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache",
+      "--out",
+      "/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_ghpack_20260712_202250_c642-022_P.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "d9a5b7fd65fa4cf8fa66b5a0418a9f6cb897bb63",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 1850.1972245499492
+}

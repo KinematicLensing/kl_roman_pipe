@@ -1517,5 +1517,246 @@ class TestBinKwarg:
         assert result.shape == pdata.original_shape
 
 
+# ==============================================================================
+# F. rfft2 + minimal-exact-padding swap vs the prior full-pad fft2 reference
+# ==============================================================================
+#
+# The production PSF path (precompute_psf_fft + convolve_fft) uses a
+# half-spectrum rfft2 on the minimum FFT grid that is still exact on the
+# retained [0, N) crop (kernel placed by wrapped modulo-P folding). The
+# reference below reproduces the path as it stood before that swap: full
+# linear-convolution padding (next_fast_len(N + K - 1)), zero-pad + np.roll
+# kernel placement, full complex fft2 multiply ifft2, real-part crop. The two
+# differ only in FFT-grid size and factorization, so they must agree to the
+# float64 round-off floor on both value and gradient. This is the direct
+# old-vs-new numerical gate the swap ships against.
+
+
+def _render_psf_kernel(gsobj, pixel_scale, kernel_size=None):
+    """Render a normalized PSF kernel stamp (shared physics, both paths).
+
+    Reproduces the kernel-rendering half of ``gsobj_to_kernel``: GalSim good
+    image size, oddified, optional explicit override, ``drawImage`` at
+    ``pixel_scale``, normalized to unit sum. The convolution kernel is
+    therefore bit-identical between the reference and the production path;
+    only the padding/FFT machinery differs (which is what these tests probe).
+    """
+    kern_size = gsobj.getGoodImageSize(pixel_scale)
+    if kern_size % 2 == 0:
+        kern_size += 1
+    if kernel_size is not None:
+        kern_size = int(kernel_size)
+    kern_img = gsobj.drawImage(nx=kern_size, ny=kern_size, scale=pixel_scale)
+    kernel = kern_img.array.astype(np.float64)
+    kernel /= kernel.sum()
+    return kernel
+
+
+def _reference_full_pad_fft2_convolve(image, kernel, image_shape):
+    """Reference PSF convolution: full-pad, roll-placed, complex fft2 path.
+
+    The psf.py convolution as it stood before the rfft2 + minimal-exact
+    padding swap: pad to ``next_fast_len(N + K - 1)`` (full linear-convolution
+    size), place the kernel center at (0,0) by zero-pad + ``np.roll``, full
+    complex ``fft2`` multiply ``ifft2``, crop to ``[0, N)`` and take the real
+    part. Kept only as the numerical reference the production path validates
+    against; not used in production.
+    """
+    nrow, ncol = image_shape
+    krow, kcol = kernel.shape
+    nrow_pad = next_fast_len(nrow + krow - 1)
+    ncol_pad = next_fast_len(ncol + kcol - 1)
+    padded_kernel = np.zeros((nrow_pad, ncol_pad), dtype=np.float64)
+    padded_kernel[:krow, :kcol] = kernel
+    padded_kernel = np.roll(padded_kernel, (-(krow // 2), -(kcol // 2)), axis=(0, 1))
+    kernel_fft = jnp.fft.fft2(jnp.array(padded_kernel))
+
+    padded = jnp.zeros((nrow_pad, ncol_pad), dtype=image.dtype)
+    padded = padded.at[:nrow, :ncol].set(image)
+    result = jnp.fft.ifft2(jnp.fft.fft2(padded) * kernel_fft)
+    return result[:nrow, :ncol].real
+
+
+def _asymmetric_source(shape, pixel_scale):
+    """Off-center anisotropic blob: distinguishable under transpose.
+
+    Different x/y scale radii and different-sign offsets so a row/col swap
+    (the class of bug wrapped kernel placement or an rfft axis mix-up would
+    introduce) changes the array — a radially symmetric source would hide it.
+    """
+    ny, nx = shape
+    yy, xx = np.meshgrid(
+        (np.arange(ny) - ny / 2) * pixel_scale,
+        (np.arange(nx) - nx / 2) * pixel_scale,
+        indexing='ij',
+    )
+    r2 = ((xx - 0.4) / 1.2) ** 2 + ((yy + 0.2) / 0.7) ** 2
+    return np.exp(-np.sqrt(r2 + 1e-6)).astype(np.float64)
+
+
+# Old-vs-new agreement bound. Measured worst-case relative delta across the
+# parametrized cases (2026-07-19, this module): value 5.6e-16, gradient
+# 6.1e-16 — pure float64 round-off from the two paths' differing FFT grid
+# sizes and factorizations. Bound = 1e-14, the round-up of 10x that worst
+# case to the next decade, absorbing cross-platform FFT-planner round-off
+# variation. This is a floating-point-identity floor, NOT a physics
+# tolerance: the two paths compute the same linear map.
+_RFFT2_SWAP_RTOL = 1e-14
+
+_SWAP_KERNELS = [
+    pytest.param(gs.Gaussian(fwhm=0.7), 'gaussian_sym', id='gaussian_sym'),
+    pytest.param(
+        gs.Moffat(beta=3.5, fwhm=0.7).shear(g1=0.2, g2=0.25),
+        'moffat_sheared_asym',
+        id='moffat_sheared_asym',
+    ),
+]
+
+# even-even, odd-odd, even-odd, odd-even — exercises FFT-grid parity handling
+_SWAP_SHAPES = [(40, 40), (41, 41), (40, 41), (41, 40)]
+
+
+@pytest.mark.parametrize("gsobj,kname", _SWAP_KERNELS)
+@pytest.mark.parametrize("shape", _SWAP_SHAPES, ids=[str(s) for s in _SWAP_SHAPES])
+def test_rfft2_swap_matches_full_pad_reference_value_and_grad(gsobj, kname, shape):
+    """Production rfft2 + minimal-exact path == full-pad fft2 reference.
+
+    Direct old-vs-new comparison of BOTH the convolved value and the
+    gradient w.r.t. the input image, across a symmetric and an asymmetric
+    (transpose-distinguishable) kernel and all four shape parities. Also
+    confirms the production grid is strictly smaller than the full-pad grid
+    (the point of the swap).
+    """
+    pixel_scale = 0.3
+    image = jnp.array(_asymmetric_source(shape, pixel_scale))
+
+    psf_data = precompute_psf_fft(gsobj, image_shape=shape, pixel_scale=pixel_scale)
+    kernel = _render_psf_kernel(gsobj, pixel_scale)
+
+    # the swap must actually shrink the grid, else the comparison is vacuous
+    full_rows = next_fast_len(shape[0] + kernel.shape[0] - 1)
+    full_cols = next_fast_len(shape[1] + kernel.shape[1] - 1)
+    assert psf_data.padded_shape[0] < full_rows
+    assert psf_data.padded_shape[1] < full_cols
+
+    new = np.asarray(convolve_fft(image, psf_data))
+    ref = np.asarray(_reference_full_pad_fft2_convolve(image, kernel, shape))
+    value_rel = np.max(np.abs(new - ref)) / np.max(np.abs(ref))
+    assert (
+        value_rel < _RFFT2_SWAP_RTOL
+    ), f"{kname} {shape}: value_rel={value_rel:.3e} exceeds {_RFFT2_SWAP_RTOL:.0e}"
+
+    # asymmetric fixed weights so the scalar loss (and thus its gradient)
+    # depends on every output pixel, exercising the full adjoint of both paths
+    w = jnp.array(
+        np.outer(np.linspace(0.3, 1.7, shape[0]), np.linspace(0.5, 1.5, shape[1]))
+    )
+
+    def loss_new(im):
+        return jnp.sum(w * convolve_fft(im, psf_data))
+
+    def loss_ref(im):
+        return jnp.sum(w * _reference_full_pad_fft2_convolve(im, kernel, shape))
+
+    g_new = np.asarray(jax.grad(loss_new)(image))
+    g_ref = np.asarray(jax.grad(loss_ref)(image))
+    grad_rel = np.max(np.abs(g_new - g_ref)) / np.max(np.abs(g_ref))
+    assert (
+        grad_rel < _RFFT2_SWAP_RTOL
+    ), f"{kname} {shape}: grad_rel={grad_rel:.3e} exceeds {_RFFT2_SWAP_RTOL:.0e}"
+
+
+@pytest.mark.diagnostic_plots
+def test_rfft2_swap_diagnostic_plot(output_dir):
+    """Visual old-vs-new panel for the rfft2 + minimal-exact-padding swap.
+
+    Convolves an asymmetric source with an aberrated (Roman-like,
+    transpose-distinguishable) OpticalPSF via the production path and the
+    full-pad fft2 reference, then plots old / new / log-scale residual and
+    prints the max abs/rel value and gradient differences. Figure + CSV land
+    in tests/out/psf_rfft2_swap/ for inspection. Deltas are the float64
+    round-off floor; this figure exists to make that visible, not to gate.
+    """
+    out_dir = get_test_dir() / "out" / "psf_rfft2_swap"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pixel_scale = 0.3
+    shape = (60, 64)
+    gsobj = gs.OpticalPSF(
+        lam_over_diam=0.5, defocus=0.4, coma1=0.3, coma2=0.2, astig1=0.15
+    )
+    image = jnp.array(_asymmetric_source(shape, pixel_scale))
+
+    psf_data = precompute_psf_fft(gsobj, image_shape=shape, pixel_scale=pixel_scale)
+    kernel = _render_psf_kernel(gsobj, pixel_scale)
+
+    new = np.asarray(convolve_fft(image, psf_data))
+    ref = np.asarray(_reference_full_pad_fft2_convolve(image, kernel, shape))
+    residual = new - ref
+    value_maxabs = float(np.max(np.abs(residual)))
+    value_maxrel = float(value_maxabs / np.max(np.abs(ref)))
+
+    w = jnp.array(
+        np.outer(np.linspace(0.3, 1.7, shape[0]), np.linspace(0.5, 1.5, shape[1]))
+    )
+
+    def loss_new(im):
+        return jnp.sum(w * convolve_fft(im, psf_data))
+
+    def loss_ref(im):
+        return jnp.sum(w * _reference_full_pad_fft2_convolve(im, kernel, shape))
+
+    g_new = np.asarray(jax.grad(loss_new)(image))
+    g_ref = np.asarray(jax.grad(loss_ref)(image))
+    grad_maxabs = float(np.max(np.abs(g_new - g_ref)))
+    grad_maxrel = float(grad_maxabs / np.max(np.abs(g_ref)))
+
+    full_rows = next_fast_len(shape[0] + kernel.shape[0] - 1)
+
+    print(
+        f"\n[rfft2 swap] shape={shape} "
+        f"pad_new={tuple(psf_data.padded_shape)} pad_full~=({full_rows},{full_rows})"
+    )
+    print(f"[rfft2 swap] value: max|diff|={value_maxabs:.3e} rel={value_maxrel:.3e}")
+    print(f"[rfft2 swap] grad : max|diff|={grad_maxabs:.3e} rel={grad_maxrel:.3e}")
+
+    csv_path = out_dir / "rfft2_swap_deltas.csv"
+    csv_path.write_text(
+        "quantity,max_abs_diff,max_rel_diff\n"
+        f"value,{value_maxabs:.6e},{value_maxrel:.6e}\n"
+        f"gradient,{grad_maxabs:.6e},{grad_maxrel:.6e}\n"
+    )
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    vmax = float(np.max(np.abs(ref)))
+    im0 = axes[0].imshow(ref, origin='lower', vmin=0, vmax=vmax)
+    axes[0].set_title('old: full-pad fft2 reference')
+    fig.colorbar(im0, ax=axes[0], fraction=0.046)
+    im1 = axes[1].imshow(new, origin='lower', vmin=0, vmax=vmax)
+    axes[1].set_title('new: rfft2 + minimal-exact pad')
+    fig.colorbar(im1, ax=axes[1], fraction=0.046)
+
+    absres = np.abs(residual)
+    floor = max(absres[absres > 0].min(), 1e-300) if np.any(absres > 0) else 1e-300
+    im2 = axes[2].imshow(
+        np.where(absres > 0, absres, floor),
+        origin='lower',
+        norm=LogNorm(vmin=floor, vmax=max(value_maxabs, floor * 10)),
+        cmap='magma',
+    )
+    axes[2].set_title(
+        f'|new - old| (log)\nmax rel: value {value_maxrel:.1e}, grad {grad_maxrel:.1e}'
+    )
+    fig.colorbar(im2, ax=axes[2], fraction=0.046)
+    fig.suptitle('PSF rfft2 + minimal-exact-padding swap: old vs new (OpticalPSF)')
+    fig.tight_layout()
+    fig.savefig(out_dir / 'rfft2_swap_panel.png', dpi=150)
+    plt.close(fig)
+
+    # sanity: the figure only exists because the deltas are at round-off
+    assert value_maxrel < _RFFT2_SWAP_RTOL
+    assert grad_maxrel < _RFFT2_SWAP_RTOL
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

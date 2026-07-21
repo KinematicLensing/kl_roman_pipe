@@ -1,0 +1,128 @@
+{
+  "sections": {
+    "a": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "n_sampled": 17,
+            "build_s": 2.8482431250158697
+          },
+          "timings": {
+            "primal": {
+              "compile_ms": 671.0465829819441,
+              "min_ms": 2.3234590189531446,
+              "mean_ms": 2.446497200677792,
+              "std_ms": 0.06056387114789728,
+              "nreps": 30
+            },
+            "grad": {
+              "compile_ms": 1587.6957920845598,
+              "min_ms": 10.37595805246383,
+              "mean_ms": 11.501623682367306,
+              "std_ms": 1.264890843839221,
+              "nreps": 30
+            },
+            "value_and_grad": {
+              "compile_ms": 1427.7963329805061,
+              "min_ms": 9.297584067098796,
+              "mean_ms": 10.799933364614844,
+              "std_ms": 0.5705487683385493,
+              "nreps": 30
+            },
+            "posterior_value": 21.25142908047254
+          }
+        }
+      },
+      "wallclock_s": 7.685482457978651
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "ok",
+      "result": {
+        "children": {
+          "fp64": {
+            "x64": true,
+            "grism_dtype": "float64",
+            "default_dtype": "float64",
+            "posterior_value": 21.251429080473905,
+            "vg_min_ms": 9.719499968923628,
+            "vg_mean_ms": 10.767998600689074,
+            "vg_compile_ms": 1550.582707975991,
+            "nreps": 30,
+            "status": "ok"
+          },
+          "fp32": {
+            "x64": false,
+            "grism_dtype": "float32",
+            "default_dtype": "float32",
+            "posterior_value": 21.31271743774414,
+            "vg_min_ms": 5.044457968324423,
+            "vg_mean_ms": 5.503870907705277,
+            "vg_compile_ms": 1575.3232090501115,
+            "nreps": 30,
+            "status": "ok"
+          }
+        },
+        "grism_max_abs_diff_over_peak": 4.880305164360631e-05,
+        "grism_rms_diff_over_peak": 1.2859923210325904e-05,
+        "broadband_max_abs_diff_over_peak": 1.1456912739571345e-07,
+        "broadband_rms_diff_over_peak": 1.3287722835171136e-08,
+        "vg_speedup_fp32_over_fp64": 1.9267679560331585,
+        "posterior_value_fp64": 21.251429080473905,
+        "posterior_value_fp32": 21.31271743774414
+      },
+      "wallclock_s": 12.690654749982059
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-05T10:53:55.936709",
+    "hostname": "nazara",
+    "platform": "macOS-14.4-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.13",
+    "jax": "0.7.1",
+    "jaxlib": "0.7.1",
+    "default_backend": "cpu",
+    "devices": [
+      "TFRT_CPU_0",
+      "TFRT_CPU_1"
+    ],
+    "local_device_count": 2,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "a,e",
+      "--configs",
+      "Q",
+      "--nreps",
+      "30",
+      "--out",
+      "clean_fp32_eval.json"
+    ],
+    "numpyro": "0.20.1",
+    "git_commit": "2741b08330f4717c28d843926c021ab18ec23822",
+    "git_branch": "se/speedups",
+    "galsim": "2.8.4"
+  },
+  "total_wallclock_s": 20.37689199997112
+}

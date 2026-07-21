@@ -1,0 +1,630 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "j": {
+      "status": "ok",
+      "result": {
+        "device": "gpu",
+        "pack_configs": "P",
+        "core_pinning": false,
+        "pack_fit_reps": 1,
+        "vary_seeds": true,
+        "vary_data": true,
+        "os_cpu_count": 72,
+        "sched_affinity_size": 72,
+        "rlimit_nproc": {
+          "nproc_soft": 16384,
+          "nproc_hard": 16384
+        },
+        "stagger_s": 0.5,
+        "points": {
+          "8": {
+            "n_workers": 8,
+            "makespan_s": 792.5972277475521,
+            "fits_completed": 8,
+            "fits_per_node_hour": 36.33623610045354,
+            "child_wallclock_min_s": 670.4849009858444,
+            "child_wallclock_max_s": 774.6458798805252,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 688.2340055983514,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0069375664603497,
+                  "n_divergences": 230,
+                  "min_ess": 1146.0270269348143,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6086.4375
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 708.4706620853394,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0017755076092083,
+                  "n_divergences": 306,
+                  "min_ess": 1397.602934852096,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6101.5625
+                }
+              },
+              "2": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 765.96354759112,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001004102498688,
+                  "n_divergences": 385,
+                  "min_ess": 1655.9446854634896,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6071.125
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 670.4849009858444,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001454442213977,
+                  "n_divergences": 273,
+                  "min_ess": 1359.603306863321,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6083.6875
+                }
+              },
+              "4": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 690.0482354769483,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0008560900569574,
+                  "n_divergences": 250,
+                  "min_ess": 1767.423550623796,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6042.6875
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 774.6458798805252,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.002537065186963,
+                  "n_divergences": 1074,
+                  "min_ess": 1005.6784525636834,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6072.3125
+                }
+              },
+              "6": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 708.6381517732516,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0087720857155402,
+                  "n_divergences": 281,
+                  "min_ess": 921.3718163239555,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6096.125
+                }
+              },
+              "7": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 704.4010536428541,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0021397085675041,
+                  "n_divergences": 311,
+                  "min_ess": 1451.8205248024926,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 6062.8125
+                }
+              }
+            }
+          },
+          "16": {
+            "n_workers": 16,
+            "makespan_s": 1150.4227499747649,
+            "fits_completed": 14,
+            "fits_per_node_hour": 43.80998202713355,
+            "child_wallclock_min_s": 666.3127949507907,
+            "child_wallclock_max_s": 1129.3007258446887,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 666.3127949507907,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0069375664603497,
+                  "n_divergences": 230,
+                  "min_ess": 1146.0270269348143,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3687.625
+                }
+              },
+              "1": {
+                "returncode": 0,
+                "core": null,
+                "error": "\"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 277 (total of 10 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "2": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 908.3963739667088,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.001004102498688,
+                  "n_divergences": 385,
+                  "min_ess": 1655.9446854634896,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3716.0625
+                }
+              },
+              "3": {
+                "returncode": 0,
+                "core": null,
+                "error": "\"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 277 (total of 10 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "4": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 677.0869489302859,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0008560900569574,
+                  "n_divergences": 250,
+                  "min_ess": 1767.423550623796,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3708.0625
+                }
+              },
+              "5": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 932.6344876177609,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.002537065186963,
+                  "n_divergences": 1074,
+                  "min_ess": 1005.6784525636834,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3705.8125
+                }
+              },
+              "6": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 712.6125553650782,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0087720857155402,
+                  "n_divergences": 281,
+                  "min_ess": 921.3718163239555,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3664.4375
+                }
+              },
+              "7": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 708.0747463852167,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0021397085675041,
+                  "n_divergences": 311,
+                  "min_ess": 1451.8205248024926,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 3667.9375
+                }
+              },
+              "8": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1031.8883646167815,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.000400179523579,
+                  "n_divergences": 216,
+                  "min_ess": 1494.0156839675876,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5813.8125
+                }
+              },
+              "9": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 907.0976495668292,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0042141671765745,
+                  "n_divergences": 297,
+                  "min_ess": 1327.688533106104,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5819.625
+                }
+              },
+              "10": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 991.7131864251569,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0013613146603226,
+                  "n_divergences": 487,
+                  "min_ess": 1200.1688948309782,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5786.6875
+                }
+              },
+              "11": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1022.171702593565,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.002070021893179,
+                  "n_divergences": 321,
+                  "min_ess": 1244.603664697329,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5871.9375
+                }
+              },
+              "12": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 983.9200250525028,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0024946214133428,
+                  "n_divergences": 289,
+                  "min_ess": 1261.3225773923482,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5819.625
+                }
+              },
+              "13": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1056.5900109782815,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0016480542937463,
+                  "n_divergences": 406,
+                  "min_ess": 1501.283252739055,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5774.0625
+                }
+              },
+              "14": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1129.3007258446887,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0005240904663169,
+                  "n_divergences": 277,
+                  "min_ess": 1462.5202658455576,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5767.125
+                }
+              },
+              "15": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 939.2096207756549,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0032889739253923,
+                  "n_divergences": 267,
+                  "min_ess": 1459.1293588463705,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5845.5625
+                }
+              }
+            }
+          },
+          "32": {
+            "n_workers": 32,
+            "makespan_s": 1494.9369684830308,
+            "fits_completed": 4,
+            "fits_per_node_hour": 9.632513145094155,
+            "child_wallclock_min_s": 1262.7758911354467,
+            "child_wallclock_max_s": 1415.870660486631,
+            "children": {
+              "0": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "1": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "2": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\n"
+              },
+              "3": {
+                "returncode": 0,
+                "core": null,
+                "error": "\"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 277 (total of 10 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "4": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "5": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "6": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "7": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "8": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\n"
+              },
+              "9": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\n"
+              },
+              "10": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "11": {
+                "returncode": 0,
+                "core": null,
+                "error": " \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 16 (total of 6 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_negative']\n"
+              },
+              "12": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\n"
+              },
+              "13": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\n"
+              },
+              "14": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [tf-allocator-allocation-error=''] [executable_name='jit__log_posterior_jittable']\n"
+              },
+              "15": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.63GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "16": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.48GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "17": {
+                "returncode": 0,
+                "core": null,
+                "error": "ed\n    samples = np.asarray(mcmc.get_samples())\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: [0] Failed to get module function loop_add_multiply_fusion_9: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "18": {
+                "returncode": 0,
+                "core": null,
+                "error": "y(mcmc.get_samples())\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: [0] Failed to get module function loop_add_atan2_divide_multiply_pad_subtract_fusion_1: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "19": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1262.7758911354467,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0019648726184835,
+                  "n_divergences": 262,
+                  "min_ess": 1346.0980905192653,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5477.0
+                }
+              },
+              "20": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1415.870660486631,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.002170666234304,
+                  "n_divergences": 297,
+                  "min_ess": 1866.96500436114,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5621.625
+                }
+              },
+              "21": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1348.315930747427,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.0015685217497277,
+                  "n_divergences": 241,
+                  "min_ess": 1761.5664033327475,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5646.8125
+                }
+              },
+              "22": {
+                "returncode": 0,
+                "core": null,
+                "error": " \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 16 (total of 6 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_negative']\n"
+              },
+              "23": {
+                "returncode": 0,
+                "core": null,
+                "P": {
+                  "wallclock_s": 1355.7360073411837,
+                  "steady_state_wallclock_s": null,
+                  "max_rhat": 1.004199178781745,
+                  "n_divergences": 332,
+                  "min_ess": 1180.2562983279695,
+                  "chain_method": "vectorized",
+                  "peak_rss_mb": 5642.3125
+                }
+              },
+              "24": {
+                "returncode": 0,
+                "core": null,
+                "error": "\"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 277 (total of 10 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "25": {
+                "returncode": 0,
+                "core": null,
+                "error": "ed\n    samples = np.asarray(mcmc.get_samples())\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: [0] Failed to get module function loop_add_multiply_fusion_3: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "26": {
+                "returncode": 0,
+                "core": null,
+                "error": "\"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 2413 (total of 5 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "27": {
+                "returncode": 0,
+                "core": null,
+                "error": "obs\n    data_true = np.asarray(source.render_broadband(true_pars, obs_clean, band_key))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: INTERNAL: Unable to get Blas support [executable_name='jit_dynamic_slice']\n"
+              },
+              "28": {
+                "returncode": 0,
+                "core": null,
+                "error": "onditioned\n    samples = np.asarray(mcmc.get_samples())\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: [0] Failed to get module function loop_add_fusion_82: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              },
+              "29": {
+                "returncode": 0,
+                "core": null,
+                "error": "og_posterior_chunked\n    out.append(np.asarray(fn(chunk)))\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.48GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']\n"
+              },
+              "30": {
+                "returncode": 0,
+                "core": null,
+                "error": " \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Underlying backend ran out of memory trying to instantiate command buffer with 16 (total of 6 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_negative']\n"
+              },
+              "31": {
+                "returncode": 0,
+                "core": null,
+                "error": "samples = np.asarray(mcmc.get_samples())\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 414, in __array__\n    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]\n                      ^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/profiler.py\", line 427, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/jax/jax/_src/array.py\", line 614, in _value\n    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\njax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: [0] Failed to load in-memory CUBIN (compiled for a different GPU?).: CUDA_ERROR_OUT_OF_MEMORY: out of memory [executable_name='jit_reshape']\n"
+              }
+            }
+          }
+        }
+      },
+      "wallclock_s": 3437.9594452586025
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-13T10:22:26.814334",
+    "hostname": "c642-032.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260713",
+    "jaxlib": "0.10.1.dev20260713",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--sections",
+      "j",
+      "--pack-configs",
+      "P",
+      "--pack-workers",
+      "8,16,32",
+      "--pack-device",
+      "gpu",
+      "--pack-mem-fraction",
+      "0.85",
+      "--pack-stagger-s",
+      "0.5",
+      "--pack-vary-data",
+      "--pack-vary-seeds",
+      "--x64",
+      "1",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache",
+      "--out",
+      "/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_ghpack_20260713_102222_c642-032_P.json"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "22bd9f5b675a14c81baffaccd42f2ac57b551759",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 3437.9645296698436
+}

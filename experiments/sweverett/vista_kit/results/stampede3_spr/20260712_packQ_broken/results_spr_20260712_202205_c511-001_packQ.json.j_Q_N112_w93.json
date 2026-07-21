@@ -1,0 +1,98 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "i": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/likelihood.py\", line 224, in _log_likelihood_total_source\n    log_l = log_l + _log_likelihood_grism_source(\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/likelihood.py\", line 133, in _log_likelihood_grism_source\n    model_img = source.render_grism(\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/source.py\", line 297, in render_grism\n    return self._render_grism_analytic(\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/source.py\", line 504, in _render_grism_analytic\n    cont_theta, cont_model = self._build_emission_continuum_theta(\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/source.py\", line 1097, in _build_emission_continuum_theta\n    theta = _build_component_theta(\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/source.py\", line 77, in _build_component_theta\n    return jnp.asarray([_lookup_param(pars, prefix, p) for p in param_names])\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_constructors.py\", line 453, in asarray\n    return array(a, dtype=dtype, copy=bool(copy), order=order, device=device,\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/jax/_src/numpy/array_constructors.py\", line 329, in array\n    out = lax.concatenate(arrays_out, 0)\njax._src.source_info_util.JaxStackTraceBeforeTransformation: MemoryError\n\nThe preceding stack trace is the source of the JAX operation that, once transformed by JAX, triggered the following exception.\n\n--------------------\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 1315, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 1006, in section_i\n    res = sampler.run()  # includes the Laplace preconditioner build\n          ^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 538, in run\n    return self._run_preconditioned()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/repos/kl_roman_pipe/kl_pipe/sampling/numpyro.py\", line 717, in _run_preconditioned\n    mcmc.run(\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 715, in run\n    states, last_state = _laxmap(partial_map_fn, map_args)\n                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 178, in _laxmap\n    ys.append(f(x))\n              ^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/mcmc.py\", line 470, in _single_chain_mcmc\n    new_init_state = self.sampler.init(\n                     ^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc.py\", line 791, in init\n    init_state = hmc_init_fn(init_params, rng_key)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc.py\", line 771, in <lambda>\n    hmc_init_fn = lambda init_params, rng_key: self._init_fn(  # noqa: E731\n                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc.py\", line 342, in init_kernel\n    vv_state = vv_init(z, r, potential_energy=pe, z_grad=z_grad)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 284, in init_fn\n    potential_energy, z_grad = _value_and_grad(\n                               ^^^^^^^^^^^^^^^^\n  File \"/work2/09102/sweveret/stampede3/klpipe_cpu_venv/lib/python3.12/site-packages/numpyro/infer/hmc_util.py\", line 252, in _value_and_grad\n    return value_and_grad(f, has_aux=False)(x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nMemoryError\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.\n",
+      "wallclock_s": 62.348318396136165
+    },
+    "j": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-12T22:07:49.550324",
+    "hostname": "c511-001.stampede3.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.24.1.el9_7.x86_64-x86_64-with-glibc2.34",
+    "machine": "x86_64",
+    "python": "3.12.9",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "default_backend": "cpu",
+    "devices": [
+      "cpu:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_compilation_cache_dir": "/scratch/09102/sweveret/jaxcache_cpu",
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 1
+    },
+    "argv": [
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py",
+      "--sections",
+      "i",
+      "--configs",
+      "Q",
+      "--x64",
+      "1",
+      "--cpu-devices",
+      "1",
+      "--nreps",
+      "30",
+      "--fit-samples",
+      "1000",
+      "--fit-warmup",
+      "500",
+      "--fit-chains",
+      "4",
+      "--fit-hessian-method",
+      "fd",
+      "--fit-reps",
+      "1",
+      "--fit-seed",
+      "42",
+      "--data-seed-offset",
+      "0",
+      "--out",
+      "/work2/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_spr_20260712_202205_c511-001_packQ.json.j_Q_N112_w93.json",
+      "--jax-cache-dir",
+      "/scratch/09102/sweveret/jaxcache_cpu"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "b8217712cf04e1c85ba5959a216e2939cc65186f",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 62.351081697270274
+}

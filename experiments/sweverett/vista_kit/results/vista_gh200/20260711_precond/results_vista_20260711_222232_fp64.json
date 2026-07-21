@@ -1,0 +1,146 @@
+{
+  "sections": {
+    "a": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "g": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "h": {
+      "status": "ok",
+      "result": {
+        "Q": {
+          "meta": {
+            "rolls": 1,
+            "bands": 1,
+            "nlam": 25,
+            "dispersal_method": "analytic",
+            "n_sampled": 17,
+            "build_s": 8.143965274095535
+          },
+          "methods": {
+            "ad": {
+              "1": {
+                "cold_s": 11.800169369205832,
+                "warm_s": 8.324881801381707,
+                "compile_s_est": 3.4752875678241253
+              },
+              "4": {
+                "cold_s": 9.002441768534482,
+                "warm_s": 8.599233409389853,
+                "compile_s_est": 0.40320835914462805
+              }
+            },
+            "fd": {
+              "1": {
+                "cold_s": 0.19159020949155092,
+                "warm_s": 0.19073031283915043,
+                "compile_s_est": 0.0008598966524004936
+              },
+              "4": {
+                "cold_s": 0.5286563346162438,
+                "warm_s": 0.5279795080423355,
+                "compile_s_est": 0.000676826573908329
+              }
+            },
+            "inv_mass_reldiff_ad_vs_fd": 3.654119258528095e-09
+          }
+        },
+        "P": {
+          "meta": {
+            "rolls": 4,
+            "bands": 2,
+            "nlam": 32,
+            "dispersal_method": "analytic",
+            "n_sampled": 22,
+            "build_s": 3.0863206014037132
+          },
+          "methods": {
+            "ad": {
+              "1": {
+                "cold_s": 164.4999763732776,
+                "warm_s": 149.20893375761807,
+                "compile_s_est": 15.291042615659535
+              },
+              "4": {
+                "cold_s": 153.34001080598682,
+                "warm_s": 152.19626249279827,
+                "compile_s_est": 1.1437483131885529
+              }
+            },
+            "fd": {
+              "1": {
+                "cold_s": 1.209682298824191,
+                "warm_s": 1.171212811022997,
+                "compile_s_est": 0.03846948780119419
+              },
+              "4": {
+                "cold_s": 3.7044313233345747,
+                "warm_s": 4.070992038585246,
+                "compile_s_est": -0.3665607152506709
+              }
+            },
+            "inv_mass_reldiff_ad_vs_fd": 4.601922576751785e-09
+          }
+        }
+      },
+      "wallclock_s": 892.3819202762097
+    },
+    "i": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-11T22:22:32.553209",
+    "hostname": "c642-031.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.1.dev20260711",
+    "jaxlib": "0.10.1.dev20260711",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "h",
+      "--configs",
+      "Q,P",
+      "--x64",
+      "1"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "c6143cdbafda7a71f4053f8aa06d59fe8c377847",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 892.383854277432
+}

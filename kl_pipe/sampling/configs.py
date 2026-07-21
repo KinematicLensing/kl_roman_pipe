@@ -244,17 +244,30 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
         For posterior-informed conditioning, use
         ``InferenceTask.laplace_preconditioner`` instead.
-    chain_method : str
+    chain_method : str or None
         How to run multiple chains:
 
-        - 'sequential': Run chains one after another (default, works everywhere)
-        - 'parallel': Run chains in parallel via JAX pmap (requires multi-device)
-        - 'vectorized': Vectorize across chains (single device, memory intensive)
+        - None (default): auto-dispatch based on backend and device count
+          (see below)
+        - 'sequential': Run chains one after another (works everywhere)
+        - 'parallel': Run chains in parallel via JAX pmap (requires
+          ``jax.local_device_count() >= n_chains``; raises ``ValueError`` if
+          not, rather than numpyro's silent sequential fallback)
+        - 'vectorized': Vectorize across chains (single device, memory
+          intensive)
 
-        'sequential' is the default deliberately: on CPU, 'vectorized' was
-        benchmarked ~2.5x slower (vmap-ing the NUTS kernel adds overhead with
-        no extra parallelism to exploit) at similar peak memory. 'vectorized'
-        is expected to win only on GPU.
+        With ``chain_method=None``, ``NumpyroSampler`` resolves the method at
+        run time: non-CPU backends dispatch to 'vectorized'; CPU with
+        ``jax.local_device_count() >= n_chains`` (and more than one device)
+        dispatches to 'parallel'; CPU otherwise falls back to 'sequential'.
+        This makes 'sequential' the effective default on an unconfigured
+        single-CPU-device machine (unchanged from the historical default),
+        while opting into 'parallel' automatically once
+        ``KLPIPE_CPU_DEVICES`` (see ``kl_pipe._devices``) provides enough host
+        CPU devices. An explicit string always overrides auto-dispatch.
+        'vectorized' was benchmarked ~2.5x slower than 'sequential' on CPU
+        (vmap-ing the NUTS kernel adds overhead with no extra parallelism to
+        exploit); it is expected to win only on GPU/TPU backends.
     save_warmup : bool
         Whether to save warmup samples in result.
     save_mass_matrix : bool
@@ -301,7 +314,7 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
 
     reparam_strategy: ReparamStrategy = ReparamStrategy.PRIOR
 
-    chain_method: str = 'sequential'
+    chain_method: Optional[str] = None
     save_warmup: bool = False
     save_mass_matrix: bool = False
 
@@ -310,9 +323,15 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # Laplace preconditioning (opt-in). 'none' = standard model-based NUTS
     # (unchanged). 'laplace' = find MAP + regularized inverse Hessian, use as a
     # fixed NUTS mass matrix initialized at the MAP, skipping the expensive
-    # early-warmup transient. See experiments/sweverett/flagship_speedup.
+    # early-warmup transient (~2x faster warmup on correlated posteriors).
     precondition: str = 'none'
     n_map_starts: int = 4
+    # Hessian evaluation for the Laplace preconditioner: 'fd' (default) =
+    # central differences of the compiled gradient (no new compilation);
+    # 'ad' = exact second-order autodiff (compiles a second-order graph per
+    # call -- ~150 s per fit on the production config; float32-safe). See
+    # InferenceTask.laplace_preconditioner.
+    hessian_method: str = 'fd'
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
@@ -323,12 +342,16 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
             )
         if self.n_map_starts < 1:
             raise ValueError("n_map_starts must be >= 1")
+        if self.hessian_method not in ('ad', 'fd'):
+            raise ValueError(
+                f"hessian_method must be 'ad' or 'fd', got '{self.hessian_method}'"
+            )
         if self.n_chains < 1:
             raise ValueError("n_chains must be >= 1")
-        if self.chain_method not in ('sequential', 'parallel', 'vectorized'):
+        if self.chain_method not in (None, 'sequential', 'parallel', 'vectorized'):
             raise ValueError(
-                f"chain_method must be 'sequential', 'parallel', or 'vectorized', "
-                f"got '{self.chain_method}'"
+                f"chain_method must be None (auto-dispatch), 'sequential', "
+                f"'parallel', or 'vectorized', got '{self.chain_method}'"
             )
         if self.init_strategy not in ('prior', 'median', 'jitter'):
             raise ValueError(
@@ -360,6 +383,8 @@ PRIOR_TYPES = {
     'normal': 'Gaussian',
     'loguniform': 'LogUniform',
     'log_uniform': 'LogUniform',
+    'lognormal': 'LogNormal',
+    'log_normal': 'LogNormal',
     'truncated_normal': 'TruncatedNormal',
     'truncatednormal': 'TruncatedNormal',
 }
@@ -387,7 +412,7 @@ def parse_prior_spec(spec: Union[dict, float, int]):
     >>> parse_prior_spec({'type': 'uniform', 'low': 0, 'high': 1})
     Uniform(0.0, 1.0)
     """
-    from kl_pipe.priors import Uniform, Gaussian, LogUniform, TruncatedNormal
+    from kl_pipe.priors import Uniform, Gaussian, LogUniform, LogNormal, TruncatedNormal
 
     if isinstance(spec, (int, float)):
         return float(spec)
@@ -409,6 +434,7 @@ def parse_prior_spec(spec: Union[dict, float, int]):
         'Uniform': Uniform,
         'Gaussian': Gaussian,
         'LogUniform': LogUniform,
+        'LogNormal': LogNormal,
         'TruncatedNormal': TruncatedNormal,
     }
     prior_class = prior_classes[PRIOR_TYPES[prior_type]]

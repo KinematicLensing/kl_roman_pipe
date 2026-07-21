@@ -213,7 +213,7 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `max_tree_depth` | `int` | `10` | Max NUTS tree depth |
 | `target_accept_prob` | `float` | `0.8` | In (0, 1) |
 | `reparam_strategy` | `ReparamStrategy` | `PRIOR` | `'none'`, `'prior'` |
-| `chain_method` | `str` | `'sequential'` | `'sequential'`, `'parallel'`, `'vectorized'` |
+| `chain_method` | `Optional[str]` | `None` (auto-dispatch) | `None`, `'sequential'`, `'parallel'`, `'vectorized'` |
 | `save_warmup` | `bool` | `False` | Save warmup samples |
 | `save_mass_matrix` | `bool` | `False` | Save adapted inverse mass matrix |
 | `init_strategy` | `str` | `'prior'` | `'prior'`, `'median'`, `'jitter'` |
@@ -226,7 +226,14 @@ print(f"Divergences: {result.diagnostics['n_divergences']}")
 | `PRIOR` | Z-score using prior mean/std (default, fast) |
 
 For posterior-informed conditioning (a MAP-based mass matrix capturing parameter
-correlations), use `InferenceTask.laplace_preconditioner` instead of a reparam strategy.
+correlations), use `InferenceTask.laplace_preconditioner` instead of a reparam strategy
+(`NumpyroSamplerConfig(precondition='laplace')`). Its `hessian_method` option selects
+how the Hessian at the MAP is evaluated: `'fd'` (default; central differences of the
+already-compiled gradient; no new compilation; agrees with `'ad'` to well below the
+eigenvalue-floor regularization; requires float64) or `'ad'` (exact second-order
+autodiff; traces and compiles a second-order graph on every call, which dominates
+the preconditioner cost on large joint tasks -- use for float32 runs or as a
+cross-check).
 
 ---
 
@@ -526,7 +533,7 @@ sampler_config = config.get_sampler_config()
 
 ### Key test utilities (`tests/test_utils.py`)
 
-**`TestConfig`** -- configuration container for parameter recovery tests. Holds output directories, tolerance tables (SNR-dependent relative + absolute), parameter bounds, and image parameters.
+**`TestConfig`** -- configuration container for parameter recovery tests. Holds output directories, parameter bounds, and image parameters. Its SNR-dependent tolerance tables are legacy (unconverted likelihood-slice tests only): converted slice tests now run noiseless with frozen curvature-sigma references, and optimizer recovery uses derived k-sigma bounds. Noise wiring is checked separately by `tests/test_noise_calibration.py`.
 
 ```python
 config = TestConfig(

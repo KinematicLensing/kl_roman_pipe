@@ -1,0 +1,59 @@
+{
+  "sections": {
+    "a": {
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 699, in main\n    payload = SECTION_FNS[name](args)\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 225, in section_a\n    st = get_state(cfg)\n         ^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/bench_matrix.py\", line 186, in get_state\n    import tasks_vista as tv\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/tasks_vista.py\", line 61, in <module>\n    from kl_pipe.velocity import CenteredVelocityModel  # noqa: E402\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/work/09102/sweveret/repos/kl_roman_pipe/kl_pipe/velocity.py\", line 2, in <module>\n    import matplotlib.pyplot as plt\nModuleNotFoundError: No module named 'matplotlib'\n",
+      "wallclock_s": 0.8525825790129602
+    },
+    "b": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "c": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "d": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    },
+    "e": {
+      "status": "skipped",
+      "reason": "not in --sections"
+    }
+  },
+  "env": {
+    "timestamp": "2026-07-09T21:37:54.958112",
+    "hostname": "c642-022.vista.tacc.utexas.edu",
+    "platform": "Linux-5.14.0-611.16.1.el9_7.aarch64+64k-aarch64-with-glibc2.39",
+    "machine": "aarch64",
+    "python": "3.12.3",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "default_backend": "gpu",
+    "devices": [
+      "cuda:0"
+    ],
+    "local_device_count": 1,
+    "x64_active": true,
+    "jax_config_notes": {
+      "x64_requested": true,
+      "jax_default_matmul_precision": "highest",
+      "jax_num_cpu_devices": 2
+    },
+    "argv": [
+      "bench_matrix.py",
+      "--sections",
+      "a",
+      "--configs",
+      "Q",
+      "--nreps",
+      "5"
+    ],
+    "numpyro": "0.21.0",
+    "git_commit": "7f13d86ccc9d1004cffa18b3d0367c22feb4fa7e",
+    "git_branch": "se/speedups",
+    "galsim": "absent"
+  },
+  "total_wallclock_s": 0.8538931659422815
+}

@@ -1,5 +1,11 @@
 # Grism Inference — Status & Deferred Work
 
+Status: Phases 1-3 all shipped. The current public API is `SourceModel` +
+the unified `InferenceTask.from_obs(...)` factory; `KLModel`, `SpectralModel`,
+and the typed `from_*_obs`/`from_*_model` factories are deleted. The sections
+below are kept as a build record; the Phase-1/2 API names refer to code that
+Phase 3 has since replaced.
+
 ## Phase 1: shipped
 
 ### Likelihood Functions
@@ -14,12 +20,14 @@
 
 ### InferenceTask Factories
 
-- ✓ `InferenceTask.from_grism_obs(model, priors, obs, meta_pars=None)` (`kl_pipe/sampling/task.py`).
-- ✓ `InferenceTask.from_joint_photometry_grism_obs(model, priors, obs_int, obs_grism, meta_pars=None)`.
+Phase 1 shipped typed `from_grism_obs` / `from_joint_photometry_grism_obs`
+factories. Both are deleted; Phase 3 replaced them with the unified
+`InferenceTask.from_obs(source, priors, image_obs=, grism_obs=, velocity_obs=)`
+(`kl_pipe/sampling/task.py`).
 
 ### Tests
 
-- ✓ `tests/test_grism_likelihood.py` — unit tests (eval / JIT / grad / factory) + likelihood slice tests for `Ha_flux` at SNR ∈ {100, 1000} + `vcirc` + `vel_dispersion` at SNR=1000 + one smoke optimizer-recovery test (Ha_flux + vcirc + vel_dispersion).
+- ✓ `tests/test_grism_likelihood.py` — unit tests (eval / JIT / grad / factory) + likelihood slice tests for `Halpha.flux` + `vcirc` + `Halpha.dispersion` + one smoke optimizer-recovery test. (Slice tests are now noiseless three-gate; see `docs/plans/TEST_TIER_REDESIGN.md`.)
 
 ## Phase 2: shipped — LSF refactor
 
@@ -27,31 +35,36 @@
 - ✓ Delete `roman_grism_R`, `SpectralConfig.lsf_mode`, `SpectralConfig.R_func`, `convolve_spectral` stub.
 - ✓ Mirror change in numpy reference `kl_pipe/synthetic.py:generate_datacube_3d`.
 - ✓ `vel_dispersion` recoverable in grism likelihood slice + smoke recovery tests.
-- ✓ `tests/test_lsf_gate.py` codifies the empirical gate: PSF+dispersion alone reproduces Roman `R = 461·λ_μm` within ±5%.
+- ✓ `tests/test_spectral_resolution.py` codifies the empirical gate: PSF+dispersion alone reproduces Roman `R = 461·λ_μm` within ±5%.
 
 Empirical evidence drove the refactor: see `experiments/sweverett/lsf_gate_test/`. PSF+dispersion alone gives `R_measured/R_spec = 1.035` at λ_obs ≈ 1.30 μm; σ_inst-active broadened the detector FWHM by 48% on top — classic double-counting signature.
 
-## Phase 1 known limitations still open (Phase 3)
+## Phase 1 limitations — resolved in Phase 3
 
-1. **Photometric and emission centroids are shared** — both broadband image rendering and grism cube assembly use `kl_model.intensity_model`'s `int_x0`/`int_y0`. If the photometric and grism observations have independent astrometric solutions this is incorrect. See **`docs/plans/phase3_sourcemodel_refactor.md`**.
+1. **Photometric and emission centroids** — Phase 1 shared a single intensity
+   centroid across broadband and grism. Resolved: per-component dotted
+   centroids (`F087.x0`, `Halpha.x0`, `vel.x0`) via `SourceModel`.
 
-2. **Joint photometry+grism rendering shares `flux_theta_override` mechanism** — velocity PSF flux weighting uses the intensity model's params in the velocity grid's frame; latent bug if grids are not aligned. Phase 3 resolves via explicit `flux_weight_key` binding on VelocityObs.
+2. **Joint photometry+grism flux weighting** — the Phase-1 `flux_theta_override`
+   coupling is resolved by explicit `flux_weight_key` binding on `VelocityObs`
+   (`kl_pipe/observation.py`, consumed in `kl_pipe/source.py`).
 
-3. **`_check_priors_fit_obs_rc` skipped for GrismObs** — the grid-adequacy validation that broadband inference runs is not run for grism. Phase 3 generalizes the validation to obs-type-aware.
+3. **Grid-adequacy validation for GrismObs** — resolved: `_check_source_priors_fit_obs`
+   (`kl_pipe/sampling/task.py`) runs per channel, grism included.
 
-## Deferred — Phase 3: SourceModel refactor
+## Phase 3: shipped — SourceModel refactor
 
-See **`docs/plans/phase3_sourcemodel_refactor.md`** for the full plan. Summary:
+See **`docs/plans/phase3_sourcemodel_refactor.md`** for the original plan. Shipped:
 
-- Replace `KLModel` with `SourceModel(velocity_model, broadband_models, emission_lines)`.
-- Per-component centroids (`F087.x0`, `Halpha.x0`, `vel.x0`) — fixes the Phase 1 centroid coupling.
-- Multi-line emission with shared or independent spatial profiles via `EmissionLine(intensity= | intensity_key=)`.
+- `KLModel` replaced by `SourceModel(velocity_model, broadband_models, emission_lines)` (`kl_pipe/source.py`).
+- Per-component centroids (`F087.x0`, `Halpha.x0`, `vel.x0`) — fixed the Phase 1 centroid coupling.
+- Multi-line emission with shared or independent spatial profiles via `EmissionLine(intensity= | intensity_key=)` (`kl_pipe/lines.py`).
 - Multi-band photometry via `broadband_models` dict.
 - Per-line continuum via `EmissionLine.continuum`.
-- Unified `InferenceTask.from_obs(source, priors, image_obs=, grism_obs=, velocity_obs=)` factory replaces all 5+ typed factories.
+- Unified `InferenceTask.from_obs(source, priors, image_obs=, grism_obs=, velocity_obs=)` factory replaced all typed factories.
 - Hard break — `KLModel`, `SpectralModel`, and the legacy `from_*_obs`/`from_*_model` factories are deleted.
 
-PA-velocity degeneracy break design (Outini & Copin 2020, Eq. 1) — handled in Phase 3 via joint photometry+grism with the SourceModel architecture: shared geometric priors break the degeneracy.
+PA-velocity degeneracy break (Outini & Copin 2020, Eq. 1) — handled via joint photometry+grism with shared geometric priors.
 
 ## Not on the Phase 1–3 roadmap
 

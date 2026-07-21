@@ -19,15 +19,17 @@ Sign convention:
   ``OrientedAngle._sky2cartesian``).
 - ``(g1_det, g2_det) = rotate_shear(g1_cel, g2_cel, image_rotation)``; shear
   is a spin-2 quantity that rotates by ``2 * image_rotation``.
+- ``(x_det, y_det) = rotate_position(x_cel, y_cel, image_rotation)``;
+  positions are spin-1 (component rotation by ``image_rotation``).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Tuple
 
-import jax
+from kl_pipe._precision import ensure_precision
 
-jax.config.update("jax_enable_x64", True)
+ensure_precision()
 
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
@@ -66,6 +68,23 @@ def image_rotation_from_wcs(wcs: 'WCS') -> float:
     return theta
 
 
+def wcs_is_flipped(wcs: 'WCS') -> bool:
+    """True when the WCS PC/CD matrix has negative determinant (a parity
+    flip / mirroring).
+
+    A flip is NOT a rotation: ``image_rotation_from_wcs`` absorbs it by
+    adding pi (the kl-tools OrientedAngle convention), which is only
+    meaningful for spin-2 / axis-like quantities. Pathways that rotate
+    positions or sampling grids (e.g. the shared-cube grism path) must
+    reject flipped WCSs loudly instead.
+    """
+    if wcs.wcs.has_pc():
+        R = wcs.wcs.get_pc()
+    else:
+        R = wcs.wcs.get_cd()
+    return bool(np.linalg.det(R) < 0)
+
+
 def rotate_shear(g1, g2, phi) -> Tuple:
     """Spin-2 rotation of shear components by ``phi`` radians.
 
@@ -96,3 +115,36 @@ def rotate_shear(g1, g2, phi) -> Tuple:
     g1_rot = g1 * c + g2 * s
     g2_rot = -g1 * s + g2 * c
     return g1_rot, g2_rot
+
+
+def rotate_position(x, y, phi) -> Tuple:
+    """Spin-1 rotation of position components by ``phi`` radians.
+
+    A position vector fixed on the sky has detector-frame components
+    rotated by the celestial-to-detector angle: a direction at celestial
+    angle ``alpha`` appears at ``alpha - phi`` in the detector frame,
+    consistent with ``theta_int_det = theta_int_cel - phi`` and the spin-2
+    ``rotate_shear``.
+
+    .. math::
+        x' = x \\cos(\\phi) + y \\sin(\\phi)
+        y' = -x \\sin(\\phi) + y \\cos(\\phi)
+
+    JAX-traceable: all inputs may be JAX scalars or arrays.
+
+    Parameters
+    ----------
+    x, y : float or jnp.ndarray
+        Celestial-frame position components.
+    phi : float or jnp.ndarray
+        Rotation angle in radians (celestial-to-detector, i.e. the obs's
+        ``image_rotation``).
+
+    Returns
+    -------
+    (x_rot, y_rot) : tuple of same type as inputs
+        Detector-frame position components.
+    """
+    c = jnp.cos(phi)
+    s = jnp.sin(phi)
+    return x * c + y * s, -x * s + y * c

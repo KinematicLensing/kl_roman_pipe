@@ -35,10 +35,11 @@ continuous representations stay in SB.
 | `SourceModel.render_broadband(pars, obs, band_key)` | flux per coarse pixel | Dispatches to `IntensityModel.render_image`; same convention. |
 | `SourceModel.render_velocity(pars, obs)` | km/s per coarse pixel | Dispatches to `VelocityModel.render_image`. |
 | `SourceModel.build_cube(pars, cube_pars, ...)` | SB per arcsec² per nm | Intermediate; cube voxel = line term `I_line(x, y) × G(λ; x, y)` (SB × 1/nm) plus continuum term `I_cont(x, y)` (already SB/nm — see below). |
-| `kl_pipe.dispersion.disperse_cube(cube, grism_pars, lambda_grid, oversample)` | SB per arcsec² | Sums `cube × throughput × dlam` over wavelength; output is wavelength-integrated SB. |
-| `kl_pipe.grism._apply_post_dispersion_pixel_response(...)` | flux per coarse pixel | Bins fine SB to coarse and multiplies by `coarse_ps²` to convert SB → flux per coarse pixel. |
+| `kl_pipe.dispersion.disperse_line_analytic(...)` | SB per arcsec² | Default line path (`dispersal_method='analytic'`). Closed-form per-spaxel deposit along the dispersion axis (no wavelength grid); returns a dimensionless profile × `I_line` SB, same units as `disperse_cube`. |
+| `kl_pipe.dispersion.disperse_continuum_analytic(...)` | SB per arcsec² | Default continuum path. Exact wavelength-continuum limit via a precomputed trace kernel (no slices); same SB units. |
+| `kl_pipe.dispersion.disperse_cube(cube, grism_pars, lambda_grid, oversample)` | SB per arcsec² | Legacy slice path (`dispersal_method='slice'`). Sums `cube × throughput × dlam` over wavelength; output is wavelength-integrated SB. |
+| `kl_pipe.grism._apply_post_dispersion_pixel_response(...)` | flux per coarse pixel | Coarse-pixel sinc in k-space (the pixel integration), samples the box-averaged SB at coarse pixel centers, multiplies by `coarse_ps²` to convert SB → flux per coarse pixel. |
 | `SourceModel.render_grism(pars, obs, ...)` | flux per coarse pixel | Final dispersed grism observable. |
-| `KLModel.render_grism(theta, obs)` | flux per coarse pixel | Legacy path; same convention. |
 
 ## Emission line flux vs continuum flux density (cube assembly)
 
@@ -62,11 +63,14 @@ I_line·G(λ)  [flux/arcsec²/nm] = SB/nm
 
 `G(λ) = (1/(σ√2π))·exp(...)` is the normalized line-spread kernel. Integrating the
 voxel back over λ (`disperse_cube` does this via `× dlam` then summing) and over
-space recovers `<line>.flux`. Discretization caveat: `∫G dλ = 1` holds only if the
-wavelength grid resolves `σ_λ`. For Roman, ~50 km/s dispersion at λ_obs ≈ 1310 nm
-gives `σ_λ ≈ 0.2 nm`, comparable to a coarse channel; `build_cube`'s
-`spectral_oversample` sub-binning keeps the normalization accurate. This is an
-accuracy concern, separate from units.
+space recovers `<line>.flux`. The stored voxel is the **bin average** of `G` over
+each coarse channel. With the default `spectral_method='erf'` this bin average is
+computed exactly (Gaussian CDF differenced at the channel edges), so `Σ_bins × dλ
+= 1` holds for any line width covered by the wavelength window. The retained
+`spectral_method='oversample'` path approximates it by midpoint sub-sampling
+(`spectral_oversample` sub-bins/channel) and requires the fine grid to resolve
+`σ_λ`; it under-resolves narrow lines (dispersion ≲ 17 km/s at osf=15). This is
+an accuracy concern, separate from units.
 
 Continuum: `<line>.cont.flux_per_nm` is a spectral density `[flux/nm]`. The
 intensity profile is linear in its amplitude, so feeding a `[flux/nm]` amplitude
@@ -92,6 +96,12 @@ flux_per_coarse_pixel  =  mean(fine_SB over N×N fine cells) × coarse_ps²
 These are equivalent. When `N == 1`, `mean == sum == identity`, and the
 conversion reduces to `SB × coarse_ps²`.
 
+This shorthand applies to RAW (point-sampled) SB fields only. A field that
+has already been pixel-integrated (e.g. multiplied by the coarse BoxPixel
+sinc in k-space) must be READ OUT by sampling at coarse pixel centers, not
+mean-binned — averaging an already box-averaged field is a second box
+convolution (see "Pixel response" below).
+
 ## Pixel response
 
 For broadband imaging, the BoxPixel sinc multiplies the profile FT in
@@ -100,8 +110,13 @@ the output is already flux per pixel.
 
 For grism, the BoxPixel sinc applies post-dispersion on the dispersed 2D
 image (`_apply_post_dispersion_pixel_response`); the source-plane cube
-cells are not detector pixels. After the sinc multiplication, the final
-binning step converts SB to flux per coarse pixel.
+cells are not detector pixels. The sinc (coarse-pixel side, on the fine
+k-grid) IS the coarse-pixel integration: after the IFFT each fine cell
+holds the coarse-box-averaged SB centered on that cell. The readout
+SAMPLES that field at each coarse pixel center (the center fine cell of
+each block; oversample must be odd) and multiplies by `coarse_ps²` to get
+flux per coarse pixel. Averaging the block instead would apply a second,
+unintended coarse-box convolution.
 
 The pixel response is a coarse-detector property — the BoxPixel side length
 is `coarse_ps`, not `fine_ps`. This matters when oversample > 1 (the sinc

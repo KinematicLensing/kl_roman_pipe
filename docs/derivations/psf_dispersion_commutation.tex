@@ -1,0 +1,463 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{remark}{Remark}
+\newtheorem{corollary}{Corollary}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\conv}{\ast}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{Commutation of PSF Convolution and Grism Dispersion:\\
+Justification for the Convolve-After-Dispersion Fast Path}
+\author{kl\_roman\_pipe -- \code{docs/derivations/psf\_dispersion\_commutation.tex}}
+\date{2026-07-04 (rev.\ 2: independent cross-check applied; implementation
+variant recorded)}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The grism forward model currently applies PSF convolution to every wavelength
+slice of the spectral datacube before dispersing (per-eval cost: $2N_\lambda$
+FFTs, measured 45\% of the grism leg at the flagship configuration). We prove
+that, for a wavelength-independent PSF --- the assumption the pipeline already
+makes (\code{source.py}, issue \#51) --- per-slice convolution followed by
+dispersion is mathematically identical, on the infinite plane, to dispersion
+followed by a \emph{single} convolution of the 2D dispersed image. On the
+finite stamp the two orderings differ only by boundary-truncation terms, which
+we bound explicitly by near-boundary flux of the same class already budgeted
+by \code{folding\_threshold}. We give the generalization to per-line PSFs
+(preserving a path to wavelength-dependent PSFs), a first-order estimate of
+the error induced by assuming PSF constancy across a single emission line, and
+the empirical validation protocol required before the fast path may become a
+default.
+\end{abstract}
+
+\section{Streamlined argument}
+\label{sec:streamlined}
+
+The entire result in four steps; the rest of the document is the same
+argument with definitions, code anchors, and error accounting.
+
+\begin{enumerate}
+\item \textbf{Bilinear shift is a convolution.} A shift by real
+$d = n + \delta$ ($n \in \Z^2$, $\delta \in [0,1)^2$) implemented by
+bilinear interpolation is exactly $B_d f = \tau_n(t_\delta \conv f)$: a
+convolution with the unit-sum $2\times2$ tent kernel $t_\delta$, then an
+integer translation $\tau_n$.
+\item \textbf{Hence the PSF commutes through each shift.} Convolution
+commutes with translations and with other convolutions, so for any PSF $p$:
+\[
+B_d(p \conv f) = \tau_n(t_\delta \conv p \conv f)
+= p \conv \tau_n(t_\delta \conv f) = p \conv B_d f .
+\]
+\item \textbf{And through the whole dispersion.} Dispersion is a
+positively-weighted sum of per-wavelength shifts,
+$D c = \sum_k w_k B_{d_k} c_k$. By linearity of $p \conv {}$:
+\[
+\sum_k w_k\, B_{d_k}(p \conv c_k)
+\;=\;
+p \conv \Big( \sum_k w_k\, B_{d_k} c_k \Big).
+\]
+Convolving every slice then dispersing $\equiv$ dispersing then convolving
+once. Exact on the infinite lattice, for the literal discrete operations the
+code performs; no continuum idealization.
+\item \textbf{Finite stamp: bounded, budgeted difference.} Each implemented
+operator is (restrict to stamp) $\circ$ (ideal) $\circ$ (zero-extend), and
+the FFT convolution is exactly linear (padded to
+$M \ge N_{\rm img} + N_{\rm ker} - 1$). The only discrepancy between the two
+orderings is mass zeroed outside the stamp between steps:
+\[
+\| G_{\rm A} - G_{\rm B} \|_1 \;\le\; \sum_k w_k \left( \mu_k^{\rm A} +
+\mu_k^{\rm B} \right),
+\]
+with $\mu_k$ the blurred (A) or shifted (B) out-of-stamp slice mass --- the
+same near-boundary flux class already budgeted by
+\code{folding\_threshold}. The equivalence test asserts
+$\|G_{\rm A}-G_{\rm B}\|_1 \le C f_t F_{\rm tot}$ with a frozen measured
+$C$.
+\end{enumerate}
+
+\section{Setup and notation}
+\label{sec:setup}
+
+All operators below name concrete code paths at branch \code{se/speedups}
+(commit \code{5ec0030} era); line numbers are indicative.
+
+Let $W \subset \Z^2$ be the fine spatial stamp (flagship: $96\times96$, the
+$32\times32$ detector stamp at spatial oversample 3). The spectral cube is a
+finite family of slices $c = \{c_k\}_{k=1}^{K}$, $c_k : W \to \R$, at coarse
+wavelengths $\lambda_k$ ($K = N_\lambda = 25$ at flagship), produced by
+\code{build\_cube} (\code{source.py:336--474}).
+
+\paragraph{Extension and restriction.} $E : \R^W \to \R^{\Z^2}$ denotes
+extension by zero; $R : \R^{\Z^2} \to \R^W$ denotes restriction to $W$. Both
+are linear.
+
+\paragraph{PSF convolution $P$.} For a kernel $p$ with $\sum p = 1$,
+define on the infinite lattice $P f = p \conv f$. The implemented operator
+(\code{psf.py:convolve\_fft}, \code{bin=False}) is
+\[
+\tilde P = R \circ P \circ E ,
+\]
+i.e.\ zero-pad to $M \ge N_{\rm img} + N_{\rm ker} - 1$ via
+\code{next\_fast\_len} (\code{psf.py:144--145}; $N_{\rm ker}$ is the
+rendered kernel support from \code{getGoodImageSize}, in general
+$\ne N_{\rm img}$), multiply FFTs, inverse-transform, crop. Because the pad
+covers the full linear-convolution support, the circular convolution equals
+the linear convolution on the padded domain: $\tilde P$ is \emph{exactly}
+$R\,P\,E$, with no wrap-around term. This exactness is load-bearing for
+everything below.
+
+Instrument PSFs rendered through interpolation (e.g.\ \code{galsim.roman}
+\code{getPSF} $\to$ InterpolatedImage with Lanczos kernels) may carry small
+negative pixels, so $p \ge 0$ cannot be assumed and $\|p\|_1 = 1 +
+\epsilon_p$ with $\epsilon_p$ tiny. All bounds below survive via Young's
+inequality ($\|p \conv f\|_1 \le \|p\|_1 \|f\|_1$) at the cost of the
+factor $\|p\|_1$; we suppress it. Cube slices themselves are nonnegative by
+construction (\code{source.py}: nonnegative line kernels $\times$
+nonnegative profiles).
+
+\paragraph{Sub-pixel shift $B_d$.} Dispersion shifts each slice by a real
+displacement $d_k = (\Delta y_k, \Delta x_k)$ with
+$\Delta x_k = s_k \cos\alpha$, $\Delta y_k = s_k \sin\alpha$,
+$s_k = (\lambda_k - \lambda_{\rm ref})/D \cdot o$ (\code{dispersion.py:173--211};
+$D$ = dispersion in nm per coarse pixel, $o$ = spatial oversample). The
+implementation is pull-semantics bilinear interpolation
+(\code{jax.scipy.ndimage.map\_coordinates}, \code{order=1},
+\code{mode='constant'}, \code{cval=0}). Write $d = n + \delta$ with
+$n \in \Z^2$, $\delta \in [0,1)^2$. On the infinite lattice, bilinear
+interpolation is exactly
+\[
+B_d f = \tau_n\!\left( t_\delta \conv f \right),
+\qquad
+t_\delta = \begin{pmatrix}
+(1-\delta_y)(1-\delta_x) & (1-\delta_y)\,\delta_x\\
+\delta_y\,(1-\delta_x) & \delta_y\,\delta_x
+\end{pmatrix},
+\]
+where $\tau_n$ is translation by the integer vector $n$ and $t_\delta$ is the
+$2\times2$ tent (triangle) kernel with $\sum t_\delta = 1$. That is:
+\emph{bilinear shift is itself a convolution followed by a translation}. The
+implemented operator is $\tilde B_d = R \circ B_d \circ E$.
+
+\paragraph{Dispersion $D$.} With throughputs $w_k = t_k\,\Delta\lambda > 0$
+(\code{dispersion.py:220}),
+\[
+D c \;=\; \sum_{k=1}^{K} w_k\, B_{d_k} c_k ,
+\qquad
+\tilde D c \;=\; \sum_{k=1}^{K} w_k\, \tilde B_{d_k} c_k .
+\]
+
+\paragraph{The two orderings.} The current path (A) and proposed fast path
+(B) for the pre-pixel-response dispersed image are
+\[
+G_{\rm A} \;=\; \sum_k w_k\, \tilde B_{d_k}\, \tilde P\, c_k
+\qquad\text{vs.}\qquad
+G_{\rm B} \;=\; \tilde P \sum_k w_k\, \tilde B_{d_k}\, c_k .
+\]
+Both are followed by the post-dispersion pixel response (BoxPixel sinc
+multiply + sum-bin, \code{grism.py:16--76}), which is identical in both paths
+and is itself already a post-dispersion convolution --- precedent for
+commuting linear operators past $D$ in this codebase.
+
+\section{Exact commutation on the infinite plane}
+
+\begin{lemma}[Convolution commutes with lattice translation and with other
+convolutions]
+\label{lem:comm}
+For any $f$, kernel $p$, integer translation $\tau_n$, and kernel $t$:
+$p \conv (\tau_n f) = \tau_n (p \conv f)$ and
+$p \conv (t \conv f) = t \conv (p \conv f)$.
+\end{lemma}
+\begin{proof}
+Both are immediate from the definition of discrete convolution
+$(p\conv f)(x) = \sum_y p(y) f(x-y)$: substituting $f \mapsto \tau_n f$
+re-indexes the sum; associativity and commutativity of convolution give the
+second identity.
+\end{proof}
+
+\begin{theorem}[Commutation, infinite domain]
+\label{thm:main}
+For any kernel $p$, displacements $\{d_k\}$, weights $\{w_k\}$, and slices
+$\{c_k\}$ on $\Z^2$,
+\[
+\sum_k w_k\, B_{d_k} (P c_k) \;=\; P\!\left(\sum_k w_k\, B_{d_k} c_k\right).
+\]
+\end{theorem}
+\begin{proof}
+Fix $k$ and write $d_k = n_k + \delta_k$. By the bilinear-shift decomposition
+and Lemma~\ref{lem:comm},
+\[
+B_{d_k}(P c_k)
+= \tau_{n_k}\big(t_{\delta_k} \conv (p \conv c_k)\big)
+= \tau_{n_k}\big(p \conv (t_{\delta_k} \conv c_k)\big)
+= p \conv \tau_{n_k}\big(t_{\delta_k} \conv c_k\big)
+= P(B_{d_k} c_k).
+\]
+The claim follows by linearity of $P$ over the finite weighted sum.
+\end{proof}
+
+Theorem~\ref{thm:main} covers the exact discrete operations the code performs
+(bilinear interpolation, arbitrary real $d_k$, arbitrary dispersion angle,
+per-slice throughput weights); no continuum idealization is invoked. The
+per-roll \code{image\_rotation} does not interact with the result: it is
+applied to model \emph{parameters} ($\theta_{\rm int}$, shear) upstream in
+\code{build\_cube}, so both orderings start from identical slices $c_k$.
+The \emph{only} gap between Theorem~\ref{thm:main} and the implementation is
+the finite stamp, treated next.
+
+\section{Finite-domain error bound}
+\label{sec:finite}
+
+Define the \emph{ideal} dispersed image, in which all intermediates live on
+the infinite lattice and only the final result is cropped:
+\[
+G_\infty \;=\; R \sum_k w_k\, B_{d_k}\, P\, (E c_k)
+\;\overset{\text{Thm.~\ref{thm:main}}}{=}\;
+R\, P \sum_k w_k\, B_{d_k} (E c_k).
+\]
+
+\begin{lemma}[Truncation terms]
+\label{lem:trunc}
+For each slice $k$, with $\mathbb{1}_{W^c}$ the indicator of the stamp
+complement and $\|\cdot\|_1$ the absolute sum over all pixels,
+\begin{align}
+\big\| w_k \tilde B_{d_k} \tilde P c_k - w_k R\,B_{d_k} P E c_k \big\|_1
+&\;\le\; w_k \,\big\| (P E c_k)\,\mathbb{1}_{W^c} \big\|_1
+\;=:\; w_k\, \mu_k^{\rm A},
+\label{eq:muA}\\
+\big\| w_k \tilde P' \tilde B_{d_k} c_k - w_k \tilde P' R\, B_{d_k} E c_k \big\|_1
+&\;=\; 0,
+\qquad
+\big\| w_k R P E (R B_{d_k} E c_k) - w_k R P B_{d_k} E c_k \big\|_1
+\;\le\; w_k\, \mu_k^{\rm B},
+\label{eq:muB}
+\end{align}
+where $\mu_k^{\rm B} := \| (B_{d_k} E c_k)\,\mathbb{1}_{W^c} \|_1$ and
+$\tilde P'$ denotes the implemented convolution applied to the (already
+restricted) dispersed sum. Consequently
+\[
+\| G_{\rm A} - G_\infty \|_1 \le \sum_k w_k\, \mu_k^{\rm A},
+\qquad
+\| G_{\rm B} - G_\infty \|_1 \le \sum_k w_k\, \mu_k^{\rm B},
+\qquad
+\| G_{\rm A} - G_{\rm B} \|_1 \le \sum_k w_k (\mu_k^{\rm A} + \mu_k^{\rm B}).
+\]
+\end{lemma}
+\begin{proof}
+In path A the implemented pipeline computes
+$\tilde B_{d} \tilde P c_k = R\,B_{d}\,E\,R\,(P E c_k)$. The composition
+$E R$ zeroes exactly the content of $P E c_k$ outside $W$; since $B_d$ and
+$R$ are $\ell_1$-contractions on nonnegative decompositions, the discrepancy
+from $R B_d P E c_k$ is at most the mass so zeroed, giving \eqref{eq:muA}.
+In path B the analogous insertion of $E R$ acts on $B_{d} E c_k$, giving
+$\mu_k^{\rm B}$; the outer $\tilde P = R P E$ applied to the restricted
+dispersed image is exact linear convolution of its input by
+Section~\ref{sec:setup}, contributing no additional wrap term. Summation and
+the triangle inequality complete the proof.
+\end{proof}
+
+\begin{remark}[What the bound means physically]
+$\mu_k^{\rm A}$ is the PSF-blurred slice flux lying outside the stamp;
+$\mu_k^{\rm B}$ is the shifted (un-blurred) slice flux outside the stamp.
+Both are ``flux within about one PSF support radius of the stamp boundary,
+after the slice's dispersion shift.'' Slices at the wavelength-window
+extremes have the largest $|d_k|$ (flagship: up to $\pm12$ coarse pixels on a
+32-pixel stamp) and hence dominate the bound; those same slices carry only
+line-wing and continuum flux, which is why the empirical discrepancy is far
+smaller than a worst-case reading of the bound. Note both paths truncate
+\emph{something}; neither is ``exact'' relative to $G_\infty$. Path B inserts
+one fewer $E R$ truncation between blur and shift, so there is no a priori
+reason to regard path A as the more faithful of the two.
+
+The region where the two paths' \emph{adjoints} differ is not a thin
+boundary ring: a cube pixel contributes truncated flux whenever its
+\emph{shifted} position falls near the boundary, so the affected zone is
+the boundary ring dilated by the maximum dispersion shift (measured
+directly, 2026-07-04: adjoint differences persist $\gtrsim24$ fine px into
+a 96-px stamp). This is why gradient-level equivalence must be asserted on
+physical-parameter gradients (which weight the zone by its small flux),
+not on worst-case per-pixel adjoint elements.
+\end{remark}
+
+\begin{corollary}[Tolerance policy]
+\label{cor:tol}
+\code{RenderConfig} sizes stamps and grids so that profile flux beyond the
+stamp is budgeted by \code{folding\_threshold} $f_t$ (default
+$5\times10^{-3}$); the near-boundary flux entering
+Lemma~\ref{lem:trunc} is the same class of quantity evaluated per shifted
+slice. The A/B equivalence test therefore asserts
+\[
+\| G_{\rm A} - G_{\rm B} \|_1 \;\le\; C\, f_t\, F_{\rm tot},
+\]
+with $F_{\rm tot}$ the total dispersed flux and $C$ an order-unity constant
+frozen at implementation time from the measured constant across the
+validation grid (Section~\ref{sec:protocol}). Tying the tolerance to $f_t$
+(rather than an ad-hoc absolute) keeps the fast-path error in lockstep with
+the accuracy regime the user has already selected.
+\end{corollary}
+
+\section{Wavelength dependence of the PSF}
+\label{sec:lambda}
+
+\subsection{Status quo and exact per-line generalization}
+The pipeline currently applies a \emph{single} shared \code{psf\_data} to all
+$K$ slices (\code{source.py:219--223}; wavelength-dependent PSFs are deferred
+--- issue \#51). Under that existing assumption, Theorem~\ref{thm:main} is an
+identity: the fast path changes numerics only through
+Lemma~\ref{lem:trunc}-class boundary terms, and introduces \emph{no new
+physical approximation whatsoever}.
+
+If per-line PSFs $p^{(\ell)}$ are later adopted, the fast path generalizes
+exactly: build per-line sub-cubes $c^{(\ell)}$ (the line decomposition
+already exists inside \code{build\_cube}'s loop over lines), disperse each,
+convolve each dispersed image with its own $p^{(\ell)}$, and sum:
+\[
+\sum_\ell P^{(\ell)}\!\left( \sum_k w_k B_{d_k} c^{(\ell)}_k \right),
+\]
+i.e.\ $O(N_{\rm lines})$ convolutions instead of $O(N_\lambda)$. A fully
+per-slice $p_k$ falls back to the current general path --- which is
+\textbf{retained} in the code by decision (2026-07-04): the fast path is an
+opt-in configuration, the per-slice path remains the general reference
+implementation.
+
+\subsection{Error of assuming PSF constancy across one line}
+\label{sec:lambdaerr}
+
+For a near--diffraction-limited PSF the size scales linearly with wavelength,
+so the second moment obeys
+$\delta R^2_{\rm psf} / R^2_{\rm psf} \simeq 2\,\delta\lambda/\lambda$.
+An unmodeled fractional PSF second-moment error $\epsilon$ propagates to a
+multiplicative shear-type bias of order
+$m \sim \epsilon \cdot R^2_{\rm psf}/R^2_{\rm gal}$
+(standard PSF-dilution scaling). Convention caveat: the numerator below
+uses $\sigma_{\rm psf}^2$ (a second moment) while the denominator uses the
+exponential \emph{scale radius} $r_{\rm gal}^2$; a second-moment-consistent
+denominator would be $\langle r^2 \rangle = 6\,r_s^2$ for an exponential
+disk, making the quoted $m$ conservative by roughly that factor. The
+numbers are order-of-magnitude estimates and their conclusion is robust to
+this convention choice.
+
+This was measured directly (2026-07-04) with monochromatic
+\code{galsim.roman.getPSF} adaptive moments (SCA 1, cross-checked SCA 9/18
+and \code{pupil\_bin} 1 vs 4; script and log in
+\code{experiments/sweverett/production\_speedups/psf\_lambda\_variation/}).
+Measured $\sigma_{\rm psf}(1313\,{\rm nm}) = 0.0457''$; the fractional size
+scaling matches naive $\delta\lambda/\lambda$ diffraction scaling to
+$<1\%$, monotonic, with no aberration surprises; ellipticity changes are
+$|\delta e_{1,2}| \le 5\times10^{-5}$ everywhere. Implied $m$ below uses
+$r_{\rm gal} = 0.3''$ (conservative; $0.5''$ is $\sim3\times$ smaller):
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+window & $\delta\lambda$ & measured $|\delta\sigma/\sigma|$ & implied $m$ \\
+\midrule
+single velocity-broadened line & $\pm1$\,nm & $7.6\times10^{-4}$ & $3.5\times10^{-5}$ \\
+H$\alpha$+[NII] blend span & $\pm2.5$\,nm & $1.9\times10^{-3}$ & $8.8\times10^{-5}$ \\
+full modeled cube window & $\pm13.5$\,nm & $1.02\times10^{-2}$ & $4.7\times10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Three observations. (i) Per-line constancy is safe by a wide margin:
+$m \sim 3\times10^{-5}$ sits far below the paper's ``reasonable
+performance'' bar and below the $0.1\sigma$ parameter-shift criterion for
+any realistic per-galaxy posterior. (ii) Constancy across the \emph{full}
+cube window (relevant to the continuum, which spans all slices) is the
+dominant term at $m \sim 5\times10^{-4}$ --- still sub-$10^{-3}$, and it
+bounds the pre-existing issue-\#51 approximation, not anything introduced by
+the fast path; it sharpens the case for the per-line generalization when
+requirement-level bias control is eventually attempted, and deserves a
+proper WL-formalism treatment (beyond this order-of-magnitude scaling) if
+that window ever becomes the operative one. (iii) For the paper's
+self-consistent mocks (fit model $\equiv$ truth model, same PSF assumption
+on both sides) the bias is identically zero by construction; the numbers
+above bound model-adequacy for real data.
+
+\section{Implementation corollary: the fast path is nearly free}
+\label{sec:impl}
+
+The post-dispersion pixel response
+(\code{grism.py:\_apply\_post\_dispersion\_pixel\_response}) already performs
+one \code{fft2}/\code{ifft2} pair on the dispersed fine image to apply the
+BoxPixel sinc. Since the commuted PSF acts at the same point in the chain,
+its transfer function can be \emph{multiplied into the same k-space pass}:
+\[
+\widehat{G}_{\rm out} = \widehat{G}_{\rm B,raw} \cdot \hat p \cdot
+\widehat{\rm sinc},
+\]
+so the fast path eliminates all $2N_\lambda$ per-slice FFTs (flagship: 50)
+while adding zero new transforms. Caveat: the existing pixel-response pass
+operates on the $96\times96$ dispersed image without linear-convolution
+padding (sinc is applied circularly by construction of the precomputed
+\code{pixel\_response\_fft}); fusing the PSF there requires either
+(i) demonstrating the PSF's circular-vs-linear difference is within the
+Corollary~\ref{cor:tol} budget on the padded-enough stamp, or (ii) padding
+that single pass (two padded FFTs --- still a $25\times$ reduction).
+
+\paragraph{Implemented variant (2026-07-04).} Neither fusion option:
+the fast path applies the commuted PSF as a \emph{separate} exact padded
+convolution of the dispersed image (the existing \code{convolve\_fft}
+machinery, so $\tilde P = R P E$ exactly as in the theorem), followed by
+the \emph{unchanged} circular sinc pass. Per roll: 4~FFTs instead of
+$2N_\lambda + 2 = 52$. This deliberately isolates the commutation change
+--- the pixel-response code is bit-identical between pathways, so the A/B
+equivalence tests measure only the theorem --- at the cost of two extra
+small FFTs per roll ($52 \to 4$ vs the fused $52 \to 2$; immaterial).
+Fusing into the sinc pass remains an optional micro-optimization gated on
+option (i)/(ii) above. Selector: \code{RenderConfig.psf\_mode}
+$\in$ \{\code{'post\_dispersion'} (default), \code{'per\_slice'}\}. Note at
+\code{oversample=1} the sinc pass is skipped entirely
+(\code{grism.py}), so there the fast path adds its two FFTs rather than
+riding an existing pass --- still $\ll 2N_\lambda$.
+
+\section{Empirical validation protocol}
+\label{sec:protocol}
+
+Required before the fast path can be enabled anywhere (and re-run before any
+default flip, which separately requires user sign-off). Status
+(2026-07-04): user signed off after an independent cross-check of this
+document (agent audit against code + numerical verification with the real
+operators: interior-source image agreement $5\times10^{-5}$ $L_1/F_{\rm
+tot}$, physical-parameter gradient agreement $\sim2\times10^{-5}$
+relative); items 1, 2, 4 implemented in
+\code{tests/test\_grism\_psf\_mode.py}; item 3 run as a short seeded
+screening A/B (flagship-depth deferred to GPU-era hardware). Measured $C$
+across the item-1 grid: canonical configs $0.03$--$0.16$, continuum $0.59$,
+high-shift stress $1.33$ (dispersed line approaching the stamp boundary
+--- both paths truncating heavily); frozen $C = 2$.
+
+\begin{enumerate}
+\item \textbf{Image-level A/B equivalence.} Grid over: flagship canonical
+parameters; high-shift stress case (line centered near the wavelength-window
+edge, maximal $|d_k|$); high velocity gradient (large $v_{\rm circ}$, low
+$\cos i$); dispersion angles $\{0, 30^\circ, 90^\circ\}$; PSF FWHM
+$\{0.11'', 0.18'', 0.3''\}$; with and without continuum. Assert
+$\|G_{\rm A}-G_{\rm B}\|_1 / F_{\rm tot} \le C f_t$ and report the measured
+$C$ distribution; freeze $C$ in the test.
+\item \textbf{Gradient-level equivalence.} Same assertion for
+$\nabla_\theta$ of a scalar reduction through both paths (the fast path must
+be adjoint-consistent, not just primal-consistent).
+\item \textbf{Posterior-level A/B.} Seeded flagship inference with path A
+vs.\ path B: shear posterior mean shifts $< 0.1\sigma$, widths within a few
+percent, divergence/R-hat/ESS not degraded.
+\item \textbf{Pathway preservation.} Regression test asserting the per-slice
+general path remains selectable and bit-identical to its pre-refactor
+behavior.
+\end{enumerate}
+
+\paragraph{Decision record.} User (2026-07-04): PSF is physically
+wavelength-dependent; constancy is assumed per line only, and the per-slice
+pathway must be retained for future wavelength-varying PSFs. This document
+plus the protocol above constitute the required justification package.
+
+\end{document}

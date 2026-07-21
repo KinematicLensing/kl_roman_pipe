@@ -1,0 +1,23 @@
+E0713 10:55:11.395096 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 2.53GiB (2713345536 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0713 10:55:11.420307 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 2.27GiB (2442010880 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0713 10:55:11.444842 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 2.05GiB (2197809664 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0713 10:55:11.469361 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 1.84GiB (1978028800 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0713 10:55:11.493757 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 1.66GiB (1780226048 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0713 10:55:11.518534 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 1.49GiB (1602203392 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0713 10:55:11.543084 2990937 cuda_executor.cc:1273] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 1.34GiB (1441982976 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+W0713 11:18:49.524645 2990937 hlo_rematerialization.cc:3233] Can't reduce memory use below 2.40GiB (2577635562 bytes) by rematerialization; only reduced to 2.55GiB (2734885768 bytes), down from 2.61GiB (2799963016 bytes) originally
+W0713 11:19:08.114995 2990937 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 2.48GiB (rounded to 2659575296)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0713 11:19:08.115267 2990937 bfc_allocator.cc:525] *______________________________________________*____________________________________________________
+[bench] env: gpu ['cuda:0']  x64=True
+
+[bench] === section i ===
+[vista_kit] real galsim not importable -- installed minimal stub (PositionD only). Any code path needing more of galsim will fail loudly with AttributeError.
+[vista_kit] kl_pipe.psf.precompute_psf_fft / precompute_psf_kspace_fft patched: GaussianPSFShim -> analytic numpy path (no galsim, no x64 guard); other PSF types untouched.
+[bench] built config P: {'rolls': 4, 'bands': 2, 'nlam': 32, 'dispersal_method': 'analytic', 'n_sampled': 22, 'build_s': 9.88821389619261, 'data_seed_offset': 290000}
+[bench] section i ERRORED (recorded in JSON):
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.48GiB. [executable_name='jit__log_posterior_jittable'] [tf-allocator-allocation-error='']
+
+[bench] wrote /work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_ghpack_20260713_102222_c642-032_P.json.j_P_N32_w29.json (total 1438 s)

@@ -140,6 +140,28 @@ class TestApplyObsRotation:
         assert float(out[0]) == pytest.approx(-0.02, abs=1e-10)
         assert float(out[1]) == pytest.approx(-0.05, abs=1e-10)
 
+    def test_position_rotation(self):
+        """x0, y0 rotated by phi (spin-1): a fixed sky offset appears
+        rotated in the detector frame."""
+        theta = jnp.array([0.3, 0.1])
+        names = ('x0', 'y0')
+        # phi = pi/2: x' = y, y' = -x
+        out = _apply_obs_rotation(theta, names, np.pi / 2)
+        assert float(out[0]) == pytest.approx(0.1, abs=1e-10)
+        assert float(out[1]) == pytest.approx(-0.3, abs=1e-10)
+        # phi = pi/4: analytic components
+        out45 = _apply_obs_rotation(theta, names, np.pi / 4)
+        c = np.cos(np.pi / 4)
+        assert float(out45[0]) == pytest.approx((0.3 + 0.1) * c, abs=1e-10)
+        assert float(out45[1]) == pytest.approx((-0.3 + 0.1) * c, abs=1e-10)
+
+    def test_position_rotation_needs_both_components(self):
+        """x0 without y0 (or vice versa) is left untouched -- rotation only
+        applies to a complete 2-vector."""
+        theta = jnp.array([0.3])
+        out = _apply_obs_rotation(theta, ('x0',), np.pi / 2)
+        assert float(out[0]) == pytest.approx(0.3, abs=1e-12)
+
 
 # ===========================================================================
 # render_broadband
@@ -238,6 +260,44 @@ class TestRenderBroadband:
         pars_id['theta_int'] = 0.0
         pars_id['g1'] = float(g1_det)
         pars_id['g2'] = float(g2_det)
+        img_id = source.render_broadband(pars_id, obs_id, 'F087')
+
+        np.testing.assert_allclose(np.asarray(img_rot), np.asarray(img_id), atol=1e-8)
+
+    def test_position_rotation_invariance(self, source, pars, image_pars):
+        """Same invariance for the centroid offset: a celestial (x0, y0) at
+        image_rotation=phi must equal the hand-rotated detector-frame offset
+        (x0_det, y0_det) = rotate_position(x0, y0, phi) at image_rotation=0.
+        Shear zeroed and theta_int matched so only the offset rotation is
+        exercised.
+        """
+        from kl_pipe.coordinates import rotate_position
+
+        phi = np.pi / 5
+        x0_cel, y0_cel = 0.25, -0.15
+        x0_det, y0_det = rotate_position(x0_cel, y0_cel, phi)
+
+        pars_base = dict(pars)
+        pars_base['g1'] = 0.0
+        pars_base['g2'] = 0.0
+
+        # case 1: celestial offset, obs rotated by phi (theta_int = phi so
+        # theta_int_det = 0 in both cases)
+        wcs_rot = _wcs_with_rotation((32, 32), 0.1, phi)
+        ip_rot = ImagePars(shape=(32, 32), wcs=wcs_rot, indexing='ij')
+        obs_rot = build_image_obs(ip_rot, broadband_key='F087', pixel_response=None)
+        pars_rot = dict(pars_base)
+        pars_rot['theta_int'] = phi
+        pars_rot['F087.x0'] = x0_cel
+        pars_rot['F087.y0'] = y0_cel
+        img_rot = source.render_broadband(pars_rot, obs_rot, 'F087')
+
+        # case 2: detector offset directly, identity WCS, theta_int=0
+        obs_id = build_image_obs(image_pars, broadband_key='F087', pixel_response=None)
+        pars_id = dict(pars_base)
+        pars_id['theta_int'] = 0.0
+        pars_id['F087.x0'] = float(x0_det)
+        pars_id['F087.y0'] = float(y0_det)
         img_id = source.render_broadband(pars_id, obs_id, 'F087')
 
         np.testing.assert_allclose(np.asarray(img_rot), np.asarray(img_id), atol=1e-8)

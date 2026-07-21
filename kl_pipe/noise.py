@@ -11,6 +11,8 @@ Current contents
   map.
 - ``add_velocity_noise``: Gaussian-only on a (signed) velocity map. Poisson
   enters at the spectral-cube layer, never on the moment.
+- ``grism_line_noise``: Gaussian on a dispersed grism stamp, normalized so the
+  labeled SNR is the emission-LINE matched-filter SNR (not the whole stamp).
 
 SNR convention (current baseline: matched-filter)
 -------------------------------------------------
@@ -30,6 +32,24 @@ uniform-equivalent matched-filter target: pick Gaussian ``sigma_g`` so
 that ``mean(poisson_var) + sigma_g^2 = (||T||_2 / target_snr)^2``. This
 is exact when ``include_poisson=False`` and an effective approximation
 when shot noise is on.
+
+Grism line-SNR convention
+--------------------------
+A dispersed grism stamp contains the emission line plus the galaxy continuum,
+but only the line carries the kinematic (shear/velocity) signal. Normalizing
+the SNR over the whole stamp lets the continuum -- which for a realistic disk
+dominates the dispersed power -- absorb most of the SNR budget, so a nominal
+"grism SNR" corresponds to a much lower effective LINE SNR. ``grism_line_noise``
+therefore defines the labeled SNR on the LINE component alone:
+
+    var = ||I_line||_2^2 / line_snr^2 ,
+
+a uniform per-pixel Gaussian variance set by the line matched filter. This
+assumes the sky/background-dominated regime (faint slitless-grism sources),
+where the per-pixel noise floor is independent of the source; the continuum is
+still rendered and marginalized as a nuisance but does not enter the SNR
+normalization. This matches the emission-line SNR used in the Roman KL
+literature (Xu et al., in the sky-dominated limit).
 
 Other conventions (e.g. range-based for velocity, L2-RMS for stamp-fixed
 test calibrations) can be added later as alternative entry points; do not
@@ -191,3 +211,59 @@ def add_velocity_noise(
     noisy_velocity = velocity + rng.normal(0, sigma, velocity.shape)
     variance = np.full_like(velocity, sigma**2, dtype=float)
     return noisy_velocity, variance
+
+
+def grism_line_noise(
+    full_render: np.ndarray,
+    line_render: np.ndarray,
+    line_snr: float,
+    seed: Optional[int] = None,
+) -> Tuple[np.ndarray, float]:
+    """Add Gaussian noise to a dispersed grism stamp at a target LINE SNR.
+
+    The uniform per-pixel variance is set by the emission-LINE matched filter,
+    ``var = sum(line_render**2) / line_snr**2``, so the labeled ``line_snr`` is
+    the matched-filter amplitude SNR of the line alone (see the module docstring,
+    "Grism line-SNR convention"). Noise is added to ``full_render`` (line +
+    continuum); the continuum contributes to the observed data and is
+    marginalized in the fit, but does NOT enter the SNR normalization. This is
+    the sky/background-dominated regime, where the noise floor is independent of
+    the source.
+
+    Parameters
+    ----------
+    full_render : ndarray
+        Noiseless dispersed stamp including line + continuum.
+    line_render : ndarray
+        Noiseless dispersed stamp of the LINE component only (continuum
+        amplitude zeroed), same shape as ``full_render``.
+    line_snr : float
+        Target emission-line matched-filter amplitude SNR.
+    seed : int, optional
+        RNG seed.
+
+    Returns
+    -------
+    noisy_image : ndarray
+        ``full_render`` plus Gaussian noise of the line-normalized variance.
+    variance : float
+        Scalar per-pixel variance ``||line_render||^2 / line_snr**2``.
+    """
+    full = np.asarray(full_render)
+    line = np.asarray(line_render)
+    if full.shape != line.shape:
+        raise ValueError(
+            f"full_render shape {full.shape} != line_render shape {line.shape}"
+        )
+    if line_snr <= 0:
+        raise ValueError(f"line_snr must be positive, got {line_snr}")
+    line_power = float(np.sum(line**2))
+    if line_power <= 0:
+        raise ValueError(
+            "line_render has zero power; cannot set a line SNR (is the line "
+            "flux zero, or was the wrong component passed?)"
+        )
+    var = line_power / line_snr**2
+    rng = np.random.default_rng(seed)
+    noisy = full + rng.normal(0.0, np.sqrt(var), size=full.shape)
+    return noisy, var

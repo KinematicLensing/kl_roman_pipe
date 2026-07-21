@@ -7,59 +7,6 @@ from pathlib import Path
 from typing import Tuple, Literal
 
 
-def _build_pixel_grid(
-    N1: int,
-    N2: int,
-    indexing: Literal['ij', 'xy'],
-) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Internal helper for centered pixel grids. Not part of the public API.
-
-    Use ``build_map_grid_from_image_pars`` instead, which returns grids in
-    standard Cartesian convention (X=horizontal=cols, Y=vertical=rows).
-
-    Parameters
-    ----------
-    N1 : int
-        Number of pixels along first axis.
-    N2 : int
-        Number of pixels along second axis.
-    indexing : {'ij', 'xy'}
-        Passed directly to ``jnp.meshgrid``.
-
-    Returns
-    -------
-    X, Y : jnp.ndarray
-        2D coordinate grids in pixel units, centered at (0, 0).
-    """
-    if indexing not in ['ij', 'xy']:
-        raise ValueError(f"indexing must be 'ij' or 'xy', got '{indexing}'")
-
-    # Maximum distance along each axis
-    # For even counts, offset by 0.5 pixels (center falls on corner)
-    # For odd counts, no offset (center falls on pixel center)
-    R1 = (N1 // 2) - 0.5 * ((N1 - 1) % 2)
-    R2 = (N2 // 2) - 0.5 * ((N2 - 1) % 2)
-
-    # Create 1D coordinate arrays
-    coord1 = jnp.arange(-R1, R1 + 1, 1)
-    coord2 = jnp.arange(-R2, R2 + 1, 1)
-
-    # Verify correct lengths
-    assert len(coord1) == N1, f"coord1 length {len(coord1)} != N1 {N1}"
-    assert len(coord2) == N2, f"coord2 length {len(coord2)} != N2 {N2}"
-
-    # Create 2D meshgrid
-    X, Y = jnp.meshgrid(coord1, coord2, indexing=indexing)
-
-    # Verify output shape
-    expected_shape = (N1, N2) if indexing == 'ij' else (N2, N1)
-    assert X.shape == expected_shape, f"X.shape {X.shape} != expected {expected_shape}"
-    assert Y.shape == expected_shape, f"Y.shape {Y.shape} != expected {expected_shape}"
-
-    return X, Y
-
-
 def build_map_grid_from_image_pars(
     image_pars, unit: Literal['arcsec', 'pixel'] = 'arcsec', centered: bool = True
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:

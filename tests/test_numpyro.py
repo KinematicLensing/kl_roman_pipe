@@ -736,6 +736,99 @@ class TestNumpyroChainMethods:
         assert result.n_samples == 100
 
 
+class TestResolveChainMethod:
+    """Unit tests for NumpyroSampler._resolve_chain_method dispatch logic.
+
+    No MCMC is run here -- these monkeypatch jax.default_backend /
+    jax.local_device_count (actual device count cannot change mid-pytest-
+    process) and call the private resolver directly.
+    """
+
+    def test_explicit_method_always_wins(self, simple_velocity_task, monkeypatch):
+        """An explicit non-None chain_method overrides auto-dispatch."""
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(chain_method='sequential', progress=False)
+        sampler = NumpyroSampler(task, config)
+
+        monkeypatch.setattr(jax, 'default_backend', lambda: 'gpu')
+        monkeypatch.setattr(jax, 'local_device_count', lambda: 8)
+
+        assert sampler._resolve_chain_method(4) == 'sequential'
+
+    def test_auto_non_cpu_backend_dispatches_vectorized(
+        self, simple_velocity_task, monkeypatch
+    ):
+        """chain_method=None on a non-CPU backend resolves to 'vectorized'."""
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(chain_method=None, progress=False)
+        sampler = NumpyroSampler(task, config)
+
+        monkeypatch.setattr(jax, 'default_backend', lambda: 'gpu')
+        monkeypatch.setattr(jax, 'local_device_count', lambda: 1)
+
+        assert sampler._resolve_chain_method(4) == 'vectorized'
+
+    def test_auto_cpu_enough_devices_dispatches_parallel(
+        self, simple_velocity_task, monkeypatch
+    ):
+        """chain_method=None on CPU with device_count >= n_chains (and > 1)
+        resolves to 'parallel'."""
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(chain_method=None, progress=False)
+        sampler = NumpyroSampler(task, config)
+
+        monkeypatch.setattr(jax, 'default_backend', lambda: 'cpu')
+        monkeypatch.setattr(jax, 'local_device_count', lambda: 4)
+
+        assert sampler._resolve_chain_method(4) == 'parallel'
+
+    def test_auto_cpu_single_device_dispatches_sequential(
+        self, simple_velocity_task, monkeypatch
+    ):
+        """chain_method=None on CPU with exactly 1 device never picks
+        'parallel', even if n_chains == 1 (device count > 1 required)."""
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(chain_method=None, progress=False)
+        sampler = NumpyroSampler(task, config)
+
+        monkeypatch.setattr(jax, 'default_backend', lambda: 'cpu')
+        monkeypatch.setattr(jax, 'local_device_count', lambda: 1)
+
+        assert sampler._resolve_chain_method(1) == 'sequential'
+
+    def test_auto_cpu_insufficient_devices_dispatches_sequential(
+        self, simple_velocity_task, monkeypatch
+    ):
+        """chain_method=None on CPU with device_count < n_chains resolves to
+        'sequential', not 'parallel' -- this is the byte-identical-default
+        branch: an unconfigured single-CPU-device machine must not start
+        raising the parallel/device-count error merely from the new default.
+        """
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(chain_method=None, progress=False)
+        sampler = NumpyroSampler(task, config)
+
+        monkeypatch.setattr(jax, 'default_backend', lambda: 'cpu')
+        monkeypatch.setattr(jax, 'local_device_count', lambda: 2)
+
+        assert sampler._resolve_chain_method(4) == 'sequential'
+
+    def test_explicit_parallel_insufficient_devices_raises(
+        self, simple_velocity_task, monkeypatch
+    ):
+        """Explicit chain_method='parallel' with n_chains > device_count
+        raises ValueError before numpyro's MCMC is ever constructed --
+        NumPyro itself only warns and silently degrades to sequential."""
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(chain_method='parallel', progress=False)
+        sampler = NumpyroSampler(task, config)
+
+        monkeypatch.setattr(jax, 'local_device_count', lambda: 1)
+
+        with pytest.raises(ValueError, match='KLPIPE_CPU_DEVICES'):
+            sampler._resolve_chain_method(4)
+
+
 # ==============================================================================
 # Init Strategy Tests
 # ==============================================================================
@@ -897,6 +990,17 @@ class TestLaplacePreconditionerConfig:
         with pytest.raises(ValueError, match="n_map_starts"):
             NumpyroSamplerConfig(n_map_starts=0)
 
+    def test_hessian_method_default_fd(self):
+        """Default Hessian evaluation is 'fd' (no second-order compile);
+        'ad' remains available."""
+        assert NumpyroSamplerConfig().hessian_method == 'fd'
+        assert NumpyroSamplerConfig(hessian_method='ad').hessian_method == 'ad'
+
+    def test_invalid_hessian_method_config_raises(self):
+        """Unknown hessian_method value raises ValueError."""
+        with pytest.raises(ValueError, match="hessian_method"):
+            NumpyroSamplerConfig(hessian_method='bogus')
+
 
 class TestLaplacePreconditioner:
     """The InferenceTask.laplace_preconditioner utility + preconditioned NUTS."""
@@ -918,6 +1022,32 @@ class TestLaplacePreconditioner:
         names = task.sampled_names
         vcirc_map = pre.map_point[names.index('vel.vcirc')]
         assert abs(vcirc_map - true_pars['vel.vcirc']) / 200.0 < 0.1
+
+    def test_fd_hessian_matches_ad(self, simple_velocity_task):
+        """hessian_method='fd' must reproduce the 'ad' mass matrix.
+
+        Same seed -> identical MAP (deterministic scipy path), so only the
+        Hessian evaluation differs. Bound provenance: max relative element
+        difference of the regularized inverse mass measured at ~1e-9 on the
+        flagship joint task (fp64, fd_rel_step=1e-5, 2026-07-11); 1e-6 is
+        ~1000x that measurement.
+        """
+        task, _ = simple_velocity_task
+        pre_ad = task.laplace_preconditioner(n_starts=2, seed=0, hessian_method='ad')
+        pre_fd = task.laplace_preconditioner(n_starts=2, seed=0, hessian_method='fd')
+
+        np.testing.assert_array_equal(pre_fd.map_point, pre_ad.map_point)
+        ref = np.max(np.abs(pre_ad.inverse_mass_matrix))
+        assert (
+            np.max(np.abs(pre_fd.inverse_mass_matrix - pre_ad.inverse_mass_matrix))
+            < 1e-6 * ref
+        )
+
+    def test_invalid_hessian_method_raises(self, simple_velocity_task):
+        """Unknown hessian_method fails loudly."""
+        task, _ = simple_velocity_task
+        with pytest.raises(ValueError, match="hessian_method"):
+            task.laplace_preconditioner(hessian_method='bogus')
 
     def test_preconditioned_converges_and_recovers(self, simple_velocity_task):
         """precondition='laplace' yields a converged chain recovering truth."""

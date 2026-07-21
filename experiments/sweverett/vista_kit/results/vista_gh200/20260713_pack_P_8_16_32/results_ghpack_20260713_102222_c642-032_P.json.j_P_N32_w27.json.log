@@ -1,0 +1,11 @@
+E0713 10:55:12.433596 2989526 cuda_blas.cc:196] failed to create cublas handle: the resource allocation failed
+E0713 10:55:12.434697 2989526 cuda_blas.cc:199] Failure to initialize cublas may be due to OOM (cublas needs some free memory when you initialize it, and your deep-learning framework may have preallocated more than its fair share), or may be because this binary was not built with support for the GPU in your machine.
+[bench] env: gpu ['cuda:0']  x64=True
+
+[bench] === section i ===
+[vista_kit] real galsim not importable -- installed minimal stub (PositionD only). Any code path needing more of galsim will fail loudly with AttributeError.
+[vista_kit] kl_pipe.psf.precompute_psf_fft / precompute_psf_kspace_fft patched: GaussianPSFShim -> analytic numpy path (no galsim, no x64 guard); other PSF types untouched.
+[bench] section i ERRORED (recorded in JSON):
+jax.errors.JaxRuntimeError: INTERNAL: Unable to get Blas support [executable_name='jit_dynamic_slice']
+
+[bench] wrote /work/09102/sweveret/repos/kl_roman_pipe/experiments/sweverett/vista_kit/results_ghpack_20260713_102222_c642-032_P.json.j_P_N32_w27.json (total 3 s)

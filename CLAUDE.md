@@ -222,9 +222,11 @@ return 0.0  # could silently corrupt a likelihood calculation
 
 ### Test Tiers (strict → loose)
 
-1. **Likelihood Slicing** (`test_likelihood_slices.py`) — brute-force grid search per parameter. Validates forward model correctness. Strictest tolerances (0.1–5% by SNR). **Failures here = model bug.**
+1. **Likelihood Slicing** (`test_likelihood_slices.py`) — brute-force grid search per parameter. Validates forward model correctness. **Failures here = model bug.** Two designs coexist during migration:
+   - **Three-gate (target design; joint phot+grism test already converted)**: slices run on *noise-free* data. Gate 1: recovery within tight per-parameter accuracy budgets (10x the measured recovery error on the frozen scene, floored at 1e-5 of the scan half-range, rounded up to 1 significant figure). Gate 2: each slice's curvature-implied 1-sigma error bar within ±20% of a frozen reference (guards constraining power; catches both information loss and fake precision). Fully deterministic — no seed can pass or fail anything. Noise wiring is covered separately by `test_noise_calibration.py` (chi²-per-point at truth through the full likelihood).
+   - **Legacy (unconverted tests)**: single noisy draw vs SNR-based tolerances (0.1–5%). Known caveat: tolerances below the physical noise floor pass only via the pinned seed; convert rather than tune.
 
-2. **Optimizer Recovery** (`test_optimizer_recovery.py`) — gradient-based `scipy.optimize`. 10–20x looser tolerances. Excludes degenerate params (`cosi`, `g1`, `g2`) from pass/fail; checks observable product `vcirc*sin(i)` instead.
+2. **Optimizer Recovery** (`test_optimizer_recovery.py`) — gradient-based `scipy.optimize` on a pinned noisy draw. Every sampled parameter bounded by `bias + k*sigma`: sigma = frozen marginal noise floor measured from the likelihood curvature at truth on the model's own noiseless render with uniform priors folded in as equal-variance Gaussians (`_OPT_SIGMAS`, regenerate via `KLPIPE_TEST_MEASURE=1`); k = one suite-wide constant from a declared 1% false-alarm budget over the module's bounded checks (`suite_false_alarm_k`); bias = frozen allowance only where an independent renderer (GalSim) disagrees above the noise floor. Degenerate directions carry honest prior-scale floors; `vcirc*sin(i)` product checks carry the physics there; exactly-flat directions are pinned by flatness asserts.
 
 3. **Sampling Diagnostics** (`test_sampling_diagnostics.py`, `test_numpyro.py`, `test_blackjax.py`) — full MCMC with corner plots, traces, convergence checks (R-hat < 1.01, ESS > 400).
 
@@ -241,11 +243,12 @@ return 0.0  # could silently corrupt a likelihood calculation
 | `tng50` | Requires TNG50 data from CyVerse | `pytest -m tng50` |
 | `tng_diagnostics` | Slow TNG diagnostic plots | `pytest -m tng_diagnostics` |
 | `slow` | Significant runtime | `pytest -m slow` |
+| `diagnostic_plots` | Diagnostic-figure tests (also marked `slow`) | `pytest -m diagnostic_plots` |
 | `grism_validation` | Cross-code grism validation (requires reference data) | `make test-grism-validation` |
 
 ### Key Test Patterns
 
-- **`TestConfig`** in `tests/test_utils.py` — central tolerance configuration. SNR-dependent relative + absolute tolerances with parameter-specific scaling. **Never hardcode tolerances.**
+- **`TestConfig`** in `tests/test_utils.py` — central tolerance configuration for legacy noisy tests (SNR-dependent tolerances + parameter scaling). Converted three-gate tests instead carry per-test budget/reference tables with provenance comments. **Never hardcode a tolerance without provenance.**
 - **Module-scope fixtures** for expensive setup (grids, synthetic data)
 - **SNR parametrization**: `@pytest.mark.parametrize("snr", [1000, 50, 10])`
 - **Dual pass criteria**: parameter passes if EITHER relative OR absolute error within tolerance
@@ -256,7 +259,10 @@ return 0.0  # could silently corrupt a likelihood calculation
 ### Tolerance Rules
 
 - **Never loosen likelihood slice tolerances** — they validate model correctness
-- **Optimizer tolerances ~10-20x looser** than likelihood slices
+- **Every hard-coded bound needs stated provenance**: what was measured, when, on what scene, and the rule that turned the measurement into the bound (e.g. "10x measured, rounded up"). A number without provenance is a bug.
+- **Noise-floor honesty**: never bound a noisy-data recovery below the noise floor the likelihood curvature implies — such a test passes only by seed luck. Bounds on noisy quantities are k·sigma with sigma measured and k derived from a stated suite-level false-alarm budget (not an ad hoc constant).
+- **Frozen references** (curvature sigmas, GalSim floors) are updated only deliberately, with the reason recorded next to the value
+- **Optimizer bounds are derived, not tuned**: recount `_N_BOUNDED_CHECKS` instead of adjusting k; re-measure sigma tables instead of widening bounds
 - **Parameter-specific scaling must reflect physics**, not just make tests pass
 - **Document and loudly flag** any tolerance changes in PRs
 

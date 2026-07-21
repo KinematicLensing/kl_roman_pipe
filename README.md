@@ -40,15 +40,20 @@ kl_pipe/              # Main pipeline package
 ├── likelihood.py     # Likelihood construction and optimization
 ├── spectral.py       # Datacube grid (CubePars)
 ├── dispersion.py     # Grism dispersion (GrismPars, 3D->2D projection)
+├── render.py         # RenderConfig: k-space grid sizing + render defaults (analytic dispersal, erf, post-dispersion PSF)
+├── grism.py          # Post-dispersion pixel response
+├── pixel.py          # PixelResponse (BoxPixel sinc k-space pixel integration)
 ├── transformation.py # Multi-plane coordinate transformations
 ├── parameters.py     # Parameter and coordinate handling (ImagePars, Pars, etc.)
 ├── priors.py         # Prior distributions (Uniform, Gaussian, TruncatedNormal, etc.)
 ├── psf.py            # PSF convolution (PSFData, oversampled rendering, FFT pipeline)
 ├── synthetic.py      # Synthetic data generation
 ├── noise.py          # SNR-based noise utilities
+├── optimization.py   # Gradient-based recovery (multi_start_minimize)
+├── constants.py      # Physical constants (C_KMS, etc.)
 ├── utils.py          # Grid builders, path helpers
 ├── plotting.py       # Velocity/intensity map visualization
-├── diagnostics.py    # Parameter recovery plots, joint Nsigma analysis
+├── diagnostics/      # Diagnostic plotting subpackage (imaging, datacube, grism)
 ├── sampling/         # MCMC sampling infrastructure
 │   ├── base.py       # Sampler ABC, SamplerResult
 │   ├── configs.py    # Config dataclasses per sampler type

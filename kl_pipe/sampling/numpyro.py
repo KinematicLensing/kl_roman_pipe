@@ -43,7 +43,14 @@ import jax.random as random
 
 from kl_pipe.sampling.base import Sampler, SamplerResult
 from kl_pipe.sampling.configs import NumpyroSamplerConfig, ReparamStrategy
-from kl_pipe.priors import Prior, Gaussian, TruncatedNormal, Uniform, LogUniform
+from kl_pipe.priors import (
+    Prior,
+    Gaussian,
+    TruncatedNormal,
+    Uniform,
+    LogUniform,
+    LogNormal,
+)
 
 if TYPE_CHECKING:
     from kl_pipe.sampling.task import InferenceTask, LaplacePreconditioner
@@ -90,6 +97,10 @@ def compute_reparam_scales(prior: Prior, name: str) -> Tuple[float, float]:
         loc = (prior.low + prior.high) / 2
         scale = (prior.high - prior.low) / 4  # 4σ spans the range
         return float(loc), float(scale)
+
+    elif isinstance(prior, LogNormal):
+        # center at the distribution mean, scale = its standard deviation
+        return prior.mean, prior.std
 
     elif isinstance(prior, LogUniform):
         # Work in log-space conceptually
@@ -193,7 +204,7 @@ class NumpyroSampler(Sampler):
 
     Laplace preconditioning (opt-in) -- ~2x faster warmup on correlated joint
     posteriors by initializing NUTS at the MAP with a fixed inverse-Hessian
-    mass matrix (see experiments/sweverett/flagship_speedup):
+    mass matrix:
 
     >>> # config flag: sampler computes the MAP + Hessian internally
     >>> config = NumpyroSamplerConfig(precondition='laplace', n_warmup=100)
@@ -465,6 +476,59 @@ class NumpyroSampler(Sampler):
 
         return diagnostics
 
+    def _resolve_chain_method(self, n_chains: int) -> str:
+        """Resolve ``config.chain_method`` to a concrete numpyro chain method.
+
+        An explicit non-None ``config.chain_method`` always wins (including
+        raising if 'parallel' is requested without enough devices). With
+        ``config.chain_method=None`` (auto), dispatch by backend and device
+        count:
+
+        - non-CPU backend -> 'vectorized'
+        - CPU with ``jax.local_device_count() >= n_chains`` and more than one
+          device available -> 'parallel'
+        - CPU otherwise -> 'sequential'
+
+        Parameters
+        ----------
+        n_chains : int
+            Number of chains this run will launch.
+
+        Returns
+        -------
+        str
+            One of 'sequential', 'parallel', 'vectorized'.
+
+        Raises
+        ------
+        ValueError
+            If ``config.chain_method='parallel'`` is requested explicitly
+            but ``jax.local_device_count() < n_chains``. NumPyro itself
+            only warns and silently falls back to sequential execution in
+            this case; kl_pipe raises instead so a misconfigured device
+            count is never silent.
+        """
+        method = self.config.chain_method
+        if method is not None:
+            if method == 'parallel' and jax.local_device_count() < n_chains:
+                raise ValueError(
+                    f"chain_method='parallel' requires "
+                    f"jax.local_device_count() >= n_chains ({n_chains}), "
+                    f"got {jax.local_device_count()} device(s). Set the "
+                    f"KLPIPE_CPU_DEVICES environment variable (see "
+                    f"kl_pipe._devices) to force more host CPU devices "
+                    f"before the first kl_pipe/JAX import, or use "
+                    f"chain_method='sequential'/'vectorized' instead."
+                )
+            return method
+
+        if jax.default_backend() != 'cpu':
+            return 'vectorized'
+        n_devices = jax.local_device_count()
+        if n_devices >= n_chains and n_devices > 1:
+            return 'parallel'
+        return 'sequential'
+
     def run(self) -> SamplerResult:
         """
         Run NumPyro NUTS sampler.
@@ -505,13 +569,15 @@ class NumpyroSampler(Sampler):
             target_accept_prob=self.config.target_accept_prob,
         )
 
+        chain_method = self._resolve_chain_method(self.config.n_chains)
+
         # Setup MCMC
         mcmc = MCMC(
             kernel,
             num_warmup=self.config.n_warmup,
             num_samples=self.config.n_samples,
             num_chains=self.config.n_chains,
-            chain_method=self.config.chain_method,
+            chain_method=chain_method,
             progress_bar=self.config.progress,
         )
 
@@ -577,6 +643,7 @@ class NumpyroSampler(Sampler):
             'seed': seed,
             'dense_mass': self.config.dense_mass,
             'reparam_strategy': self.config.reparam_strategy.value,
+            'chain_method': chain_method,
         }
 
         return SamplerResult(
@@ -598,9 +665,8 @@ class NumpyroSampler(Sampler):
         that as a FIXED mass matrix, initialized at the MAP. This skips the
         expensive early-warmup transient (an identity-metric chain climbing
         from scratch) and the dense-mass adaptation cost. ~2x faster than
-        adapted dense mass with better convergence on the flagship; see
-        ``experiments/sweverett/flagship_speedup``. The standard model-based
-        ``run`` path is untouched.
+        adapted dense mass with better convergence on the flagship joint
+        test. The standard model-based ``run`` path is untouched.
         """
         from numpyro.infer import MCMC, NUTS
 
@@ -610,7 +676,9 @@ class NumpyroSampler(Sampler):
         pre = self._preconditioner
         if pre is None:
             pre = self.task.laplace_preconditioner(
-                n_starts=self.config.n_map_starts, seed=seed
+                n_starts=self.config.n_map_starts,
+                seed=seed,
+                hessian_method=self.config.hessian_method,
             )
             self._preconditioner = pre
 
@@ -647,12 +715,14 @@ class NumpyroSampler(Sampler):
             max_tree_depth=self.config.max_tree_depth,
             target_accept_prob=self.config.target_accept_prob,
         )
+        chain_method = self._resolve_chain_method(n_chains)
+
         mcmc = MCMC(
             kernel,
             num_warmup=self.config.n_warmup,
             num_samples=self.config.n_samples,
             num_chains=n_chains,
-            chain_method=self.config.chain_method,
+            chain_method=chain_method,
             progress_bar=self.config.progress,
         )
         mcmc.run(
@@ -698,6 +768,7 @@ class NumpyroSampler(Sampler):
             'seed': seed,
             'dense_mass': True,
             'precondition': 'laplace',
+            'chain_method': chain_method,
         }
         return SamplerResult(
             samples=samples,
