@@ -3149,7 +3149,7 @@ class CompositeIntensityModel(IntensityModel):
 
 
 class BulgeDiskModel(CompositeIntensityModel):
-    """Exponential disk (n=1) + Sersic bulge (n=4, fixed) composite.
+    """Exponential disk (n=1) + fixed-index Sersic bulge composite.
 
     The disk component uses ``InclinedExponentialModel`` with the exact
     analytic Fourier transform ``(1 + k^2)^{-3/2}`` -- no approximation.
@@ -3157,7 +3157,8 @@ class BulgeDiskModel(CompositeIntensityModel):
     The bulge component uses ``InclinedSersicModel`` with the Miller &
     Pasha (2025) symbolic regression emulator for the radial FT
     (L2 < 2e-6 vs numerical truth, valid 0.5 <= n <= 6). The Sersic
-    index is fixed at n=4 (de Vaucouleurs).
+    index is fixed at construction (default n=4, de Vaucouleurs) and is
+    not a sampled parameter.
 
     Parameters
     ----------
@@ -3171,6 +3172,11 @@ class BulgeDiskModel(CompositeIntensityModel):
         a common preference in WL inference because mis-specified bulges
         can absorb shear signal that physically belongs to the disk;
         forcing the bulge to be intrinsically round bounds that leakage.
+    bulge_nsersic : float
+        Fixed Sersic index of the bulge component. Default 4.0. Must lie
+        in the emulator validity range [0.5, 6.0]. Real bulge populations
+        are pseudobulge-dominated (median n ~ 2 in CANDELS decompositions),
+        so catalog-backed mocks set this per galaxy.
     meta_pars : dict, optional
         Model metadata.
     """
@@ -3179,17 +3185,25 @@ class BulgeDiskModel(CompositeIntensityModel):
         self,
         shared_centroids: bool = False,
         shear_bulge: bool = True,
+        bulge_nsersic: float = 4.0,
         meta_pars: dict = None,
         n_quad: int = None,
         los_quadrature: str = 'tanh',
     ):
+        bulge_nsersic = float(bulge_nsersic)
+        if not (0.5 <= bulge_nsersic <= 6.0):
+            raise ValueError(
+                f"bulge_nsersic ({bulge_nsersic}) outside the Sersic FT "
+                f"emulator validity range [0.5, 6.0]"
+            )
+
         shared = {'cosi', 'theta_int', 'g1', 'g2'}
         if shared_centroids:
             shared |= {'x0', 'y0'}
 
-        # n_sersic always fixed at 4 (de Vaucouleurs); optionally also
+        # bulge index fixed at construction (not sampled); optionally also
         # zero out shear for the bulge (fixed-overrides-shared semantics).
-        bulge_fixed = {'n_sersic': 4.0}
+        bulge_fixed = {'n_sersic': bulge_nsersic}
         if not shear_bulge:
             bulge_fixed['g1'] = 0.0
             bulge_fixed['g2'] = 0.0
@@ -3221,6 +3235,11 @@ class BulgeDiskModel(CompositeIntensityModel):
         # SSOT for the toggle is the bulge component's fixed_params:
         # shear_bulge=False writes g1=g2=0 into bulge_fixed at __init__.
         return 'g1' not in self._components[1].fixed_params
+
+    @property
+    def bulge_nsersic(self) -> float:
+        # SSOT is the bulge component's fixed n_sersic set at __init__
+        return float(self._components[1].fixed_params['n_sersic'])
 
 
 # ==============================================================================

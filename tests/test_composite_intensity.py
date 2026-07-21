@@ -522,6 +522,88 @@ class TestBulgeDiskShearKwarg:
         assert float(jnp.max(jnp.abs(img2 - img1))) > 1e-3
 
 
+class TestBulgeDiskNsersicKwarg:
+    """Verify the bulge_nsersic kwarg on BulgeDiskModel.
+
+    The bulge Sersic index is fixed at construction (default 4.0) and
+    routed through the bulge component's fixed_params. Catalog-backed
+    mocks set it per galaxy (pseudobulge-dominated populations).
+    """
+
+    def _pars(self):
+        return {
+            'cosi': 0.5,
+            'theta_int': 0.3,
+            'g1': 0.02,
+            'g2': -0.01,
+            'total_flux': 1e4,
+            'bulge_frac': 0.25,
+            'disk_rscale': 1.0,
+            'disk_h_over_r': 0.1,
+            'disk_x0': 0.0,
+            'disk_y0': 0.0,
+            'bulge_hlr': 0.3,
+            'bulge_h_over_hlr': 0.3,
+            'bulge_x0': 0.0,
+            'bulge_y0': 0.0,
+        }
+
+    def test_default_and_property_roundtrip(self):
+        assert BulgeDiskModel().bulge_nsersic == 4.0
+        assert BulgeDiskModel(bulge_nsersic=1.5).bulge_nsersic == 1.5
+
+    def test_out_of_emulator_range_raises(self):
+        with pytest.raises(ValueError, match='emulator validity range'):
+            BulgeDiskModel(bulge_nsersic=0.4)
+        with pytest.raises(ValueError, match='emulator validity range'):
+            BulgeDiskModel(bulge_nsersic=6.5)
+
+    def test_parameter_names_unchanged(self):
+        """n_sersic stays fixed (not sampled) regardless of its value."""
+        assert (
+            BulgeDiskModel(bulge_nsersic=1.5).PARAMETER_NAMES
+            == BulgeDiskModel().PARAMETER_NAMES
+        )
+
+    def test_bulge_component_receives_index(self):
+        model = BulgeDiskModel(bulge_nsersic=2.0)
+        theta = model.pars2theta(self._pars())
+        bulge_theta = model._get_component_theta(theta, 1)
+        bulge_model = model._components[1].model
+        n = float(bulge_theta[bulge_model._param_indices['n_sersic']])
+        assert abs(n - 2.0) < 1e-6
+
+    def test_render_matches_manual_composite(self, image_pars):
+        """BulgeDiskModel(bulge_nsersic=n) == manual composite with fixed n."""
+        model = BulgeDiskModel(bulge_nsersic=2.0)
+        manual = CompositeIntensityModel(
+            components=[
+                ComponentSpec(InclinedExponentialModel(), prefix='disk'),
+                ComponentSpec(
+                    InclinedSersicModel(),
+                    prefix='bulge',
+                    fixed_params={'n_sersic': 2.0},
+                ),
+            ],
+        )
+        pars = self._pars()
+        img_a = model.render_image(model.pars2theta(pars), image_pars=image_pars)
+        img_b = manual.render_image(manual.pars2theta(pars), image_pars=image_pars)
+        np.testing.assert_allclose(img_b, img_a, rtol=1e-12, atol=0)
+
+    def test_render_depends_on_index(self, image_pars):
+        """Different bulge n → measurably different bulge-only render."""
+        pars = self._pars()
+        pars['bulge_frac'] = 1.0
+        imgs = []
+        for n in (1.5, 4.0):
+            model = BulgeDiskModel(bulge_nsersic=n)
+            imgs.append(
+                model.render_image(model.pars2theta(pars), image_pars=image_pars)
+            )
+        assert float(jnp.max(jnp.abs(imgs[1] - imgs[0]))) > 1e-3
+
+
 # ==============================================================================
 # JIT and gradient tests
 # ==============================================================================
