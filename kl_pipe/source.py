@@ -308,6 +308,9 @@ class SourceModel:
             build_cube_pars = obs.cube_pars
 
         image_rotation = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
+        # realistic continuum is dispersed separately (below) so it can fill
+        # the stamp; keep it out of the line cube in that mode
+        cont_fills = obs.continuum_fills_stamp
         cube = self.build_cube(
             pars,
             build_cube_pars,
@@ -315,6 +318,7 @@ class SourceModel:
             plane=plane,
             image_rotation=image_rotation,
             spectral_method=spectral_method,
+            include_continuum=not cont_fills,
         )
 
         # per-slice PSF convolution (vmap over wavelength), bin=False keeps
@@ -337,15 +341,44 @@ class SourceModel:
             oversample=obs.oversample,
         )
 
+        # stamp-filling continuum dispersed by the closed-form trace kernel
+        # (no interior box edges); the legacy narrow-window continuum instead
+        # rides inside the cube above
+        cont_disp = None
+        if cont_fills:
+            cont_disp = self._render_continuum_dispersed(
+                pars,
+                obs.grism_pars,
+                plane,
+                image_rotation,
+                build_cube_pars.image_pars,
+                obs.oversample,
+                obs.cube_pars.lambda_grid,
+            )
+
         # post-dispersion PSF convolution: one exact padded linear
         # convolution of the dispersed image replaces the 2*Nlambda
         # per-slice FFTs (a shared PSF commutes with per-slice uniform
         # shifts and their weighted sum). The unit-sum kernel preserves
         # SB units.
-        if obs.psf_data is not None and psf_mode == 'post_dispersion':
-            from kl_pipe.psf import convolve_fft
+        if psf_mode == 'post_dispersion':
+            # the continuum shares the line's single post-dispersion pass
+            if cont_disp is not None:
+                dispersed = dispersed + cont_disp
+            if obs.psf_data is not None:
+                from kl_pipe.psf import convolve_fft
 
-            dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+                dispersed = convolve_fft(dispersed, obs.psf_data, bin=False)
+        else:
+            # per_slice: the line cube is already convolved; convolve the
+            # separately-dispersed continuum with the same shared PSF to
+            # match, then add
+            if cont_disp is not None:
+                if obs.psf_data is not None:
+                    from kl_pipe.psf import convolve_fft
+
+                    cont_disp = convolve_fft(cont_disp, obs.psf_data, bin=False)
+                dispersed = dispersed + cont_disp
 
         # post-dispersion BoxPixel sinc + SB→flux/pixel conversion
         coarse_shape = (
@@ -359,6 +392,77 @@ class SourceModel:
             obs.oversample,
             obs.grism_pars.image_pars.pixel_scale,
         )
+
+    def _render_continuum_dispersed(
+        self,
+        pars: dict,
+        grism_pars: 'GrismPars',
+        plane: str,
+        image_rotation: float,
+        fine_image_pars: 'ImagePars',
+        oversample: int,
+        lam_grid: jnp.ndarray,
+    ):
+        """Disperse the flat stellar continuum to fill the stamp (closed form).
+
+        The continuum is flat in wavelength, so its dispersed trace is a
+        throughput-weighted box convolution of the continuum spatial
+        profile along the dispersion axis. A real slitless-grism continuum
+        trace spans the whole bandpass (hundreds of pixels) while the stamp
+        is a tiny window on it, so within the stamp the continuum is a
+        smooth stripe with no interior edges. This reproduces that by
+        integrating the trace over a window wide enough to cover the stamp
+        (``+/- (Ncol + 2)`` coarse pixels about ``lambda_ref``) rather than
+        the narrow emission-line velocity window. Dispersion is axis-
+        aligned (detector frame); roll is handled by ``image_rotation``
+        rotating the spatial profile into the detector frame, matching the
+        line term. Returns the fine 2D continuum image (pre-PSF, pre-pixel-
+        response), or None when no line carries a continuum.
+
+        See ``RenderConfig.continuum_fills_stamp``.
+        """
+        from kl_pipe.dispersion import (
+            continuum_trace_kernel,
+            disperse_continuum_analytic,
+        )
+        from kl_pipe.utils import build_map_grid_from_image_pars
+
+        X, Y = build_map_grid_from_image_pars(fine_image_pars)
+        I_cont_total = None
+        unit_cache: dict = {}
+        for line_key, line in self.emission_lines.items():
+            cont_theta, cont_model = self._build_emission_continuum_theta(
+                pars, line_key
+            )
+            if cont_model is None:
+                continue
+            cont_theta = _apply_obs_rotation(
+                cont_theta, cont_model.PARAMETER_NAMES, image_rotation
+            )
+            cont_owner = (
+                line.continuum_key if line.continuum_key is not None else line_key
+            )
+            amp_idx = cont_model.PARAMETER_NAMES.index(cont_model.amplitude_param)
+            amplitude = cont_theta[amp_idx]
+            cache_key = f'cont:{cont_owner}'
+            if cache_key not in unit_cache:
+                unit_cache[cache_key] = cont_model(
+                    cont_theta.at[amp_idx].set(1.0), plane, X, Y
+                )
+            I_cont = amplitude * unit_cache[cache_key]
+            I_cont_total = I_cont if I_cont_total is None else I_cont_total + I_cont
+
+        if I_cont_total is None:
+            return None
+
+        # widen the trace integration window so the continuum fills the
+        # stamp along the dispersion axis (no interior box edges)
+        half_nm = (grism_pars.image_pars.Ncol + 2) * grism_pars.dispersion
+        window = (grism_pars.lambda_ref - half_nm, grism_pars.lambda_ref + half_nm)
+        kernel, m_lo = continuum_trace_kernel(
+            grism_pars, lam_grid, oversample, integration_window=window
+        )
+        return disperse_continuum_analytic(I_cont_total, kernel, m_lo)
 
     def _render_grism_analytic(
         self,
@@ -453,6 +557,7 @@ class SourceModel:
             return amplitude * unit_eval_cache[owner_key]
 
         dispersed = jnp.zeros(X.shape)
+        cont_fills = obs.continuum_fills_stamp
         I_cont_total = None
         for line_key, line in self.emission_lines.items():
             theta_int, int_model = self._build_emission_intensity_theta(pars, line_key)
@@ -501,10 +606,12 @@ class SourceModel:
                 I_line, xi, sigma_s, halfwidth, weight=weight
             )
 
+            # legacy line-window continuum accumulation; the realistic
+            # stamp-filling continuum is dispersed after the loop
             cont_theta, cont_model = self._build_emission_continuum_theta(
                 pars, line_key
             )
-            if cont_model is not None:
+            if not cont_fills and cont_model is not None:
                 cont_theta = _apply_obs_rotation(
                     cont_theta, cont_model.PARAMETER_NAMES, image_rotation
                 )
@@ -519,7 +626,13 @@ class SourceModel:
                 )
                 I_cont_total = I_cont if I_cont_total is None else I_cont_total + I_cont
 
-        if I_cont_total is not None:
+        if cont_fills:
+            cont_disp = self._render_continuum_dispersed(
+                pars, gp, plane, image_rotation, fine_ip, os_f, lam_grid
+            )
+            if cont_disp is not None:
+                dispersed = dispersed + cont_disp
+        elif I_cont_total is not None:
             kernel, m_lo = continuum_trace_kernel(gp, lam_grid, os_f)
             dispersed = dispersed + disperse_continuum_analytic(
                 I_cont_total, kernel, m_lo
@@ -671,6 +784,11 @@ class SourceModel:
         else:
             build_cube_pars = first.cube_pars
 
+        # realistic continuum fills the stamp and is dispersed per obs
+        # (axis-aligned, rotated by that obs's roll) rather than shared
+        # through the operator; keep it out of the shared line cube then.
+        # The group is homogeneous in render settings (resolved from first).
+        cont_fills = first.continuum_fills_stamp
         cube = self.build_cube(
             pars,
             build_cube_pars,
@@ -678,6 +796,7 @@ class SourceModel:
             plane=plane,
             image_rotation=anchor_rotation,
             spectral_method=spectral_method,
+            include_continuum=not cont_fills,
         )
 
         if operators is None:
@@ -686,6 +805,21 @@ class SourceModel:
         out = {}
         for key, obs in obs_group.items():
             dispersed = apply_dispersion_operator(operators[key], cube)
+            if cont_fills:
+                # multi-obs groups are post_dispersion (validated), so the
+                # continuum joins the line before the single PSF pass
+                obs_rotation = image_rotation_from_wcs(obs.grism_pars.image_pars.wcs)
+                cont_disp = self._render_continuum_dispersed(
+                    pars,
+                    obs.grism_pars,
+                    plane,
+                    obs_rotation,
+                    build_cube_pars.image_pars,
+                    obs.oversample,
+                    obs.cube_pars.lambda_grid,
+                )
+                if cont_disp is not None:
+                    dispersed = dispersed + cont_disp
             if obs.psf_data is not None:
                 from kl_pipe.psf import convolve_fft
 
@@ -756,6 +890,7 @@ class SourceModel:
         plane: str = 'obs',
         image_rotation: float = 0.0,
         spectral_method: str = 'erf',
+        include_continuum: bool = True,
     ) -> jnp.ndarray:
         """Build the intrinsic 3D datacube ``C(x, y, lambda)`` (no PSF).
 
@@ -779,6 +914,7 @@ class SourceModel:
                 plane=plane,
                 image_rotation=image_rotation,
                 spectral_method=spectral_method,
+                include_continuum=include_continuum,
             )
 
         def _cube_of_pars(traced_pars: dict) -> jnp.ndarray:
@@ -789,6 +925,7 @@ class SourceModel:
                 plane=plane,
                 image_rotation=image_rotation,
                 spectral_method=spectral_method,
+                include_continuum=include_continuum,
             )
 
         return jax.checkpoint(
@@ -803,6 +940,7 @@ class SourceModel:
         plane: str = 'obs',
         image_rotation: float = 0.0,
         spectral_method: str = 'erf',
+        include_continuum: bool = True,
     ) -> jnp.ndarray:
         """Build the intrinsic 3D datacube ``C(x, y, lambda)`` (no PSF).
 
@@ -986,11 +1124,13 @@ class SourceModel:
                 )
             cube_fine = cube_fine + I_line[:, :, None] * kernel
 
-            # optional stellar continuum near this line (flat in wavelength)
+            # optional stellar continuum near this line (flat in wavelength).
+            # skipped when the caller disperses the continuum separately to
+            # fill the stamp (see RenderConfig.continuum_fills_stamp)
             cont_theta, cont_model = self._build_emission_continuum_theta(
                 pars, line_key
             )
-            if cont_model is not None:
+            if include_continuum and cont_model is not None:
                 cont_theta = _apply_obs_rotation(
                     cont_theta, cont_model.PARAMETER_NAMES, image_rotation
                 )

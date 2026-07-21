@@ -2848,24 +2848,21 @@ class TestAnalytical:
 
         diff = grism_cont - grism_nocont
 
-        # build expected by explicitly dispersing the continuum contribution
-        # using SourceModel's continuum semantic (Halpha.cont.flux_per_nm is the
-        # continuum's own flux, not a multiplier on the line). Build the
-        # continuum theta + spatial profile the same way source.build_cube
-        # does internally, then mirror the full pipeline (disperse + sinc +
-        # SB→flux/pixel via × coarse_area).
-        cont_theta, cont_model = source._build_emission_continuum_theta(
-            source_pars_cont, 'Halpha'
-        )
-        X_grid, Y_grid = build_map_grid_from_image_pars(_ANALYTICAL_IMAGE_PARS)
-        I_cont = np.array(cont_model(cont_theta, 'obs', X_grid, Y_grid))
-        cont_cube_sb = np.broadcast_to(
-            I_cont[:, :, None], (*I_cont.shape, cp.n_lambda)
-        ).copy()
-        coarse_area = _ANALYTICAL_IMAGE_PARS.pixel_scale**2
-        expected = (
-            np.array(disperse_cube(jnp.array(cont_cube_sb), gp, cp.lambda_grid))
-            * coarse_area
+        # both the line and the continuum are linear in their own amplitudes
+        # and added, so the continuum's contribution (the diff above) must
+        # equal a line-free render at the same continuum flux -- testing the
+        # separability property directly against the actual pipeline, rather
+        # than re-deriving one continuum model's dispersal by hand (which
+        # would pin the test to a specific continuum_fills_stamp mode). Holds
+        # for whichever continuum model is active.
+        source_pars_lineoff = {
+            **base_pars,
+            **cont_spatial,
+            'Halpha.flux': 0.0,
+            'Halpha.cont.flux_per_nm': cont_val,
+        }
+        expected = np.array(
+            source.render_grism(source_pars_lineoff, _make_grism_obs_no_psf(gp, cp))
         )
 
         peak = max(expected.max(), 1e-16)
@@ -2879,7 +2876,7 @@ class TestAnalytical:
         plt.colorbar(im0, ax=axes[0], fraction=0.046)
 
         im1 = axes[1].imshow(expected, origin='lower')
-        axes[1].set_title('Expected (dispersed uniform cube)')
+        axes[1].set_title('Expected (line-free continuum render)')
         plt.colorbar(im1, ax=axes[1], fraction=0.046)
 
         vmax_r = max(residual.max(), 1e-16)

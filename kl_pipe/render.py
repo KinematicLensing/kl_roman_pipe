@@ -109,6 +109,18 @@ class RenderConfig:
         None, standalone renders size it from the concrete parameter
         values at call time; jitted/inference use must set it
         explicitly.
+    continuum_fills_stamp : bool
+        Spectral extent of the flat stellar continuum trace. ``True``
+        (default) disperses the continuum over a window wide enough to
+        fill the stamp along the dispersion axis, matching a real slitless
+        grism where the continuum trace spans the whole bandpass (hundreds
+        of pixels) and the stamp is a tiny window on it: within the stamp
+        the continuum is a smooth stripe with no interior edges. ``False``
+        disperses the continuum only over the emission line's velocity
+        window (the legacy behavior), which truncates the continuum to a
+        box narrower than the stamp and leaves sharp trace edges inside
+        it. Applies to grism obs only; the line term is unaffected either
+        way.
     effective_maxk : float, optional
         Computed effective maxk for the full rendering chain
         (profile × pixel × PSF). None if not yet computed.
@@ -127,6 +139,7 @@ class RenderConfig:
     cube_mode: str = 'shared'
     dispersal_method: str = 'analytic'
     line_window_halfwidth: Optional[int] = None
+    continuum_fills_stamp: bool = True
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
 
@@ -170,6 +183,11 @@ class RenderConfig:
             raise ValueError(
                 f"line_window_halfwidth must be a positive int or None, got "
                 f"{self.line_window_halfwidth!r}"
+            )
+        if not isinstance(self.continuum_fills_stamp, bool):
+            raise ValueError(
+                f"continuum_fills_stamp must be a bool, got "
+                f"{self.continuum_fills_stamp!r}"
             )
 
     @classmethod

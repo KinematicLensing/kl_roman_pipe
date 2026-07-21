@@ -350,6 +350,15 @@ class GrismObs:
             else None
         )
 
+    @property
+    def continuum_fills_stamp(self) -> bool:
+        """Continuum trace extent; canonical source is render_config."""
+        return (
+            self.render_config.continuum_fills_stamp
+            if self.render_config is not None
+            else True
+        )
+
     def with_render_config(self, new_rc: 'RenderConfig') -> 'GrismObs':
         """Return a new GrismObs with ``new_rc`` and freshly-recomputed grids.
 

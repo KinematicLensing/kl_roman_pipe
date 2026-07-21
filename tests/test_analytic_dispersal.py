@@ -277,6 +277,288 @@ class TestRenderEquivalence:
         assert all(np.isfinite(np.asarray(v)).all() for v in grads.values())
 
 
+def _rolled_grism_obs(
+    shape,
+    pixel_scale,
+    roll_deg,
+    z,
+    dispersion,
+    psf,
+    oversample,
+    dispersal_method,
+    continuum_fills_stamp,
+):
+    """32x32-style rolled grism obs (roll = WCS PC rotation)."""
+    from kl_pipe.dispersion import GrismPars
+
+    rot = np.deg2rad(roll_deg)
+    c, s = float(np.cos(rot)), float(np.sin(rot))
+    wcs = WCS(naxis=2)
+    wcs.wcs.pc = np.array([[c, -s], [s, c]])
+    wcs.wcs.cdelt = np.array([pixel_scale, pixel_scale])
+    wcs.wcs.crpix = np.array([shape[1] / 2, shape[0] / 2])
+    wcs.wcs.crval = np.array([0.0, 0.0])
+    wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    wcs.wcs.cunit = ['arcsec', 'arcsec']
+    wcs.pixel_shape = (shape[1], shape[0])
+    wcs.wcs.set()
+    gp = GrismPars(
+        image_pars=ImagePars(shape=shape, wcs=wcs, indexing='ij'),
+        dispersion=dispersion,
+        lambda_ref=656.28 * (1.0 + z),
+        dispersion_angle_detector=0.0,
+    )
+    rc = RenderConfig(
+        oversample=oversample,
+        dispersal_method=dispersal_method,
+        continuum_fills_stamp=continuum_fills_stamp,
+    )
+    return build_grism_obs(gp, z=z, psf=psf, render_config=rc)
+
+
+class TestContinuumFillsStamp:
+    """RenderConfig.continuum_fills_stamp: the realistic continuum fills the
+    stamp along the dispersion axis (no interior box edges), the legacy
+    setting truncates it to the emission-line velocity window.
+
+    A real slitless-grism continuum trace spans the whole bandpass (~845 px
+    for Roman G150) while a 32-px stamp is a tiny window on it, so inside
+    the stamp the continuum should be a smooth stripe edge-to-edge. The
+    legacy behavior integrates the continuum only over the line's velocity
+    window (~+/-15 px here), leaving a box that truncates inside the stamp;
+    convolved with an inclined, rolled disk that box's sharp edges read as
+    diagonal lines near the stamp corners.
+    """
+
+    SHAPE = (32, 32)
+    PIXEL_SCALE = 0.11
+    DISPERSION = 1.1
+    Z = 1.0
+    # inclined disk so the continuum profile has a clear major/minor axis
+    PARS = {
+        **{k: v for k, v in TRUE_PARS.items()},
+        'cosi': 0.3,
+        'theta_int': 0.0,
+    }
+
+    def _psf(self):
+        return galsim.Gaussian(fwhm=0.18)
+
+    def _continuum_only(self):
+        pars = dict(self.PARS)
+        pars['Halpha.flux'] = 0.0  # isolate the continuum
+        return pars
+
+    @staticmethod
+    def _edge_center_ratio(image):
+        # flux in the two dispersion-edge columns vs the two central columns,
+        # along the (horizontal, roll=0) continuum trace
+        edge = image[:, 0].sum() + image[:, -1].sum()
+        center = image[:, 15].sum() + image[:, 16].sum()
+        return float(edge / center)
+
+    def test_fills_stamp_removes_interior_edges(self):
+        # continuum-only, axis-aligned (roll=0): the legacy box tapers to
+        # near-zero at the stamp edges; the realistic stripe reaches them.
+        # Thresholds bracket measured values (2026-07-20, 32x32/os=3):
+        # legacy 0.13, filled 0.75.
+        psf = self._psf()
+        cont = self._continuum_only()
+
+        def render(fills, method):
+            obs = _rolled_grism_obs(
+                self.SHAPE,
+                self.PIXEL_SCALE,
+                0.0,
+                self.Z,
+                self.DISPERSION,
+                psf,
+                3,
+                method,
+                fills,
+            )
+            return np.asarray(
+                SourceModel(
+                    velocity_model=CenteredVelocityModel(),
+                    emission_lines={
+                        'Halpha': EmissionLine(
+                            intensity=InclinedExponentialModel(),
+                            continuum=InclinedExponentialModel(),
+                        )
+                    },
+                ).render_grism(cont, obs)
+            )
+
+        legacy = self._edge_center_ratio(render(False, 'analytic'))
+        filled = self._edge_center_ratio(render(True, 'analytic'))
+        assert legacy < 0.30, f"legacy continuum should taper at edges, got {legacy}"
+        assert filled > 0.55, f"filled continuum should reach edges, got {filled}"
+        assert filled > 2.0 * legacy
+
+        # both dispersal paths must agree on the filled continuum (the slice
+        # path pulls the continuum out of the cube and disperses it with the
+        # same closed-form kernel); the residual is the slice line term's
+        # O(ds^2) discretization
+        filled_slice = self._edge_center_ratio(render(True, 'slice'))
+        assert abs(filled_slice - filled) < 0.05
+
+    def test_line_term_unchanged_by_flag(self):
+        # the flag touches only the continuum; a line-only render is identical
+        psf = self._psf()
+        pars = dict(self.PARS)
+        pars['Halpha.cont.flux_per_nm'] = 0.0
+        src = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                )
+            },
+        )
+
+        def render(fills):
+            obs = _rolled_grism_obs(
+                self.SHAPE,
+                self.PIXEL_SCALE,
+                0.0,
+                self.Z,
+                self.DISPERSION,
+                psf,
+                3,
+                'analytic',
+                fills,
+            )
+            return np.asarray(src.render_grism(pars, obs))
+
+        np.testing.assert_allclose(render(True), render(False), rtol=0, atol=1e-12)
+
+    def test_runtime_overhead_small(self):
+        # the realistic continuum adds a spatial eval + a slightly longer
+        # trace kernel; render cost must stay comparable (measured ~1.01x,
+        # 2026-07-20). Generous 3x bound guards against a pathological path.
+        import time
+
+        psf = self._psf()
+        src = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                )
+            },
+        )
+
+        def timed(fills):
+            obs = _rolled_grism_obs(
+                self.SHAPE,
+                self.PIXEL_SCALE,
+                0.0,
+                self.Z,
+                self.DISPERSION,
+                psf,
+                3,
+                'analytic',
+                fills,
+            )
+            # eager render (the analytic path sizes the line window from
+            # concrete params, so it is not jitted here); relative cost is
+            # what matters
+            src.render_grism(self.PARS, obs).block_until_ready()
+            t = time.perf_counter()
+            for _ in range(10):
+                src.render_grism(self.PARS, obs).block_until_ready()
+            return (time.perf_counter() - t) / 10
+
+        t_legacy = timed(False)
+        t_filled = timed(True)
+        assert t_filled < 3.0 * t_legacy, (
+            f"filled continuum render {t_filled*1e3:.1f} ms vs legacy "
+            f"{t_legacy*1e3:.1f} ms exceeds 3x"
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.diagnostic_plots
+    def test_diagnostic_on_off_figure(self):
+        """Visual on/off diagnostic across rolls, saved to
+        tests/out/continuum_fills_stamp/on_off.png. Top row legacy
+        (box edges), bottom row realistic (smooth stripe)."""
+        import time
+        import os
+        import matplotlib
+
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from kl_pipe.utils import get_test_dir
+
+        psf = self._psf()
+        src = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                )
+            },
+        )
+        rolls = [0.0, 45.0, 90.0, 135.0]
+
+        def render(roll, fills):
+            obs = _rolled_grism_obs(
+                self.SHAPE,
+                self.PIXEL_SCALE,
+                roll,
+                self.Z,
+                self.DISPERSION,
+                psf,
+                3,
+                'analytic',
+                fills,
+            )
+            return np.asarray(src.render_grism(self.PARS, obs))
+
+        # timing summary for the figure title
+        def mean_ms(fills):
+            obs = _rolled_grism_obs(
+                self.SHAPE,
+                self.PIXEL_SCALE,
+                0.0,
+                self.Z,
+                self.DISPERSION,
+                psf,
+                3,
+                'analytic',
+                fills,
+            )
+            src.render_grism(self.PARS, obs).block_until_ready()
+            t = time.perf_counter()
+            for _ in range(20):
+                src.render_grism(self.PARS, obs).block_until_ready()
+            return (time.perf_counter() - t) / 20 * 1e3
+
+        t_off, t_on = mean_ms(False), mean_ms(True)
+
+        fig, ax = plt.subplots(2, 4, figsize=(16, 8))
+        for j, roll in enumerate(rolls):
+            off = render(roll, False)
+            on = render(roll, True)
+            vmax = float(max(off.max(), on.max()))
+            ax[0, j].imshow(off, origin='lower', cmap='viridis', vmax=vmax)
+            ax[0, j].set_title(f'legacy (box) roll={int(roll)}')
+            ax[1, j].imshow(on, origin='lower', cmap='viridis', vmax=vmax)
+            ax[1, j].set_title(f'realistic (stripe) roll={int(roll)}')
+        fig.suptitle(
+            f'continuum_fills_stamp off/on  (render {t_off:.1f} vs {t_on:.1f} ms)'
+        )
+        out_dir = get_test_dir() / 'out' / 'continuum_fills_stamp'
+        os.makedirs(out_dir, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(out_dir / 'on_off.png', dpi=100)
+        plt.close(fig)
+        assert (out_dir / 'on_off.png').exists()
+
+
 class TestGuards:
     def test_render_config_validation(self):
         with pytest.raises(ValueError, match='dispersal_method'):

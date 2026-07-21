@@ -633,6 +633,7 @@ def continuum_trace_kernel(
     grism_pars: GrismPars,
     lambda_grid: jnp.ndarray,
     oversample: int,
+    integration_window: Optional[Tuple[float, float]] = None,
 ) -> tuple:
     """Precompute the exact continuum trace kernel (numpy, static).
 
@@ -644,11 +645,29 @@ def continuum_trace_kernel(
                     integral_{s_min}^{s_max} T(lambda(s)) tri(m - s) ds
 
     with s the trace coordinate in fine pixels over the wavelength window
-    [lambda_grid[0], lambda_grid[-1]] (the same window the slice method
-    integrates with trapezoid weights). Flat throughput uses the exact
-    closed form; a sampled throughput is integrated per unit-s segment
-    with 16-point Gauss-Legendre (smooth-T assumption; exact to numerical
-    precision for physically smooth bandpasses).
+    [lambda_lo, lambda_hi]. Flat throughput uses the exact closed form; a
+    sampled throughput is integrated per unit-s segment with 16-point
+    Gauss-Legendre (smooth-T assumption; exact to numerical precision for
+    physically smooth bandpasses).
+
+    Parameters
+    ----------
+    lambda_grid : array
+        Wavelength samples (nm). When ``integration_window`` is None these
+        also define the integration limits (``[lambda_grid[0],
+        lambda_grid[-1]]``, the window the slice method integrates with
+        trapezoid weights). When ``integration_window`` is given, this
+        array serves only as the throughput lookup table; throughput
+        outside its range is held at the nearest endpoint value
+        (``np.interp`` default), accurate for the gentle throughput
+        variation over a widened stamp-scale window.
+    integration_window : (float, float), optional
+        Explicit ``(lambda_lo, lambda_hi)`` integration limits (nm),
+        decoupled from the throughput table. Used to widen the continuum
+        trace beyond the line window so it fills the stamp (see
+        ``RenderConfig.continuum_fills_stamp``) without resampling the
+        throughput array. When None, falls back to the lambda_grid
+        endpoints (legacy behavior).
 
     Returns
     -------
@@ -657,8 +676,12 @@ def continuum_trace_kernel(
     """
     lam = np.asarray(lambda_grid, dtype=float)
     scale = grism_pars.dispersion / oversample  # nm per fine pixel
-    s_min = (lam[0] - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
-    s_max = (lam[-1] - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
+    if integration_window is None:
+        lam_lo, lam_hi = lam[0], lam[-1]
+    else:
+        lam_lo, lam_hi = integration_window
+    s_min = (lam_lo - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
+    s_max = (lam_hi - grism_pars.lambda_ref) / grism_pars.dispersion * oversample
     m_lo = int(np.floor(s_min)) - 1
     m_hi = int(np.ceil(s_max)) + 1
     m = np.arange(m_lo, m_hi + 1, dtype=float)
