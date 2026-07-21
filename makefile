@@ -18,6 +18,9 @@ CYVERSE_CONFIG = $(CYVERSE_DATA_DIR)/cyverse_data.conf
 CYVERSE_DOWNLOAD_SCRIPT = scripts/download_cyverse_data.sh
 CYVERSE_DATA_MARKER = $(CYVERSE_DATA_DIR)/.cyverse_data_downloaded
 
+# CosmoHub (Euclid Flagship2) data configuration
+COSMOHUB_DATA_DIR = $(DATA_DIR)/cosmohub
+
 TNG50_DATA_DIR = $(DATA_DIR)/tng50
 
 DIAGNOSTICS_DIR = $(TEST_DIR)/out/diagnostics
@@ -129,6 +132,20 @@ download-tng50:
 	@echo "URL: $(TNG50_DRIVE_URL)"
 	@echo "Destination: $(TNG50_DATA_DIR)"
 
+# CosmoHub (Euclid Flagship2) + Q1 anchor downloads. The python scripts are
+# idempotent (sha256-verified skip), so no marker files are needed.
+.PHONY: download-cosmohub-dev
+download-cosmohub-dev:
+	@conda run -n klpipe python scripts/download_cosmohub.py $(COSMOHUB_DATA_DIR)/flagship2_dev.yaml
+
+.PHONY: download-cosmohub-data
+download-cosmohub-data:
+	@conda run -n klpipe python scripts/download_cosmohub.py $(COSMOHUB_DATA_DIR)/flagship2_v1.yaml
+
+.PHONY: download-q1-data
+download-q1-data:
+	@conda run -n klpipe python scripts/download_q1.py
+
 #-------------------------------------------------------------------------------
 # test related targets
 
@@ -140,12 +157,12 @@ test-data: $(UNIT_TEST_FILES)
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
 	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation"
+	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation and not cosmohub"
 
 .PHONY: test-extended
 test-extended: $(CYVERSE_DATA_MARKER)
 	@echo "Running extended tests (excluding TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics and not grism_validation"
+	@conda run -n klpipe pytest tests/ -v -m "not tng_diagnostics and not grism_validation and not cosmohub"
 
 .PHONY: test-all
 test-all: $(CYVERSE_DATA_MARKER)
@@ -200,7 +217,7 @@ test-flagship-production-long:
 .PHONY: test-basic
 test-basic:
 	@echo "Running fast tests (excluding TNG50 and slow, no download required)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow"
+	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow and not cosmohub"
 
 .PHONY: test-coverage
 test-coverage: $(CYVERSE_DATA_MARKER)

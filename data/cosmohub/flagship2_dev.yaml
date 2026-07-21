@@ -1,0 +1,58 @@
+# Flagship2 dev subset: small verified-full sky region for gate checks,
+# unit tests, and local development. All columns kept (variant-comparison
+# checks need model1/model3 and ext/unext pairs).
+#
+# Region chosen 2026-07-21 from a measured footprint histogram (CosmoHub
+# query #26600): RA 200-210 / Dec 0-10 is fully filled; superset-cut
+# density there is ~48.5k rows/deg^2. This 3x2 deg box -> ~290k rows,
+# ~40 MB parquet.
+#
+# The flux/z cuts form a deliberate SUPERSET of any population selection:
+# all real selection happens in versioned pipeline code (population spec),
+# never in SQL, so tightening a cut never requires a re-download.
+name: flagship2_dev
+catalog_id: 353
+table: cosmohub.euclid_fs2_mock_dr_v1_1_phz
+format: parquet
+columns:
+  - galaxy_id
+  - halo_id
+  - ra_gal
+  - dec_gal
+  - true_redshift_gal
+  - observed_redshift_gal
+  - logf_halpha_model3
+  - logf_halpha_model3_ext
+  - logf_halpha_model1
+  - logf_halpha_model1_ext
+  - halpha_scatter
+  - logf_n2_model3_ext
+  - logf_o3_model3_ext
+  - log_stellar_mass
+  - log_sfr
+  - disk_r50
+  - disk_scalelength
+  - disk_axis_ratio
+  - disk_angle
+  - disk_ellipticity
+  - inclination_angle
+  - bulge_fraction
+  - bulge_r50
+  - bulge_nsersic
+  - bulge_axis_ratio
+  - euclid_nisp_y
+  - euclid_nisp_j
+  - euclid_nisp_h
+  - euclid_nisp_y_el_model3_ext
+  - euclid_nisp_j_el_model3_ext
+  - euclid_nisp_h_el_model3_ext
+  - euclid_vis
+  - euclid_vis_el_model3_ext
+  - kappa
+  - gamma1
+  - gamma2
+cuts:
+  - ra_gal BETWEEN 200 AND 203
+  - dec_gal BETWEEN 0 AND 2
+  - true_redshift_gal BETWEEN 0.55 AND 1.9
+  - logf_halpha_model3_ext > -16.5

@@ -1,0 +1,53 @@
+# Flagship2 production row bank: one fully-filled ~100 deg^2 region.
+# ~4.8M unique galaxies above the superset cut (measured 48.5k/deg^2 via
+# CosmoHub query #26600 footprint histogram, 2026-07-21) -- two orders of
+# magnitude more unique rows than any planned campaign consumes.
+# Estimated download ~1 GB parquet; the Hive job is async (tens of minutes).
+#
+# Superset-cut philosophy: see flagship2_dev.yaml. Same columns as dev.
+name: flagship2_v1
+catalog_id: 353
+table: cosmohub.euclid_fs2_mock_dr_v1_1_phz
+format: parquet
+columns:
+  - galaxy_id
+  - halo_id
+  - ra_gal
+  - dec_gal
+  - true_redshift_gal
+  - observed_redshift_gal
+  - logf_halpha_model3
+  - logf_halpha_model3_ext
+  - logf_halpha_model1
+  - logf_halpha_model1_ext
+  - halpha_scatter
+  - logf_n2_model3_ext
+  - logf_o3_model3_ext
+  - log_stellar_mass
+  - log_sfr
+  - disk_r50
+  - disk_scalelength
+  - disk_axis_ratio
+  - disk_angle
+  - disk_ellipticity
+  - inclination_angle
+  - bulge_fraction
+  - bulge_r50
+  - bulge_nsersic
+  - bulge_axis_ratio
+  - euclid_nisp_y
+  - euclid_nisp_j
+  - euclid_nisp_h
+  - euclid_nisp_y_el_model3_ext
+  - euclid_nisp_j_el_model3_ext
+  - euclid_nisp_h_el_model3_ext
+  - euclid_vis
+  - euclid_vis_el_model3_ext
+  - kappa
+  - gamma1
+  - gamma2
+cuts:
+  - ra_gal BETWEEN 200 AND 210
+  - dec_gal BETWEEN 0 AND 10
+  - true_redshift_gal BETWEEN 0.55 AND 1.9
+  - logf_halpha_model3_ext > -16.5

@@ -11,6 +11,13 @@ __pycache__/
 data/*
 !data/cyverse/*.conf
 !data/cyverse/README.md
+!data/cosmohub/
+data/cosmohub/*
+!data/cosmohub/*.yaml
+!data/cosmohub/README.md
+!data/q1/
+data/q1/*
+!data/q1/README.md
 
 # Test outputs
 tests/out/
