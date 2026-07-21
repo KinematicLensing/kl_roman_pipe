@@ -1,8 +1,8 @@
-# Flagship-P structural observing config with the realistic Roman WFI PSF
+# Flagship-P structural observation config with the realistic Roman WFI PSF
 # (galsim.roman.getPSF, monochromatic): 2 broadbands (F158 + F184, official
 # Roman WFI filter names; galsim maps F158 to its legacy key H158) + 4 grism
-# rolls (0/45/90/135 deg), single Halpha line. Same roll/stamp/render
-# geometry as canonical_P. Broadband PSFs are evaluated at each band's
+# rolls (0/45/90/135 deg), single Halpha line. Same roll/stamp geometry
+# as canonical_P. Broadband PSFs are evaluated at each band's
 # effective wavelength; the grism PSF at the observed Halpha wavelength
 # (z-dependent), with the kernel stamp pinned at the ensemble's largest
 # observed wavelength so the PSF array shape is constant across fits.
@@ -34,4 +34,3 @@ psf:
     folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
 pixel_scale_arcsec: 0.11
 stamp: {broadband_pix: 32, grism_pix: 32}
-render: {oversample: 3}

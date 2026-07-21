@@ -28,7 +28,7 @@ from kl_pipe.ensemble.scene import scene_truth_defaults
 from kl_pipe.ensemble.spec import (
     EnsembleSpec,
     FoldingThresholdTier,
-    ObservingConfig,
+    ObservationConfig,
     PSFSpec,
 )
 from kl_pipe.lines import LINE_LAMBDAS
@@ -38,10 +38,10 @@ from kl_pipe.psf import precompute_psf_fft
 from kl_pipe.render import RenderConfig
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REGISTRY = REPO_ROOT / 'configs' / 'observing'
+REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
 
-# canonical geometry (matches the observing-config registry)
+# canonical geometry (matches the observation-config registry)
 PIXEL_SCALE = 0.11  # arcsec/pix
 
 # wavelength-scaling test endpoints: Z_HI matches the current spec z-draw
@@ -80,7 +80,7 @@ def _pinned_kernel_size(pixel_scale: float, z_max: float = Z_HI) -> int:
 
 class TestRomanPSFConfig:
     def test_registry_roman_config_loads(self):
-        config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
+        config = ObservationConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
         assert config.bands == ('F158', 'F184')
         assert config.grism_rolls_deg == (0.0, 45.0, 90.0, 135.0)
         # 2026-07-19 ruling: fit kernels follow the z-tiered schedule
@@ -107,7 +107,7 @@ class TestRomanPSFConfig:
         d = _config_dict()
         d['psf']['broadband'] = {'type': 'roman_wfi'}
         d['psf']['grism'] = {'type': 'roman_wfi'}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         assert config.band_psf['F087'].sca == 10
         assert config.band_psf['F087'].pupil_bin == 4
         assert config.grism_psf.sca == 10
@@ -116,20 +116,20 @@ class TestRomanPSFConfig:
     def test_explicit_sca_pupil_bin(self, tmp_path):
         d = _config_dict()
         d['psf']['grism'] = {'type': 'roman_wfi', 'sca': 4, 'pupil_bin': 8}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         assert config.grism_psf.sca == 4
         assert config.grism_psf.pupil_bin == 8
 
     def test_mixed_gaussian_broadband_roman_grism(self, tmp_path):
         d = _config_dict()
         d['psf']['grism'] = {'type': 'roman_wfi'}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         assert config.band_psf['F087'].psf_type == 'gaussian'
         assert config.band_psf['F087'].fwhm_arcsec == 0.18
         assert config.grism_psf.psf_type == 'roman_wfi'
 
     def test_gaussian_configs_unchanged(self):
-        config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
+        config = ObservationConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
         assert {b: p.fwhm_arcsec for b, p in config.band_psf.items()} == {
             'F087': 0.18,
             'F158': 0.18,
@@ -141,26 +141,26 @@ class TestRomanPSFConfig:
             d = _config_dict()
             d['psf'][channel] = {'type': 'imcom'}
             with pytest.raises(NotImplementedError, match='not supported'):
-                ObservingConfig.from_yaml(_write_config(tmp_path, d))
+                ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     def test_roman_with_fwhm_key_raises(self, tmp_path):
         d = _config_dict()
         d['psf']['grism'] = {'type': 'roman_wfi', 'fwhm_arcsec': 0.18}
         with pytest.raises(ValueError, match='unknown keys'):
-            ObservingConfig.from_yaml(_write_config(tmp_path, d))
+            ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     def test_bad_sca_raises(self, tmp_path):
         for sca in (0, 19):
             d = _config_dict()
             d['psf']['grism'] = {'type': 'roman_wfi', 'sca': sca}
             with pytest.raises(ValueError, match='sca'):
-                ObservingConfig.from_yaml(_write_config(tmp_path, d))
+                ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     def test_bad_pupil_bin_raises(self, tmp_path):
         d = _config_dict()
         d['psf']['grism'] = {'type': 'roman_wfi', 'pupil_bin': 0}
         with pytest.raises(ValueError, match='pupil_bin'):
-            ObservingConfig.from_yaml(_write_config(tmp_path, d))
+            ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     def test_non_integer_sca_pupil_bin_rejected(self, tmp_path):
         # YAML floats/strings must raise, not silently truncate via int()
@@ -168,7 +168,7 @@ class TestRomanPSFConfig:
             d = _config_dict()
             d['psf']['grism'] = {'type': 'roman_wfi', key: val}
             with pytest.raises(ValueError, match='must be an integer'):
-                ObservingConfig.from_yaml(_write_config(tmp_path, d))
+                ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     def test_psfspec_cross_field_validation(self):
         with pytest.raises(ValueError, match='roman_wfi-only'):
@@ -183,10 +183,10 @@ class TestRomanPSFConfig:
     def test_folding_threshold_parsing(self, tmp_path):
         d = _config_dict()
         d['psf']['grism'] = {'type': 'roman_wfi', 'folding_threshold': 0.02}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         assert config.grism_psf.folding_threshold == 0.02
         d['psf']['grism'] = {'type': 'roman_wfi'}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         assert config.grism_psf.folding_threshold is None  # galsim default
 
     def test_folding_threshold_roman_only(self, tmp_path):
@@ -197,7 +197,7 @@ class TestRomanPSFConfig:
             'folding_threshold': 0.02,
         }
         with pytest.raises(ValueError, match='unknown keys'):
-            ObservingConfig.from_yaml(_write_config(tmp_path, d))
+            ObservationConfig.from_yaml(_write_config(tmp_path, d))
         with pytest.raises(ValueError, match='roman_wfi-only'):
             PSFSpec(psf_type='gaussian', fwhm_arcsec=0.18, folding_threshold=0.02)
 
@@ -246,7 +246,7 @@ class TestRomanPSFConfig:
             'folding_threshold': 0.01,
             'mock_folding_threshold': 0.005,
         }
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         assert config.grism_psf.mock_folding_threshold == 0.005
 
     def test_dual_fidelity_kernel_split(self):
@@ -372,14 +372,14 @@ class TestRomanKernel:
         spec = EnsembleSpec.from_yaml(DEV_SPEC)
         d = _config_dict()
         d['psf']['grism'] = {'type': 'roman_wfi'}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         size = _grism_psf_kernel_size(config, spec)
-        fine_ps = config.pixel_scale_arcsec / config.oversample
+        fine_ps = config.pixel_scale_arcsec / spec.render_oversample
         # dev spec draws z uniform on [1.0, 1.9]: pin at z=1.9
         assert size == _pinned_kernel_size(fine_ps, z_max=1.9)
         assert size % 2 == 1
         # gaussian grism psf needs no pinning
-        gaussian_config = ObservingConfig.from_yaml(REGISTRY / 'canonical_Q.yaml')
+        gaussian_config = ObservationConfig.from_yaml(REGISTRY / 'canonical_Q.yaml')
         assert _grism_psf_kernel_size(gaussian_config, spec) is None
 
 
@@ -711,8 +711,7 @@ def _folding_scan_inputs(tmp_path, ft, seed=11):
     if ft is not None:
         d['psf']['broadband']['folding_threshold'] = ft
         d['psf']['grism']['folding_threshold'] = ft
-    d['render'] = {'oversample': 3}
-    config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+    config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
     spec = EnsembleSpec.from_yaml(DEV_SPEC)
     truth = scene_truth_defaults(config, spec.fixed)
     truth.update(
@@ -917,8 +916,7 @@ def test_dual_fidelity_data_uses_mock_kernel(tmp_path):
         if mock_ft is not None:
             d['psf']['grism']['mock_folding_threshold'] = mock_ft
             d['psf']['broadband']['mock_folding_threshold'] = mock_ft
-        d['render'] = {'oversample': 3}
-        config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+        config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
         spec = EnsembleSpec.from_yaml(DEV_SPEC)
         truth = scene_truth_defaults(config, spec.fixed)
         truth.update(
@@ -968,8 +966,7 @@ def test_from_obs_roman_production_path(tmp_path):
         'broadband': {'type': 'roman_wfi'},
         'grism': {'type': 'roman_wfi'},
     }
-    d['render'] = {'oversample': 3}
-    config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+    config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     truth = scene_truth_defaults(config, spec.fixed)
     truth.update(
@@ -1004,7 +1001,12 @@ def test_build_fit_inputs_roman_smoke(tmp_path):
     one F158 band + one grism roll, oversample 1 to keep the kernel grids
     small. Asserts valid PSFData on every obs, finite noisy data, and a
     finite truth render through the fit's own obs."""
-    spec = EnsembleSpec.from_yaml(DEV_SPEC)
+    # render oversample lives on the spec now: drop DEV_SPEC's 3 to 1
+    spec_dict = yaml.safe_load(DEV_SPEC.read_text())
+    spec_dict['model'] = {'render': {'oversample': 1}}
+    spec_path = tmp_path / 'spec.yaml'
+    spec_path.write_text(yaml.safe_dump(spec_dict))
+    spec = EnsembleSpec.from_yaml(spec_path)
     d = _config_dict()
     d['id'] = 'roman_smoke'
     d['bands'] = ['F158']
@@ -1012,8 +1014,7 @@ def test_build_fit_inputs_roman_smoke(tmp_path):
         'broadband': {'type': 'roman_wfi'},
         'grism': {'type': 'roman_wfi'},
     }
-    d['render'] = {'oversample': 1}
-    config = ObservingConfig.from_yaml(_write_config(tmp_path, d))
+    config = ObservationConfig.from_yaml(_write_config(tmp_path, d))
 
     truth = scene_truth_defaults(config, spec.fixed)
     truth.update(

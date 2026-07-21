@@ -3,34 +3,40 @@
 # mock datavectors, and sampler outputs retained for per-fit inspection.
 # Expected ~10-25 min/fit on an M3 (fresh XLA compile per galaxy) -> ~2-4 h
 # wallclock with 2 workers.
-run_name: sigma_eps_cosi_local_v1
-version: 1
-description: "sigma_eps vs cos i, local overnight validation, config Q, save-all"
-seed: 20260714
-measurement: sigma_eps_vs_cosi
+run:
+  name: sigma_eps_cosi_local_v1
+  version: 1
+  description: "sigma_eps vs cos i, local overnight validation, config Q, save-all"
+  seed: 20260714
+  measurement: sigma_eps_vs_cosi
+  noise_reps: 1
 
-bank:
+population:
+  type: sampled
   stratify:
     cosi: {n_bins: 5, range: [0.1, 0.9]}
   n_gal_per_bin: 4
-  m_noise: 1
   draw:
     theta_int: {dist: uniform, low: 0.0, high: 3.141592653589793}
     vcirc: {dist: lognormal_tf, center_kms: 200.0, sigma_tf_dex: 0.08}
     z: {dist: uniform, low: 1.0, high: 1.9}
   fixed: {h_over_r: 0.1, x0: 0.0, y0: 0.0}
+  shear:
+    scheme: fixed
+    g1: 0.05
+    g2: 0.05
+  ring:
+    enabled: false
 
-shear:
-  scheme: fixed
-  g1: 0.05
-  g2: 0.05
+model:
+  render:
+    oversample: 3
 
-ring:
-  enabled: false
-
-observed_config: canonical_Q
-broadband_snr: 100
-line_snr: 100
+observation:
+  config: canonical_Q
+  snr:
+    broadband: 100
+    line: 100
 
 fit:
   sampler: numpyro

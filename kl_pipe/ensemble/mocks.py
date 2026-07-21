@@ -1,7 +1,7 @@
 """
 Per-fit on-the-fly mock observation construction.
 
-The mock is a deterministic function of (truth, observing config, spec SNR
+The mock is a deterministic function of (truth, observation config, spec SNR
 knobs, noise_seed): the model renders its own truth datavector (guaranteeing
 fit == truth self-consistency) and Gaussian noise is added at the
 matched-filter variance ``||I||^2 / SNR^2``. Broadband channels use the whole
@@ -15,7 +15,7 @@ Per-channel noise seeds are derived from the manifest row's ``noise_seed``
 via a SeedSequence spawn, so a single integer in the manifest reproduces the
 whole multi-channel realization.
 
-PSFs are built per channel from the observing config's ``PSFSpec``:
+PSFs are built per channel from the observation config's ``PSFSpec``:
 ``gaussian`` (galsim.Gaussian at the configured FWHM) or ``roman_wfi``
 (monochromatic ``galsim.roman.getPSF``; broadband at the band's effective
 wavelength, grism at the observed Halpha wavelength). Roman grism kernels
@@ -48,7 +48,7 @@ from kl_pipe.parameters import ImagePars
 from kl_pipe.render import RenderConfig
 
 if TYPE_CHECKING:
-    from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig, PSFSpec
+    from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig, PSFSpec
     from kl_pipe.priors import PriorDict
     from kl_pipe.source import SourceModel
 
@@ -250,7 +250,7 @@ def _build_grism_psf(psf_spec: 'PSFSpec', z: float, mock: bool = False):
 
 
 def _grism_psf_kernel_size(
-    config: 'ObservingConfig', spec: 'EnsembleSpec', mock: bool = False
+    config: 'ObservationConfig', spec: 'EnsembleSpec', mock: bool = False
 ) -> Optional[int]:
     """Pinned grism PSF kernel stamp size (fine pixels), constant across z.
     mock=True sizes the truth-render kernel (mock_folding_threshold fidelity).
@@ -268,7 +268,7 @@ def _grism_psf_kernel_size(
     z_draw = spec.draw.get('z')
     if z_draw is None:
         raise ValueError(
-            "a roman_wfi grism psf requires z in bank.draw so the kernel "
+            "a roman_wfi grism psf requires z in population.draw so the kernel "
             "size can be pinned at the ensemble's largest observed "
             "wavelength"
         )
@@ -279,7 +279,7 @@ def _grism_psf_kernel_size(
         )
     z_max = z_draw.params['high']
     psf_max = _build_grism_psf(config.grism_psf, z_max, mock=mock)
-    fine_ps = config.pixel_scale_arcsec / config.oversample
+    fine_ps = config.pixel_scale_arcsec / spec.render_oversample
     size = int(psf_max.getGoodImageSize(fine_ps))
     if size % 2 == 0:
         size += 1
@@ -346,7 +346,7 @@ def _make_band_obs(
 
 
 def _grism_pars_for_roll(
-    config: 'ObservingConfig', z: float, roll_deg: float, single_roll: bool
+    config: 'ObservationConfig', z: float, roll_deg: float, single_roll: bool
 ) -> GrismPars:
     shape = (config.stamp_grism_pix, config.stamp_grism_pix)
     if single_roll and roll_deg == 0.0:
@@ -389,7 +389,8 @@ def _make_roll_obs(
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
     # _make_band_obs); otherwise the grism truth datavector is generated at the
-    # RenderConfig default oversample=1 while the fit runs at config.oversample,
+    # RenderConfig default oversample=1 while the fit runs at the spec's
+    # render_oversample,
     # silently breaking grism fit==truth self-consistency. The truth data goes
     # through the mock-fidelity kernel; the fit obs carries the fit-fidelity
     # kernel (identical unless the PSFSpec splits them).
@@ -425,7 +426,7 @@ def build_fit_inputs(
     truth: Dict[str, float],
     noise_seed: int,
     spec: 'EnsembleSpec',
-    config: 'ObservingConfig',
+    config: 'ObservationConfig',
     *,
     broadband_snr: float,
     line_snr: float,
@@ -441,7 +442,7 @@ def build_fit_inputs(
         The row's noise seed; per-channel seeds derive from it.
     spec : EnsembleSpec
         Population distributions (for the fit priors).
-    config : ObservingConfig
+    config : ObservationConfig
         Structural instrument setup.
     broadband_snr, line_snr : float
         Per-fit SNR values from the manifest row (the manifest, not the
@@ -488,7 +489,7 @@ def build_fit_inputs(
             band,
             broadband_snr,
             seeds[i],
-            config.oversample,
+            spec.render_oversample,
         )
 
     grism_psf_mock = _build_grism_psf(config.grism_psf, z, mock=True)
@@ -509,7 +510,7 @@ def build_fit_inputs(
             single_roll,
             line_snr,
             seeds[len(config.bands) + j],
-            config.oversample,
+            spec.render_oversample,
             kernel_size_mock,
             kernel_size_fit,
         )

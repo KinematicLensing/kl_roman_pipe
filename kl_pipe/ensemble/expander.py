@@ -18,9 +18,9 @@ Determinism contract
   fresh per galaxy and per noise_rep (absolutes use independent noise).
 
 Provenance: the run directory receives a verbatim copy of the spec, a
-verbatim snapshot of the referenced observing config plus its content hash,
-the git commit, and the expander version. The runner loads the snapshot,
-never the live registry.
+verbatim snapshot of the referenced observation config plus its content
+hash, the git commit, and the expander version. The runner loads the
+snapshot, never the live registry.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from kl_pipe.ensemble.scene import scene_truth_defaults
-from kl_pipe.ensemble.spec import DrawSpec, EnsembleSpec, ObservingConfig
+from kl_pipe.ensemble.spec import DrawSpec, EnsembleSpec, ObservationConfig
 
 # bump when the expansion algorithm changes in a way that alters manifests
 EXPANDER_VERSION = 1
@@ -112,7 +112,7 @@ def _shear_for_step(spec: EnsembleSpec, step: int) -> Dict[str, float]:
     return {'g1': 0.0, 'g2': value}
 
 
-def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
+def build_manifest(spec: EnsembleSpec, config: ObservationConfig) -> pd.DataFrame:
     """Expand the spec into the per-fit manifest table.
 
     Axis semantics: a cosi stratification means each bin holds its OWN
@@ -127,7 +127,7 @@ def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
     missing = required_draws - set(spec.draw)
     if missing:
         raise ValueError(
-            f"spec bank.draw must include {sorted(required_draws)}; "
+            f"spec population.draw must include {sorted(required_draws)}; "
             f"missing {sorted(missing)}"
         )
 
@@ -213,7 +213,7 @@ def build_manifest(spec: EnsembleSpec, config: ObservingConfig) -> pd.DataFrame:
                                     ring_member,
                                     noise_rep,
                                 ),
-                                'observed_config_id': config.id,
+                                'observation_config_id': config.id,
                                 'broadband_snr': spec.broadband_snr,
                                 'line_snr': (
                                     float(sweep_value)
@@ -301,7 +301,7 @@ def expand(
             manifest.parquet
             provenance/
                 ensemble_spec.yaml          (verbatim copy)
-                observing_config.yaml       (verbatim snapshot)
+                observation_config.yaml     (verbatim snapshot)
                 expansion.json              (hashes, git commit, versions)
             status/{claims,done,failed}/
             results/
@@ -313,7 +313,7 @@ def expand(
     spec_path : Path
         The human-authored ensemble spec YAML.
     registry_dir : Path
-        Directory holding observing configs (``<id>.yaml``).
+        Directory holding observation configs (``<id>.yaml``).
     runs_dir : Path
         Parent directory for run outputs.
     overwrite : bool
@@ -329,9 +329,10 @@ def expand(
     config_path = Path(registry_dir) / f'{spec.observed_config}.yaml'
     if not config_path.exists():
         raise FileNotFoundError(
-            f"observing config '{spec.observed_config}' not found at " f"{config_path}"
+            f"observation config '{spec.observed_config}' not found at "
+            f"{config_path}"
         )
-    config = ObservingConfig.from_yaml(config_path)
+    config = ObservationConfig.from_yaml(config_path)
 
     run_dir = Path(runs_dir) / spec.run_name
     if run_dir.exists():
@@ -357,14 +358,14 @@ def expand(
     manifest.to_parquet(run_dir / 'manifest.parquet', index=False)
 
     shutil.copy2(spec_path, run_dir / 'provenance' / 'ensemble_spec.yaml')
-    shutil.copy2(config_path, run_dir / 'provenance' / 'observing_config.yaml')
+    shutil.copy2(config_path, run_dir / 'provenance' / 'observation_config.yaml')
     expansion_record = {
         'run_name': spec.run_name,
         'spec_version': spec.version,
         'expander_version': EXPANDER_VERSION,
         'n_fits': int(len(manifest)),
-        'observed_config_id': config.id,
-        'observing_config_hash': config.content_hash,
+        'observation_config_id': config.id,
+        'observation_config_hash': config.content_hash,
         'spec_hash': hashlib.sha256(spec_path.read_bytes()).hexdigest(),
         'git_commit': _git_commit(),
     }
@@ -378,6 +379,8 @@ def load_run(run_dir: Path):
     """Load (spec, config, manifest) from a run directory's provenance."""
     run_dir = Path(run_dir)
     spec = EnsembleSpec.from_yaml(run_dir / 'provenance' / 'ensemble_spec.yaml')
-    config = ObservingConfig.from_yaml(run_dir / 'provenance' / 'observing_config.yaml')
+    config = ObservationConfig.from_yaml(
+        run_dir / 'provenance' / 'observation_config.yaml'
+    )
     manifest = pd.read_parquet(run_dir / 'manifest.parquet')
     return spec, config, manifest

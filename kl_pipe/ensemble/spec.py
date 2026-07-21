@@ -1,17 +1,18 @@
 """
-Ensemble spec + observing-config registry.
+Ensemble spec + observation-config registry.
 
 Two YAML-backed, strictly-validated config layers:
 
-- ``ObservingConfig``: the structural instrument setup (bands, grism rolls,
-  PSFs, stamp/render geometry), shared by every fit in a campaign. Lives in a
-  small registry (``configs/observing/<id>.yaml``) and is referenced by id
+- ``ObservationConfig``: the structural instrument setup (bands, grism rolls,
+  PSFs, stamp geometry), shared by every fit in a campaign. Lives in a
+  small registry (``configs/observation/<id>.yaml``) and is referenced by id
   from the ensemble spec. The expander snapshots the referenced file verbatim
   into the run's provenance directory with a content hash; the runner loads
   the snapshot, never the live registry.
-- ``EnsembleSpec``: one campaign (one run_name): the galaxy bank (stratified
-  grid + drawn nuisance truths + fixed constants), shear scheme, SNR knobs,
-  fit settings, dispatch settings, and output retention.
+- ``EnsembleSpec``: one campaign (one run name): the galaxy population
+  (stratified grid + drawn nuisance truths + fixed constants + shear/ring
+  scheme), model render settings, observation reference + SNR knobs, fit
+  settings, dispatch settings, and output retention.
 
 Unknown YAML keys raise. Every enum-like field is validated at construction.
 """
@@ -42,7 +43,7 @@ def _reject_unknown(d: dict, allowed: Tuple[str, ...], context: str) -> None:
 
 
 # =============================================================================
-# Observing-config registry
+# Observation-config registry
 # =============================================================================
 
 _PSF_TYPES = ('gaussian', 'roman_wfi')
@@ -387,8 +388,8 @@ def _parse_grism_psf(block: dict, context: str) -> PSFSpec:
 
 
 @dataclass(frozen=True)
-class ObservingConfig:
-    """Structural observing setup shared by all fits in a campaign."""
+class ObservationConfig:
+    """Structural observation setup shared by all fits in a campaign."""
 
     id: str
     bands: Tuple[str, ...]
@@ -400,12 +401,11 @@ class ObservingConfig:
     pixel_scale_arcsec: float
     stamp_broadband_pix: int
     stamp_grism_pix: int
-    oversample: int
     content_hash: str = ''  # sha256 of the source YAML file bytes
 
     def __post_init__(self):
         if not self.bands:
-            raise ValueError("observing config needs at least one band")
+            raise ValueError("observation config needs at least one band")
         for band in self.bands:
             if band not in self.band_psf:
                 raise ValueError(f"band '{band}' has no entry in broadband psf spec")
@@ -414,7 +414,7 @@ class ObservingConfig:
         if not isinstance(self.grism_psf, PSFSpec):
             raise ValueError("grism_psf must be a PSFSpec")
         if not self.grism_rolls_deg:
-            raise ValueError("observing config needs at least one grism roll")
+            raise ValueError("observation config needs at least one grism roll")
         if tuple(self.lines) != ('Halpha',):
             raise NotImplementedError(
                 f"v1 supports the single-Halpha line config only, got {self.lines}"
@@ -428,18 +428,17 @@ class ObservingConfig:
         for name, value in [
             ('stamp_broadband_pix', self.stamp_broadband_pix),
             ('stamp_grism_pix', self.stamp_grism_pix),
-            ('oversample', self.oversample),
         ]:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} ({value}) must be a positive int")
 
     @classmethod
-    def from_yaml(cls, path: Path) -> 'ObservingConfig':
+    def from_yaml(cls, path: Path) -> 'ObservationConfig':
         path = Path(path)
         raw_bytes = path.read_bytes()
         raw = yaml.safe_load(raw_bytes)
         if not isinstance(raw, dict):
-            raise ValueError(f"{path}: observing config must be a mapping")
+            raise ValueError(f"{path}: observation config must be a mapping")
         allowed = (
             'id',
             'bands',
@@ -448,7 +447,6 @@ class ObservingConfig:
             'psf',
             'pixel_scale_arcsec',
             'stamp',
-            'render',
         )
         _reject_unknown(raw, allowed, str(path))
         _require_keys(raw, allowed, str(path))
@@ -469,10 +467,6 @@ class ObservingConfig:
         _reject_unknown(stamp, ('broadband_pix', 'grism_pix'), f"{path}:stamp")
         _require_keys(stamp, ('broadband_pix', 'grism_pix'), f"{path}:stamp")
 
-        render = raw['render']
-        _reject_unknown(render, ('oversample',), f"{path}:render")
-        _require_keys(render, ('oversample',), f"{path}:render")
-
         return cls(
             id=str(raw['id']),
             bands=tuple(raw['bands']),
@@ -484,7 +478,6 @@ class ObservingConfig:
             pixel_scale_arcsec=float(raw['pixel_scale_arcsec']),
             stamp_broadband_pix=int(stamp['broadband_pix']),
             stamp_grism_pix=int(stamp['grism_pix']),
-            oversample=int(render['oversample']),
             content_hash=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
@@ -494,6 +487,7 @@ class ObservingConfig:
 # =============================================================================
 
 _DRAW_DISTS = ('uniform', 'lognormal_tf')
+_POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
 _DISPATCH_BACKENDS = ('local', 'slurm')
@@ -509,7 +503,7 @@ _BROADCAST_FIXED = ('h_over_r', 'x0', 'y0')
 
 @dataclass(frozen=True)
 class DrawSpec:
-    """One drawn truth distribution from the spec's bank.draw block."""
+    """One drawn truth distribution from the spec's population.draw block."""
 
     dist: str
     params: Dict[str, float]
@@ -542,9 +536,10 @@ class EnsembleSpec:
     seed: int
     measurement: str
 
-    # bank: exactly one plot axis, either a truth stratification (cosi bins)
-    # or a config sweep (line_snr values; galaxies + noise shared across the
-    # sweep -- common random numbers)
+    # population: exactly one plot axis, either a truth stratification (cosi
+    # bins) or a config sweep (line_snr values; galaxies + noise shared
+    # across the sweep -- common random numbers)
+    population_type: str  # 'sampled' | 'catalog' (catalog not implemented)
     stratify_param: str  # 'cosi' | 'line_snr'
     stratify_n_bins: int  # cosi axis only; 0 for a config sweep
     stratify_range: Tuple[float, float]  # cosi axis only; (0, 0) for a sweep
@@ -564,7 +559,10 @@ class EnsembleSpec:
     # ring
     ring_enabled: bool
 
-    # observing
+    # model render
+    render_oversample: int
+
+    # observation
     observed_config: str
     broadband_snr: float
     line_snr: float
@@ -597,6 +595,16 @@ class EnsembleSpec:
     shear_fit_prior_sigma: float = 0.2
 
     def __post_init__(self):
+        if self.population_type not in _POPULATION_TYPES:
+            raise ValueError(
+                f"population type '{self.population_type}'; supported: "
+                f"{_POPULATION_TYPES}"
+            )
+        if not isinstance(self.render_oversample, int) or self.render_oversample <= 0:
+            raise ValueError(
+                f"render_oversample ({self.render_oversample}) must be a "
+                f"positive int"
+            )
         if self.measurement not in _MEASUREMENTS:
             raise NotImplementedError(
                 f"measurement '{self.measurement}' not supported; "
@@ -636,7 +644,7 @@ class EnsembleSpec:
                 raise ValueError("line_snr sweep values must be unique")
             if 'cosi' not in self.draw:
                 raise ValueError(
-                    "sigma_eps_vs_line_snr requires cosi in bank.draw "
+                    "sigma_eps_vs_line_snr requires cosi in population.draw "
                     "(cosi is a drawn population truth on this axis)"
                 )
         if self.n_gal_per_bin < 1 or self.m_noise < 1:
@@ -702,37 +710,59 @@ class EnsembleSpec:
             raise ValueError(f"{path}: ensemble spec must be a mapping")
 
         allowed = (
-            'run_name',
-            'version',
-            'description',
-            'seed',
-            'measurement',
-            'bank',
-            'shear',
-            'ring',
-            'observed_config',
-            'broadband_snr',
-            'line_snr',
+            'run',
+            'population',
+            'model',
+            'observation',
             'fit',
             'dispatch',
             'output',
         )
         _reject_unknown(raw, allowed, str(path))
-        # line_snr is required as a scalar UNLESS it is the swept axis
-        _require_keys(raw, tuple(k for k in allowed if k != 'line_snr'), str(path))
+        # the model block is optional (render defaults apply)
+        _require_keys(raw, tuple(k for k in allowed if k != 'model'), str(path))
 
-        bank = raw['bank']
+        run = raw['run']
         _reject_unknown(
-            bank,
-            ('stratify', 'n_gal_per_bin', 'm_noise', 'draw', 'fixed'),
-            f"{path}:bank",
+            run,
+            ('name', 'version', 'description', 'seed', 'measurement', 'noise_reps'),
+            f"{path}:run",
         )
-        _require_keys(bank, ('stratify', 'n_gal_per_bin', 'draw'), f"{path}:bank")
-        stratify = bank['stratify']
+        _require_keys(
+            run,
+            ('name', 'version', 'description', 'seed', 'measurement'),
+            f"{path}:run",
+        )
+
+        population = raw['population']
+        _reject_unknown(
+            population,
+            ('type', 'stratify', 'n_gal_per_bin', 'draw', 'fixed', 'shear', 'ring'),
+            f"{path}:population",
+        )
+        _require_keys(
+            population,
+            ('type', 'stratify', 'n_gal_per_bin', 'draw', 'shear', 'ring'),
+            f"{path}:population",
+        )
+        population_type = str(population['type'])
+        if population_type == 'catalog':
+            raise NotImplementedError("catalog population backend not yet implemented")
+
+        observation = raw['observation']
+        _reject_unknown(observation, ('config', 'snr'), f"{path}:observation")
+        _require_keys(observation, ('config', 'snr'), f"{path}:observation")
+        snr = observation['snr']
+        # observation.snr.line is required as a scalar UNLESS it is the
+        # swept axis
+        _reject_unknown(snr, ('broadband', 'line'), f"{path}:observation.snr")
+        _require_keys(snr, ('broadband',), f"{path}:observation.snr")
+
+        stratify = population['stratify']
         if len(stratify) != 1:
             raise ValueError(
-                f"{path}:bank.stratify must contain exactly one parameter, "
-                f"got {list(stratify)}"
+                f"{path}:population.stratify must contain exactly one "
+                f"parameter, got {list(stratify)}"
             )
         strat_param, strat_cfg = next(iter(stratify.items()))
         strat_n_bins = 0
@@ -740,24 +770,32 @@ class EnsembleSpec:
         sweep_values: Tuple[float, ...] = ()
         if strat_param == 'line_snr':
             _reject_unknown(
-                strat_cfg, ('values',), f"{path}:bank.stratify.{strat_param}"
-            )
-            _require_keys(strat_cfg, ('values',), f"{path}:bank.stratify.{strat_param}")
-            sweep_values = tuple(float(v) for v in strat_cfg['values'])
-            if 'line_snr' in raw:
-                raise ValueError(
-                    f"{path}: top-level line_snr conflicts with the "
-                    f"line_snr sweep axis; remove it (per-fit values come "
-                    f"from bank.stratify.line_snr.values)"
-                )
-        else:
-            if 'line_snr' not in raw:
-                raise ValueError(f"{path}: missing required keys ['line_snr']")
-            _reject_unknown(
-                strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
+                strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
             )
             _require_keys(
-                strat_cfg, ('n_bins', 'range'), f"{path}:bank.stratify.{strat_param}"
+                strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
+            )
+            sweep_values = tuple(float(v) for v in strat_cfg['values'])
+            if 'line' in snr:
+                raise ValueError(
+                    f"{path}: observation.snr.line conflicts with the "
+                    f"line_snr sweep axis; remove it (per-fit values come "
+                    f"from population.stratify.line_snr.values)"
+                )
+        else:
+            if 'line' not in snr:
+                raise ValueError(
+                    f"{path}:observation.snr: missing required keys ['line']"
+                )
+            _reject_unknown(
+                strat_cfg,
+                ('n_bins', 'range'),
+                f"{path}:population.stratify.{strat_param}",
+            )
+            _require_keys(
+                strat_cfg,
+                ('n_bins', 'range'),
+                f"{path}:population.stratify.{strat_param}",
             )
             strat_n_bins = int(strat_cfg['n_bins'])
             strat_range = (
@@ -766,37 +804,45 @@ class EnsembleSpec:
             )
 
         draw = {}
-        for name, dcfg in bank['draw'].items():
+        for name, dcfg in population['draw'].items():
             dcfg = dict(dcfg)
             dist = dcfg.pop('dist', None)
             if dist is None:
-                raise ValueError(f"{path}:bank.draw.{name}: missing 'dist'")
+                raise ValueError(f"{path}:population.draw.{name}: missing 'dist'")
             if dist == 'uniform' and 'range' in dcfg:
                 lo, hi = dcfg.pop('range')
                 dcfg.update(low=lo, high=hi)
             resolved = _PARAM_ALIASES.get(name, name)
             draw[resolved] = DrawSpec(dist=dist, params=dcfg)
 
-        fixed = _resolve_fixed_block(bank.get('fixed', {}), context=f"{path}")
+        fixed = _resolve_fixed_block(population.get('fixed', {}), context=f"{path}")
 
-        shear = raw['shear']
+        shear = population['shear']
         _reject_unknown(
             shear,
-            ('scheme', 'g1', 'g2', 'grid', 'component', 'fit_prior_sigma'),
-            f"{path}:shear",
+            ('scheme', 'g1', 'g2', 'grid', 'component'),
+            f"{path}:population.shear",
         )
         scheme = shear.get('scheme', 'fixed')
         shear_grid: Tuple[float, ...] = ()
         shear_component = ''
         if scheme == 'grid':
-            _require_keys(shear, ('grid', 'component'), f"{path}:shear")
+            _require_keys(shear, ('grid', 'component'), f"{path}:population.shear")
             shear_grid = tuple(float(g) for g in shear['grid'])
             shear_component = shear['component']
 
-        ring = raw.get('ring', {})
-        _reject_unknown(ring, ('enabled', 'antithetic_g'), f"{path}:ring")
+        ring = population['ring']
+        _reject_unknown(ring, ('enabled', 'antithetic_g'), f"{path}:population.ring")
         if ring.get('antithetic_g', False):
             raise NotImplementedError("antithetic_g (+/-g pairs) is scoped out of v1")
+
+        model = raw.get('model', {})
+        _reject_unknown(model, ('render',), f"{path}:model")
+        render = model.get('render', {})
+        _reject_unknown(render, ('oversample',), f"{path}:model.render")
+        render_oversample = _require_yaml_int(
+            render, 'oversample', 3, f"{path}:model.render"
+        )
 
         fit = raw['fit']
         _reject_unknown(
@@ -810,6 +856,7 @@ class EnsembleSpec:
                 'target_accept',
                 'n_map_starts',
                 'pin_z_to_truth',
+                'shear_prior_sigma',
             ),
             f"{path}:fit",
         )
@@ -837,17 +884,18 @@ class EnsembleSpec:
         _reject_unknown(output, ('save_chains', 'save_mocks'), f"{path}:output")
 
         return cls(
-            run_name=str(raw['run_name']),
-            version=int(raw['version']),
-            description=str(raw['description']),
-            seed=int(raw['seed']),
-            measurement=str(raw['measurement']),
+            run_name=str(run['name']),
+            version=int(run['version']),
+            description=str(run['description']),
+            seed=int(run['seed']),
+            measurement=str(run['measurement']),
+            population_type=population_type,
             stratify_param=strat_param,
             stratify_n_bins=strat_n_bins,
             stratify_range=strat_range,
             sweep_values=sweep_values,
-            n_gal_per_bin=int(bank['n_gal_per_bin']),
-            m_noise=int(bank.get('m_noise', 1)),
+            n_gal_per_bin=int(population['n_gal_per_bin']),
+            m_noise=int(run.get('noise_reps', 1)),
             draw=draw,
             fixed=fixed,
             shear_scheme=scheme,
@@ -855,16 +903,15 @@ class EnsembleSpec:
             g2=float(shear.get('g2', 0.0)),
             shear_grid=shear_grid,
             shear_component=shear_component,
-            shear_fit_prior_sigma=float(shear.get('fit_prior_sigma', 0.2)),
+            shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
             ring_enabled=bool(ring.get('enabled', False)),
-            observed_config=str(raw['observed_config']),
-            broadband_snr=float(raw['broadband_snr']),
+            render_oversample=render_oversample,
+            observed_config=str(observation['config']),
+            broadband_snr=float(snr['broadband']),
             # swept axis: per-fit values live in the manifest; the scalar
             # field is unused (set to the first sweep value as a placeholder
             # that keeps validation simple)
-            line_snr=(
-                float(raw['line_snr']) if 'line_snr' in raw else float(sweep_values[0])
-            ),
+            line_snr=(float(snr['line']) if 'line' in snr else float(sweep_values[0])),
             n_warmup=int(fit.get('n_warmup', 500)),
             n_samples=int(fit.get('n_samples', 1000)),
             n_chains=int(fit.get('n_chains', 4)),
@@ -887,7 +934,7 @@ class EnsembleSpec:
 
 
 def _resolve_fixed_block(fixed_raw: dict, context: str) -> Dict[str, float]:
-    """Resolve the spec's bank.fixed block to dotted parameter names.
+    """Resolve the spec's population.fixed block to dotted parameter names.
 
     Short keys in _BROADCAST_FIXED are kept as-is (broadcast to every scene
     component by the scene builder); dotted keys pass through; aliased keys
@@ -897,10 +944,10 @@ def _resolve_fixed_block(fixed_raw: dict, context: str) -> Dict[str, float]:
     for name, value in fixed_raw.items():
         if name == 'flux':
             raise ValueError(
-                f"{context}:bank.fixed: 'flux' is ambiguous across components "
-                f"(band flux vs line flux vs continuum flux_per_nm); use "
-                f"dotted names like 'F087.flux', or omit to keep scene "
-                f"defaults"
+                f"{context}:population.fixed: 'flux' is ambiguous across "
+                f"components (band flux vs line flux vs continuum "
+                f"flux_per_nm); use dotted names like 'F087.flux', or omit "
+                f"to keep scene defaults"
             )
         resolved = _PARAM_ALIASES.get(name, name)
         fixed[resolved] = float(value)

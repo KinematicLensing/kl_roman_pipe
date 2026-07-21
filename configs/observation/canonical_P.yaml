@@ -1,4 +1,4 @@
-# Flagship-P structural observing config: 2 broadbands (F087 + F158) + 4
+# Flagship-P structural observation config: 2 broadbands (F087 + F158) + 4
 # grism rolls (0/45/90/135 deg), single Halpha line. Mirrors the
 # tests/test_flagship.py production scene: roll angle is a pure WCS rotation
 # of the same sky galaxy; each band and each roll is an independent exposure
@@ -15,4 +15,3 @@ psf:
   grism: {type: gaussian, fwhm_arcsec: 0.18}
 pixel_scale_arcsec: 0.11
 stamp: {broadband_pix: 32, grism_pix: 32}
-render: {oversample: 3}

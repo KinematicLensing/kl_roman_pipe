@@ -2,7 +2,7 @@
 Canonical galaxy scene for ensemble fits.
 
 One place defines (a) the full dotted truth-parameter defaults for a scene
-assembled from an ObservingConfig's bands and lines, (b) the fit prior rules,
+assembled from an ObservationConfig's bands and lines, (b) the fit prior rules,
 and (c) the SourceModel structure. The expander overrides the per-fit varying
 truths (stratified cosi, drawn theta_int / vel.vcirc / z, injected g1 / g2)
 on top of these defaults; the worker builds the matching fit priors.
@@ -14,7 +14,8 @@ are a separate, pending decision.
 
 Prior policy: drawn truth parameters get their generating distribution as the
 fit prior (self-consistent by construction); nuisance parameters that do not
-vary across the bank keep the flagship priors centered on the scene defaults;
+vary across the population keep the flagship priors centered on the scene
+defaults;
 z is pinned to the per-fit truth in v1.
 """
 
@@ -31,7 +32,7 @@ from kl_pipe.priors import (
 )
 
 if TYPE_CHECKING:
-    from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
+    from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
     from kl_pipe.source import SourceModel
 
 # per-band scene defaults (flagship values; F184 mirrors F087, slightly
@@ -61,12 +62,12 @@ _SHARED_TRUTH = {
 
 
 # components carrying the broadcastable geometry params (h_over_r, x0, y0)
-def _geometry_components(config: 'ObservingConfig') -> tuple:
+def _geometry_components(config: 'ObservationConfig') -> tuple:
     return tuple(config.bands) + ('Halpha', 'Halpha.cont')
 
 
-def build_source_model(config: 'ObservingConfig') -> 'SourceModel':
-    """SourceModel matching the observing config's bands and lines."""
+def build_source_model(config: 'ObservationConfig') -> 'SourceModel':
+    """SourceModel matching the observation config's bands and lines."""
     from kl_pipe.intensity import InclinedExponentialModel
     from kl_pipe.lines import EmissionLine
     from kl_pipe.source import SourceModel
@@ -92,17 +93,17 @@ def build_source_model(config: 'ObservingConfig') -> 'SourceModel':
 
 
 def scene_truth_defaults(
-    config: 'ObservingConfig', fixed_overrides: Dict[str, float]
+    config: 'ObservationConfig', fixed_overrides: Dict[str, float]
 ) -> Dict[str, float]:
     """
     Full dotted truth defaults for the scene, before per-fit overrides.
 
     Parameters
     ----------
-    config : ObservingConfig
+    config : ObservationConfig
         Defines which bands (and lines) the scene contains.
     fixed_overrides : dict
-        The spec's resolved bank.fixed block. Short keys 'h_over_r', 'x0',
+        The spec's resolved population.fixed block. Short keys 'h_over_r', 'x0',
         'y0' broadcast to every scene component; dotted keys override a
         single parameter. Unknown dotted keys raise.
 
@@ -138,7 +139,7 @@ def scene_truth_defaults(
         else:
             if name not in truth:
                 raise ValueError(
-                    f"bank.fixed key '{name}' is not a scene parameter; "
+                    f"population.fixed key '{name}' is not a scene parameter; "
                     f"scene parameters: {sorted(truth)}"
                 )
             truth[name] = value
@@ -146,7 +147,7 @@ def scene_truth_defaults(
 
 
 def scene_priors(
-    truth: Dict[str, float], config: 'ObservingConfig', spec: 'EnsembleSpec'
+    truth: Dict[str, float], config: 'ObservationConfig', spec: 'EnsembleSpec'
 ) -> PriorDict:
     """
     Fit priors for one fit, self-consistent with the generating population.
@@ -155,7 +156,7 @@ def scene_priors(
     ----------
     truth : dict
         The fit's fully-resolved dotted truth (from the manifest row).
-    config : ObservingConfig
+    config : ObservationConfig
         Scene structure (bands).
     spec : EnsembleSpec
         Supplies the population distributions for stratified/drawn params.
@@ -233,14 +234,16 @@ def scene_priors(
     if 'cosi' not in prior_spec:
         raise ValueError(
             "cosi has no prior: it must be either the stratified axis or a "
-            "bank.draw entry"
+            "population.draw entry"
         )
     if 'theta_int' not in prior_spec:
         raise ValueError(
-            "spec bank.draw must include theta_int (position angle population)"
+            "spec population.draw must include theta_int (position angle population)"
         )
     if 'vel.vcirc' not in prior_spec:
-        raise ValueError("spec bank.draw must include vcirc (Tully-Fisher population)")
+        raise ValueError(
+            "spec population.draw must include vcirc (Tully-Fisher population)"
+        )
 
     return PriorDict(prior_spec)
 

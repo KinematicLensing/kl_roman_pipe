@@ -1,7 +1,7 @@
 """
 Unit tests for the ensemble pipeline infrastructure (kl_pipe/ensemble/).
 
-Covers spec/observing-config validation, deterministic expansion, the CRN
+Covers spec/observation-config validation, deterministic expansion, the CRN
 noise-seed rule, ring pairing, the filesystem ledger, and collation. The
 fit execution path (worker/mocks) is exercised by the local shakedown and
 a small marked integration test, not here -- these tests are fast and
@@ -30,13 +30,13 @@ from kl_pipe.ensemble.scene import scene_priors, scene_truth_defaults
 from kl_pipe.ensemble.spec import (
     EnsembleSpec,
     FoldingThresholdTier,
-    ObservingConfig,
+    ObservationConfig,
     PSFSpec,
 )
 from kl_pipe.priors import LogNormal, Uniform
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REGISTRY = REPO_ROOT / 'configs' / 'observing'
+REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
 P_GSNR_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_gsnr_P_vista.yaml'
 
@@ -47,8 +47,8 @@ def dev_spec() -> EnsembleSpec:
 
 
 @pytest.fixture(scope='module')
-def canonical_q() -> ObservingConfig:
-    return ObservingConfig.from_yaml(REGISTRY / 'canonical_Q.yaml')
+def canonical_q() -> ObservationConfig:
+    return ObservationConfig.from_yaml(REGISTRY / 'canonical_Q.yaml')
 
 
 def _spec_dict() -> dict:
@@ -62,7 +62,7 @@ def _write_spec(tmp_path: Path, spec_dict: dict) -> Path:
 
 
 # ==============================================================================
-# Spec + observing-config validation
+# Spec + observation-config validation
 # ==============================================================================
 
 
@@ -81,19 +81,19 @@ class TestSpecValidation:
 
     def test_flux_fixed_rejected(self, tmp_path):
         d = _spec_dict()
-        d['bank']['fixed']['flux'] = 1.0
+        d['population']['fixed']['flux'] = 1.0
         with pytest.raises(ValueError, match="'flux' is ambiguous"):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
     def test_unknown_draw_dist_rejected(self, tmp_path):
         d = _spec_dict()
-        d['bank']['draw']['z'] = {'dist': 'hlss_halpha_nz', 'low': 1, 'high': 2}
+        d['population']['draw']['z'] = {'dist': 'hlss_halpha_nz', 'low': 1, 'high': 2}
         with pytest.raises(ValueError, match='unknown draw dist'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
     def test_antithetic_g_rejected(self, tmp_path):
         d = _spec_dict()
-        d['ring'] = {'enabled': True, 'antithetic_g': True}
+        d['population']['ring'] = {'enabled': True, 'antithetic_g': True}
         with pytest.raises(NotImplementedError, match='antithetic_g'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
@@ -111,12 +111,35 @@ class TestSpecValidation:
 
     def test_grid_scheme_needs_component(self, tmp_path):
         d = _spec_dict()
-        d['shear'] = {'scheme': 'grid', 'grid': [-0.05, 0.0, 0.05]}
+        d['population']['shear'] = {'scheme': 'grid', 'grid': [-0.05, 0.0, 0.05]}
         with pytest.raises(ValueError, match='missing required keys'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
+    def test_catalog_population_rejected(self, tmp_path):
+        d = _spec_dict()
+        d['population']['type'] = 'catalog'
+        with pytest.raises(NotImplementedError, match='catalog population backend'):
+            EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
-class TestObservingConfig:
+    def test_old_flat_schema_rejected(self, tmp_path):
+        # pre-hierarchical flat schema (top-level run_name/bank/...) must
+        # raise loudly on its unknown keys, not half-parse
+        old = {
+            'run_name': 'legacy',
+            'version': 1,
+            'description': 'old flat schema',
+            'seed': 1,
+            'measurement': 'sigma_eps_vs_cosi',
+            'bank': {'stratify': {'cosi': {'n_bins': 2, 'range': [0.3, 0.9]}}},
+            'observed_config': 'canonical_Q',
+            'broadband_snr': 100,
+            'line_snr': 100,
+        }
+        with pytest.raises(ValueError, match='unknown keys'):
+            EnsembleSpec.from_yaml(_write_spec(tmp_path, old))
+
+
+class TestObservationConfig:
     def test_canonical_q_loads(self, canonical_q):
         assert canonical_q.bands == ('F087',)
         assert canonical_q.grism_rolls_deg == (0.0,)
@@ -129,7 +152,7 @@ class TestObservingConfig:
         path = tmp_path / 'bad.yaml'
         path.write_text(yaml.safe_dump(raw))
         with pytest.raises(NotImplementedError, match='single-Halpha'):
-            ObservingConfig.from_yaml(path)
+            ObservationConfig.from_yaml(path)
 
     def test_non_gaussian_psf_rejected(self, tmp_path):
         raw = yaml.safe_load((REGISTRY / 'canonical_Q.yaml').read_text())
@@ -137,7 +160,7 @@ class TestObservingConfig:
         path = tmp_path / 'bad.yaml'
         path.write_text(yaml.safe_dump(raw))
         with pytest.raises(NotImplementedError, match='gaussian'):
-            ObservingConfig.from_yaml(path)
+            ObservationConfig.from_yaml(path)
 
     def test_gaussian_psf_specs(self, canonical_q):
         assert canonical_q.band_psf['F087'].psf_type == 'gaussian'
@@ -146,7 +169,7 @@ class TestObservingConfig:
         assert canonical_q.grism_psf.fwhm_arcsec == 0.18
 
     def test_canonical_p_roman_loads(self):
-        config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
+        config = ObservationConfig.from_yaml(REGISTRY / 'canonical_P_roman.yaml')
         assert config.bands == ('F158', 'F184')
         assert config.grism_rolls_deg == (0.0, 45.0, 90.0, 135.0)
         assert config.grism_psf.psf_type == 'roman_wfi'
@@ -177,7 +200,7 @@ class TestFoldingThresholdTiers:
         raw['psf']['grism'] = grism_block
         path = tmp_path / 'obs.yaml'
         path.write_text(yaml.safe_dump(raw))
-        return ObservingConfig.from_yaml(path).grism_psf
+        return ObservationConfig.from_yaml(path).grism_psf
 
     def test_two_tier_resolution(self, tmp_path):
         # ruling schedule: ft=0.01 for z<=1.2, tighter 5e-3 above
@@ -406,7 +429,7 @@ class TestExpander:
 
     def test_crn_noise_seed_constant_across_shear_grid(self, tmp_path, canonical_q):
         d = _spec_dict()
-        d['shear'] = {
+        d['population']['shear'] = {
             'scheme': 'grid',
             'component': 'g1',
             'grid': [-0.05, -0.01, 0.01, 0.05],
@@ -423,7 +446,7 @@ class TestExpander:
 
     def test_independent_noise_across_reps(self, tmp_path, canonical_q):
         d = _spec_dict()
-        d['bank']['m_noise'] = 3
+        d['run']['noise_reps'] = 3
         spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
         m = build_manifest(spec, canonical_q)
         for _, group in m.groupby(['cosi_bin', 'galaxy_id']):
@@ -431,7 +454,7 @@ class TestExpander:
 
     def test_ring_pairs(self, tmp_path, canonical_q):
         d = _spec_dict()
-        d['ring'] = {'enabled': True}
+        d['population']['ring'] = {'enabled': True}
         spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
         m = build_manifest(spec, canonical_q)
         assert len(m) == 2 * 4
@@ -466,11 +489,11 @@ class TestExpander:
         run_dir = expand(DEV_SPEC, REGISTRY, tmp_path / 'runs')
         record = json.loads((run_dir / 'provenance' / 'expansion.json').read_text())
         assert record['n_fits'] == 4
-        assert len(record['observing_config_hash']) == 64
+        assert len(record['observation_config_hash']) == 64
         spec, config, manifest = load_run(run_dir)
         assert len(manifest) == 4
         # snapshot, not live registry: hash matches the copied file
-        assert config.content_hash == record['observing_config_hash']
+        assert config.content_hash == record['observation_config_hash']
 
     def test_expand_refuses_overwrite(self, tmp_path):
         expand(DEV_SPEC, REGISTRY, tmp_path / 'runs')
@@ -648,14 +671,14 @@ class TestLineSnrSweep:
 
     def test_top_level_line_snr_conflict(self, tmp_path, gsnr_spec):
         d = yaml.safe_load(GSNR_SPEC.read_text())
-        d['line_snr'] = 30
+        d['observation']['snr']['line'] = 30
         with pytest.raises(ValueError, match='conflicts with the'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
     def test_cosi_must_be_drawn(self, tmp_path):
         d = yaml.safe_load(GSNR_SPEC.read_text())
-        del d['bank']['draw']['cosi']
-        with pytest.raises(ValueError, match='cosi in bank.draw'):
+        del d['population']['draw']['cosi']
+        with pytest.raises(ValueError, match='cosi in population.draw'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
     def test_crn_across_sweep(self, gsnr_spec, canonical_q):
@@ -753,7 +776,7 @@ def test_shear_information_increases_with_line_snr():
     component gx is not degenerate with theta_int. No tolerance is tuned; the
     assertion is pure monotonicity (more information never widens a posterior)."""
     spec = EnsembleSpec.from_yaml(P_GSNR_SPEC)
-    config = ObservingConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
+    config = ObservationConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
     truth = scene_truth_defaults(config, spec.fixed)
     truth.update(
         {

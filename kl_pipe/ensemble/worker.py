@@ -28,7 +28,7 @@ import pandas as pd
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.expander import truth_from_row
 from kl_pipe.ensemble.mocks import build_fit_inputs
-from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
+from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
 
 # sampler-seed stream tag: distinct from the expander's galaxy/noise streams
 _SAMPLER_STREAM = 3
@@ -93,7 +93,7 @@ def _is_catastrophic(summary: dict) -> bool:
 def run_single_fit(
     row: Dict,
     spec: EnsembleSpec,
-    config: ObservingConfig,
+    config: ObservationConfig,
     run_dir: Path,
 ) -> dict:
     """Run one fit and return its summary row (also persisted by the caller).
@@ -134,7 +134,7 @@ def run_single_fit(
 def _run_fit_attempt(
     row: Dict,
     spec: EnsembleSpec,
-    config: ObservingConfig,
+    config: ObservationConfig,
     run_dir: Path,
     truth: Dict[str, float],
     noise_seed: int,

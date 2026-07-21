@@ -5,7 +5,7 @@ collate per-fit results into a single catalog.
 
 Modules
 -------
-spec       Ensemble spec + observing-config registry (YAML, validated)
+spec       Ensemble spec + observation-config registry (YAML, validated)
 scene      Canonical galaxy scene: truth defaults + fit prior rules
 expander   Deterministic spec -> manifest.parquet expansion
 mocks      Per-fit on-the-fly mock observation construction
@@ -22,6 +22,6 @@ python -m kl_pipe.ensemble status --run-dir runs/<run_name>
 python -m kl_pipe.ensemble collate --run-dir runs/<run_name>
 """
 
-from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig, PSFSpec
+from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig, PSFSpec
 
-__all__ = ['EnsembleSpec', 'ObservingConfig', 'PSFSpec']
+__all__ = ['EnsembleSpec', 'ObservationConfig', 'PSFSpec']

@@ -80,14 +80,14 @@ Gotchas that have bitten before:
 - gh-dev QOS rejects job arrays while an idev session is running
   (`QOSMaxSubmitJobPerUserLimit`) -- statistics runs use `queue: gh`;
   gh-dev is for idev shakedowns only.
-- `observed_config: canonical_Q` (1 band, 1 roll) is the shakedown config
+- `observation.config: canonical_Q` (1 band, 1 roll) is the shakedown config
   only -- it cannot constrain vcirc or break g2/theta_int; measurement runs
   need `canonical_P` (2 bands, 4 rolls).
 
 ## Module map
 
 ```
-spec.py         EnsembleSpec + ObservingConfig registry (strict YAML validation)
+spec.py         EnsembleSpec + ObservationConfig registry (strict YAML validation)
 scene.py        canonical galaxy scene: truth defaults + fit prior rules
 expander.py     spec -> manifest.parquet (deterministic seeds, CRN rule,
                 fit_id, provenance snapshot)
@@ -105,6 +105,6 @@ __main__.py     CLI: expand | run | worker | status | collate | slurm | reclaim
 ```
 
 Generic vs paper-specific: everything except `scene.py`, `mocks.py`, and the
-`ObservingConfig` schema is datavector-agnostic; those three form the
+`ObservationConfig` schema is datavector-agnostic; those three form the
 "datavector recipe" for the Roman imaging+grism paper (see the architecture
 section of `docs/ensemble_workflow.md` for the extension seam).

@@ -1,33 +1,39 @@
 # sigma_eps vs cos i -- dev shakedown spec (config Q, local backend).
 # Micro-shakedown sizing: 2 bins x 2 galaxies = 4 fits with tiny chains.
-run_name: sigma_eps_cosi_dev
-version: 1
-description: "sigma_eps vs cos i, local micro-shakedown, config Q"
-seed: 20260713
-measurement: sigma_eps_vs_cosi
+run:
+  name: sigma_eps_cosi_dev
+  version: 1
+  description: "sigma_eps vs cos i, local micro-shakedown, config Q"
+  seed: 20260713
+  measurement: sigma_eps_vs_cosi
+  noise_reps: 1
 
-bank:
+population:
+  type: sampled
   stratify:
     cosi: {n_bins: 2, range: [0.3, 0.9]}
   n_gal_per_bin: 2
-  m_noise: 1
   draw:
     theta_int: {dist: uniform, low: 0.0, high: 3.141592653589793}
     vcirc: {dist: lognormal_tf, center_kms: 200.0, sigma_tf_dex: 0.08}
     z: {dist: uniform, low: 1.0, high: 1.9}
   fixed: {h_over_r: 0.1, x0: 0.0, y0: 0.0}
+  shear:
+    scheme: fixed
+    g1: 0.05
+    g2: 0.05
+  ring:
+    enabled: false
 
-shear:
-  scheme: fixed
-  g1: 0.05
-  g2: 0.05
+model:
+  render:
+    oversample: 3
 
-ring:
-  enabled: false
-
-observed_config: canonical_Q
-broadband_snr: 100
-line_snr: 100
+observation:
+  config: canonical_Q
+  snr:
+    broadband: 100
+    line: 100
 
 fit:
   sampler: numpyro

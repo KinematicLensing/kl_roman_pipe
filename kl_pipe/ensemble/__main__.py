@@ -32,8 +32,8 @@ def main(argv=None) -> int:
     p_expand.add_argument(
         '--registry',
         type=Path,
-        default=Path('configs/observing'),
-        help='observing-config registry dir (default: configs/observing)',
+        default=Path('configs/observation'),
+        help='observation-config registry dir (default: configs/observation)',
     )
     p_expand.add_argument(
         '--runs-dir',
