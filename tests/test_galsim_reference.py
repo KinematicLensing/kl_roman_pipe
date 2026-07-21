@@ -281,18 +281,23 @@ class TestGalSimReferenceGate:
         # against the same independent GalSim-chromatic reference. The
         # analytic path is the n_lambda -> infinity limit of the slice
         # method, so it must sit at or below the refined-grid floor.
-        # Measured (2026-07-06, float64, this gate, oversample=5):
-        # max|diff|/peak=0.206%, mean|diff|/peak=0.019% -- well below the
-        # n_lambda=251 slice floor (0.534%/0.030%): removing slice
-        # quantization also removes part of the shift-interpolation
-        # disagreement. Frozen at ~3x measured.
+        # Provenance history: the 2026-07-06 freeze recorded
+        # max|diff|/peak=0.206% and set max_tol=0.006 (~3x). That value is
+        # not reproducible in current environments: 2026-07-19 re-measurement
+        # gives 0.529024% (macOS/M3, bit-identical at the freeze commit and
+        # HEAD) and 0.636% (CI ubuntu) -- the metric is environment-sensitive
+        # because the residual is dominated by disperse_cube's bilinear
+        # sub-pixel shift interpolation, and the klpipe env was rebuilt near
+        # the freeze date. max_tol=0.010 set by user ruling 2026-07-20
+        # (~1.6x the worst measured platform, CI ubuntu 0.636%). The tight
+        # regression screws are mean_tol and flux_tol below, unchanged.
         kl_image, ref_image = _render_both(
             vcirc=200.0, n_lambda=None, dispersal_method='analytic'
         )
         _assert_agreement(
             kl_image,
             ref_image,
-            max_tol=0.006,
+            max_tol=0.010,
             mean_tol=0.0006,
             flux_tol=self.FLUX_TOL,
             label='dynamic scene (vcirc=200, analytic dispersal)',

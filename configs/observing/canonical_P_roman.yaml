@@ -1,0 +1,37 @@
+# Flagship-P structural observing config with the realistic Roman WFI PSF
+# (galsim.roman.getPSF, monochromatic): 2 broadbands (F158 + F184, official
+# Roman WFI filter names; galsim maps F158 to its legacy key H158) + 4 grism
+# rolls (0/45/90/135 deg), single Halpha line. Same roll/stamp/render
+# geometry as canonical_P. Broadband PSFs are evaluated at each band's
+# effective wavelength; the grism PSF at the observed Halpha wavelength
+# (z-dependent), with the kernel stamp pinned at the ensemble's largest
+# observed wavelength so the PSF array shape is constant across fits.
+id: canonical_P_roman
+bands: [F158, F184]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+# FIT-kernel folding_threshold follows a z-tiered schedule (fit kernels only;
+# mock/truth renders keep the galsim default 5e-3 kernels, mock_folding_threshold
+# unset). The rigor audit found the ft=0.01 acceptance does not extend across z:
+# wing-truncation bias grows monotonically with kernel size and exceeds the
+# z<=1.2 envelope by z=1.9. User ruling: ft=0.01 for z<=1.2, tighter ft=5e-3
+# above -- at the tight tier ft == the mock default 5e-3, so mock == fit by
+# construction (zero mock/fit kernel mismatch). Measured cost of the schedule
+# with the rfft2 + minimal-padding psf patch: ensemble-mean ~1.27x, per-eval
+# 1.56x at z=1.9; z<=1.2 scenes resolve ft=0.01 (unchanged cost).
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}
+render: {oversample: 3}

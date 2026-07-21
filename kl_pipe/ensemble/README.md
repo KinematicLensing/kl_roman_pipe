@@ -92,7 +92,8 @@ scene.py        canonical galaxy scene: truth defaults + fit prior rules
 expander.py     spec -> manifest.parquet (deterministic seeds, CRN rule,
                 fit_id, provenance snapshot)
 mocks.py        truth row -> noisy mock observations (model-rendered,
-                matched-filter noise, galsim Gaussian PSFs)
+                matched-filter noise; PSF per config: galsim Gaussian or
+                Roman WFI via galsim.roman.getPSF, z-dependent grism kernel)
 worker.py       claim -> mock -> NUTS (Laplace precond, PA-stratified MAP
                 starts, one retry on broken chains) -> per-fit parquet
 ledger.py       lock-free filesystem status (atomic-mkdir claims,

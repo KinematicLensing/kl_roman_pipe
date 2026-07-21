@@ -552,6 +552,13 @@ def compute_effective_maxk(
         psf_ft = np.array(
             [abs(psf.kValue(galsim.PositionD(0.0, float(k)))) for k in k_scan]
         )
+        # kValue beyond the profile's own band limit (psf.maxk) is
+        # interpolation noise, not signal: pupil-plane PSFs (e.g.
+        # galsim.roman getPSF) are backed by interpolated images whose
+        # kValue sidelobes bounce back above threshold past the physical
+        # aperture cutoff, which would inflate the scan result and demand
+        # absurd oversampling. Treat the FT as zero past maxk.
+        psf_ft = np.where(k_scan <= float(psf.maxk), psf_ft, 0.0)
         product = product * psf_ft
 
     above = k_scan[product > threshold]
@@ -648,8 +655,14 @@ def compute_effective_maxk_grism(
 
     # PSF damping: post-PSF amplitude at k is bounded by FT[PSF](k). Find the
     # largest k <= k_cube_bare at which FT[PSF] remains above threshold.
+    # The scan stops at the PSF's own band limit (psf.maxk): kValue beyond it
+    # is interpolation noise, not signal -- pupil-plane PSFs (e.g.
+    # galsim.roman getPSF) are backed by interpolated images whose kValue
+    # sidelobes bounce back above threshold past the physical aperture
+    # cutoff, which would inflate the scan result and demand absurd
+    # oversampling.
     n_scan = 500
-    k_scan = np.linspace(0.0, k_cube_bare, n_scan)
+    k_scan = np.linspace(0.0, min(k_cube_bare, float(psf.maxk)), n_scan)
 
     import galsim
 

@@ -13,10 +13,16 @@ diagnostic plot doubles as a presentation / paper asset. Outputs sort first
 alphabetically in ``tests/out/`` via the ``00_flagship/`` directory.
 
 Configuration (Roman-like), dev config:
-- F087 broadband: 32x32 image at 0.11 arcsec/pixel (native Roman), PSF FWHM 0.18"
+- F087 broadband: 32x32 image at 0.11 arcsec/pixel (native Roman), Roman WFI
+  PSF (galsim.roman.getPSF, monochromatic at the band effective wavelength;
+  SCA 10, pupil_bin 4)
 - Grism (Roman G150-like): 32x32 dispersed image, dispersion 1.1 nm/pix,
   lambda_ref derived from Halpha at z=1.0 (lambda_obs ~ 1313 nm, within the
-  Roman grism range ~1.0-1.93 um)
+  Roman grism range ~1.0-1.93 um); grism PSF at the observed line wavelength
+- Dual PSF fidelity: mock/truth data is rendered with default-accuracy
+  kernels (folding_threshold 5e-3) while the inference model uses
+  folding_threshold 0.01 kernels -- the model PSF never matches reality
+  exactly, and the 0.01 setting is gated at <= 0.07 sigma parameter bias
 - Galaxy: z=1.0, vcirc=200 km/s, hlr~0.3", inc~53 deg (cosi=0.6), theta_int=pi/4
 - Shear: g1=0.02, g2=-0.01
 - SNR (matched-filter): 100 broadband, 150 grism
@@ -66,7 +72,6 @@ import warnings
 from pathlib import Path
 from typing import Dict
 
-import galsim
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -78,6 +83,8 @@ from kl_pipe.diagnostics.imaging import (
     plot_data_comparison_panels,
 )
 from kl_pipe.dispersion import build_grism_pars_for_line
+from kl_pipe.ensemble.mocks import _build_band_psf, _build_grism_psf
+from kl_pipe.ensemble.spec import PSFSpec
 from kl_pipe.intensity import InclinedExponentialModel
 from kl_pipe.lines import EmissionLine, LINE_LAMBDAS
 from kl_pipe.noise import grism_line_noise
@@ -112,10 +119,19 @@ pytestmark = pytest.mark.slow
 Z = 1.0
 PIXEL_SCALE = 0.11  # arcsec/pixel, Roman native
 IMAGE_SHAPE = (32, 32)
-PSF_FWHM = 0.18  # arcsec, Roman-like (F087 broadband / grism)
 SNR_BROADBAND = 100.0
 SNR_GRISM = 150.0
 GRISM_DISPERSION_NM_PER_PIX = 1.1
+
+# Roman WFI PSF (galsim.roman.getPSF, monochromatic; broadband at the band
+# effective wavelength, grism at the observed Halpha wavelength). Mock/truth
+# data uses default-accuracy kernels; the fit model uses folding_threshold
+# 0.01 kernels (2.8x cheaper convolutions, parameter bias gated at <= 0.07
+# sigma against matched kernels -- see test_roman_psf.py fidelity tests).
+PSF_SPEC_MOCK = PSFSpec(psf_type='roman_wfi', sca=10, pupil_bin=4)
+PSF_SPEC_FIT = PSFSpec(
+    psf_type='roman_wfi', sca=10, pupil_bin=4, folding_threshold=0.01
+)
 
 # Tully-Fisher scatter (dex) for the vel.vcirc prior. Fiducial 0.08 dex from
 # Xu+2022 / Pranjal, the project's archival TFR value (ensemble sweep spans
@@ -125,9 +141,10 @@ GRISM_DISPERSION_NM_PER_PIX = 1.1
 SIGMA_TF_DEX = 0.08
 
 # Spatial oversample factor for both broadband and grism obs. Default is 5;
-# 3 is acceptable here because PSF FWHM (0.18") is ~1.6 pixels at 0.11"/pix
-# and the resulting profile is band-limited enough that osf=3 gives sub-1%
-# bias on rendered images. Cuts FFT work ~3x vs default.
+# 3 is acceptable here because the Roman WFI optical PSF is strictly
+# band-limited at the aperture cutoff (2 pi D / lambda ~ 50-82 rad/arcsec
+# over the bands used), inside the oversample-3 fine-grid Nyquist
+# (85.7 rad/arcsec at 0.11"/pix). Cuts FFT work ~3x vs default.
 SPATIAL_OVERSAMPLE = 3
 
 # Sampler settings. Uses the Laplace preconditioner (precondition='laplace'):
@@ -366,23 +383,37 @@ def _band_flat_pars(true: Dict[str, float], band_key: str) -> Dict[str, float]:
     }
 
 
-def _make_broadband_channel(source, true, image_pars, psf, band_key, seed):
+def _make_broadband_channel(
+    source, true, image_pars, psf_mock, psf_fit, band_key, seed
+):
     """Broadband channel: GalSim SyntheticIntensity data + obs carrying it.
 
     Synthetic data is rendered by GalSim (an independent renderer), not the
     model under test -- the flagship's cross-check against the forward model.
-    Returns a channel dict with obs + the true/noisy images + variance.
+    Data uses the mock-fidelity PSF; the fit obs carries the fit-fidelity
+    kernel. Returns a channel dict with obs + true/noisy images + variance.
     """
     int_model = source.broadband_models[band_key]
     synth = SyntheticIntensity(
-        _band_flat_pars(true, band_key), model_type='exponential', seed=seed, psf=psf
+        _band_flat_pars(true, band_key),
+        model_type='exponential',
+        seed=seed,
+        psf=psf_mock,
     )
+    # galsim-native backend: the scipy backend multiplies the PSF FT on the
+    # profile's own FFT grid, which cannot host the Roman PSF's far wings
+    # (kernel larger than the grid raises); galsim convolves natively at
+    # whatever internal size the optics demand
     data_noisy = synth.generate(
-        image_pars, snr=SNR_BROADBAND, seed=seed, include_poisson=False
+        image_pars,
+        snr=SNR_BROADBAND,
+        seed=seed,
+        include_poisson=False,
+        sersic_backend='galsim',
     )
     obs = build_image_obs(
         image_pars,
-        psf=psf,
+        psf=psf_fit,
         render_config=RenderConfig(oversample=SPATIAL_OVERSAMPLE),
         data=jnp.asarray(data_noisy),
         variance=synth.variance,
@@ -398,12 +429,16 @@ def _make_broadband_channel(source, true, image_pars, psf, band_key, seed):
     }
 
 
-def _make_grism_channel(source, true, image_pars, psf, angle_deg, seed, roll_key):
+def _make_grism_channel(
+    source, true, image_pars, psf_mock, psf_fit, angle_deg, seed, roll_key
+):
     """One grism roll: (optionally rotated) WCS obs + model-rendered truth +
     independent Gaussian noise at fixed per-exposure SNR.
 
-    angle_deg == 0 reuses the dev image_pars (default WCS) so the dev config's
-    single roll is unchanged; nonzero angles carry a rotated-WCS ImagePars.
+    Truth is rendered through the mock-fidelity PSF; the fit obs carries the
+    fit-fidelity kernel. angle_deg == 0 reuses the dev image_pars (default
+    WCS) so the dev config's single roll is unchanged; nonzero angles carry
+    a rotated-WCS ImagePars.
     """
     if angle_deg == 0.0:
         ip = image_pars
@@ -419,7 +454,7 @@ def _make_grism_channel(source, true, image_pars, psf, angle_deg, seed, roll_key
         image_pars=ip,
         dispersion=GRISM_DISPERSION_NM_PER_PIX,
     )
-    grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf)
+    grism_obs_clean = build_grism_obs(grism_pars, z=Z, psf=psf_mock)
     data_true = np.asarray(source.render_grism(true, grism_obs_clean))
     # SNR_GRISM is the emission-LINE matched-filter SNR: normalize the noise on
     # the line only (continuum zeroed), not the continuum-inflated whole stamp
@@ -432,7 +467,7 @@ def _make_grism_channel(source, true, image_pars, psf, angle_deg, seed, roll_key
     obs = build_grism_obs(
         grism_pars,
         z=Z,
-        psf=psf,
+        psf=psf_fit,
         render_config=RenderConfig(oversample=SPATIAL_OVERSAMPLE),
         data=jnp.asarray(data_noisy),
         variance=var,
@@ -455,7 +490,8 @@ def _build_config(production: bool):
     images + variance for both inference and diagnostics.
     """
     image_pars = ImagePars(shape=IMAGE_SHAPE, pixel_scale=PIXEL_SCALE, indexing='ij')
-    psf = galsim.Gaussian(fwhm=PSF_FWHM)
+    grism_psf_mock = _build_grism_psf(PSF_SPEC_MOCK, Z)
+    grism_psf_fit = _build_grism_psf(PSF_SPEC_FIT, Z)
 
     def _line_source(broadband_models):
         return SourceModel(
@@ -488,17 +524,26 @@ def _build_config(production: bool):
         roll_angles = (0.0,)
 
     # Distinct noise seeds per channel (independent exposures). Dev keeps its
-    # historical seeds (F087=42, roll0 grism=43) so its data is unchanged.
+    # historical seeds (F087=42, roll0 grism=43) so its noise realization is
+    # unchanged (the data itself moved with the Roman-PSF migration).
     band_seeds = {'F087': 42, 'F158': 52}
     image_channels = {
-        b: _make_broadband_channel(source, true, image_pars, psf, b, band_seeds[b])
+        b: _make_broadband_channel(
+            source,
+            true,
+            image_pars,
+            _build_band_psf(PSF_SPEC_MOCK, b),
+            _build_band_psf(PSF_SPEC_FIT, b),
+            b,
+            band_seeds[b],
+        )
         for b in band_keys
     }
     grism_channels = {}
     for i, a in enumerate(roll_angles):
         seed = 43 if not production else 100 + i
         grism_channels[f'roll{i}'] = _make_grism_channel(
-            source, true, image_pars, psf, a, seed, f'roll{i}'
+            source, true, image_pars, grism_psf_mock, grism_psf_fit, a, seed, f'roll{i}'
         )
     return source, priors, true, image_channels, grism_channels
 

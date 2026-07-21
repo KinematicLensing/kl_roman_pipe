@@ -15,15 +15,26 @@ Per-channel noise seeds are derived from the manifest row's ``noise_seed``
 via a SeedSequence spawn, so a single integer in the manifest reproduces the
 whole multi-channel realization.
 
-PSFs are galsim.Gaussian in v1 (the complex WFI grism PSF is a known pending
-gap). On hosts without galsim (e.g. Vista NGC containers), the vista_kit
-GaussianPSFShim mechanism applies; this module raises a clear ImportError
+PSFs are built per channel from the observing config's ``PSFSpec``:
+``gaussian`` (galsim.Gaussian at the configured FWHM) or ``roman_wfi``
+(monochromatic ``galsim.roman.getPSF``; broadband at the band's effective
+wavelength, grism at the observed Halpha wavelength). Roman grism kernels
+are rendered at a stamp size pinned to the ensemble's largest observed
+wavelength so the PSF array shape is constant across z. When the PSFSpec
+loosens the fit-kernel ``folding_threshold``, mock/truth data is still
+rendered through the tighter ``mock_folding_threshold`` kernels (default:
+galsim's 5e-3) -- the mock is always at least as accurate as the fit model. On hosts without
+galsim (e.g. Vista NGC containers), the vista_kit GaussianPSFShim mechanism
+applies to GAUSSIAN configs only; roman_wfi needs the real galsim (the
+pupil-plane and aberration data ship inside the galsim package itself, so
+any working install suffices). This module raises a clear ImportError
 rather than silently substituting.
 """
 
 from __future__ import annotations
 
-from typing import Dict, NamedTuple, TYPE_CHECKING
+from functools import lru_cache
+from typing import Dict, NamedTuple, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import jax.numpy as jnp
@@ -37,7 +48,7 @@ from kl_pipe.parameters import ImagePars
 from kl_pipe.render import RenderConfig
 
 if TYPE_CHECKING:
-    from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig
+    from kl_pipe.ensemble.spec import EnsembleSpec, ObservingConfig, PSFSpec
     from kl_pipe.priors import PriorDict
     from kl_pipe.source import SourceModel
 
@@ -52,7 +63,7 @@ class FitInputs(NamedTuple):
     truth: Dict[str, float]
 
 
-def _build_gaussian_psf(fwhm_arcsec: float):
+def _import_galsim():
     try:
         import galsim
     except ImportError as err:
@@ -62,7 +73,217 @@ def _build_gaussian_psf(fwhm_arcsec: float):
             "stub + GaussianPSFShim before importing kl_pipe (see "
             "experiments/sweverett/vista_kit/psf_numpy.py)."
         ) from err
+    return galsim
+
+
+def _build_gaussian_psf(fwhm_arcsec: float):
+    galsim = _import_galsim()
     return galsim.Gaussian(fwhm=fwhm_arcsec)
+
+
+# process-level cache: getPSF is expensive (~0.5 s) and the worker builds
+# several obs per fit (bands + rolls) plus the pinned-size reference PSF, so
+# repeated wavelengths must not re-run the optics computation. Bounded FIFO:
+# a long-lived worker claims many fits at distinct redshifts, so an unbounded
+# cache would accumulate one GSObject per fit; within-fit reuse only needs a
+# handful of entries.
+_ROMAN_PSF_CACHE: Dict[
+    Tuple[int, int, float, Optional[str], Optional[float]], object
+] = {}
+_ROMAN_PSF_CACHE_MAX = 16
+
+
+def _get_roman_wfi_psf(
+    sca: int,
+    pupil_bin: int,
+    wavelength_nm: float,
+    bandpass: Optional[str],
+    folding_threshold: Optional[float] = None,
+):
+    """Monochromatic Roman WFI PSF via galsim.roman.getPSF, cached.
+
+    Cache key rounds the wavelength to 0.1 nm -- far below any PSF-size
+    scale of interest -- so per-fit continuous redshifts still hit the
+    cache across rolls within a fit.
+
+    Parameters
+    ----------
+    sca : int
+        WFI sensor chip assembly (1-18).
+    pupil_bin : int
+        Pupil-plane image binning (galsim.roman.getPSF pupil_bin).
+    wavelength_nm : float
+        Wavelength in nm (galsim.roman.getPSF takes nm).
+    bandpass : str or None
+        galsim.roman bandpass key selecting the pupil-plane configuration
+        (F184 is the only long-wavelength band); None uses the
+        short-wavelength pupil image.
+    folding_threshold : float, optional
+        GSParams folding_threshold applied to the returned PSF; controls
+        the rendered kernel stamp size (and hence the padded convolution
+        FFT). None keeps GalSim's default (5e-3).
+    """
+    _import_galsim()
+    import galsim
+    from galsim import roman
+
+    key = (
+        int(sca),
+        int(pupil_bin),
+        round(float(wavelength_nm), 1),
+        bandpass,
+        folding_threshold,
+    )
+    if key not in _ROMAN_PSF_CACHE:
+        while len(_ROMAN_PSF_CACHE) >= _ROMAN_PSF_CACHE_MAX:
+            _ROMAN_PSF_CACHE.pop(next(iter(_ROMAN_PSF_CACHE)))
+        psf = roman.getPSF(
+            SCA=key[0], bandpass=bandpass, wavelength=key[2], pupil_bin=key[1]
+        )
+        if folding_threshold is not None:
+            psf = psf.withGSParams(galsim.GSParams(folding_threshold=folding_threshold))
+        _ROMAN_PSF_CACHE[key] = psf
+    return _ROMAN_PSF_CACHE[key]
+
+
+# official Roman WFI filter names -> galsim.roman bandpass keys. galsim
+# kept the legacy WFIRST names (H158, Z087, ...); the official filter set is
+# F062-F213 (roman-docs.stsci.edu), so configs may use either.
+_OFFICIAL_TO_GALSIM_BAND = {
+    'F062': 'R062',
+    'F087': 'Z087',
+    'F106': 'Y106',
+    'F129': 'J129',
+    'F146': 'W146',
+    'F158': 'H158',
+    'F184': 'F184',
+    'F213': 'K213',
+}
+
+
+def _galsim_roman_band(band: str) -> str:
+    """Resolve an official Roman WFI filter name or a galsim legacy key to
+    the galsim.roman bandpass key."""
+    if band in _OFFICIAL_TO_GALSIM_BAND:
+        return _OFFICIAL_TO_GALSIM_BAND[band]
+    if band in _OFFICIAL_TO_GALSIM_BAND.values():
+        return band
+    raise ValueError(
+        f"band '{band}' is not a Roman WFI filter; official names: "
+        f"{sorted(_OFFICIAL_TO_GALSIM_BAND)} (galsim legacy keys "
+        f"{sorted(_OFFICIAL_TO_GALSIM_BAND.values())} also accepted)"
+    )
+
+
+@lru_cache(maxsize=None)
+def _band_effective_wavelength_nm(band: str) -> float:
+    """Effective wavelength (nm) of a Roman WFI bandpass (official or
+    galsim legacy name)."""
+    _import_galsim()
+    from galsim import roman
+
+    key = _galsim_roman_band(band)
+    return float(roman.getBandpasses()[key].effective_wavelength)
+
+
+def _spec_folding_threshold(
+    psf_spec: 'PSFSpec', mock: bool, z: Optional[float] = None
+) -> Optional[float]:
+    """Folding threshold for the requested role: fit kernels resolve
+    ``folding_threshold``/``folding_threshold_tiers`` at the scene redshift
+    ``z``, truth-render kernels use ``mock_folding_threshold`` (all None =
+    galsim default; mock validated at least as accurate at every z).
+
+    ``z`` is consulted only for a tiered fit schedule; a scalar/None fit
+    threshold ignores it, and a tiered schedule with ``z is None`` raises
+    loudly (rather than silently picking a tier)."""
+    if mock:
+        return psf_spec.mock_folding_threshold
+    return psf_spec.resolve_fit_folding_threshold(z)
+
+
+def _build_band_psf(
+    psf_spec: 'PSFSpec', band: str, z: Optional[float] = None, mock: bool = False
+):
+    """Broadband PSF for one band from its PSFSpec.
+
+    mock=True selects the truth-render kernel fidelity
+    (``mock_folding_threshold``); mock=False the fit-kernel fidelity, whose
+    folding_threshold may depend on the scene redshift ``z`` (tier schedule).
+    """
+    if psf_spec.psf_type == 'gaussian':
+        return _build_gaussian_psf(psf_spec.fwhm_arcsec)
+    if psf_spec.psf_type == 'roman_wfi':
+        # monochromatic at the band's effective wavelength; the bandpass
+        # name selects the matching pupil-plane configuration
+        return _get_roman_wfi_psf(
+            psf_spec.sca,
+            psf_spec.pupil_bin,
+            _band_effective_wavelength_nm(band),
+            bandpass=_galsim_roman_band(band),
+            folding_threshold=_spec_folding_threshold(psf_spec, mock, z),
+        )
+    raise NotImplementedError(f"psf type '{psf_spec.psf_type}' has no mock PSF builder")
+
+
+def _build_grism_psf(psf_spec: 'PSFSpec', z: float, mock: bool = False):
+    """Grism PSF from its PSFSpec, at the observed Halpha wavelength.
+
+    mock=True selects the truth-render kernel fidelity
+    (``mock_folding_threshold``); mock=False the fit-kernel fidelity, whose
+    folding_threshold may depend on the scene redshift ``z`` (tier schedule).
+    """
+    if psf_spec.psf_type == 'gaussian':
+        return _build_gaussian_psf(psf_spec.fwhm_arcsec)
+    if psf_spec.psf_type == 'roman_wfi':
+        # monochromatic at the observed line wavelength; bandpass=None uses
+        # the short-wavelength pupil-plane image (galsim.roman does not
+        # model the grism element's own pupil)
+        return _get_roman_wfi_psf(
+            psf_spec.sca,
+            psf_spec.pupil_bin,
+            LINE_LAMBDAS['Halpha'] * (1.0 + z),
+            bandpass=None,
+            folding_threshold=_spec_folding_threshold(psf_spec, mock, z),
+        )
+    raise NotImplementedError(f"psf type '{psf_spec.psf_type}' has no mock PSF builder")
+
+
+def _grism_psf_kernel_size(
+    config: 'ObservingConfig', spec: 'EnsembleSpec', mock: bool = False
+) -> Optional[int]:
+    """Pinned grism PSF kernel stamp size (fine pixels), constant across z.
+    mock=True sizes the truth-render kernel (mock_folding_threshold fidelity).
+
+    The roman_wfi grism PSF is monochromatic at the observed Halpha
+    wavelength, so its GalSim good image size grows with z. Rendering every
+    fit's kernel at the good size of the ensemble's LARGEST observed
+    wavelength keeps the PSF array shape (and the padded FFT shape)
+    constant across the ensemble. Smaller-z kernels are simply drawn on the
+    larger stamp and stay unit-normalized. Gaussian grism PSFs are
+    z-independent, so no pinning applies (returns None).
+    """
+    if config.grism_psf.psf_type == 'gaussian':
+        return None
+    z_draw = spec.draw.get('z')
+    if z_draw is None:
+        raise ValueError(
+            "a roman_wfi grism psf requires z in bank.draw so the kernel "
+            "size can be pinned at the ensemble's largest observed "
+            "wavelength"
+        )
+    if z_draw.dist != 'uniform':
+        raise NotImplementedError(
+            f"grism kernel-size pinning knows the z range for uniform "
+            f"draws only, got dist '{z_draw.dist}'"
+        )
+    z_max = z_draw.params['high']
+    psf_max = _build_grism_psf(config.grism_psf, z_max, mock=mock)
+    fine_ps = config.pixel_scale_arcsec / config.oversample
+    size = int(psf_max.getGoodImageSize(fine_ps))
+    if size % 2 == 0:
+        size += 1
+    return size
 
 
 def _channel_seeds(noise_seed: int, n_channels: int) -> np.ndarray:
@@ -98,11 +319,15 @@ def _wcs_with_pc(shape, pixel_scale: float, rotation_radians: float):
     return wcs
 
 
-def _make_band_obs(source, truth, psf, image_pars, band, snr, seed, oversample):
+def _make_band_obs(
+    source, truth, psf_mock, psf_fit, image_pars, band, snr, seed, oversample
+):
     int_model = source.broadband_models[band]
+    # truth data through the mock-fidelity kernel; the fit obs carries the
+    # fit-fidelity kernel (identical objects unless the PSFSpec splits them)
     obs_clean = build_image_obs(
         image_pars,
-        psf=psf,
+        psf=psf_mock,
         render_config=RenderConfig(oversample=oversample),
         int_model=int_model,
         broadband_key=band,
@@ -111,7 +336,7 @@ def _make_band_obs(source, truth, psf, image_pars, band, snr, seed, oversample):
     data_noisy, var = _noisy(data_true, snr, seed)
     return build_image_obs(
         image_pars,
-        psf=psf,
+        psf=psf_fit,
         render_config=RenderConfig(oversample=oversample),
         data=jnp.asarray(data_noisy),
         variance=var,
@@ -147,18 +372,33 @@ def _grism_pars_for_roll(
 
 
 def _make_roll_obs(
-    source, truth, psf, config, z, roll_deg, single_roll, line_snr, seed, oversample
+    source,
+    truth,
+    psf_mock,
+    psf_fit,
+    config,
+    z,
+    roll_deg,
+    single_roll,
+    line_snr,
+    seed,
+    oversample,
+    kernel_size_mock,
+    kernel_size_fit,
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
     # _make_band_obs); otherwise the grism truth datavector is generated at the
     # RenderConfig default oversample=1 while the fit runs at config.oversample,
-    # silently breaking grism fit==truth self-consistency
+    # silently breaking grism fit==truth self-consistency. The truth data goes
+    # through the mock-fidelity kernel; the fit obs carries the fit-fidelity
+    # kernel (identical unless the PSFSpec splits them).
     obs_clean = build_grism_obs(
         grism_pars,
         z=z,
-        psf=psf,
+        psf=psf_mock,
         render_config=RenderConfig(oversample=oversample),
+        psf_kernel_size=kernel_size_mock,
     )
     data_true = np.asarray(source.render_grism(truth, obs_clean))
     # line-only render (continuum amplitudes zeroed) sets the noise level so the
@@ -173,10 +413,11 @@ def _make_roll_obs(
     return build_grism_obs(
         grism_pars,
         z=z,
-        psf=psf,
+        psf=psf_fit,
         render_config=RenderConfig(oversample=oversample),
         data=jnp.asarray(data_noisy),
         variance=var,
+        psf_kernel_size=kernel_size_fit,
     )
 
 
@@ -237,11 +478,12 @@ def build_fit_inputs(
     )
     image_obs = {}
     for i, band in enumerate(config.bands):
-        psf = _build_gaussian_psf(config.band_psf_fwhm[band])
+        band_spec = config.band_psf[band]
         image_obs[band] = _make_band_obs(
             source,
             truth,
-            psf,
+            _build_band_psf(band_spec, band, z, mock=True),
+            _build_band_psf(band_spec, band, z),
             image_pars,
             band,
             broadband_snr,
@@ -249,14 +491,18 @@ def build_fit_inputs(
             config.oversample,
         )
 
-    grism_psf = _build_gaussian_psf(config.grism_psf_fwhm)
+    grism_psf_mock = _build_grism_psf(config.grism_psf, z, mock=True)
+    grism_psf_fit = _build_grism_psf(config.grism_psf, z)
+    kernel_size_mock = _grism_psf_kernel_size(config, spec, mock=True)
+    kernel_size_fit = _grism_psf_kernel_size(config, spec)
     single_roll = len(config.grism_rolls_deg) == 1
     grism_obs = {}
     for j, roll in enumerate(config.grism_rolls_deg):
         grism_obs[f'roll{j}'] = _make_roll_obs(
             source,
             truth,
-            grism_psf,
+            grism_psf_mock,
+            grism_psf_fit,
             config,
             z,
             roll,
@@ -264,6 +510,8 @@ def build_fit_inputs(
             line_snr,
             seeds[len(config.bands) + j],
             config.oversample,
+            kernel_size_mock,
+            kernel_size_fit,
         )
 
     return FitInputs(

@@ -19,9 +19,10 @@ Unknown YAML keys raise. Every enum-like field is validated at construction.
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import yaml
 
@@ -44,6 +45,346 @@ def _reject_unknown(d: dict, allowed: Tuple[str, ...], context: str) -> None:
 # Observing-config registry
 # =============================================================================
 
+_PSF_TYPES = ('gaussian', 'roman_wfi')
+_ROMAN_WFI_DEFAULT_SCA = 10
+_ROMAN_WFI_DEFAULT_PUPIL_BIN = 4
+_GALSIM_DEFAULT_FOLDING_THRESHOLD = 5e-3
+
+
+@dataclass(frozen=True)
+class FoldingThresholdTier:
+    """One redshift tier of the fit-kernel folding_threshold schedule.
+
+    ``z_max`` is the inclusive upper redshift bound this tier covers
+    (``None`` = open, covering all remaining z); ``ft`` is the GSParams
+    folding_threshold applied to fit kernels for scenes in the tier. Tiers
+    are stored sorted by ``z_max`` ascending with the open (None) tier last;
+    validation lives in ``_validate_folding_tiers``.
+    """
+
+    z_max: Optional[float]
+    ft: float
+
+
+def _validate_folding_tiers(
+    tiers: Tuple['FoldingThresholdTier', ...], context: str
+) -> None:
+    """Validate a fit-kernel folding_threshold tier schedule.
+
+    Enforces: non-empty; every ``ft`` a float in (0, 1); the final tier open
+    (``z_max is None``) and no earlier tier open; bounded ``z_max`` values
+    positive floats and strictly increasing. Together these guarantee the
+    schedule covers every non-negative z exactly once.
+    """
+    if not tiers:
+        raise ValueError(f"{context}: folding_threshold_tiers must be non-empty")
+    for i, tier in enumerate(tiers):
+        if not isinstance(tier.ft, float) or not (0.0 < tier.ft < 1.0):
+            raise ValueError(
+                f"{context}: tier {i} ft must be a float in (0, 1), got " f"{tier.ft!r}"
+            )
+        is_last = i == len(tiers) - 1
+        if is_last:
+            if tier.z_max is not None:
+                raise ValueError(
+                    f"{context}: final tier must have z_max: null (open upper "
+                    f"bound covering all remaining z), got {tier.z_max!r}"
+                )
+        else:
+            if tier.z_max is None:
+                raise ValueError(
+                    f"{context}: only the final tier may have z_max: null; "
+                    f"tier {i} of {len(tiers)} has null z_max"
+                )
+            if not isinstance(tier.z_max, float) or tier.z_max <= 0:
+                raise ValueError(
+                    f"{context}: tier {i} z_max must be a positive float, got "
+                    f"{tier.z_max!r}"
+                )
+    bounded = [t.z_max for t in tiers[:-1]]
+    if any(b2 <= b1 for b1, b2 in zip(bounded, bounded[1:])):
+        raise ValueError(
+            f"{context}: tier z_max values must be strictly increasing, got "
+            f"{bounded}"
+        )
+
+
+@dataclass(frozen=True)
+class PSFSpec:
+    """One channel's PSF specification (a broadband band or the grism).
+
+    ``gaussian`` carries ``fwhm_arcsec``; ``roman_wfi`` (realistic WFI PSF
+    via ``galsim.roman.getPSF``, monochromatic) carries ``sca`` and
+    ``pupil_bin``, plus optional GSParams folding thresholds (None keeps
+    GalSim's default 5e-3). A looser threshold shrinks the rendered kernel
+    stamp -- and with it the padded convolution FFT -- at the cost of
+    truncating more far-wing flux.
+
+    The FIT-model kernels (the per-eval convolution cost) take their
+    folding_threshold from EITHER ``folding_threshold`` (a single value for
+    all z) OR ``folding_threshold_tiers`` (a redshift schedule); the two are
+    mutually exclusive. ``mock_folding_threshold`` applies to the TRUTH
+    (mock-data) render kernels, paid once per fit. Leaving
+    ``mock_folding_threshold`` at None while loosening the fit threshold
+    gives the realistic asymmetry: mock data is rendered at higher kernel
+    fidelity than the inference model. The mock kernels must be at least as
+    accurate as the fit kernels at every z (raises otherwise; with tiers the
+    binding tier is the most accurate = smallest ft). Parameter-level bias
+    from the split was gated at folding_threshold=0.01 (all MAP shifts
+    <= 0.07 sigma vs a matched-kernel control at line SNR 100) for z <= 1.2;
+    the rigor audit found the shape/shear/continuum wing-truncation bias
+    grows with kernel size and exceeds that envelope by z=1.9 (cosi -0.093,
+    g1 -0.037, continuum -0.066), motivating the tiered schedule (looser ft
+    at low z, tighter at high z). 0.02 fails the gate at all z. Cross-type
+    fields must be None (raises otherwise).
+    """
+
+    psf_type: str
+    fwhm_arcsec: Optional[float] = None  # gaussian only, arcsec
+    sca: Optional[int] = None  # roman_wfi only, 1-18
+    pupil_bin: Optional[int] = None  # roman_wfi only
+    folding_threshold: Optional[float] = None  # roman_wfi only, fit kernels (scalar)
+    mock_folding_threshold: Optional[float] = None  # roman_wfi only, truth kernels
+    # roman_wfi only, fit kernels (z schedule); mutually exclusive with
+    # folding_threshold
+    folding_threshold_tiers: Optional[Tuple[FoldingThresholdTier, ...]] = None
+
+    def __post_init__(self):
+        if self.psf_type == 'gaussian':
+            if self.fwhm_arcsec is None or self.fwhm_arcsec <= 0:
+                raise ValueError(
+                    f"gaussian psf needs a positive fwhm_arcsec, got "
+                    f"{self.fwhm_arcsec!r}"
+                )
+            if self.sca is not None or self.pupil_bin is not None:
+                raise ValueError("sca/pupil_bin are roman_wfi-only psf fields")
+            if (
+                self.folding_threshold is not None
+                or self.mock_folding_threshold is not None
+                or self.folding_threshold_tiers is not None
+            ):
+                raise ValueError(
+                    "folding_threshold/mock_folding_threshold/"
+                    "folding_threshold_tiers are roman_wfi-only psf fields"
+                )
+        elif self.psf_type == 'roman_wfi':
+            if self.fwhm_arcsec is not None:
+                raise ValueError("fwhm_arcsec is a gaussian-only psf field")
+            if not isinstance(self.sca, int) or not (1 <= self.sca <= 18):
+                raise ValueError(
+                    f"roman_wfi sca must be an int in [1, 18], got {self.sca!r}"
+                )
+            if not isinstance(self.pupil_bin, int) or self.pupil_bin < 1:
+                raise ValueError(
+                    f"roman_wfi pupil_bin must be a positive int, got "
+                    f"{self.pupil_bin!r}"
+                )
+            if self.folding_threshold is not None and (
+                not isinstance(self.folding_threshold, float)
+                or not (0.0 < self.folding_threshold < 1.0)
+            ):
+                raise ValueError(
+                    f"roman_wfi folding_threshold must be a float in (0, 1), "
+                    f"got {self.folding_threshold!r}"
+                )
+            if self.mock_folding_threshold is not None and (
+                not isinstance(self.mock_folding_threshold, float)
+                or not (0.0 < self.mock_folding_threshold < 1.0)
+            ):
+                raise ValueError(
+                    f"roman_wfi mock_folding_threshold must be a float in "
+                    f"(0, 1), got {self.mock_folding_threshold!r}"
+                )
+            if (
+                self.folding_threshold is not None
+                and self.folding_threshold_tiers is not None
+            ):
+                raise ValueError(
+                    "folding_threshold (scalar) and folding_threshold_tiers "
+                    "(z schedule) are mutually exclusive; set at most one"
+                )
+            if self.folding_threshold_tiers is not None:
+                _validate_folding_tiers(
+                    self.folding_threshold_tiers, "roman_wfi folding_threshold_tiers"
+                )
+            # mock kernels must be at least as accurate as fit kernels at every
+            # z (None = galsim default 5e-3). With a tier schedule the binding
+            # fit tier is the most accurate one (smallest ft).
+            mock_eff = (
+                self.mock_folding_threshold
+                if self.mock_folding_threshold is not None
+                else _GALSIM_DEFAULT_FOLDING_THRESHOLD
+            )
+            if self.folding_threshold_tiers is not None:
+                fit_eff_most_accurate = min(t.ft for t in self.folding_threshold_tiers)
+            else:
+                fit_eff_most_accurate = (
+                    self.folding_threshold
+                    if self.folding_threshold is not None
+                    else _GALSIM_DEFAULT_FOLDING_THRESHOLD
+                )
+            if mock_eff > fit_eff_most_accurate:
+                raise ValueError(
+                    f"mock_folding_threshold ({mock_eff}) must be <= the most "
+                    f"accurate fit folding_threshold ({fit_eff_most_accurate}): "
+                    f"truth-render kernels must be at least as accurate as fit "
+                    f"kernels at every z"
+                )
+        else:
+            raise NotImplementedError(
+                f"psf type {self.psf_type!r} not supported; supported types: "
+                f"{list(_PSF_TYPES)}"
+            )
+
+    def resolve_fit_folding_threshold(self, z: float) -> Optional[float]:
+        """Fit-kernel folding_threshold at scene redshift ``z``.
+
+        Returns the scalar ``folding_threshold`` (z-independent) when no tier
+        schedule is configured, else the ``ft`` of the first tier whose
+        ``z_max`` covers ``z`` (tiers sorted ascending; the final open tier
+        covers all remaining z). ``None`` means GalSim's default (5e-3).
+        """
+        if self.folding_threshold_tiers is None:
+            return self.folding_threshold
+        if (
+            not isinstance(z, (int, float))
+            or isinstance(z, bool)
+            or not math.isfinite(float(z))
+        ):
+            raise ValueError(
+                f"folding_threshold tier resolution needs a finite numeric z, "
+                f"got {z!r}"
+            )
+        for tier in self.folding_threshold_tiers:
+            if tier.z_max is None or z <= tier.z_max:
+                return tier.ft
+        # unreachable when tiers are validated (final tier is open)
+        raise ValueError(
+            f"no folding_threshold tier covers z={z}; tiers={self.folding_threshold_tiers}"
+        )
+
+
+def _require_yaml_int(block: dict, key: str, default: int, context: str) -> int:
+    """Fetch an integer key, rejecting floats/strings instead of coercing."""
+    val = block.get(key, default)
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise ValueError(
+            f"{context}: '{key}' must be an integer, got {val!r} "
+            f"({type(val).__name__})"
+        )
+    return val
+
+
+def _parse_folding_tiers(
+    block: dict, context: str
+) -> Optional[Tuple[FoldingThresholdTier, ...]]:
+    """Parse an optional folding_threshold_tiers list from a psf YAML block.
+
+    Each entry is a ``{z_max, ft}`` mapping (``z_max: null`` for the final
+    open tier). Returns None when the key is absent. Structural validation
+    (ordering, open-final, ft range) happens in the PSFSpec constructor.
+    """
+    tiers_raw = block.get('folding_threshold_tiers')
+    if tiers_raw is None:
+        return None
+    if not isinstance(tiers_raw, list) or not tiers_raw:
+        raise ValueError(
+            f"{context}: folding_threshold_tiers must be a non-empty list of "
+            f"{{z_max, ft}} mappings, got {tiers_raw!r}"
+        )
+    parsed = []
+    for i, entry in enumerate(tiers_raw):
+        entry_ctx = f"{context}:folding_threshold_tiers[{i}]"
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"{entry_ctx}: each tier must be a {{z_max, ft}} mapping, got "
+                f"{entry!r}"
+            )
+        _reject_unknown(entry, ('z_max', 'ft'), entry_ctx)
+        _require_keys(entry, ('z_max', 'ft'), entry_ctx)
+        z_max = entry['z_max']
+        parsed.append(
+            FoldingThresholdTier(
+                z_max=float(z_max) if z_max is not None else None,
+                ft=float(entry['ft']),
+            )
+        )
+    return tuple(parsed)
+
+
+def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
+    _reject_unknown(
+        block,
+        (
+            'type',
+            'sca',
+            'pupil_bin',
+            'folding_threshold',
+            'mock_folding_threshold',
+            'folding_threshold_tiers',
+        ),
+        context,
+    )
+    thresholds = {}
+    for key in ('folding_threshold', 'mock_folding_threshold'):
+        value = block.get(key)
+        thresholds[key] = float(value) if value is not None else None
+    return PSFSpec(
+        psf_type='roman_wfi',
+        sca=_require_yaml_int(block, 'sca', _ROMAN_WFI_DEFAULT_SCA, context),
+        pupil_bin=_require_yaml_int(
+            block, 'pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN, context
+        ),
+        folding_threshold_tiers=_parse_folding_tiers(block, context),
+        **thresholds,
+    )
+
+
+def _parse_broadband_psf(
+    block: dict, bands: Tuple[str, ...], context: str
+) -> Dict[str, PSFSpec]:
+    psf_type = block.get('type')
+    if psf_type == 'gaussian':
+        _reject_unknown(block, ('type', 'fwhm_arcsec'), context)
+        _require_keys(block, ('type', 'fwhm_arcsec'), context)
+        fwhm = block['fwhm_arcsec']
+        if not isinstance(fwhm, dict):
+            raise ValueError(
+                f"{context}: broadband gaussian fwhm_arcsec must be a "
+                f"band -> arcsec mapping, got {fwhm!r}"
+            )
+        return {
+            band: PSFSpec(psf_type='gaussian', fwhm_arcsec=float(value))
+            for band, value in fwhm.items()
+        }
+    if psf_type == 'roman_wfi':
+        spec = _parse_roman_wfi_psf(block, context)
+        return {band: spec for band in bands}
+    raise NotImplementedError(
+        f"{context}: psf type {psf_type!r} not supported; supported types: "
+        f"{list(_PSF_TYPES)}"
+    )
+
+
+def _parse_grism_psf(block: dict, context: str) -> PSFSpec:
+    psf_type = block.get('type')
+    if psf_type == 'gaussian':
+        _reject_unknown(block, ('type', 'fwhm_arcsec'), context)
+        _require_keys(block, ('type', 'fwhm_arcsec'), context)
+        fwhm = block['fwhm_arcsec']
+        if isinstance(fwhm, dict):
+            raise ValueError(
+                f"{context}: grism gaussian fwhm_arcsec must be a scalar, "
+                f"got {fwhm!r}"
+            )
+        return PSFSpec(psf_type='gaussian', fwhm_arcsec=float(fwhm))
+    if psf_type == 'roman_wfi':
+        return _parse_roman_wfi_psf(block, context)
+    raise NotImplementedError(
+        f"{context}: psf type {psf_type!r} not supported; supported types: "
+        f"{list(_PSF_TYPES)}"
+    )
+
 
 @dataclass(frozen=True)
 class ObservingConfig:
@@ -51,10 +392,10 @@ class ObservingConfig:
 
     id: str
     bands: Tuple[str, ...]
-    band_psf_fwhm: Dict[str, float]  # arcsec, per band
+    band_psf: Dict[str, PSFSpec]  # per band
     grism_rolls_deg: Tuple[float, ...]
     grism_dispersion_nm_per_pix: float
-    grism_psf_fwhm: float  # arcsec (gaussian; complex WFI PSF is a future gap)
+    grism_psf: PSFSpec
     lines: Tuple[str, ...]
     pixel_scale_arcsec: float
     stamp_broadband_pix: int
@@ -66,8 +407,12 @@ class ObservingConfig:
         if not self.bands:
             raise ValueError("observing config needs at least one band")
         for band in self.bands:
-            if band not in self.band_psf_fwhm:
-                raise ValueError(f"band '{band}' has no psf fwhm in broadband psf spec")
+            if band not in self.band_psf:
+                raise ValueError(f"band '{band}' has no entry in broadband psf spec")
+            if not isinstance(self.band_psf[band], PSFSpec):
+                raise ValueError(f"band '{band}' psf entry must be a PSFSpec")
+        if not isinstance(self.grism_psf, PSFSpec):
+            raise ValueError("grism_psf must be a PSFSpec")
         if not self.grism_rolls_deg:
             raise ValueError("observing config needs at least one grism roll")
         if tuple(self.lines) != ('Halpha',):
@@ -76,7 +421,6 @@ class ObservingConfig:
             )
         for name, value in [
             ('grism_dispersion_nm_per_pix', self.grism_dispersion_nm_per_pix),
-            ('grism_psf_fwhm', self.grism_psf_fwhm),
             ('pixel_scale_arcsec', self.pixel_scale_arcsec),
         ]:
             if value <= 0:
@@ -116,13 +460,10 @@ class ObservingConfig:
         psf = raw['psf']
         _reject_unknown(psf, ('broadband', 'grism'), f"{path}:psf")
         _require_keys(psf, ('broadband', 'grism'), f"{path}:psf")
-        for key in ('broadband', 'grism'):
-            if psf[key].get('type') != 'gaussian':
-                raise NotImplementedError(
-                    f"{path}:psf.{key}: only type 'gaussian' is supported in v1 "
-                    f"(complex WFI grism PSF is a known gap), got "
-                    f"{psf[key].get('type')!r}"
-                )
+        band_psf = _parse_broadband_psf(
+            psf['broadband'], tuple(raw['bands']), f"{path}:psf.broadband"
+        )
+        grism_psf = _parse_grism_psf(psf['grism'], f"{path}:psf.grism")
 
         stamp = raw['stamp']
         _reject_unknown(stamp, ('broadband_pix', 'grism_pix'), f"{path}:stamp")
@@ -135,12 +476,10 @@ class ObservingConfig:
         return cls(
             id=str(raw['id']),
             bands=tuple(raw['bands']),
-            band_psf_fwhm={
-                k: float(v) for k, v in psf['broadband']['fwhm_arcsec'].items()
-            },
+            band_psf=band_psf,
             grism_rolls_deg=tuple(float(a) for a in grism['rolls_deg']),
             grism_dispersion_nm_per_pix=float(grism['dispersion_nm_per_pix']),
-            grism_psf_fwhm=float(psf['grism']['fwhm_arcsec']),
+            grism_psf=grism_psf,
             lines=tuple(raw['lines']),
             pixel_scale_arcsec=float(raw['pixel_scale_arcsec']),
             stamp_broadband_pix=int(stamp['broadband_pix']),
