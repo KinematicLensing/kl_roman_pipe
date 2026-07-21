@@ -37,6 +37,7 @@ TIMEOUT_SECONDS = 4 * 3600
 # result file becoming downloadable
 DOWNLOAD_RETRY_SECONDS = 60
 DOWNLOAD_MAX_RETRIES = 12
+POLL_MAX_CONSECUTIVE_ERRORS = 10
 
 REQUIRED_SPEC_KEYS = ('name', 'catalog_id', 'table', 'format', 'columns', 'cuts')
 
@@ -101,10 +102,26 @@ def submit(session: requests.Session, sql: str, fmt: str) -> int:
 
 
 def poll(session: requests.Session, query_id: int) -> dict:
+    """Poll /queries until the query is terminal, tolerating transient
+    network errors (the Hive job keeps running server-side regardless)."""
     deadline = time.time() + TIMEOUT_SECONDS
+    consecutive_errors = 0
     while time.time() < deadline:
-        r = session.get(f'{API}/queries')
-        r.raise_for_status()
+        try:
+            r = session.get(f'{API}/queries', timeout=60)
+            r.raise_for_status()
+            consecutive_errors = 0
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
+            consecutive_errors += 1
+            if consecutive_errors > POLL_MAX_CONSECUTIVE_ERRORS:
+                raise RuntimeError(
+                    f"polling failed {consecutive_errors} times in a row; "
+                    f"query {query_id} may still be running server-side -- "
+                    f"resume with --query-id {query_id}"
+                ) from e
+            print(f"  transient poll error ({e.__class__.__name__}); retrying")
+            time.sleep(POLL_SECONDS)
+            continue
         matches = [q for q in r.json() if q['id'] == query_id]
         if not matches:
             raise RuntimeError(f"query {query_id} vanished from /queries")
@@ -116,7 +133,10 @@ def poll(session: requests.Session, query_id: int) -> dict:
             raise RuntimeError(f"query {query_id} terminal status {status}: {q}")
         print(f"  query {query_id}: {status} ...")
         time.sleep(POLL_SECONDS)
-    raise TimeoutError(f"query {query_id} still running after {TIMEOUT_SECONDS}s")
+    raise TimeoutError(
+        f"query {query_id} still running after {TIMEOUT_SECONDS}s; "
+        f"resume with --query-id {query_id}"
+    )
 
 
 def download(session: requests.Session, record: dict, out_path: Path) -> None:
@@ -125,8 +145,17 @@ def download(session: requests.Session, record: dict, out_path: Path) -> None:
         raise RuntimeError(f"query {record['id']} has no download_results URL")
     tmp = out_path.with_suffix(out_path.suffix + '.tmp')
     for attempt in range(1, DOWNLOAD_MAX_RETRIES + 1):
-        r = session.get(url, stream=True)
-        if r.status_code == 200:
+        try:
+            r = session.get(url, stream=True, timeout=300)
+            status_code = r.status_code
+        except (requests.ConnectionError, requests.Timeout) as e:
+            print(
+                f"  download attempt {attempt}: {e.__class__.__name__}; "
+                f"retrying in {DOWNLOAD_RETRY_SECONDS}s"
+            )
+            time.sleep(DOWNLOAD_RETRY_SECONDS)
+            continue
+        if status_code == 200:
             with open(tmp, 'wb') as f:
                 for chunk in r.iter_content(1 << 20):
                     f.write(chunk)
@@ -139,7 +168,7 @@ def download(session: requests.Session, record: dict, out_path: Path) -> None:
             tmp.rename(out_path)
             return
         print(
-            f"  download attempt {attempt}: HTTP {r.status_code}; "
+            f"  download attempt {attempt}: HTTP {status_code}; "
             f"retrying in {DOWNLOAD_RETRY_SECONDS}s"
         )
         time.sleep(DOWNLOAD_RETRY_SECONDS)
@@ -151,6 +180,12 @@ def main() -> int:
     ap.add_argument('spec', type=Path, help='query-spec YAML path')
     ap.add_argument(
         '--force', action='store_true', help='re-download even if up to date'
+    )
+    ap.add_argument(
+        '--query-id',
+        type=int,
+        default=None,
+        help='resume an already-submitted query instead of submitting anew',
     )
     args = ap.parse_args()
 
@@ -177,10 +212,20 @@ def main() -> int:
             f"to ~/.netrc for machine api.cosmohub.pic.es"
         )
 
-    print(f"submitting {spec['name']} ({fmt}) ...")
-    query_id = submit(session, sql, fmt)
-    print(f"  submitted as query {query_id}; polling every {POLL_SECONDS}s")
+    if args.query_id is not None:
+        query_id = args.query_id
+        print(f"resuming query {query_id}; polling every {POLL_SECONDS}s")
+    else:
+        print(f"submitting {spec['name']} ({fmt}) ...")
+        query_id = submit(session, sql, fmt)
+        print(f"  submitted as query {query_id}; polling every {POLL_SECONDS}s")
     record = poll(session, query_id)
+    if record.get('sql') != sql:
+        raise RuntimeError(
+            f"query {query_id} SQL does not match the spec's SQL -- refusing "
+            f"to attach it to '{spec['name']}'.\n  query: {record.get('sql')}"
+            f"\n  spec:  {sql}"
+        )
     size_mb = (record.get('size') or 0) / 1e6
     print(f"  SUCCEEDED (server size {size_mb:.1f} MB); downloading ...")
     download(session, record, out_path)
