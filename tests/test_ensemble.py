@@ -115,10 +115,13 @@ class TestSpecValidation:
         with pytest.raises(ValueError, match='missing required keys'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
-    def test_catalog_population_rejected(self, tmp_path):
+    def test_catalog_type_rejects_sampled_keys(self, tmp_path):
+        # flipping a sampled spec to type: catalog must fail loudly on its
+        # sampled-only keys (the catalog branch has its own strict schema,
+        # covered in tests/test_population.py)
         d = _spec_dict()
         d['population']['type'] = 'catalog'
-        with pytest.raises(NotImplementedError, match='catalog population backend'):
+        with pytest.raises(ValueError, match='unknown keys'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
     def test_old_flat_schema_rejected(self, tmp_path):

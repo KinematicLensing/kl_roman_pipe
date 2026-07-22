@@ -1,0 +1,73 @@
+# Flagship2 catalog-backed shear-bias dev spec: 8 galaxies x 2 ring members
+# from the dev catalog subset (make download-cosmohub-dev), config P.
+# Shakedown-sized for local runs of the catalog population chain.
+run:
+  name: flagship2_shear_dev
+  version: 1
+  description: "Flagship2 catalog population, shear-bias dev shakedown, config P"
+  seed: 20260721
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    download: flagship2_dev        # basename of data/cosmohub/<name>.yaml
+    data_dir: data/cosmohub
+  preprocess:
+    flux_variant: model3_ext       # extincted model3 Halpha flux
+    h: 0.67                        # Flagship cosmology; logM* = col - 2*log10(h)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_min: 10.0             # per-exposure matched-filter line SNR
+    bulge_fraction_max: null       # no cut
+    bulge_nsersic_range: null      # no cut
+  sample:
+    n_galaxies: 8
+    replace: false
+  paint:
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]       # isotropic redraw; catalog inc kept for validation
+    ring: {members: 2}             # theta and theta + pi/2 partner
+  shear:
+    sigma: 0.03                    # per-component iid Gaussian, shared within pair
+    gmax: 0.1                      # redraw until |g| < gmax
+  priors:
+    logm_obs_scatter_dex: 0.25     # simulated photometric-mass error
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  config: canonical_P
+  # per-galaxy depth-anchored noise replaces these fixed SNRs in the
+  # catalog-integration phase; carried here to satisfy the v1 schema
+  snr:
+    broadband: 300
+    line: 100
+
+fit:
+  sampler: numpyro
+  n_warmup: 100
+  n_samples: 200
+  n_chains: 2
+  precondition: laplace
+  target_accept: 0.8
+  pin_z_to_truth: true
+
+dispatch:
+  backend: local
+  mode: dynamic
+  workers_per_node: 1
+  target_task_walltime_min: 30
+  queue: gh-dev
+  max_fit_walltime_min: 30
+
+output:
+  save_chains: all
+  save_mocks: all

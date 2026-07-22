@@ -492,7 +492,10 @@ _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
 _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
-_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr')
+_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr', 'shear_bias')
+_SAMPLED_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr')
+_FLUX_VARIANTS = ('model3_ext', 'model3', 'model1_ext', 'model1')
+_CATALOG_DEFAULT_DATA_DIR = 'data/cosmohub'
 
 # spec draw/fixed keys may be shared top-level params, aliased short names, or
 # fully-dotted source-model params; aliases resolve here
@@ -527,6 +530,240 @@ class DrawSpec:
 
 
 @dataclass(frozen=True)
+class CatalogPopulationSpec:
+    """Catalog-backed population block (``population.type: catalog``).
+
+    Galaxies come from Flagship2 catalog rows (structural + flux truths),
+    with kinematics painted on via scaling relations, an isotropic
+    orientation redraw, and per-pair shear draws. All keys are required in
+    the YAML unless a default is stated; unknown keys raise.
+    """
+
+    # catalog
+    catalog_download: str  # basename of data/cosmohub/<name>.yaml query spec
+    catalog_data_dir: str  # default 'data/cosmohub'
+
+    # preprocess
+    flux_variant: str  # Halpha flux column variant
+    h: float  # Flagship cosmology little-h; logM*_phys = col - 2*log10(h)
+
+    # selection
+    z_range: Tuple[float, float]
+    snr_line_min: float  # per-exposure matched-filter line SNR floor
+    bulge_fraction_max: Optional[float]  # None = no cut
+    bulge_nsersic_range: Optional[Tuple[float, float]]  # None = no cut
+
+    # sample
+    n_galaxies: int  # subsampled without replacement
+
+    # paint: inverted TFR (logv = logv0 + (logM - logm0)/slope) + sigma0(z)
+    tfr_logv0: float
+    tfr_logm0: float
+    tfr_slope: float
+    tfr_scatter_dex: float  # Gaussian scatter in logv
+    sigma0_intercept_kms: float
+    sigma0_slope_kms: float  # per unit z
+    sigma0_scatter_kms: float
+    sigma0_min_kms: float  # resample below this floor
+
+    # orientation: isotropic redraw; catalog inclination kept for validation
+    cosi_range: Tuple[float, float]
+    ring_members: int  # 1, or 2 for a theta / theta + pi/2 ring pair
+
+    # shear: iid per-component Gaussian, shared within a ring pair
+    shear_sigma: float
+    shear_gmax: float  # redraw until |g| < gmax
+
+    # priors
+    logm_obs_scatter_dex: float  # simulated photometric-mass error
+
+    def __post_init__(self):
+        if not self.catalog_download:
+            raise ValueError("catalog.download must be a non-empty name")
+        if self.flux_variant not in _FLUX_VARIANTS:
+            raise ValueError(
+                f"preprocess.flux_variant '{self.flux_variant}'; supported: "
+                f"{_FLUX_VARIANTS}"
+            )
+        if self.h <= 0:
+            raise ValueError(f"preprocess.h ({self.h}) must be positive")
+        z_lo, z_hi = self.z_range
+        if not (0.0 < z_lo < z_hi):
+            raise ValueError(
+                f"selection.z_range ({z_lo}, {z_hi}) must satisfy 0 < lo < hi"
+            )
+        if self.snr_line_min <= 0:
+            raise ValueError(
+                f"selection.snr_line_min ({self.snr_line_min}) must be positive"
+            )
+        if self.bulge_fraction_max is not None and not (
+            0.0 < self.bulge_fraction_max <= 1.0
+        ):
+            raise ValueError(
+                f"selection.bulge_fraction_max ({self.bulge_fraction_max}) "
+                f"must be in (0, 1] or null"
+            )
+        if self.bulge_nsersic_range is not None:
+            n_lo, n_hi = self.bulge_nsersic_range
+            if not (0.0 < n_lo < n_hi):
+                raise ValueError(
+                    f"selection.bulge_nsersic_range ({n_lo}, {n_hi}) must "
+                    f"satisfy 0 < lo < hi or be null"
+                )
+        if not isinstance(self.n_galaxies, int) or self.n_galaxies < 1:
+            raise ValueError(
+                f"sample.n_galaxies ({self.n_galaxies!r}) must be a positive int"
+            )
+        if self.tfr_slope == 0:
+            raise ValueError("paint.tfr.slope must be nonzero")
+        if self.tfr_scatter_dex < 0:
+            raise ValueError(
+                f"paint.tfr.scatter_dex ({self.tfr_scatter_dex}) must be >= 0"
+            )
+        if self.sigma0_scatter_kms < 0:
+            raise ValueError(
+                f"paint.sigma0.scatter_kms ({self.sigma0_scatter_kms}) must " f"be >= 0"
+            )
+        if self.sigma0_min_kms <= 0:
+            raise ValueError(
+                f"paint.sigma0.min_kms ({self.sigma0_min_kms}) must be positive"
+            )
+        c_lo, c_hi = self.cosi_range
+        if not (0.0 <= c_lo < c_hi <= 1.0):
+            raise ValueError(
+                f"orientation.cosi_range ({c_lo}, {c_hi}) must satisfy "
+                f"0 <= lo < hi <= 1"
+            )
+        if self.ring_members not in (1, 2):
+            raise ValueError(
+                f"orientation.ring.members ({self.ring_members!r}) must be 1 or 2"
+            )
+        if self.shear_sigma <= 0:
+            raise ValueError(f"shear.sigma ({self.shear_sigma}) must be positive")
+        if not (0.0 < self.shear_gmax < 1.0):
+            raise ValueError(f"shear.gmax ({self.shear_gmax}) must be in (0, 1)")
+        if self.logm_obs_scatter_dex < 0:
+            raise ValueError(
+                f"priors.logm_obs_scatter_dex ({self.logm_obs_scatter_dex}) "
+                f"must be >= 0"
+            )
+
+
+def _parse_pair(value, context: str) -> Tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{context}: must be a [lo, hi] pair, got {value!r}")
+    return (float(value[0]), float(value[1]))
+
+
+def _parse_catalog_population(population: dict, context: str) -> CatalogPopulationSpec:
+    """Parse the ``population.type: catalog`` block.
+
+    Sampled-only keys (stratify/n_gal_per_bin/draw/fixed/ring) are rejected
+    as unknown; every catalog-mode key is required unless a default is
+    stated (catalog.data_dir).
+    """
+    allowed = (
+        'type',
+        'catalog',
+        'preprocess',
+        'selection',
+        'sample',
+        'paint',
+        'orientation',
+        'shear',
+        'priors',
+    )
+    _reject_unknown(population, allowed, context)
+    _require_keys(population, allowed, context)
+
+    catalog = population['catalog']
+    _reject_unknown(catalog, ('download', 'data_dir'), f"{context}.catalog")
+    _require_keys(catalog, ('download',), f"{context}.catalog")
+
+    pre = population['preprocess']
+    _reject_unknown(pre, ('flux_variant', 'h'), f"{context}.preprocess")
+    _require_keys(pre, ('flux_variant', 'h'), f"{context}.preprocess")
+
+    sel = population['selection']
+    sel_keys = ('z_range', 'snr_line_min', 'bulge_fraction_max', 'bulge_nsersic_range')
+    _reject_unknown(sel, sel_keys, f"{context}.selection")
+    _require_keys(sel, sel_keys, f"{context}.selection")
+
+    sample = population['sample']
+    _reject_unknown(sample, ('n_galaxies', 'replace'), f"{context}.sample")
+    _require_keys(sample, ('n_galaxies', 'replace'), f"{context}.sample")
+    if sample['replace']:
+        raise NotImplementedError(
+            f"{context}.sample: replace: true (bootstrap resampling) is not "
+            f"implemented; set replace: false"
+        )
+
+    paint = population['paint']
+    _reject_unknown(paint, ('tfr', 'sigma0'), f"{context}.paint")
+    _require_keys(paint, ('tfr', 'sigma0'), f"{context}.paint")
+    tfr = paint['tfr']
+    tfr_keys = ('logv0', 'logm0', 'slope', 'scatter_dex')
+    _reject_unknown(tfr, tfr_keys, f"{context}.paint.tfr")
+    _require_keys(tfr, tfr_keys, f"{context}.paint.tfr")
+    sigma0 = paint['sigma0']
+    sigma0_keys = ('intercept_kms', 'slope_kms', 'scatter_kms', 'min_kms')
+    _reject_unknown(sigma0, sigma0_keys, f"{context}.paint.sigma0")
+    _require_keys(sigma0, sigma0_keys, f"{context}.paint.sigma0")
+
+    orientation = population['orientation']
+    _reject_unknown(orientation, ('cosi_range', 'ring'), f"{context}.orientation")
+    _require_keys(orientation, ('cosi_range', 'ring'), f"{context}.orientation")
+    ring = orientation['ring']
+    _reject_unknown(ring, ('members',), f"{context}.orientation.ring")
+    _require_keys(ring, ('members',), f"{context}.orientation.ring")
+
+    shear = population['shear']
+    _reject_unknown(shear, ('sigma', 'gmax'), f"{context}.shear")
+    _require_keys(shear, ('sigma', 'gmax'), f"{context}.shear")
+
+    priors = population['priors']
+    _reject_unknown(priors, ('logm_obs_scatter_dex',), f"{context}.priors")
+    _require_keys(priors, ('logm_obs_scatter_dex',), f"{context}.priors")
+
+    bulge_fraction_max = sel['bulge_fraction_max']
+    bulge_nsersic_range = sel['bulge_nsersic_range']
+    return CatalogPopulationSpec(
+        catalog_download=str(catalog['download']),
+        catalog_data_dir=str(catalog.get('data_dir', _CATALOG_DEFAULT_DATA_DIR)),
+        flux_variant=str(pre['flux_variant']),
+        h=float(pre['h']),
+        z_range=_parse_pair(sel['z_range'], f"{context}.selection.z_range"),
+        snr_line_min=float(sel['snr_line_min']),
+        bulge_fraction_max=(
+            float(bulge_fraction_max) if bulge_fraction_max is not None else None
+        ),
+        bulge_nsersic_range=(
+            _parse_pair(bulge_nsersic_range, f"{context}.selection.bulge_nsersic_range")
+            if bulge_nsersic_range is not None
+            else None
+        ),
+        n_galaxies=_require_yaml_int(sample, 'n_galaxies', 0, f"{context}.sample"),
+        tfr_logv0=float(tfr['logv0']),
+        tfr_logm0=float(tfr['logm0']),
+        tfr_slope=float(tfr['slope']),
+        tfr_scatter_dex=float(tfr['scatter_dex']),
+        sigma0_intercept_kms=float(sigma0['intercept_kms']),
+        sigma0_slope_kms=float(sigma0['slope_kms']),
+        sigma0_scatter_kms=float(sigma0['scatter_kms']),
+        sigma0_min_kms=float(sigma0['min_kms']),
+        cosi_range=_parse_pair(
+            orientation['cosi_range'], f"{context}.orientation.cosi_range"
+        ),
+        ring_members=_require_yaml_int(
+            ring, 'members', 0, f"{context}.orientation.ring"
+        ),
+        shear_sigma=float(shear['sigma']),
+        shear_gmax=float(shear['gmax']),
+        logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
+    )
+
+
+@dataclass(frozen=True)
 class EnsembleSpec:
     """One ensemble campaign, loaded from ensemble_spec.yaml."""
 
@@ -538,8 +775,10 @@ class EnsembleSpec:
 
     # population: exactly one plot axis, either a truth stratification (cosi
     # bins) or a config sweep (line_snr values; galaxies + noise shared
-    # across the sweep -- common random numbers)
-    population_type: str  # 'sampled' | 'catalog' (catalog not implemented)
+    # across the sweep -- common random numbers). For catalog populations
+    # the stratify/draw machinery is unused (catalog_population carries the
+    # whole population definition).
+    population_type: str  # 'sampled' | 'catalog'
     stratify_param: str  # 'cosi' | 'line_snr'
     stratify_n_bins: int  # cosi axis only; 0 for a config sweep
     stratify_range: Tuple[float, float]  # cosi axis only; (0, 0) for a sweep
@@ -594,6 +833,10 @@ class EnsembleSpec:
     # published Roman KL prior half-width (Xu+ 2023) as an isotropic Gaussian.
     shear_fit_prior_sigma: float = 0.2
 
+    # catalog-backed population definition (population.type: catalog only;
+    # None for sampled populations)
+    catalog_population: Optional[CatalogPopulationSpec] = None
+
     def __post_init__(self):
         if self.population_type not in _POPULATION_TYPES:
             raise ValueError(
@@ -610,6 +853,27 @@ class EnsembleSpec:
                 f"measurement '{self.measurement}' not supported; "
                 f"available: {_MEASUREMENTS}"
             )
+        if self.population_type == 'catalog':
+            if self.catalog_population is None:
+                raise ValueError(
+                    "population type 'catalog' requires a catalog_population " "block"
+                )
+            if self.measurement != 'shear_bias':
+                raise ValueError(
+                    f"catalog populations require run.measurement: "
+                    f"shear_bias, got '{self.measurement}'"
+                )
+        else:
+            if self.catalog_population is not None:
+                raise ValueError(
+                    "catalog_population is only valid for population type " "'catalog'"
+                )
+            if self.measurement not in _SAMPLED_MEASUREMENTS:
+                raise ValueError(
+                    f"measurement '{self.measurement}' requires "
+                    f"population.type: catalog; sampled populations support "
+                    f"{_SAMPLED_MEASUREMENTS}"
+                )
         if self.measurement == 'sigma_eps_vs_cosi':
             if self.stratify_param != 'cosi':
                 raise ValueError(
@@ -691,6 +955,11 @@ class EnsembleSpec:
     @property
     def n_axis_steps(self) -> int:
         """Number of steps along the plot axis (cosi bins or sweep values)."""
+        if self.population_type == 'catalog':
+            raise ValueError(
+                "n_axis_steps is a sampled-population concept; catalog "
+                "populations carry no stratification axis"
+            )
         if self.sweep_values:
             return len(self.sweep_values)
         return self.stratify_n_bins
@@ -698,6 +967,9 @@ class EnsembleSpec:
     @property
     def n_fits(self) -> int:
         """Total fits this spec expands to."""
+        if self.population_type == 'catalog':
+            cp = self.catalog_population
+            return cp.n_galaxies * cp.ring_members * self.m_noise
         n_shear = len(self.shear_grid) if self.shear_scheme == 'grid' else 1
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
@@ -735,19 +1007,9 @@ class EnsembleSpec:
         )
 
         population = raw['population']
-        _reject_unknown(
-            population,
-            ('type', 'stratify', 'n_gal_per_bin', 'draw', 'fixed', 'shear', 'ring'),
-            f"{path}:population",
-        )
-        _require_keys(
-            population,
-            ('type', 'stratify', 'n_gal_per_bin', 'draw', 'shear', 'ring'),
-            f"{path}:population",
-        )
+        if 'type' not in population:
+            raise ValueError(f"{path}:population: missing required keys ['type']")
         population_type = str(population['type'])
-        if population_type == 'catalog':
-            raise NotImplementedError("catalog population backend not yet implemented")
 
         observation = raw['observation']
         _reject_unknown(observation, ('config', 'snr'), f"{path}:observation")
@@ -758,83 +1020,132 @@ class EnsembleSpec:
         _reject_unknown(snr, ('broadband', 'line'), f"{path}:observation.snr")
         _require_keys(snr, ('broadband',), f"{path}:observation.snr")
 
-        stratify = population['stratify']
-        if len(stratify) != 1:
-            raise ValueError(
-                f"{path}:population.stratify must contain exactly one "
-                f"parameter, got {list(stratify)}"
-            )
-        strat_param, strat_cfg = next(iter(stratify.items()))
+        # sampled-mode placeholders (overwritten in the sampled branch)
+        catalog_population: Optional[CatalogPopulationSpec] = None
+        strat_param = ''
         strat_n_bins = 0
         strat_range = (0.0, 0.0)
         sweep_values: Tuple[float, ...] = ()
-        if strat_param == 'line_snr':
-            _reject_unknown(
-                strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
+        n_gal_per_bin = 1
+        draw: Dict[str, DrawSpec] = {}
+        fixed: Dict[str, float] = {}
+        scheme = 'fixed'
+        shear_g1 = 0.0
+        shear_g2 = 0.0
+        shear_grid: Tuple[float, ...] = ()
+        shear_component = ''
+        ring_enabled = False
+
+        if population_type == 'catalog':
+            catalog_population = _parse_catalog_population(
+                population, f"{path}:population"
             )
-            _require_keys(
-                strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
-            )
-            sweep_values = tuple(float(v) for v in strat_cfg['values'])
-            if 'line' in snr:
-                raise ValueError(
-                    f"{path}: observation.snr.line conflicts with the "
-                    f"line_snr sweep axis; remove it (per-fit values come "
-                    f"from population.stratify.line_snr.values)"
-                )
-        else:
+            # per-galaxy depth-anchored noise is the integration-phase plan;
+            # v1 keeps the fixed scalar SNRs, so snr.line is required here
             if 'line' not in snr:
                 raise ValueError(
                     f"{path}:observation.snr: missing required keys ['line']"
                 )
+            ring_enabled = catalog_population.ring_members == 2
+        else:
             _reject_unknown(
-                strat_cfg,
-                ('n_bins', 'range'),
-                f"{path}:population.stratify.{strat_param}",
+                population,
+                (
+                    'type',
+                    'stratify',
+                    'n_gal_per_bin',
+                    'draw',
+                    'fixed',
+                    'shear',
+                    'ring',
+                ),
+                f"{path}:population",
             )
             _require_keys(
-                strat_cfg,
-                ('n_bins', 'range'),
-                f"{path}:population.stratify.{strat_param}",
+                population,
+                ('type', 'stratify', 'n_gal_per_bin', 'draw', 'shear', 'ring'),
+                f"{path}:population",
             )
-            strat_n_bins = int(strat_cfg['n_bins'])
-            strat_range = (
-                float(strat_cfg['range'][0]),
-                float(strat_cfg['range'][1]),
+            n_gal_per_bin = int(population['n_gal_per_bin'])
+
+            stratify = population['stratify']
+            if len(stratify) != 1:
+                raise ValueError(
+                    f"{path}:population.stratify must contain exactly one "
+                    f"parameter, got {list(stratify)}"
+                )
+            strat_param, strat_cfg = next(iter(stratify.items()))
+            if strat_param == 'line_snr':
+                _reject_unknown(
+                    strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
+                )
+                _require_keys(
+                    strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
+                )
+                sweep_values = tuple(float(v) for v in strat_cfg['values'])
+                if 'line' in snr:
+                    raise ValueError(
+                        f"{path}: observation.snr.line conflicts with the "
+                        f"line_snr sweep axis; remove it (per-fit values come "
+                        f"from population.stratify.line_snr.values)"
+                    )
+            else:
+                if 'line' not in snr:
+                    raise ValueError(
+                        f"{path}:observation.snr: missing required keys ['line']"
+                    )
+                _reject_unknown(
+                    strat_cfg,
+                    ('n_bins', 'range'),
+                    f"{path}:population.stratify.{strat_param}",
+                )
+                _require_keys(
+                    strat_cfg,
+                    ('n_bins', 'range'),
+                    f"{path}:population.stratify.{strat_param}",
+                )
+                strat_n_bins = int(strat_cfg['n_bins'])
+                strat_range = (
+                    float(strat_cfg['range'][0]),
+                    float(strat_cfg['range'][1]),
+                )
+
+            for name, dcfg in population['draw'].items():
+                dcfg = dict(dcfg)
+                dist = dcfg.pop('dist', None)
+                if dist is None:
+                    raise ValueError(f"{path}:population.draw.{name}: missing 'dist'")
+                if dist == 'uniform' and 'range' in dcfg:
+                    lo, hi = dcfg.pop('range')
+                    dcfg.update(low=lo, high=hi)
+                resolved = _PARAM_ALIASES.get(name, name)
+                draw[resolved] = DrawSpec(dist=dist, params=dcfg)
+
+            fixed = _resolve_fixed_block(population.get('fixed', {}), context=f"{path}")
+
+            shear = population['shear']
+            _reject_unknown(
+                shear,
+                ('scheme', 'g1', 'g2', 'grid', 'component'),
+                f"{path}:population.shear",
             )
+            scheme = shear.get('scheme', 'fixed')
+            shear_g1 = float(shear.get('g1', 0.0))
+            shear_g2 = float(shear.get('g2', 0.0))
+            if scheme == 'grid':
+                _require_keys(shear, ('grid', 'component'), f"{path}:population.shear")
+                shear_grid = tuple(float(g) for g in shear['grid'])
+                shear_component = shear['component']
 
-        draw = {}
-        for name, dcfg in population['draw'].items():
-            dcfg = dict(dcfg)
-            dist = dcfg.pop('dist', None)
-            if dist is None:
-                raise ValueError(f"{path}:population.draw.{name}: missing 'dist'")
-            if dist == 'uniform' and 'range' in dcfg:
-                lo, hi = dcfg.pop('range')
-                dcfg.update(low=lo, high=hi)
-            resolved = _PARAM_ALIASES.get(name, name)
-            draw[resolved] = DrawSpec(dist=dist, params=dcfg)
-
-        fixed = _resolve_fixed_block(population.get('fixed', {}), context=f"{path}")
-
-        shear = population['shear']
-        _reject_unknown(
-            shear,
-            ('scheme', 'g1', 'g2', 'grid', 'component'),
-            f"{path}:population.shear",
-        )
-        scheme = shear.get('scheme', 'fixed')
-        shear_grid: Tuple[float, ...] = ()
-        shear_component = ''
-        if scheme == 'grid':
-            _require_keys(shear, ('grid', 'component'), f"{path}:population.shear")
-            shear_grid = tuple(float(g) for g in shear['grid'])
-            shear_component = shear['component']
-
-        ring = population['ring']
-        _reject_unknown(ring, ('enabled', 'antithetic_g'), f"{path}:population.ring")
-        if ring.get('antithetic_g', False):
-            raise NotImplementedError("antithetic_g (+/-g pairs) is scoped out of v1")
+            ring = population['ring']
+            _reject_unknown(
+                ring, ('enabled', 'antithetic_g'), f"{path}:population.ring"
+            )
+            if ring.get('antithetic_g', False):
+                raise NotImplementedError(
+                    "antithetic_g (+/-g pairs) is scoped out of v1"
+                )
+            ring_enabled = bool(ring.get('enabled', False))
 
         model = raw.get('model', {})
         _reject_unknown(model, ('render',), f"{path}:model")
@@ -894,17 +1205,18 @@ class EnsembleSpec:
             stratify_n_bins=strat_n_bins,
             stratify_range=strat_range,
             sweep_values=sweep_values,
-            n_gal_per_bin=int(population['n_gal_per_bin']),
+            n_gal_per_bin=n_gal_per_bin,
             m_noise=int(run.get('noise_reps', 1)),
             draw=draw,
             fixed=fixed,
             shear_scheme=scheme,
-            g1=float(shear.get('g1', 0.0)),
-            g2=float(shear.get('g2', 0.0)),
+            g1=shear_g1,
+            g2=shear_g2,
             shear_grid=shear_grid,
             shear_component=shear_component,
             shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
-            ring_enabled=bool(ring.get('enabled', False)),
+            ring_enabled=ring_enabled,
+            catalog_population=catalog_population,
             render_oversample=render_oversample,
             observed_config=str(observation['config']),
             broadband_snr=float(snr['broadband']),

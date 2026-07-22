@@ -3,7 +3,8 @@ Ensemble pipeline CLI.
 
 Commands
 --------
-expand   spec.yaml -> run directory (manifest + provenance + ledger dirs)
+expand      spec.yaml -> run directory (manifest + provenance + ledger dirs)
+population  catalog-mode spec.yaml -> population.parquet + population_meta.json
 run      execute the campaign locally (serial or N worker subprocesses)
 worker   single worker loop (the SLURM/subprocess entrypoint)
 status   derived-status tally (succeeded/failed/in_progress/stale/never_run)
@@ -45,6 +46,21 @@ def main(argv=None) -> int:
         '--overwrite',
         action='store_true',
         help='replace an existing run directory',
+    )
+
+    p_pop = sub.add_parser('population', help='build a catalog-backed population table')
+    p_pop.add_argument('spec', type=Path, help='catalog-mode ensemble spec YAML')
+    p_pop.add_argument(
+        '--out-dir',
+        type=Path,
+        required=True,
+        help='output dir for population.parquet + population_meta.json',
+    )
+    p_pop.add_argument(
+        '--data-dir',
+        type=Path,
+        default=None,
+        help='override the spec catalog data_dir (default: data/cosmohub)',
     )
 
     p_run = sub.add_parser('run', help='run the campaign locally')
@@ -95,6 +111,22 @@ def main(argv=None) -> int:
             args.spec, args.registry, args.runs_dir, overwrite=args.overwrite
         )
         print(f'expanded to {run_dir}')
+        return 0
+
+    if args.command == 'population':
+        from kl_pipe.ensemble.population import build_population, write_population
+        from kl_pipe.ensemble.spec import EnsembleSpec
+
+        spec = EnsembleSpec.from_yaml(args.spec)
+        df, meta = build_population(spec, data_dir=args.data_dir)
+        parquet_path, meta_path = write_population(args.out_dir, df, meta)
+        print(
+            f"stage counts: n_raw={meta['n_raw']} -> n_disk={meta['n_disk']} "
+            f"-> n_selected={meta['n_selected']} -> "
+            f"n_sampled={meta['n_sampled']}"
+        )
+        print(f"per-cut kills: {meta['kills']}")
+        print(f'wrote {parquet_path} + {meta_path.name}')
         return 0
 
     if args.command == 'run':
