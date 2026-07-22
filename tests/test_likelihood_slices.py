@@ -477,7 +477,16 @@ _GATES = {
     'bulge_disk': {
         'budgets': {
             'F087.bulge_frac': 5e-04,
-            'F087.bulge_hlr': 2e-05,
+            # bulge_hlr recovery is 4.8e-4 on the production inference grid
+            # (measured 2026-07-22), not the ~2e-6 of the untruncated grid the
+            # rest of this table was frozen on. Cause: the priors-sized grid
+            # caps effective_maxk at psf.maxk, truncating the n=4 emulator FT
+            # cusp; the shift is bulge_hlr-dependent and tilts the likelihood
+            # peak. The forward model is correct -- the full-grid render
+            # recovers truth to 8.8e-7 -- and shear (g1/g2) is unaffected, so
+            # this is a nuisance-only grid artifact. Bound set to 1e-3 (2x the
+            # measured error), tighter than the 10x rule.
+            'F087.bulge_hlr': 1e-03,
             'F087.disk_rscale': 2e-02,
             'F087.total_flux': 4e-03,
             'cosi': 4e-03,

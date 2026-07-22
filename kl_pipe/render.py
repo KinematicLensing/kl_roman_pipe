@@ -727,8 +727,13 @@ def _extract_worst_case_params(model, priors) -> tuple:
             continue
 
         prior = spec
+        # scale-length params may carry a composite component prefix
+        # (disk_rscale, bulge_hlr); the 'h_over' guard excludes the
+        # thickness ratios h_over_r / bulge_h_over_hlr, which are not scales
+        bare = name.rsplit('_', 1)[-1]
+        is_scale = bare in ('rscale', 'hlr') and 'h_over' not in name
         if hasattr(prior, 'low') and hasattr(prior, 'high'):
-            if name in ('rscale', 'hlr'):
+            if is_scale:
                 # smallest scale → highest maxk (also the velocity-gradient
                 # worst case: smallest rscale → steepest gradient → highest k_G)
                 worst_maxk_params[name] = prior.low

@@ -27,6 +27,7 @@ from kl_pipe.intensity import (
 )
 from kl_pipe.parameters import ImagePars
 from kl_pipe.noise import add_intensity_noise
+from kl_pipe.render import RenderConfig
 from kl_pipe.utils import get_test_dir
 
 
@@ -983,3 +984,81 @@ def _generate_composite_synthetic(pars, image_pars, snr, seed=42, psf=None):
 #   tests/test_optimizer_recovery.py::test_optimize_bulge_disk
 # They import _TRUE_PARS_SHARED, _IMAGE_PARS, _TEST_PSF, and
 # _generate_composite_synthetic from this file.
+
+
+# ==============================================================================
+# Grid sizing (maxk / stepk) -- required for k-space inference
+# ==============================================================================
+
+
+class TestCompositeGridSizing:
+    """Composite maxk/stepk aggregation and grid adequacy.
+
+    Grid sizing must resolve the slowest-decaying component (maxk = max over
+    components) and sample the most extended one finely enough (stepk = min).
+    InferenceTask validates the k-space grid via these; before this they
+    raised NotImplementedError, so BulgeDisk could not enter a fit.
+    """
+
+    def _components(self, bulge_disk_shared, pars):
+        theta = bulge_disk_shared.pars2theta(pars)
+        disk = InclinedExponentialModel()
+        bulge = InclinedSersicModel()
+        disk_pars = disk.theta2pars(bulge_disk_shared._get_component_theta(theta, 0))
+        bulge_pars = bulge.theta2pars(bulge_disk_shared._get_component_theta(theta, 1))
+        return (disk, disk_pars), (bulge, bulge_pars)
+
+    def test_maxk_is_max_over_components(
+        self, bulge_disk_shared, bulge_disk_shared_pars
+    ):
+        (disk, dp), (bulge, bp) = self._components(
+            bulge_disk_shared, bulge_disk_shared_pars
+        )
+        expected = max(float(disk.maxk(dp)), float(bulge.maxk(bp)))
+        assert bulge_disk_shared.maxk(bulge_disk_shared_pars) == pytest.approx(expected)
+
+    def test_stepk_is_min_over_components(
+        self, bulge_disk_shared, bulge_disk_shared_pars
+    ):
+        (disk, dp), (bulge, bp) = self._components(
+            bulge_disk_shared, bulge_disk_shared_pars
+        )
+        expected = min(float(disk.stepk(dp)), float(bulge.stepk(bp)))
+        assert bulge_disk_shared.stepk(bulge_disk_shared_pars) == pytest.approx(
+            expected
+        )
+
+    def test_maxk_grid_adequate(self, bulge_disk_shared):
+        """Auto-sized grid (from maxk/stepk) matches an over-resolved grid.
+
+        Uses a sharp n=4 bulge -- the highest-frequency case -- so an
+        under-sized maxk would alias visibly. Reference forces a much finer
+        k-grid (maxk_threshold 1e-5, folding 1e-4); agreement to < 1e-4
+        confirms the default grid resolves the composite.
+        """
+        model = BulgeDiskModel(bulge_nsersic=4.0, shared_centroids=True)
+        pars = {
+            'cosi': 0.5,
+            'theta_int': 0.3,
+            'g1': 0.02,
+            'g2': -0.01,
+            'x0': 0.0,
+            'y0': 0.0,
+            'total_flux': 1e4,
+            'bulge_frac': 0.25,
+            'disk_rscale': 0.3,
+            'disk_h_over_r': 0.1,
+            'bulge_hlr': 0.1,
+            'bulge_h_over_hlr': 0.3,
+        }
+        theta = model.pars2theta(pars)
+        ip = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='xy')
+
+        auto = model.render_image(theta, image_pars=ip)
+        rc_fine = RenderConfig.for_model(
+            model, pars, pixel_scale=0.11, maxk_threshold=1e-5, folding_threshold=1e-4
+        )
+        fine = model.render_image(theta, image_pars=ip, render_config=rc_fine)
+
+        rel = float(jnp.abs(auto - fine).max()) / float(jnp.abs(fine).max())
+        assert rel < 1e-4, f'auto grid under-resolves: rel max diff {rel:.2e}'

@@ -26,6 +26,7 @@ from typing import Dict, Optional, TYPE_CHECKING
 
 from kl_pipe.priors import (
     Gaussian,
+    LogUniform,
     PriorDict,
     TruncatedNormal,
     Uniform,
@@ -50,6 +51,15 @@ _BAND_FLUX_PRIOR = {
     'F184': (100.0, 20.0, 30.0, 250.0),
 }
 
+# bulge structure defaults for catalog-mode broadband (BulgeDiskModel).
+# the disk uses a thin h_over_r=0.1; the bulge is a rounder spheroid.
+# bulge_h_over_hlr has no catalog column -> fixed nuisance, not sampled.
+_BULGE_H_OVER_HLR = 0.5
+# base bulge truth defaults; the catalog expander overrides bulge_frac and
+# bulge_hlr per galaxy from the catalog columns
+_BULGE_FRAC_DEFAULT = 0.1
+_BULGE_HLR_DEFAULT = 0.2  # arcsec
+
 # shared scene defaults (flagship values)
 _SHARED_TRUTH = {
     'vel.v0': 10.0,
@@ -67,9 +77,24 @@ def _geometry_components(config: 'ObservationConfig') -> tuple:
     return tuple(config.bands) + ('Halpha', 'Halpha.cont')
 
 
-def build_source_model(config: 'ObservationConfig') -> 'SourceModel':
-    """SourceModel matching the observation config's bands and lines."""
-    from kl_pipe.intensity import InclinedExponentialModel
+def build_source_model(
+    config: 'ObservationConfig', bulge_nsersic: Optional[float] = None
+) -> 'SourceModel':
+    """SourceModel matching the observation config's bands and lines.
+
+    Parameters
+    ----------
+    config : ObservationConfig
+        Defines the scene's bands and lines.
+    bulge_nsersic : float, optional
+        If set (catalog mode), broadband bands carry a bulge: each band is a
+        ``BulgeDiskModel`` with this fixed per-galaxy Sersic index, shared
+        disk/bulge centroid, and shear applied to both components. The Halpha
+        line and its continuum stay disk-only (the line traces the star-
+        forming disk, not the old bulge). If None (sampled mode), every
+        component is a single ``InclinedExponentialModel`` as before.
+    """
+    from kl_pipe.intensity import BulgeDiskModel, InclinedExponentialModel
     from kl_pipe.lines import EmissionLine
     from kl_pipe.source import SourceModel
     from kl_pipe.velocity import CenteredVelocityModel
@@ -81,9 +106,21 @@ def build_source_model(config: 'ObservationConfig') -> 'SourceModel':
                 f"{sorted(_BAND_TRUTH)}"
             )
 
+    if bulge_nsersic is None:
+        broadband_models = {band: InclinedExponentialModel() for band in config.bands}
+    else:
+        broadband_models = {
+            band: BulgeDiskModel(
+                bulge_nsersic=bulge_nsersic,
+                shared_centroids=True,
+                shear_bulge=True,
+            )
+            for band in config.bands
+        }
+
     return SourceModel(
         velocity_model=CenteredVelocityModel(),
-        broadband_models={band: InclinedExponentialModel() for band in config.bands},
+        broadband_models=broadband_models,
         emission_lines={
             'Halpha': EmissionLine(
                 intensity=InclinedExponentialModel(),
@@ -94,7 +131,9 @@ def build_source_model(config: 'ObservationConfig') -> 'SourceModel':
 
 
 def scene_truth_defaults(
-    config: 'ObservationConfig', fixed_overrides: Dict[str, float]
+    config: 'ObservationConfig',
+    fixed_overrides: Dict[str, float],
+    bulge_bands: bool = False,
 ) -> Dict[str, float]:
     """
     Full dotted truth defaults for the scene, before per-fit overrides.
@@ -107,6 +146,13 @@ def scene_truth_defaults(
         The spec's resolved population.fixed block. Short keys 'h_over_r', 'x0',
         'y0' broadcast to every scene component; dotted keys override a
         single parameter. Unknown dotted keys raise.
+    bulge_bands : bool
+        If True (catalog mode), broadband bands are BulgeDiskModel and carry
+        the composite truth keys (total_flux, bulge_frac, disk_rscale,
+        disk_h_over_r, bulge_hlr, bulge_h_over_hlr, x0, y0). bulge_frac and
+        bulge_hlr get placeholder defaults here; the catalog expander
+        overrides them per galaxy. If False (sampled mode), bands are
+        single-disk (flux, rscale, h_over_r, x0, y0).
 
     Returns
     -------
@@ -121,22 +167,41 @@ def scene_truth_defaults(
                 f"band '{band}' has no scene defaults; known bands: "
                 f"{sorted(_BAND_TRUTH)}"
             )
-        for par, value in _BAND_TRUTH[band].items():
-            truth[f'{band}.{par}'] = value
+        bt = _BAND_TRUTH[band]
+        if bulge_bands:
+            truth[f'{band}.total_flux'] = bt['flux']
+            truth[f'{band}.bulge_frac'] = _BULGE_FRAC_DEFAULT
+            truth[f'{band}.disk_rscale'] = bt['rscale']
+            truth[f'{band}.disk_h_over_r'] = 0.1
+            truth[f'{band}.bulge_hlr'] = _BULGE_HLR_DEFAULT
+            truth[f'{band}.bulge_h_over_hlr'] = _BULGE_H_OVER_HLR
+            truth[f'{band}.x0'] = 0.0
+            truth[f'{band}.y0'] = 0.0
+        else:
+            truth[f'{band}.flux'] = bt['flux']
+            truth[f'{band}.rscale'] = bt['rscale']
+            truth[f'{band}.h_over_r'] = 0.1
+            truth[f'{band}.x0'] = 0.0
+            truth[f'{band}.y0'] = 0.0
 
-    # geometry defaults on every component
-    for comp in _geometry_components(config):
+    # geometry defaults on the line components (bands handled above, since
+    # their thickness key differs between single-disk and bulge-disk)
+    for comp in ('Halpha', 'Halpha.cont'):
         truth[f'{comp}.h_over_r'] = 0.1
         truth[f'{comp}.x0'] = 0.0
         truth[f'{comp}.y0'] = 0.0
 
-    # apply spec fixed overrides: broadcast short keys, then dotted keys
+    # apply spec fixed overrides: broadcast short keys, then dotted keys.
+    # broadcast only updates keys the scene actually has (bulge bands carry
+    # disk_h_over_r, not h_over_r), so a broadcast never invents orphan keys
     from kl_pipe.ensemble.spec import _BROADCAST_FIXED
 
     for name, value in fixed_overrides.items():
         if name in _BROADCAST_FIXED:
             for comp in _geometry_components(config):
-                truth[f'{comp}.{name}'] = value
+                key = f'{comp}.{name}'
+                if key in truth:
+                    truth[key] = value
         else:
             if name not in truth:
                 raise ValueError(
@@ -154,6 +219,15 @@ def scene_truth_defaults(
 # observed extremes rather than silently clipping truth out of support
 _CATALOG_RSCALE_LOW = 0.005
 _CATALOG_RSCALE_HIGH = 2.0
+
+# catalog-mode bulge half-light-radius prior bounds [arcsec]. This is a
+# population prior (NOT centered on each galaxy's truth) -- weakly-constrained
+# bulge params are the sharpest case where a truth-centered nuisance prior
+# would leak into the shear error bar via degeneracy. Sampled bulge_r50 spans
+# 0.033-1.13 arcsec (flagship2_dev, snr_line >= 10, measured 2026-07-22);
+# bounds set below/above with margin. Log-spaced (sizes span ~2 decades).
+_CATALOG_BULGE_HLR_LOW = 0.005
+_CATALOG_BULGE_HLR_HIGH = 2.0
 
 
 def scene_priors(
@@ -245,15 +319,33 @@ def scene_priors(
 
     for band in config.bands:
         _, sigma, low, high = _BAND_FLUX_PRIOR[band]
-        prior_spec[f'{band}.flux'] = TruncatedNormal(
-            truth[f'{band}.flux'], sigma, low, high
-        )
-        prior_spec[f'{band}.rscale'] = TruncatedNormal(
-            truth[f'{band}.rscale'], 0.08, rscale_low, rscale_high
-        )
-        prior_spec[f'{band}.h_over_r'] = truth[f'{band}.h_over_r']
         prior_spec[f'{band}.x0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
         prior_spec[f'{band}.y0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
+        if is_catalog:
+            # catalog broadband = BulgeDiskModel. Sampled: total_flux,
+            # disk_rscale (truth-centered, interim convention), bulge_frac,
+            # bulge_hlr. bulge_frac + bulge_hlr use POPULATION priors (not
+            # truth-centered); disk_h_over_r + bulge_h_over_hlr fixed.
+            prior_spec[f'{band}.total_flux'] = TruncatedNormal(
+                truth[f'{band}.total_flux'], sigma, low, high
+            )
+            prior_spec[f'{band}.disk_rscale'] = TruncatedNormal(
+                truth[f'{band}.disk_rscale'], 0.08, rscale_low, rscale_high
+            )
+            prior_spec[f'{band}.disk_h_over_r'] = truth[f'{band}.disk_h_over_r']
+            prior_spec[f'{band}.bulge_frac'] = Uniform(0.0, 1.0)
+            prior_spec[f'{band}.bulge_hlr'] = LogUniform(
+                _CATALOG_BULGE_HLR_LOW, _CATALOG_BULGE_HLR_HIGH
+            )
+            prior_spec[f'{band}.bulge_h_over_hlr'] = truth[f'{band}.bulge_h_over_hlr']
+        else:
+            prior_spec[f'{band}.flux'] = TruncatedNormal(
+                truth[f'{band}.flux'], sigma, low, high
+            )
+            prior_spec[f'{band}.rscale'] = TruncatedNormal(
+                truth[f'{band}.rscale'], 0.08, rscale_low, rscale_high
+            )
+            prior_spec[f'{band}.h_over_r'] = truth[f'{band}.h_over_r']
 
     if is_catalog:
         cp = spec.catalog_population

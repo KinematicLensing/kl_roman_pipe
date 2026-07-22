@@ -3118,6 +3118,47 @@ class CompositeIntensityModel(IntensityModel):
             oversample=oversample,
         )
 
+    def maxk(self, params: dict, threshold: float = 1e-3) -> float:
+        """Highest wavenumber the grid must resolve = max over components.
+
+        The composite FT is the flux-weighted sum of the component FTs; the
+        grid must extend to where the slowest-decaying component (a compact
+        or high-index bulge) has fallen below ``threshold``. Taking the max
+        of the component maxks is conservative: a low-flux component's term
+        in the summed FT drops under ``threshold`` before its individual
+        maxk, so the max over-resolves rather than under-resolves. maxk is
+        flux-independent (component maxk depends only on scale length and
+        the shared cosi), so the derived component fluxes do not enter.
+        """
+        theta = self.pars2theta(params)
+        return max(
+            float(
+                spec.model.maxk(
+                    spec.model.theta2pars(self._get_component_theta(theta, i)),
+                    threshold=threshold,
+                )
+            )
+            for i, spec in enumerate(self._components)
+        )
+
+    def stepk(self, params: dict, folding_threshold: float = 5e-3) -> float:
+        """Finest k-spacing the grid needs = min over components.
+
+        Grid spacing must sample the most extended component (largest real-
+        space size -> smallest stepk) finely enough to avoid folding its
+        wings; the min is conservative for the more compact components.
+        """
+        theta = self.pars2theta(params)
+        return min(
+            float(
+                spec.model.stepk(
+                    spec.model.theta2pars(self._get_component_theta(theta, i)),
+                    folding_threshold=folding_threshold,
+                )
+            )
+            for i, spec in enumerate(self._components)
+        )
+
     def __call__(self, theta, plane, x, y, z=None):
         """Sum real-space component evaluations."""
         total = jnp.zeros_like(x)

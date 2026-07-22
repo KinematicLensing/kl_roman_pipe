@@ -141,8 +141,16 @@ class TestCatalogExpand:
         _, config, manifest, population = run_parts
         pop = population.set_index('pop_index')
         for _, row in manifest.iterrows():
-            rscale = float(pop.loc[row['galaxy_id'], 'rscale_arcsec'])
-            for comp in tuple(config.bands) + ('Halpha', 'Halpha.cont', 'vel'):
+            g = pop.loc[row['galaxy_id']]
+            rscale = float(g['rscale_arcsec'])
+            # broadband bands are BulgeDiskModel: the disk scale length is
+            # disk_rscale, and the bulge carries the catalog fraction + size
+            for band in config.bands:
+                assert row[f'truth.{band}.disk_rscale'] == rscale
+                assert row[f'truth.{band}.bulge_frac'] == float(g['bulge_fraction'])
+                assert row[f'truth.{band}.bulge_hlr'] == float(g['bulge_r50_arcsec'])
+            # line + continuum + velocity stay single-disk
+            for comp in ('Halpha', 'Halpha.cont', 'vel'):
                 assert row[f'truth.{comp}.rscale'] == rscale
 
     def test_kinematic_truths_from_population(self, run_parts):

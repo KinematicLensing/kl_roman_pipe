@@ -305,8 +305,9 @@ def _catalog_rows(
             f"population table has {len(population)} rows, spec expects "
             f"{cp.n_galaxies} galaxies"
         )
-    # catalog specs carry no population.fixed block; scene defaults apply
-    base_truth = scene_truth_defaults(config, {})
+    # catalog specs carry no population.fixed block; scene defaults apply.
+    # broadband bands are BulgeDiskModel (per-galaxy bulge from the catalog)
+    base_truth = scene_truth_defaults(config, {}, bulge_bands=True)
     ring_members = (0, 90) if cp.ring_members == 2 else (0,)
 
     rows: List[dict] = []
@@ -330,11 +331,17 @@ def _catalog_rows(
                         'Halpha.dispersion': float(g['sigma0_kms']),
                     }
                 )
-                # single-disk truth: the catalog disk scale length sets ALL
-                # spatial scales (bands, line, continuum, velocity); the
-                # BulgeDisk truth wiring is a later step
+                # the catalog disk scale length sets the disk spatial scales
+                # (bands, line, continuum, velocity). broadband bands are
+                # BulgeDiskModel: the disk scale is disk_rscale, and the bulge
+                # component gets the catalog bulge fraction and half-light
+                # radius per galaxy (total_flux, disk_h_over_r, bulge_h_over_hlr,
+                # x0, y0 keep the scene defaults from base_truth). The Halpha
+                # line + continuum stay single-disk (rscale).
                 for band in config.bands:
-                    truth[f'{band}.rscale'] = rscale
+                    truth[f'{band}.disk_rscale'] = rscale
+                    truth[f'{band}.bulge_frac'] = float(g['bulge_fraction'])
+                    truth[f'{band}.bulge_hlr'] = float(g['bulge_r50_arcsec'])
                 truth['Halpha.rscale'] = rscale
                 truth['Halpha.cont.rscale'] = rscale
                 truth['vel.rscale'] = rscale
