@@ -801,7 +801,8 @@ class EnsembleSpec:
     # model render
     render_oversample: int
 
-    # observation
+    # observation; line_snr is -1 (sentinel) for catalog populations, whose
+    # per-fit line SNR lives in the population table
     observed_config: str
     broadband_snr: float
     line_snr: float
@@ -927,8 +928,12 @@ class EnsembleSpec:
                 )
         if abs(self.g1) >= 1 or abs(self.g2) >= 1:
             raise ValueError(f"|g| must be < 1, got ({self.g1}, {self.g2})")
-        if self.broadband_snr <= 0 or self.line_snr <= 0:
-            raise ValueError("SNR values must be positive")
+        if self.broadband_snr <= 0:
+            raise ValueError(f"broadband SNR ({self.broadband_snr}) must be positive")
+        # catalog mode: line_snr is a -1 sentinel (per-galaxy values come
+        # from the population table), so the positivity check is sampled-only
+        if self.population_type != 'catalog' and self.line_snr <= 0:
+            raise ValueError(f"line SNR ({self.line_snr}) must be positive")
         if self.backend not in _DISPATCH_BACKENDS:
             raise ValueError(
                 f"dispatch backend '{self.backend}'; supported: "
@@ -1040,11 +1045,14 @@ class EnsembleSpec:
             catalog_population = _parse_catalog_population(
                 population, f"{path}:population"
             )
-            # per-galaxy depth-anchored noise is the integration-phase plan;
-            # v1 keeps the fixed scalar SNRs, so snr.line is required here
-            if 'line' not in snr:
+            # per-fit line SNR comes from the population table (matched-filter
+            # snr_line per galaxy); a scalar here would be silently ignored,
+            # so reject it outright
+            if 'line' in snr:
                 raise ValueError(
-                    f"{path}:observation.snr: missing required keys ['line']"
+                    f"{path}:observation.snr.line is not valid for catalog "
+                    f"populations: per-fit line SNR comes from the population "
+                    f"table's matched-filter snr_line column; remove it"
                 )
             ring_enabled = catalog_population.ring_members == 2
         else:
@@ -1220,10 +1228,16 @@ class EnsembleSpec:
             render_oversample=render_oversample,
             observed_config=str(observation['config']),
             broadband_snr=float(snr['broadband']),
-            # swept axis: per-fit values live in the manifest; the scalar
-            # field is unused (set to the first sweep value as a placeholder
-            # that keeps validation simple)
-            line_snr=(float(snr['line']) if 'line' in snr else float(sweep_values[0])),
+            # catalog populations carry per-galaxy line SNR in the population
+            # table; the scalar field gets a -1 sentinel so any accidental use
+            # fails the positive-SNR checks loudly. Swept axes: per-fit values
+            # live in the manifest; the scalar field is unused (set to the
+            # first sweep value as a placeholder that keeps validation simple)
+            line_snr=(
+                -1.0
+                if population_type == 'catalog'
+                else float(snr['line']) if 'line' in snr else float(sweep_values[0])
+            ),
             n_warmup=int(fit.get('n_warmup', 500)),
             n_samples=int(fit.get('n_samples', 1000)),
             n_chains=int(fit.get('n_chains', 4)),

@@ -265,19 +265,24 @@ def _grism_psf_kernel_size(
     """
     if config.grism_psf.psf_type == 'gaussian':
         return None
-    z_draw = spec.draw.get('z')
-    if z_draw is None:
-        raise ValueError(
-            "a roman_wfi grism psf requires z in population.draw so the kernel "
-            "size can be pinned at the ensemble's largest observed "
-            "wavelength"
-        )
-    if z_draw.dist != 'uniform':
-        raise NotImplementedError(
-            f"grism kernel-size pinning knows the z range for uniform "
-            f"draws only, got dist '{z_draw.dist}'"
-        )
-    z_max = z_draw.params['high']
+    if spec.catalog_population is not None:
+        # catalog populations: the selection z_range caps the observed
+        # wavelength across the ensemble
+        z_max = spec.catalog_population.z_range[1]
+    else:
+        z_draw = spec.draw.get('z')
+        if z_draw is None:
+            raise ValueError(
+                "a roman_wfi grism psf requires z in population.draw so the "
+                "kernel size can be pinned at the ensemble's largest observed "
+                "wavelength"
+            )
+        if z_draw.dist != 'uniform':
+            raise NotImplementedError(
+                f"grism kernel-size pinning knows the z range for uniform "
+                f"draws only, got dist '{z_draw.dist}'"
+            )
+        z_max = z_draw.params['high']
     psf_max = _build_grism_psf(config.grism_psf, z_max, mock=mock)
     fine_ps = config.pixel_scale_arcsec / spec.render_oversample
     size = int(psf_max.getGoodImageSize(fine_ps))
@@ -430,6 +435,7 @@ def build_fit_inputs(
     *,
     broadband_snr: float,
     line_snr: float,
+    row: Optional[Dict] = None,
 ) -> FitInputs:
     """
     Build the per-fit source model, priors, and noisy mock observations.
@@ -447,8 +453,12 @@ def build_fit_inputs(
     broadband_snr, line_snr : float
         Per-fit SNR values from the manifest row (the manifest, not the
         spec, is the source of truth -- line_snr varies per row on a
-        config-sweep axis). ``line_snr`` is the emission-line matched-filter
-        SNR (see kl_pipe.noise.grism_line_noise).
+        config-sweep axis and per galaxy in catalog mode). ``line_snr`` is
+        the emission-line matched-filter SNR (see
+        kl_pipe.noise.grism_line_noise).
+    row : dict or pd.Series, optional
+        The manifest row; required for catalog populations (their vcirc
+        prior reads the row's pop.prior_vcirc_* columns).
 
     Returns
     -------
@@ -460,7 +470,7 @@ def build_fit_inputs(
             f"SNR values must be positive, got ({broadband_snr}, {line_snr})"
         )
     source = build_source_model(config)
-    priors = scene_priors(truth, config, spec)
+    priors = scene_priors(truth, config, spec, row=row)
 
     sampled = set(priors.sampled_names) | set(priors.fixed_names)
     missing = sampled - set(truth)

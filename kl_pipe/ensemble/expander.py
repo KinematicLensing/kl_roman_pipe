@@ -30,11 +30,12 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
+from kl_pipe.ensemble.population import build_population, write_population
 from kl_pipe.ensemble.scene import scene_truth_defaults
 from kl_pipe.ensemble.spec import DrawSpec, EnsembleSpec, ObservationConfig
 
@@ -47,6 +48,26 @@ _GALAXY_STREAM = 1
 _NOISE_STREAM = 2
 
 TRUTH_PREFIX = 'truth.'
+POP_PREFIX = 'pop.'
+
+# population-table columns carried through to the manifest (prefixed 'pop.')
+# for prior construction (prior_vcirc_*), selection/binning diagnostics, and
+# future BulgeDisk truth wiring (bulge_*)
+_POP_PASSTHROUGH = (
+    'halo_id',
+    'galaxy_id',
+    'snr_line',
+    'ew_rest_a',
+    'logm',
+    'logm_obs',
+    'prior_vcirc_mu_kms',
+    'prior_vcirc_sigma_dex',
+    'sigma0_kms',
+    'bulge_fraction',
+    'bulge_r50_arcsec',
+    'bulge_nsersic',
+    'f_line_cgs',
+)
 
 
 def compute_fit_id(
@@ -112,15 +133,51 @@ def _shear_for_step(spec: EnsembleSpec, step: int) -> Dict[str, float]:
     return {'g1': 0.0, 'g2': value}
 
 
-def build_manifest(spec: EnsembleSpec, config: ObservationConfig) -> pd.DataFrame:
+def build_manifest(
+    spec: EnsembleSpec,
+    config: ObservationConfig,
+    population: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
     """Expand the spec into the per-fit manifest table.
 
-    Axis semantics: a cosi stratification means each bin holds its OWN
-    galaxy bank (the property is the galaxy -- independent noise); a config
-    sweep (line_snr) means ONE galaxy bank shared across every sweep step
-    with the SAME noise seed (common random numbers -- the knob is external
-    to the galaxy).
+    Sampled populations: axis semantics are a cosi stratification (each bin
+    holds its OWN galaxy bank -- independent noise) or a config sweep
+    (line_snr: ONE galaxy bank shared across every sweep step with the SAME
+    noise seed -- common random numbers).
+
+    Catalog populations: rows cross the population table (one row per
+    galaxy, from ``build_population``) with ring members and noise reps;
+    ``population`` is required.
     """
+    if spec.catalog_population is not None:
+        if population is None:
+            raise ValueError(
+                "catalog-mode manifests require the population table "
+                "(build_population output); got population=None"
+            )
+        rows = _catalog_rows(spec, config, population)
+    else:
+        if population is not None:
+            raise ValueError(
+                "a population table is catalog-mode only; sampled specs draw "
+                "their galaxies internally"
+            )
+        rows = _sampled_rows(spec, config)
+
+    manifest = pd.DataFrame(rows)
+    if manifest['fit_id'].duplicated().any():
+        raise RuntimeError("duplicate fit_id in manifest -- expander bug")
+    if len(manifest) != spec.n_fits:
+        raise RuntimeError(
+            f"manifest has {len(manifest)} rows, spec expects {spec.n_fits} "
+            f"-- expander bug"
+        )
+    _apply_subset_policy(manifest, spec)
+    return manifest
+
+
+def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
+    """Manifest rows for a sampled (stratified/swept) population."""
     base_truth = scene_truth_defaults(config, spec.fixed)
 
     required_draws = {'theta_int', 'vel.vcirc', 'z'}
@@ -227,17 +284,107 @@ def build_manifest(spec: EnsembleSpec, config: ObservationConfig) -> pd.DataFram
                                 {f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()}
                             )
                             rows.append(row)
+    return rows
 
-    manifest = pd.DataFrame(rows)
-    if manifest['fit_id'].duplicated().any():
-        raise RuntimeError("duplicate fit_id in manifest -- expander bug")
-    if len(manifest) != spec.n_fits:
-        raise RuntimeError(
-            f"manifest has {len(manifest)} rows, spec expects {spec.n_fits} "
-            f"-- expander bug"
+
+def _catalog_rows(
+    spec: EnsembleSpec, config: ObservationConfig, population: pd.DataFrame
+) -> List[dict]:
+    """Manifest rows for a catalog population: galaxies x ring x noise reps.
+
+    The population table (one row per galaxy) carries the drawn orientation,
+    shear, and painted kinematics; this expansion adds the ring partner
+    (theta + pi/2, SAME g1/g2 -- the pair-shared shear is drawn per galaxy
+    upstream) and the noise reps. fit_id/noise_seed reuse the sampled-mode
+    index scheme with cosi_bin = 0 and galaxy_id = the population row index,
+    so the CRN seed semantics are unchanged.
+    """
+    cp = spec.catalog_population
+    if len(population) != cp.n_galaxies:
+        raise ValueError(
+            f"population table has {len(population)} rows, spec expects "
+            f"{cp.n_galaxies} galaxies"
         )
-    _apply_subset_policy(manifest, spec)
-    return manifest
+    # catalog specs carry no population.fixed block; scene defaults apply
+    base_truth = scene_truth_defaults(config, {})
+    ring_members = (0, 90) if cp.ring_members == 2 else (0,)
+
+    rows: List[dict] = []
+    for pop_index, g in population.iterrows():
+        rscale = float(g['rscale_arcsec'])
+        z = float(g['z'])
+        for ring_member in ring_members:
+            theta = float(g['theta_int'])
+            if ring_member == 90:
+                theta = (theta + np.pi / 2) % np.pi
+            for noise_rep in range(spec.m_noise):
+                truth = dict(base_truth)
+                truth.update(
+                    {
+                        'cosi': float(g['cosi']),
+                        'theta_int': theta,
+                        'g1': float(g['g1']),
+                        'g2': float(g['g2']),
+                        'z': z,
+                        'vel.vcirc': float(g['vcirc_kms']),
+                        'Halpha.dispersion': float(g['sigma0_kms']),
+                    }
+                )
+                # single-disk truth: the catalog disk scale length sets ALL
+                # spatial scales (bands, line, continuum, velocity); the
+                # BulgeDisk truth wiring is a later step
+                for band in config.bands:
+                    truth[f'{band}.rscale'] = rscale
+                truth['Halpha.rscale'] = rscale
+                truth['Halpha.cont.rscale'] = rscale
+                truth['vel.rscale'] = rscale
+                # continuum amplitude from the catalog rest-frame EW:
+                # EW_obs [nm] = ew_rest_a [A] * (1 + z) / 10, and
+                # flux_per_nm = line_flux / EW_obs [flux / nm] -- the scene's
+                # internal flux units cancel, so only the EW ratio matters.
+                # Band flux amplitudes stay scene defaults (internal units;
+                # physical flux enters only through SNR); catalog-color
+                # scaling of band fluxes is a flagged future upgrade.
+                ew_obs_nm = float(g['ew_rest_a']) * (1.0 + z) / 10.0
+                truth['Halpha.cont.flux_per_nm'] = truth['Halpha.flux'] / ew_obs_nm
+
+                id_args = (spec.run_name, spec.version, 0, int(pop_index))
+                fit_id = compute_fit_id(*id_args, ring_member, noise_rep, 0, 0)
+                ring_partner = (
+                    compute_fit_id(
+                        *id_args, 90 if ring_member == 0 else 0, noise_rep, 0, 0
+                    )
+                    if cp.ring_members == 2
+                    else ''
+                )
+                row = {
+                    'fit_id': fit_id,
+                    'run_name': spec.run_name,
+                    'cosi_bin': 0,
+                    'galaxy_id': int(pop_index),
+                    'ring_member': ring_member,
+                    'ring_partner_id': ring_partner,
+                    'noise_rep': noise_rep,
+                    'shear_step': 0,
+                    'sweep_step': 0,
+                    'noise_seed': _noise_seed(
+                        spec.seed, 0, int(pop_index), ring_member, noise_rep
+                    ),
+                    'observation_config_id': config.id,
+                    # broadband depth stays the spec scalar for now; a
+                    # per-galaxy imaging depth anchor is a documented future
+                    # step of the catalog integration
+                    'broadband_snr': spec.broadband_snr,
+                    # per-galaxy physical per-exposure line SNR from the
+                    # population's matched-filter calculation
+                    'line_snr': float(g['snr_line']),
+                    'save_chains': spec.save_chains == 'all',
+                    'save_mocks': spec.save_mocks == 'all',
+                }
+                row.update({f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()})
+                row.update({f'{POP_PREFIX}{c}': g[c] for c in _POP_PASSTHROUGH})
+                rows.append(row)
+    return rows
 
 
 def _apply_subset_policy(manifest: pd.DataFrame, spec: EnsembleSpec) -> None:
@@ -299,6 +446,8 @@ def expand(
 
         runs_dir/<run_name>/
             manifest.parquet
+            population.parquet              (catalog populations only)
+            population_meta.json            (catalog populations only)
             provenance/
                 ensemble_spec.yaml          (verbatim copy)
                 observation_config.yaml     (verbatim snapshot)
@@ -354,7 +503,25 @@ def expand(
     ):
         (run_dir / sub).mkdir(parents=True)
 
-    manifest = build_manifest(spec, config)
+    # catalog populations: build + persist the population table alongside the
+    # manifest; its sha256 and stage counts join the expansion record
+    population = None
+    population_record = {}
+    if spec.catalog_population is not None:
+        population, pop_meta = build_population(spec)
+        pop_parquet, _ = write_population(run_dir, population, pop_meta)
+        population_record = {
+            'population_sha256': hashlib.sha256(pop_parquet.read_bytes()).hexdigest(),
+            'population_stage_counts': {
+                'n_raw': pop_meta['n_raw'],
+                'n_disk': pop_meta['n_disk'],
+                'kills': pop_meta['kills'],
+                'n_selected': pop_meta['n_selected'],
+                'n_sampled': pop_meta['n_sampled'],
+            },
+        }
+
+    manifest = build_manifest(spec, config, population=population)
     manifest.to_parquet(run_dir / 'manifest.parquet', index=False)
 
     shutil.copy2(spec_path, run_dir / 'provenance' / 'ensemble_spec.yaml')
@@ -368,6 +535,7 @@ def expand(
         'observation_config_hash': config.content_hash,
         'spec_hash': hashlib.sha256(spec_path.read_bytes()).hexdigest(),
         'git_commit': _git_commit(),
+        **population_record,
     }
     (run_dir / 'provenance' / 'expansion.json').write_text(
         json.dumps(expansion_record, indent=2) + '\n'

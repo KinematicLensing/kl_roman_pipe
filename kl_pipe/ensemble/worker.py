@@ -154,6 +154,8 @@ def _run_fit_attempt(
         config,
         broadband_snr=float(row['broadband_snr']),
         line_snr=float(row['line_snr']),
+        # catalog-mode priors read the row's pop.* columns
+        row=row,
     )
     task = InferenceTask.from_obs(
         inputs.source,

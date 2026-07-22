@@ -45,11 +45,11 @@ model:
 
 observation:
   config: canonical_P
-  # per-galaxy depth-anchored noise replaces these fixed SNRs in the
-  # catalog-integration phase; carried here to satisfy the v1 schema
+  # line SNR is per-galaxy from the population table (matched-filter
+  # snr_line); a per-galaxy imaging depth anchor replacing this fixed
+  # broadband SNR is a documented future step
   snr:
     broadband: 300
-    line: 100
 
 fit:
   sampler: numpyro

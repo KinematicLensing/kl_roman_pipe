@@ -21,7 +21,8 @@ z is pinned to the per-fit truth in v1.
 
 from __future__ import annotations
 
-from typing import Dict, TYPE_CHECKING
+import math
+from typing import Dict, Optional, TYPE_CHECKING
 
 from kl_pipe.priors import (
     Gaussian,
@@ -146,8 +147,20 @@ def scene_truth_defaults(
     return truth
 
 
+# catalog-mode rscale prior bounds [arcsec]. The sampled-mode (0.05, 1.0)
+# bounds do NOT contain the catalog truths: the dev population's selected
+# disk scale lengths span 0.0086-1.18 arcsec (flagship2_dev, snr_line >= 5
+# selection, measured 2026-07-21), so bounds are set below/above the
+# observed extremes rather than silently clipping truth out of support
+_CATALOG_RSCALE_LOW = 0.005
+_CATALOG_RSCALE_HIGH = 2.0
+
+
 def scene_priors(
-    truth: Dict[str, float], config: 'ObservationConfig', spec: 'EnsembleSpec'
+    truth: Dict[str, float],
+    config: 'ObservationConfig',
+    spec: 'EnsembleSpec',
+    row: Optional[Dict] = None,
 ) -> PriorDict:
     """
     Fit priors for one fit, self-consistent with the generating population.
@@ -160,6 +173,10 @@ def scene_priors(
         Scene structure (bands).
     spec : EnsembleSpec
         Supplies the population distributions for stratified/drawn params.
+    row : dict or pd.Series, optional
+        The manifest row. Required for catalog populations, whose vcirc
+        prior is observable-conditioned (``pop.prior_vcirc_*`` columns);
+        ignored for sampled populations.
 
     Returns
     -------
@@ -168,12 +185,24 @@ def scene_priors(
     """
     from kl_pipe.ensemble.spec import DrawSpec
 
+    is_catalog = spec.catalog_population is not None
+    if is_catalog and row is None:
+        raise ValueError(
+            "catalog-mode priors require the manifest row (pop.prior_vcirc_* "
+            "columns); pass row"
+        )
+
     def population_prior(name: str, draw: DrawSpec):
         if draw.dist == 'uniform':
             return Uniform(draw.params['low'], draw.params['high'])
         if draw.dist == 'lognormal_tf':
             return make_tf_prior(draw.params['center_kms'], draw.params['sigma_tf_dex'])
         raise ValueError(f"no prior rule for draw dist '{draw.dist}' ({name})")
+
+    # catalog truths carry the catalog disk scale length, which exceeds the
+    # sampled-mode rscale bounds (see _CATALOG_RSCALE_* provenance)
+    rscale_low = _CATALOG_RSCALE_LOW if is_catalog else 0.05
+    rscale_high = _CATALOG_RSCALE_HIGH if is_catalog else 1.0
 
     prior_spec: Dict[str, object] = {
         # injected shear: wide, uninformative prior so posterior widths
@@ -186,15 +215,22 @@ def scene_priors(
         # fit's truth -- identical to scene defaults unless the spec fixed
         # block overrides them)
         'vel.v0': Gaussian(truth['vel.v0'], 10.0),
-        'vel.rscale': TruncatedNormal(truth['vel.rscale'], 0.1, 0.05, 1.0),
+        'vel.rscale': TruncatedNormal(
+            truth['vel.rscale'], 0.1, rscale_low, rscale_high
+        ),
         'Halpha.flux': TruncatedNormal(truth['Halpha.flux'], 20.0, 30.0, 250.0),
-        'Halpha.rscale': TruncatedNormal(truth['Halpha.rscale'], 0.08, 0.05, 1.0),
+        'Halpha.rscale': TruncatedNormal(
+            truth['Halpha.rscale'], 0.08, rscale_low, rscale_high
+        ),
         'Halpha.h_over_r': truth['Halpha.h_over_r'],
         'Halpha.x0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
         'Halpha.y0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
         'Halpha.dispersion': TruncatedNormal(
             truth['Halpha.dispersion'], 20.0, 5.0, 150.0
         ),
+        # catalog truths (line flux / EW_obs) span 1.3-93 flux/nm on the dev
+        # population (flagship2_dev, snr_line >= 5, measured 2026-07-21), so
+        # the (0, 200) support contains every truth
         'Halpha.cont.flux_per_nm': TruncatedNormal(
             truth['Halpha.cont.flux_per_nm'], 15.0, 0.0, 200.0
         ),
@@ -213,23 +249,47 @@ def scene_priors(
             truth[f'{band}.flux'], sigma, low, high
         )
         prior_spec[f'{band}.rscale'] = TruncatedNormal(
-            truth[f'{band}.rscale'], 0.08, 0.05, 1.0
+            truth[f'{band}.rscale'], 0.08, rscale_low, rscale_high
         )
         prior_spec[f'{band}.h_over_r'] = truth[f'{band}.h_over_r']
         prior_spec[f'{band}.x0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
         prior_spec[f'{band}.y0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
 
-    # cosi: population prior. Stratified axis -> uniform over the stratify
-    # range (the bin grid IS the random-orientation population); drawn ->
-    # handled by the generic drawn-parameter loop below.
-    if spec.stratify_param == 'cosi':
-        prior_spec['cosi'] = Uniform(*spec.stratify_range)
+    if is_catalog:
+        cp = spec.catalog_population
+        # observable-conditioned TFR prior: mu = TFR evaluated at the NOISY
+        # simulated photometric mass (logm_obs), so it is mis-centered from
+        # the fit's truth vcirc by construction; width = intrinsic TFR
+        # scatter + propagated mass error (in dex, combined upstream)
+        prior_spec['vel.vcirc'] = make_tf_prior(
+            float(row['pop.prior_vcirc_mu_kms']),
+            float(row['pop.prior_vcirc_sigma_dex']),
+        )
+        # orientation: the generating distributions (isotropic redraw)
+        prior_spec['cosi'] = Uniform(*cp.cosi_range)
+        prior_spec['theta_int'] = Uniform(0.0, math.pi)
+        # self-consistent population prior on the painted dispersion:
+        # sigma0(z) = intercept + slope*z with the paint scatter
+        # (Ubler+2019 affine evolution); bounds = the paint floor and the
+        # shared 150 km/s scene ceiling
+        prior_spec['Halpha.dispersion'] = TruncatedNormal(
+            cp.sigma0_intercept_kms + cp.sigma0_slope_kms * truth['z'],
+            cp.sigma0_scatter_kms,
+            cp.sigma0_min_kms,
+            150.0,
+        )
+    else:
+        # cosi: population prior. Stratified axis -> uniform over the
+        # stratify range (the bin grid IS the random-orientation
+        # population); drawn -> handled by the drawn-parameter loop below.
+        if spec.stratify_param == 'cosi':
+            prior_spec['cosi'] = Uniform(*spec.stratify_range)
 
-    # drawn params: generating distribution = fit prior (self-consistent)
-    for name, draw in spec.draw.items():
-        if name == 'z':
-            continue  # z is pinned above in v1
-        prior_spec[name] = population_prior(name, draw)
+        # drawn params: generating distribution = fit prior (self-consistent)
+        for name, draw in spec.draw.items():
+            if name == 'z':
+                continue  # z is pinned above in v1
+            prior_spec[name] = population_prior(name, draw)
 
     if 'cosi' not in prior_spec:
         raise ValueError(

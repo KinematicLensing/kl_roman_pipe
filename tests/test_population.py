@@ -172,7 +172,9 @@ def catalog_spec_dict(data_dir: Path, **population_overrides) -> dict:
         },
         'observation': {
             'config': 'canonical_P',
-            'snr': {'broadband': 300, 'line': 100},
+            # no snr.line: catalog mode takes per-galaxy line SNR from the
+            # population table (a scalar here is rejected)
+            'snr': {'broadband': 300},
         },
         'fit': {'pin_z_to_truth': True},
         'dispatch': {'backend': 'local'},
