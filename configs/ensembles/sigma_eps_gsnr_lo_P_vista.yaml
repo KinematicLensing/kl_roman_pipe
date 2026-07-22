@@ -45,7 +45,7 @@ dispatch:
   workers_per_node: 4
   target_task_walltime_min: 90
   queue: gh
-  account: JPL-SPHEREx
+  account: JPL-PUB
   max_fit_walltime_min: 20
 output:
   save_chains: all

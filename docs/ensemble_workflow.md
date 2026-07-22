@@ -286,3 +286,56 @@ post hoc in analysis -- nothing is filtered at write time.
 Join truth with recovery via `kl_pipe.ensemble.collate.analysis_table(run_dir)`
 (manifest ⨝ results on `fit_id`), then feed `kl_pipe/calibration.py`:
 `rotate_to_galaxy_frame`, `measure_shear_bias`, `compute_shape_noise`.
+
+## Catalog-mode (Flagship2) runs
+
+Catalog-backed specs (`population.type: catalog`, e.g.
+`configs/ensembles/flagship2_shear_dev.yaml`) reuse the same
+expand -> run/slurm -> collate flow. The only differences:
+
+1. **Catalog data must be present** at the spec's `population.catalog.data_dir`
+   (default `data/cosmohub/<download>.parquet`). Download it with the
+   idempotent, content-hashed helper -- it writes next to its query-spec YAML
+   (i.e. into `data/cosmohub/`) and authenticates via `~/.netrc` for
+   `api.cosmohub.pic.es`:
+   ```bash
+   python scripts/download_cosmohub.py data/cosmohub/flagship2_dev.yaml
+   # resume an already-ready CosmoHub query instead of resubmitting:
+   python scripts/download_cosmohub.py data/cosmohub/flagship2_v1.yaml --query-id <ID>
+   ```
+   The Q1 validation anchor is `python scripts/download_q1.py` (IRSA TAP).
+
+2. **`expand` auto-materializes the population.** For a catalog spec, `expand`
+   builds `population.parquet` (Flagship2 rows + isotropic cos i redraw +
+   Tully-Fisher / sigma0 paint + ring-pair shear) *and* `manifest.parquet` in
+   one step -- no separate command. Broadband bands render as bulge+disk from
+   the catalog columns; the grism line + continuum stay single-disk.
+
+Everything else (`run`, `slurm`, `status`, `collate`, diagnostics) is
+identical to the sampled-mode commands above.
+
+### Local end-to-end dry-run (faithful pre-TACC sanity check)
+
+The unit/smoke tests cover the forward model and a log-prob+grad smoke, but
+**not** the full dispatch -> worker(NUTS) -> collate loop. To exercise that
+exact machinery locally before submitting on TACC -- same code path, just few
+galaxies and a tiny sampler -- run the catalog dev spec end to end in the
+`klpipe` conda env:
+
+```bash
+python -m kl_pipe.ensemble expand configs/ensembles/flagship2_shear_dev.yaml \
+    --runs-dir runs                              # builds population + manifest
+python -m kl_pipe.ensemble run    --run-dir runs/flagship2_shear_dev --max-fits 2
+python -m kl_pipe.ensemble status --run-dir runs/flagship2_shear_dev
+python -m kl_pipe.ensemble collate --run-dir runs/flagship2_shear_dev
+python -c "from kl_pipe.ensemble.diagnostics import run_report; \
+    run_report('runs/flagship2_shear_dev')"
+```
+
+This is the recommended first move: it flushes out per-fit cost with
+BulgeDisk, NUTS convergence with the bulge nuisances, and any collate/report
+wiring before any TACC time is spent. On Vista/Stampede the same commands run
+under `$KLPIPE_PYTHON` (see the container launcher above); the catalog parquet
+must be in `$STOCKYARD/repos/kl_roman_pipe/data/cosmohub/`, which is where
+`download_cosmohub.py` writes when the repo is checked out on `$STOCKYARD`
+(run it from a **login node** -- compute nodes have no external network).

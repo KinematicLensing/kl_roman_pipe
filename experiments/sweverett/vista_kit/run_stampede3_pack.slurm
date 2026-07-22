@@ -28,7 +28,7 @@
 #   read the RSS at N=56 and resubmit with widths that fit.
 # - Lonestar6 variant: -p normal, 128 cores/node -> widths 1,64,128; run
 #   provision_stampede3.sh there too (same x86 wheels).
-# - Verify the charge code: Vista uses JPL-SPHEREx; your Stampede3
+# - Verify the charge code: Vista uses JPL-PUB; your Stampede3
 #   allocation name may differ (check `sacct -X` or the TACC portal).
 #-----------------------------------------------------------------------------
 #SBATCH -J klpipe-spr-pack
@@ -42,7 +42,7 @@
                                     # exclusive node (observed 2026-07-12)
 #SBATCH -t 10:00:00
 #SBATCH -p spr
-#SBATCH -A JPL-SPHEREx
+#SBATCH -A JPL-PUB
 
 set -euo pipefail
 

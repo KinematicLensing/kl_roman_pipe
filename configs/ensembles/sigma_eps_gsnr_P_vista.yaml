@@ -65,7 +65,7 @@ dispatch:
   # gh (production) not gh-dev: dev-queue QOS submit limits reject job
   # arrays while an idev session is running
   queue: gh
-  account: JPL-SPHEREx
+  account: JPL-PUB
   # P fits pack at ~11 min latency (8 workers, GH200); 20 covers the tail
   max_fit_walltime_min: 20
 

@@ -106,7 +106,7 @@ cd kl_roman_pipe && git checkout se/speedups   # or the commit you want benchmar
 
 (sweveret layout: `$STOCKYARD=/work/09102/sweveret`, machine-independent;
 `run_vista.slurm` is pre-filled with these paths, queue `gh-dev`, and
-charge code `JPL-SPHEREx`.)
+charge code `JPL-PUB`.)
 
 The kit records the git commit in the output JSON -- keep the tree clean.
 
@@ -178,7 +178,7 @@ apptainer exec --nv ... python bench_matrix.py --sections a --configs Q --nreps 
 
 ```bash
 cd $STOCKYARD/repos/kl_roman_pipe/experiments/sweverett/vista_kit
-sbatch run_vista.slurm   # pre-filled: gh-dev, -A JPL-SPHEREx, $WORK container/pipdeps, $STOCKYARD paths
+sbatch run_vista.slurm   # pre-filled: gh-dev, -A JPL-PUB, $WORK container/pipdeps, $STOCKYARD paths
 ```
 
 If you pulled a container tag other than `26.06-py3`, update `CONTAINER=`

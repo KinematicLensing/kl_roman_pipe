@@ -17,7 +17,7 @@
 #SBATCH -n 1
 #SBATCH -t 02:00:00
 #SBATCH -p gh-dev                  # dev queue; switch to "gh" for production
-#SBATCH -A JPL-SPHEREx
+#SBATCH -A JPL-PUB
 
 set -euo pipefail
 

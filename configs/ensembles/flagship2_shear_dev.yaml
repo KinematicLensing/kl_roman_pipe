@@ -66,6 +66,7 @@ dispatch:
   workers_per_node: 1
   target_task_walltime_min: 30
   queue: gh-dev
+  account: JPL-PUB        # TACC allocation (-A); used when dispatched via slurm
   max_fit_walltime_min: 30
 
 output:

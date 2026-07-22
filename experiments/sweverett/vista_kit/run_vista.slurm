@@ -20,7 +20,7 @@
 #SBATCH -n 1
 #SBATCH -t 02:00:00
 #SBATCH -p gh-dev                  # dev queue for smoke runs; switch to "gh" for production
-#SBATCH -A JPL-SPHEREx             # TACC charge code (user sweveret)
+#SBATCH -A JPL-PUB             # TACC charge code (user sweveret)
 
 set -euo pipefail
 
