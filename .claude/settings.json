@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/test_guard.py"
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/test_guard.py\""
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/lint_check.py"
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/lint_check.py\""
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/stop_check.py"
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop_check.py\""
           }
         ]
       }
