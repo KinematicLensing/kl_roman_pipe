@@ -20,8 +20,10 @@ population:
   selection:
     z_range: [0.55, 1.9]
     snr_line_min: 10.0             # per-exposure matched-filter line SNR
-    bulge_fraction_max: null       # no cut
-    bulge_nsersic_range: null      # no cut
+    # disk-dominated sample: ~70% of B/T <= 0.3 bulges are pseudobulges
+    # (Mendez-Abreu+10); keeps 73% of dev-box disks (measured 2026-07-23)
+    bulge_fraction_max: 0.3
+    bulge_nsersic_range: null      # catalog-n cut removed (n is painted)
   sample:
     n_galaxies: 8
     replace: false

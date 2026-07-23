@@ -18,7 +18,14 @@ import yaml
 from scipy import stats
 
 from kl_pipe.ensemble.population import (
+    BULGE_CLASSICAL_N,
+    BULGE_PSEUDO_N,
+    BULGE_PSEUDO_WEIGHT,
+    BULGE_SIZE_RATIO_LN_SCATTER,
+    BULGE_SIZE_RATIO_MAX,
+    BULGE_SIZE_RATIO_MEDIAN,
     FLAGSHIP2_COLUMNS,
+    R50_TO_SIGMA,
     build_population,
     compute_line_snr,
     load_flagship2_catalog,
@@ -549,6 +556,56 @@ class TestBuildPopulation:
         df2 = pd.read_parquet(parquet_path)
         pd.testing.assert_frame_equal(df, df2, check_exact=True)
         assert json.loads(meta_path.read_text())['n_sampled'] == 300
+
+
+# ==============================================================================
+# Bulge morphology paint
+# ==============================================================================
+
+
+class TestBulgePaint:
+    def test_ranges_and_size_cap(self, built):
+        df, _ = built
+        n = df['bulge_nsersic'].to_numpy()
+        lo = min(BULGE_PSEUDO_N[2], BULGE_CLASSICAL_N[2])
+        hi = max(BULGE_PSEUDO_N[3], BULGE_CLASSICAL_N[3])
+        assert np.all((n >= lo) & (n <= hi))
+        disk_r50 = R50_TO_SIGMA * df['rscale_arcsec'].to_numpy()
+        ratio = df['bulge_r50_arcsec'].to_numpy() / disk_r50
+        # cap is strict in the paint; 1e-5 covers the fake catalog's float32
+        # scalelength round-trip
+        assert np.all(ratio < BULGE_SIZE_RATIO_MAX * (1 + 1e-5))
+        assert np.all(ratio > 0)
+
+    def test_mixture_and_ratio_stats(self, built):
+        df, _ = built
+        n = df['bulge_nsersic'].to_numpy()
+        # pseudo branch is fully below 2, classical fully above: P(n <= 2)
+        # equals the mixture weight exactly. n=300 draws -> binomial
+        # sd = sqrt(0.7*0.3/300) = 0.026; bound = 4 sigma ~= 0.11
+        pseudo_frac = float((n <= BULGE_PSEUDO_N[3]).mean())
+        assert abs(pseudo_frac - BULGE_PSEUDO_WEIGHT) < 0.11
+        # lognormal ratio median: asymptotic sd of the sample ln-median is
+        # 1.2533 * 0.4 / sqrt(300) = 0.029; 4 sigma -> |ln(med/0.3)| < 0.116
+        disk_r50 = R50_TO_SIGMA * df['rscale_arcsec'].to_numpy()
+        ratio = df['bulge_r50_arcsec'].to_numpy() / disk_r50
+        assert abs(np.log(np.median(ratio) / BULGE_SIZE_RATIO_MEDIAN)) < 0.116
+
+    def test_catalog_columns_retained_and_replaced(self, built):
+        df, meta = built
+        assert 'catalog_bulge_nsersic' in df.columns
+        assert 'catalog_bulge_r50_arcsec' in df.columns
+        # painted values are draws, not the catalog columns
+        assert not np.allclose(df['bulge_nsersic'], df['catalog_bulge_nsersic'])
+        assert not np.allclose(df['bulge_r50_arcsec'], df['catalog_bulge_r50_arcsec'])
+        assert meta['bulge_paint']['pseudo_weight'] == BULGE_PSEUDO_WEIGHT
+
+    def test_bulge_nsersic_range_cut_raises(self, fake_data_dir, tmp_path):
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['selection']['bulge_nsersic_range'] = [0.5, 4.0]
+        spec = spec_from_dict(tmp_path, d)
+        with pytest.raises(ValueError, match='bulge_nsersic_range'):
+            build_population(spec)
 
 
 # ==============================================================================

@@ -307,12 +307,61 @@ expand -> run/slurm -> collate flow. The only differences:
 
 2. **`expand` auto-materializes the population.** For a catalog spec, `expand`
    builds `population.parquet` (Flagship2 rows + isotropic cos i redraw +
-   Tully-Fisher / sigma0 paint + ring-pair shear) *and* `manifest.parquet` in
-   one step -- no separate command. Broadband bands render as bulge+disk from
-   the catalog columns; the grism line + continuum stay single-disk.
+   Tully-Fisher / sigma0 paint + bulge morphology paint + ring-pair shear)
+   *and* `manifest.parquet` in one step -- no separate command. Broadband
+   bands render as bulge+disk; the grism line + continuum stay single-disk.
+
+3. **Bulge morphology is painted, not taken from the catalog.** Flagship2
+   assigns the bulge Sersic index and bulge size as uncorrelated random draws
+   (its own Sect. 7.1 caveat), so the population step replaces them with
+   literature-anchored distributions (`population.py` `BULGE_*` constants:
+   pseudobulge/classical n mixture + a capped lognormal bulge-to-disk size
+   ratio); only the calibrated catalog `bulge_fraction` is kept, and the
+   science selection is disk-dominated, `selection.bulge_fraction_max: 0.3`.
+   The fit samples bulge fraction + size under priors equal to these
+   generating distributions. None of this changes the download: the paint
+   consumes existing catalog columns, so previously downloaded parquets stay
+   valid (catalog values are retained in `catalog_*` columns for validation).
 
 Everything else (`run`, `slurm`, `status`, `collate`, diagnostics) is
 identical to the sampled-mode commands above.
+
+### Vista quick-start (catalog mode)
+
+In dependency order; steps 1-2 need no code update and can start immediately.
+
+1. **Login node -- catalog downloads** (compute nodes have no external
+   network; needs `~/.netrc` for `api.cosmohub.pic.es`). With the repo on
+   `$STOCKYARD`, the helper writes into the repo's `data/cosmohub/`:
+   ```bash
+   cd $STOCKYARD/repos/kl_roman_pipe
+   python scripts/download_cosmohub.py data/cosmohub/flagship2_dev.yaml   # ~40 MB, minutes
+   python scripts/download_cosmohub.py data/cosmohub/flagship2_v1.yaml    # ~1 GB; async Hive job
+   ```
+   The v1 job is asynchronous on the CosmoHub side (tens of minutes) --
+   start it early; if the terminal drops, resume with `--query-id <ID>`
+   (printed at submission). Only `flagship2_dev` is needed for the dev spec;
+   `flagship2_v1` is the production row bank.
+2. **Login node -- code**: `git pull` the target branch on
+   `$STOCKYARD/repos/kl_roman_pipe` (catalog runs: `se/ensemble`).
+3. **idev node -- provision + micro-run**: provision (idempotent), source the
+   launcher, then the dev catalog spec end to end:
+   ```bash
+   idev -p gh-dev -N 1 -n 1 -t 01:00:00
+   cd $STOCKYARD/repos/kl_roman_pipe
+   bash experiments/sweverett/vista_kit/provision_vista.sh
+   source experiments/sweverett/vista_kit/env_vista.sh
+   $KLPIPE_PYTHON -m kl_pipe.ensemble expand \
+       configs/ensembles/flagship2_shear_dev.yaml --runs-dir $SCRATCH/kl_runs
+   $KLPIPE_PYTHON -m kl_pipe.ensemble run \
+       --run-dir $SCRATCH/kl_runs/flagship2_shear_dev --max-fits 2
+   $KLPIPE_PYTHON -m kl_pipe.ensemble collate \
+       --run-dir $SCRATCH/kl_runs/flagship2_shear_dev
+   ```
+   Check the collated `max_rhat` / `divergence_rate` before scaling up.
+4. **Node job**: as in the sampled-mode Vista section above (`slurm` emit from
+   idev, `sbatch` from login; spec dispatch block already carries queue
+   `gh-dev` + account `JPL-PUB`).
 
 ### Local end-to-end dry-run (faithful pre-TACC sanity check)
 

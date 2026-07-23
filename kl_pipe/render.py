@@ -732,6 +732,21 @@ def _extract_worst_case_params(model, priors) -> tuple:
         # thickness ratios h_over_r / bulge_h_over_hlr, which are not scales
         bare = name.rsplit('_', 1)[-1]
         is_scale = bare in ('rscale', 'hlr') and 'h_over' not in name
+        from kl_pipe.priors import LogNormal
+
+        if is_scale and isinstance(prior, LogNormal):
+            # unbounded LogNormal scale prior (e.g. the bulge-disk size-relation
+            # bulge_hlr): use k-sigma effective bounds -- smallest size -> highest
+            # maxk, largest -> smallest stepk. Wider bounds only enlarge the grid,
+            # never shrink it, so a conservative k is safe against aliasing.
+            k_sigma = 4.0
+            worst_maxk_params[name] = float(
+                prior.median * np.exp(-k_sigma * prior.sigma)
+            )
+            worst_stepk_params[name] = float(
+                prior.median * np.exp(k_sigma * prior.sigma)
+            )
+            continue
         if hasattr(prior, 'low') and hasattr(prior, 'high'):
             if is_scale:
                 # smallest scale → highest maxk (also the velocity-gradient

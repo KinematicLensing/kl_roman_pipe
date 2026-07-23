@@ -2,12 +2,14 @@
 Catalog-backed galaxy population: Flagship2 rows + kinematic paint.
 
 Builds the per-galaxy population table for ``population.type: catalog``
-ensemble campaigns. Structural and flux truths (sizes, Halpha flux,
-continuum, bulge properties, redshift) come from Euclid Flagship2 catalog
+ensemble campaigns. Structural and flux truths (disk sizes, Halpha flux,
+continuum, bulge fraction, redshift) come from Euclid Flagship2 catalog
 rows; kinematics (vcirc via an inverted Tully-Fisher relation, sigma0 via an
-affine-in-z relation) are painted on with seeded scatter; orientation is an
-isotropic redraw (the catalog inclination is kept for validation only);
-shear is drawn per ring pair.
+affine-in-z relation) and bulge morphology (Sersic index + size; Flagship2
+assigns these as uncorrelated random draws, see BULGE_* constants) are
+painted on with seeded scatter; orientation is an isotropic redraw (the
+catalog inclination is kept for validation only); shear is drawn per ring
+pair.
 
 Determinism contract
 --------------------
@@ -86,6 +88,36 @@ _POP_GEOMETRY = 11
 _POP_PAINT = 12
 _POP_SHEAR = 13
 _POP_PRIOR = 14
+_POP_BULGE = 15
+
+# Literature-anchored bulge morphology paint. Flagship2 assigns the bulge
+# Sersic index and bulge size as random draws uncorrelated with every other
+# galaxy property (Castander et al. 2025 Sect. 5.5; Sect. 7.1: "we have not
+# enforced the correlations between different morphological parameters"),
+# and the low-n tail of its calibrating CANDELS decompositions is known to
+# be inflated by fit artifacts (Dimauro et al. 2018 Sect. 5.1). Both are
+# therefore replaced with simple empirical distributions; the magnitude-
+# calibrated bulge_fraction is kept from the catalog. Catalog values are
+# retained in the population table as catalog_* columns for validation.
+#
+# Sersic index: bimodal pseudobulge/classical mixture split at n = 2
+# (Fisher & Drory 2008). Component medians and widths from Gadotti 2009
+# Table 3 (i band): pseudobulge n = 1.5 +/- 0.9, classical n = 3.4 +/- 1.3.
+# Mixture weight for a disk-dominated sample from Mendez-Abreu et al. 2010:
+# ~70% of bulges at B/T <= 0.3 have n <= 2. Upper bound 6.0 = catalog /
+# Sersic-emulator support.
+BULGE_PSEUDO_WEIGHT = 0.7
+BULGE_PSEUDO_N = (1.5, 0.9, 0.5, 2.0)  # (mu, sd, low, high)
+BULGE_CLASSICAL_N = (3.4, 1.3, 2.0, 6.0)
+# Bulge-to-disk size ratio bulge_r50 / disk_r50: lognormal. Median 0.3
+# brackets the direct z ~ 0.5-2.5 measurement (Lang et al. 2014: ~0.2, bulge
+# n fixed) and local Gadotti 2009-derived values (0.25-0.36 by bulge type);
+# ln-scatter 0.4 from Gadotti 2009 Table 3 sd/median converted to log space.
+# Capped below 1: a steep bulge larger than its disk is unphysical (and the
+# uncapped Flagship2 paint produced such objects by chance).
+BULGE_SIZE_RATIO_MEDIAN = 0.3
+BULGE_SIZE_RATIO_LN_SCATTER = 0.4
+BULGE_SIZE_RATIO_MAX = 1.0
 
 # full Flagship2 query-spec schema (data/cosmohub/flagship2_dev.yaml);
 # downloads are validated against this exact column set
@@ -529,6 +561,48 @@ def _draw_mass_prior(
     return logm_obs, prior_mu, prior_sigma_dex
 
 
+def _truncated_normal(
+    rng: np.random.Generator, mu: float, sd: float, low: float, high: float
+) -> float:
+    """Rejection-sampled truncated normal (draw count is part of the
+    per-galaxy stream determinism contract)."""
+    while True:
+        value = rng.normal(mu, sd)
+        if low <= value <= high:
+            return value
+
+
+def _paint_bulge(
+    seed: int,
+    halo_ids: np.ndarray,
+    galaxy_ids: np.ndarray,
+    disk_r50_arcsec: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Paint bulge Sersic index and size (see BULGE_* constants).
+
+    One BULGE-stream generator per galaxy; draw order (class uniform, then
+    the n rejection draws, then the size-ratio rejection draws) is part of
+    the determinism contract.
+    """
+    n = len(halo_ids)
+    nsersic = np.empty(n, dtype=np.float64)
+    bulge_r50 = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        rng = _galaxy_rng(seed, _POP_BULGE, halo_ids[i], galaxy_ids[i])
+        pars = (
+            BULGE_PSEUDO_N if rng.uniform() < BULGE_PSEUDO_WEIGHT else BULGE_CLASSICAL_N
+        )
+        nsersic[i] = _truncated_normal(rng, *pars)
+        while True:
+            ratio = BULGE_SIZE_RATIO_MEDIAN * np.exp(
+                rng.normal(0.0, BULGE_SIZE_RATIO_LN_SCATTER)
+            )
+            if ratio < BULGE_SIZE_RATIO_MAX:
+                break
+        bulge_r50[i] = ratio * disk_r50_arcsec[i]
+    return nsersic, bulge_r50
+
+
 # =============================================================================
 # Full chain
 # =============================================================================
@@ -590,12 +664,12 @@ def build_population(
         kills['bulge_fraction'] = 0
 
     if cp.bulge_nsersic_range is not None:
-        ns = pre['bulge_nsersic'].to_numpy()
-        ns_mask = (ns >= cp.bulge_nsersic_range[0]) & (ns <= cp.bulge_nsersic_range[1])
-        kills['bulge_nsersic'] = int((~ns_mask).sum())
-        pre = pre.loc[ns_mask].reset_index(drop=True)
-    else:
-        kills['bulge_nsersic'] = 0
+        raise ValueError(
+            "selection.bulge_nsersic_range cuts on the catalog bulge_nsersic "
+            "column, which the population paint now replaces (see BULGE_* "
+            "constants); the cut is meaningless -- remove it from the spec"
+        )
+    kills['bulge_nsersic'] = 0
 
     # isotropic orientation redraw (GEOMETRY stream), then line SNR with
     # the redrawn cosi
@@ -647,6 +721,12 @@ def build_population(
     logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(
         spec.seed, halo_ids, galaxy_ids, logm, cp
     )
+    bulge_nsersic, bulge_r50 = _paint_bulge(
+        spec.seed,
+        halo_ids,
+        galaxy_ids,
+        sample['disk_r50'].to_numpy(dtype=np.float64),
+    )
 
     population = pd.DataFrame(
         {
@@ -662,8 +742,10 @@ def build_population(
             'f_lambda_cont_cgs': sample['f_lambda_cont_cgs'].to_numpy(),
             'rscale_arcsec': sample['rscale_arcsec'].to_numpy(),
             'bulge_fraction': sample['bulge_fraction'].to_numpy(dtype=np.float64),
-            'bulge_r50_arcsec': sample['bulge_r50'].to_numpy(dtype=np.float64),
-            'bulge_nsersic': sample['bulge_nsersic'].to_numpy(dtype=np.float64),
+            'bulge_r50_arcsec': bulge_r50,
+            'bulge_nsersic': bulge_nsersic,
+            'catalog_bulge_r50_arcsec': sample['bulge_r50'].to_numpy(dtype=np.float64),
+            'catalog_bulge_nsersic': sample['bulge_nsersic'].to_numpy(dtype=np.float64),
             'cosi': sample['cosi'].to_numpy(),
             'theta_int': sample['theta_int'].to_numpy(),
             'g1': g1,
@@ -716,6 +798,19 @@ def build_population(
             'paint': _POP_PAINT,
             'shear': _POP_SHEAR,
             'prior': _POP_PRIOR,
+            'bulge': _POP_BULGE,
+        },
+        'bulge_paint': {
+            'pseudo_weight': BULGE_PSEUDO_WEIGHT,
+            'pseudo_n': BULGE_PSEUDO_N,
+            'classical_n': BULGE_CLASSICAL_N,
+            'size_ratio_median': BULGE_SIZE_RATIO_MEDIAN,
+            'size_ratio_ln_scatter': BULGE_SIZE_RATIO_LN_SCATTER,
+            'size_ratio_max': BULGE_SIZE_RATIO_MAX,
+            'note': (
+                'bulge_nsersic + bulge_r50_arcsec painted (catalog values in '
+                'catalog_* columns); bulge_fraction kept from catalog'
+            ),
         },
     }
     return population, meta

@@ -24,9 +24,13 @@ from __future__ import annotations
 import math
 from typing import Dict, Optional, TYPE_CHECKING
 
+from kl_pipe.ensemble.population import (
+    BULGE_SIZE_RATIO_LN_SCATTER,
+    BULGE_SIZE_RATIO_MEDIAN,
+)
 from kl_pipe.priors import (
     Gaussian,
-    LogUniform,
+    LogNormal,
     PriorDict,
     TruncatedNormal,
     Uniform,
@@ -220,14 +224,32 @@ def scene_truth_defaults(
 _CATALOG_RSCALE_LOW = 0.005
 _CATALOG_RSCALE_HIGH = 2.0
 
-# catalog-mode bulge half-light-radius prior bounds [arcsec]. This is a
-# population prior (NOT centered on each galaxy's truth) -- weakly-constrained
-# bulge params are the sharpest case where a truth-centered nuisance prior
-# would leak into the shear error bar via degeneracy. Sampled bulge_r50 spans
-# 0.033-1.13 arcsec (flagship2_dev, snr_line >= 10, measured 2026-07-22);
-# bounds set below/above with margin. Log-spaced (sizes span ~2 decades).
-_CATALOG_BULGE_HLR_LOW = 0.005
-_CATALOG_BULGE_HLR_HIGH = 2.0
+# informative population priors for the bulge decomposition. A flat
+# bulge_frac (Uniform) + flat bulge_hlr (LogUniform) add no curvature along
+# the bulge amplitude/size directions, which the data leaves near-degenerate
+# whenever the bulge is faint or unresolved. That flatness both floors the
+# NUTS mass matrix and carves spurious MAP optima -> catastrophic divergences.
+# Informative population priors inject curvature exactly where the likelihood
+# is flat, without centering on truth: honest marginalization (assert the
+# population, not the answer), regularizing without biasing shear.
+#
+# bulge_frac: matched to the selected population. Flagship2 dev, z 0.55-1.9,
+# two-component disks, B/T <= 0.3 (the bulge_fraction_max selection cut):
+# B/T mean 0.080, std 0.080, n=206k (measured 2026-07-23; stable against a
+# brightest-decile flux cut). The truncation follows the spec's own
+# bulge_fraction_max selection cut (prior support == selected population
+# support); loc/scale stay fixed at the B/T <= 0.3 measurement, which the
+# production specs use.
+_BULGE_FRAC_LOC = 0.08
+_BULGE_FRAC_SCALE = 0.08
+# bulge_hlr: exactly the generating distribution of the population's bulge
+# size paint (population.py BULGE_SIZE_RATIO_*): a LogNormal on the bulge-to-
+# disk size ratio, median set per galaxy from the disk size. Prior ==
+# generating distribution by construction, so the marginalization is exact.
+# The paint caps the ratio below 1 while the prior is uncapped; the cap
+# removes only the >3-sigma tail (ln(1/0.3)/0.4 = 3.0), a negligible
+# mismatch that keeps the prior JIT-simple and the render grid finite.
+_EXP_R50_OVER_RSCALE = 1.6783  # exponential-disk r50 / scale-length ratio
 
 
 def scene_priors(
@@ -324,8 +346,8 @@ def scene_priors(
         if is_catalog:
             # catalog broadband = BulgeDiskModel. Sampled: total_flux,
             # disk_rscale (truth-centered, interim convention), bulge_frac,
-            # bulge_hlr. bulge_frac + bulge_hlr use POPULATION priors (not
-            # truth-centered); disk_h_over_r + bulge_h_over_hlr fixed.
+            # bulge_hlr. bulge_frac + bulge_hlr use informative POPULATION
+            # priors (not truth-centered); disk_h_over_r + bulge_h_over_hlr fixed.
             prior_spec[f'{band}.total_flux'] = TruncatedNormal(
                 truth[f'{band}.total_flux'], sigma, low, high
             )
@@ -333,9 +355,17 @@ def scene_priors(
                 truth[f'{band}.disk_rscale'], 0.08, rscale_low, rscale_high
             )
             prior_spec[f'{band}.disk_h_over_r'] = truth[f'{band}.disk_h_over_r']
-            prior_spec[f'{band}.bulge_frac'] = Uniform(0.0, 1.0)
-            prior_spec[f'{band}.bulge_hlr'] = LogUniform(
-                _CATALOG_BULGE_HLR_LOW, _CATALOG_BULGE_HLR_HIGH
+            bf_max = spec.catalog_population.bulge_fraction_max
+            prior_spec[f'{band}.bulge_frac'] = TruncatedNormal(
+                _BULGE_FRAC_LOC,
+                _BULGE_FRAC_SCALE,
+                0.0,
+                1.0 if bf_max is None else float(bf_max),
+            )
+            disk_r50 = _EXP_R50_OVER_RSCALE * truth[f'{band}.disk_rscale']
+            bulge_hlr_median = BULGE_SIZE_RATIO_MEDIAN * disk_r50
+            prior_spec[f'{band}.bulge_hlr'] = LogNormal(
+                math.log(bulge_hlr_median), BULGE_SIZE_RATIO_LN_SCATTER
             )
             prior_spec[f'{band}.bulge_h_over_hlr'] = truth[f'{band}.bulge_h_over_hlr']
         else:
