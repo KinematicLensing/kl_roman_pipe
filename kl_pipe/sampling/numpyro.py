@@ -746,7 +746,10 @@ class NumpyroSampler(Sampler):
             potential_fn=potential_fn,
             dense_mass=True,
             inverse_mass_matrix=inv_mass,
-            adapt_mass_matrix=False,  # fixed Laplace metric (validated recipe)
+            # default: fixed Laplace metric (validated recipe); opt-in warmup
+            # adaptation starting FROM that metric for posteriors whose soft
+            # directions the MAP Hessian mis-measures
+            adapt_mass_matrix=self.config.precondition_adapt_mass,
             adapt_step_size=True,
             max_tree_depth=self.config.max_tree_depth,
             target_accept_prob=self.config.target_accept_prob,

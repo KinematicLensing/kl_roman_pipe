@@ -340,6 +340,12 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # posterior in physical coordinates is unchanged by construction. Only
     # meaningful with precondition='laplace'.
     precondition_unconstrained: bool = False
+    # Adapt the mass matrix during warmup, using the (possibly transformed)
+    # Laplace inverse Hessian as the initial metric instead of freezing it.
+    # Lets warmup correct directions the MAP Hessian mis-measures (e.g.
+    # eig-floored soft directions), at the cost of dense-adaptation warmup
+    # time. Only meaningful with precondition='laplace'.
+    precondition_adapt_mass: bool = False
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
@@ -348,6 +354,8 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
             raise ValueError(
                 "precondition_unconstrained requires precondition='laplace'"
             )
+        if self.precondition_adapt_mass and self.precondition != 'laplace':
+            raise ValueError("precondition_adapt_mass requires precondition='laplace'")
         if self.precondition not in ('none', 'laplace'):
             raise ValueError(
                 f"precondition must be 'none' or 'laplace', got '{self.precondition}'"
