@@ -1,0 +1,80 @@
+# Flagship2 catalog shear-bias PILOT: 36 galaxies x 2 ring members (72 fits)
+# from the v1 bank, config P, production sampler settings. Volume-reduced
+# for an overnight Vista slurm run that exercises the full production path
+# (real selection + real sampling + GPU packing + collate/diagnostics) at a
+# few node-hours -- NOT the full-scale statistics run.
+#
+# CAVEAT: the sampler divergence fix (unconstrained reparam) is NOT on
+# se/ensemble yet, so expect high divergence. The value here is the infra +
+# failure-mode characterization at scale (catastrophic rate across a real
+# selection, MAP-vs-truth recovery, quality distributions), not clean shear
+# calibration. Selection is the CURRENT per-exposure SNR>=10 (coadded-depth
+# switch is a pending change).
+run:
+  name: flagship2_shear_v1_pilot
+  version: 1
+  description: "Flagship2 catalog shear-bias pilot: v1, config P, 72 fits"
+  seed: 20260723
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    download: flagship2_v1         # 657 selected; draw 36 from it
+    data_dir: data/cosmohub
+  preprocess:
+    flux_variant: model3_ext       # extincted model3 Halpha flux
+    h: 0.67                        # Flagship cosmology; logM* = col - 2*log10(h)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_min: 10.0             # per-exposure matched-filter line SNR
+    bulge_fraction_max: 0.3        # disk-dominated sample
+    bulge_nsersic_range: null      # catalog-n cut removed (n is painted)
+  sample:
+    n_galaxies: 36
+    replace: false
+  paint:
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]       # isotropic redraw; catalog inc kept for validation
+    ring: {members: 2}             # theta and theta + pi/2 partner
+  shear:
+    sigma: 0.03                    # per-component iid Gaussian, shared within pair
+    gmax: 0.1                      # redraw until |g| < gmax
+  priors:
+    logm_obs_scatter_dex: 0.25     # simulated photometric-mass error
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  config: canonical_P
+  snr:
+    broadband: 300
+
+fit:
+  sampler: numpyro
+  n_warmup: 300
+  n_samples: 500
+  n_chains: 4
+  precondition: laplace
+  target_accept: 0.9
+  pin_z_to_truth: true
+
+dispatch:
+  backend: local
+  mode: dynamic
+  workers_per_node: 8             # GPU packing on GH200
+  target_task_walltime_min: 90
+  queue: gh-dev
+  account: JPL-PUB
+  max_fit_walltime_min: 20
+
+output:
+  save_chains: all
+  save_mocks: none
