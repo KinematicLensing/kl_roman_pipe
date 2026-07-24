@@ -163,6 +163,7 @@ def _run_fit_attempt(
         n_chains=spec.n_chains,
         target_accept_prob=spec.target_accept,
         precondition=spec.precondition,
+        precondition_unconstrained=spec.unconstrained,
         n_map_starts=spec.n_map_starts,
         seed=sampler_seed,
     )

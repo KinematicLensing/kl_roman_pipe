@@ -812,6 +812,10 @@ class EnsembleSpec:
     n_samples: int
     n_chains: int
     precondition: str
+    # sample the preconditioned path in unconstrained coordinates (removes
+    # hard prior-truncation walls from the NUTS potential; see
+    # NumpyroSamplerConfig.precondition_unconstrained)
+    unconstrained: bool
     target_accept: float
     n_map_starts: int
     pin_z_to_truth: bool
@@ -1172,6 +1176,7 @@ class EnsembleSpec:
                 'n_samples',
                 'n_chains',
                 'precondition',
+                'unconstrained',
                 'target_accept',
                 'n_map_starts',
                 'pin_z_to_truth',
@@ -1242,6 +1247,7 @@ class EnsembleSpec:
             n_samples=int(fit.get('n_samples', 1000)),
             n_chains=int(fit.get('n_chains', 4)),
             precondition=str(fit.get('precondition', 'laplace')),
+            unconstrained=bool(fit.get('unconstrained', False)),
             target_accept=float(fit.get('target_accept', 0.8)),
             n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
