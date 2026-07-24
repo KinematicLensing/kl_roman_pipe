@@ -55,11 +55,16 @@ observation:
 
 fit:
   sampler: numpyro
-  n_warmup: 100
-  n_samples: 200
+  # settings from the 2026-07-23 fit-28 cure (unconstrained coords + warmup
+  # adaptation from the Laplace metric: div 0.3%, rhat 1.008, min ESS 123;
+  # frozen-metric constrained baseline was div 50%, ESS 8)
+  n_warmup: 800
+  n_samples: 300
   n_chains: 2
   precondition: laplace
-  target_accept: 0.8
+  unconstrained: true
+  adapt_mass: true
+  target_accept: 0.9
   pin_z_to_truth: true
 
 dispatch:

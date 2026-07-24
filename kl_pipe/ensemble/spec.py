@@ -816,6 +816,9 @@ class EnsembleSpec:
     # hard prior-truncation walls from the NUTS potential; see
     # NumpyroSamplerConfig.precondition_unconstrained)
     unconstrained: bool
+    # adapt the mass matrix during warmup starting from the Laplace metric
+    # instead of freezing it (see NumpyroSamplerConfig.precondition_adapt_mass)
+    adapt_mass: bool
     target_accept: float
     n_map_starts: int
     pin_z_to_truth: bool
@@ -1177,6 +1180,7 @@ class EnsembleSpec:
                 'n_chains',
                 'precondition',
                 'unconstrained',
+                'adapt_mass',
                 'target_accept',
                 'n_map_starts',
                 'pin_z_to_truth',
@@ -1248,6 +1252,7 @@ class EnsembleSpec:
             n_chains=int(fit.get('n_chains', 4)),
             precondition=str(fit.get('precondition', 'laplace')),
             unconstrained=bool(fit.get('unconstrained', False)),
+            adapt_mass=bool(fit.get('adapt_mass', False)),
             target_accept=float(fit.get('target_accept', 0.8)),
             n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
