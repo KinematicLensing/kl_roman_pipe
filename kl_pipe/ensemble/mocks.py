@@ -469,15 +469,17 @@ def build_fit_inputs(
         raise ValueError(
             f"SNR values must be positive, got ({broadband_snr}, {line_snr})"
         )
-    # catalog mode: broadband bands are BulgeDiskModel with this galaxy's
-    # fixed Sersic index; sampled mode: single-disk bands (bulge_nsersic None)
+    # catalog mode with the bulge paint on: broadband bands are BulgeDiskModel
+    # with this galaxy's fixed Sersic index; sampled mode and the disk-only
+    # catalog twin (paint.bulge: false): single-disk bands (bulge_nsersic None)
     is_catalog = spec.catalog_population is not None
     if is_catalog and row is None:
         raise ValueError(
-            "catalog-mode fits require the manifest row (pop.bulge_nsersic and "
-            "pop.prior_vcirc_* columns); pass row"
+            "catalog-mode fits require the manifest row (pop.prior_vcirc_* "
+            "and, with the bulge paint, pop.bulge_nsersic columns); pass row"
         )
-    bulge_nsersic = float(row['pop.bulge_nsersic']) if is_catalog else None
+    use_bulge = is_catalog and spec.catalog_population.paint_bulge
+    bulge_nsersic = float(row['pop.bulge_nsersic']) if use_bulge else None
     source = build_source_model(config, bulge_nsersic=bulge_nsersic)
     priors = scene_priors(truth, config, spec, row=row)
 

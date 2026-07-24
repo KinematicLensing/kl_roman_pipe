@@ -556,7 +556,9 @@ class CatalogPopulationSpec:
     # sample
     n_galaxies: int  # subsampled without replacement
 
-    # paint: inverted TFR (logv = logv0 + (logM - logm0)/slope) + sigma0(z)
+    # paint: inverted TFR (logv = logv0 + (logM - logm0)/slope) + sigma0(z);
+    # paint_bulge toggles the bulge morphology paint (paint.bulge, default
+    # true): false = disk-only twin (single-disk broadband truth + fit)
     tfr_logv0: float
     tfr_logm0: float
     tfr_slope: float
@@ -576,6 +578,10 @@ class CatalogPopulationSpec:
 
     # priors
     logm_obs_scatter_dex: float  # simulated photometric-mass error
+
+    # paint.bulge (default true): false = disk-only twin (no bulge paint,
+    # single-disk broadband truth keys, single-disk fit model + priors)
+    paint_bulge: bool = True
 
     def __post_init__(self):
         if not self.catalog_download:
@@ -699,8 +705,15 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         )
 
     paint = population['paint']
-    _reject_unknown(paint, ('tfr', 'sigma0'), f"{context}.paint")
+    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge'), f"{context}.paint")
     _require_keys(paint, ('tfr', 'sigma0'), f"{context}.paint")
+    # paint.bulge (optional, default true): false = disk-only twin
+    paint_bulge = paint.get('bulge', True)
+    if not isinstance(paint_bulge, bool):
+        raise ValueError(
+            f"{context}.paint.bulge must be a boolean (true = BulgeDisk "
+            f"broadband, false = single-disk twin), got {paint_bulge!r}"
+        )
     tfr = paint['tfr']
     tfr_keys = ('logv0', 'logm0', 'slope', 'scatter_dex')
     _reject_unknown(tfr, tfr_keys, f"{context}.paint.tfr")
@@ -760,6 +773,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         shear_sigma=float(shear['sigma']),
         shear_gmax=float(shear['gmax']),
         logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
+        paint_bulge=paint_bulge,
     )
 
 

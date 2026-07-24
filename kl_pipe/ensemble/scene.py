@@ -339,11 +339,16 @@ def scene_priors(
         'z': truth['z'],
     }
 
+    # catalog broadband is BulgeDiskModel only when the bulge paint is on; a
+    # disk-only twin (paint.bulge: false) takes the single-disk branch with
+    # the catalog rscale bounds
+    bulge_bands = is_catalog and spec.catalog_population.paint_bulge
+
     for band in config.bands:
         _, sigma, low, high = _BAND_FLUX_PRIOR[band]
         prior_spec[f'{band}.x0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
         prior_spec[f'{band}.y0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
-        if is_catalog:
+        if bulge_bands:
             # catalog broadband = BulgeDiskModel. Sampled: total_flux,
             # disk_rscale (truth-centered, interim convention), bulge_frac,
             # bulge_hlr. bulge_frac + bulge_hlr use informative POPULATION

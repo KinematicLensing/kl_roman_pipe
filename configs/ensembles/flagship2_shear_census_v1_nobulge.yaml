@@ -1,0 +1,91 @@
+# Disk-only twin of flagship2_shear_census_v1: identical population (same
+# seed -> same 100 galaxies, orientations, shears, noise), but the bulge
+# paint is disabled (paint.bulge: false) so mocks AND fits use single-disk
+# broadband models (InclinedExponentialModel) instead of BulgeDiskModel.
+# Paired runtime-scaling and accuracy comparison against the bulge census.
+# Requires data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
+run:
+  name: flagship2_shear_census_v1_nobulge
+  version: 1
+  description: "Flagship2 v1 catalog, 200-fit shear census, disk-only twin (no bulge)"
+  seed: 20260724
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    download: flagship2_v1         # basename of data/cosmohub/<name>.yaml
+    data_dir: data/cosmohub
+  preprocess:
+    flux_variant: model3_ext       # extincted model3 Halpha flux
+    h: 0.67                        # Flagship cosmology; logM* = col - 2*log10(h)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_min: 10.0             # per-exposure matched-filter line SNR
+    # disk-dominated sample: ~70% of B/T <= 0.3 bulges are pseudobulges
+    # (Mendez-Abreu+10); keeps 73% of dev-box disks (measured 2026-07-23)
+    bulge_fraction_max: 0.3
+    bulge_nsersic_range: null      # catalog-n cut removed (n is painted)
+  sample:
+    n_galaxies: 100
+    replace: false
+  paint:
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+    # disk-only twin: no bulge paint; single-disk broadband truth + fit
+    bulge: false
+  orientation:
+    cosi_range: [0.05, 0.95]       # isotropic redraw; catalog inc kept for validation
+    ring: {members: 2}             # theta and theta + pi/2 partner
+  shear:
+    sigma: 0.03                    # per-component iid Gaussian, shared within pair
+    gmax: 0.1                      # redraw until |g| < gmax
+  priors:
+    logm_obs_scatter_dex: 0.25     # simulated photometric-mass error
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  config: canonical_P
+  # line SNR is per-galaxy from the population table (matched-filter
+  # snr_line); a per-galaxy imaging depth anchor replacing this fixed
+  # broadband SNR is a documented future step
+  snr:
+    broadband: 300
+
+fit:
+  sampler: numpyro
+  # baseline config (2026-07-24): unconstrained coords + warmup adaptation
+  # from the Laplace metric. Warmup 200 measured equal to 800 on the hardest
+  # correct-MAP fit (div 1.7% vs 0.3%, rhat 1.02 vs 1.008, min ESS 110 vs
+  # 123) at ~1/4 the warmup cost; frozen-metric constrained baseline was
+  # div 50%, ESS 8. Escalation reruns (longer warmup/samples) key on
+  # rhat/ESS, not divergence rate: frozen-metric catastrophes show div=0.
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 2
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  target_accept: 0.9
+  pin_z_to_truth: true
+
+dispatch:
+  backend: slurm
+  mode: dynamic
+  # kept at 8 to match the bulge census exactly (paired runtime comparison);
+  # single-disk config P supports N=16 if packing is retuned later
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gh
+  account: JPL-PUB        # TACC allocation (-A); used when dispatched via slurm
+  max_fit_walltime_min: 60
+
+output:
+  save_chains: all
+  save_mocks: all

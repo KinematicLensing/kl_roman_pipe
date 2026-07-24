@@ -307,8 +307,16 @@ def _catalog_rows(
         )
     # catalog specs carry no population.fixed block; scene defaults apply.
     # broadband bands are BulgeDiskModel (per-galaxy bulge from the catalog)
-    base_truth = scene_truth_defaults(config, {}, bulge_bands=True)
+    # unless the spec disables the bulge paint (disk-only twin)
+    base_truth = scene_truth_defaults(config, {}, bulge_bands=cp.paint_bulge)
     ring_members = (0, 90) if cp.ring_members == 2 else (0,)
+    # painted bulge columns are absent from a no-bulge population; keep
+    # bulge_fraction (catalog fact, misspecification diagnostic) either way
+    pop_passthrough = tuple(
+        c
+        for c in _POP_PASSTHROUGH
+        if cp.paint_bulge or c not in ('bulge_r50_arcsec', 'bulge_nsersic')
+    )
 
     rows: List[dict] = []
     for pop_index, g in population.iterrows():
@@ -337,11 +345,17 @@ def _catalog_rows(
                 # component gets the catalog bulge fraction and half-light
                 # radius per galaxy (total_flux, disk_h_over_r, bulge_h_over_hlr,
                 # x0, y0 keep the scene defaults from base_truth). The Halpha
-                # line + continuum stay single-disk (rscale).
+                # line + continuum stay single-disk (rscale). With the bulge
+                # paint disabled, bands are single-disk too: the band flux
+                # keeps the scene default, which equals the bulge-mode
+                # total_flux, so the twin's total broadband flux matches.
                 for band in config.bands:
-                    truth[f'{band}.disk_rscale'] = rscale
-                    truth[f'{band}.bulge_frac'] = float(g['bulge_fraction'])
-                    truth[f'{band}.bulge_hlr'] = float(g['bulge_r50_arcsec'])
+                    if cp.paint_bulge:
+                        truth[f'{band}.disk_rscale'] = rscale
+                        truth[f'{band}.bulge_frac'] = float(g['bulge_fraction'])
+                        truth[f'{band}.bulge_hlr'] = float(g['bulge_r50_arcsec'])
+                    else:
+                        truth[f'{band}.rscale'] = rscale
                 truth['Halpha.rscale'] = rscale
                 truth['Halpha.cont.rscale'] = rscale
                 truth['vel.rscale'] = rscale
@@ -389,7 +403,7 @@ def _catalog_rows(
                     'save_mocks': spec.save_mocks == 'all',
                 }
                 row.update({f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()})
-                row.update({f'{POP_PREFIX}{c}': g[c] for c in _POP_PASSTHROUGH})
+                row.update({f'{POP_PREFIX}{c}': g[c] for c in pop_passthrough})
                 rows.append(row)
     return rows
 

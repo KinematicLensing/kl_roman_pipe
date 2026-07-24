@@ -38,6 +38,10 @@ from test_population import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 EXAMPLE_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'flagship2_shear_dev.yaml'
+CENSUS_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'flagship2_shear_census_v1.yaml'
+NOBULGE_CENSUS_SPEC = (
+    REPO_ROOT / 'configs' / 'ensembles' / 'flagship2_shear_census_v1_nobulge.yaml'
+)
 DATA_DIR = REPO_ROOT / 'data' / 'cosmohub'
 DEV_PARQUET = DATA_DIR / 'flagship2_dev.parquet'
 
@@ -46,6 +50,14 @@ def _small_spec_dict(data_dir: Path) -> dict:
     """4 galaxies x 2 ring members x 1 noise rep = 8 fits."""
     d = catalog_spec_dict(data_dir)
     d['population']['sample']['n_galaxies'] = 4
+    return d
+
+
+def _nobulge_spec_dict(data_dir: Path) -> dict:
+    """The small spec with the bulge paint disabled (disk-only twin)."""
+    d = _small_spec_dict(data_dir)
+    d['run']['name'] = 'pop_test_nobulge'
+    d['population']['paint']['bulge'] = False
     return d
 
 
@@ -279,6 +291,167 @@ class TestCatalogPriors:
                 broadband_snr=300.0,
                 line_snr=float(manifest.iloc[0]['line_snr']),
             )
+
+
+# ==============================================================================
+# No-bulge catalog mode (paint.bulge: false -- disk-only twin)
+# ==============================================================================
+
+
+@pytest.fixture(scope='module')
+def nobulge_run(fake_data_dir, tmp_path_factory) -> Path:
+    """Expanded run dir for the small no-bulge catalog spec."""
+    tmp = tmp_path_factory.mktemp('cat_run_nobulge')
+    spec_path = tmp / 'spec.yaml'
+    spec_path.write_text(yaml.safe_dump(_nobulge_spec_dict(fake_data_dir)))
+    return expand(spec_path, REGISTRY, tmp / 'runs')
+
+
+@pytest.fixture(scope='module')
+def nobulge_parts(nobulge_run):
+    spec, config, manifest = load_run(nobulge_run)
+    population = pd.read_parquet(nobulge_run / 'population.parquet')
+    return spec, config, manifest, population
+
+
+class TestNoBulgeCatalog:
+    def test_spec_knob(self, fake_data_dir, tmp_path):
+        # default true (existing behavior), explicit false, non-bool rejected
+        spec = spec_from_dict(tmp_path, _small_spec_dict(fake_data_dir))
+        assert spec.catalog_population.paint_bulge is True
+        d = _nobulge_spec_dict(fake_data_dir)
+        spec = spec_from_dict(tmp_path, d)
+        assert spec.catalog_population.paint_bulge is False
+        d['population']['paint']['bulge'] = 'no'
+        with pytest.raises(ValueError, match='paint.bulge'):
+            spec_from_dict(tmp_path, d)
+
+    def test_nobulge_census_spec_parses(self):
+        # the committed disk-only twin of the census spec: same seed (paired
+        # galaxy draws), same observation config, bulge paint off
+        spec = EnsembleSpec.from_yaml(NOBULGE_CENSUS_SPEC)
+        bulge_spec = EnsembleSpec.from_yaml(CENSUS_SPEC)
+        assert spec.run_name == 'flagship2_shear_census_v1_nobulge'
+        assert spec.catalog_population.paint_bulge is False
+        assert bulge_spec.catalog_population.paint_bulge is True
+        assert spec.seed == bulge_spec.seed
+        assert spec.observed_config == bulge_spec.observed_config
+        assert spec.catalog_population.n_galaxies == 100
+
+    def test_population_omits_painted_bulge_columns(self, nobulge_parts):
+        _, _, _, population = nobulge_parts
+        assert 'bulge_nsersic' not in population.columns
+        assert 'bulge_r50_arcsec' not in population.columns
+        # catalog facts stay for diagnostics
+        assert 'bulge_fraction' in population.columns
+        assert 'catalog_bulge_nsersic' in population.columns
+        assert 'catalog_bulge_r50_arcsec' in population.columns
+
+    def test_population_matches_bulge_twin(self, run_parts, nobulge_parts):
+        # same seed + selection -> identical galaxies and all non-bulge
+        # draws; the no-bulge table is the bulge table minus painted columns
+        _, _, _, pop_bulge = run_parts
+        _, _, _, pop_nobulge = nobulge_parts
+        pd.testing.assert_frame_equal(
+            pop_bulge[list(pop_nobulge.columns)], pop_nobulge, check_exact=True
+        )
+
+    def test_manifest_single_disk_truth_keys(self, nobulge_parts):
+        _, config, manifest, population = nobulge_parts
+        pop = population.set_index('pop_index')
+        for band in config.bands:
+            for key in (
+                'total_flux',
+                'bulge_frac',
+                'bulge_hlr',
+                'disk_rscale',
+                'disk_h_over_r',
+                'bulge_h_over_hlr',
+            ):
+                assert f'truth.{band}.{key}' not in manifest.columns
+            for key in ('flux', 'rscale', 'h_over_r', 'x0', 'y0'):
+                assert f'truth.{band}.{key}' in manifest.columns
+        # painted bulge passthrough columns absent; catalog fact retained
+        assert 'pop.bulge_nsersic' not in manifest.columns
+        assert 'pop.bulge_r50_arcsec' not in manifest.columns
+        assert 'pop.bulge_fraction' in manifest.columns
+        # the catalog disk scale still sets every spatial scale
+        for _, row in manifest.iterrows():
+            rscale = float(pop.loc[row['galaxy_id'], 'rscale_arcsec'])
+            for band in config.bands:
+                assert row[f'truth.{band}.rscale'] == rscale
+            for comp in ('Halpha', 'Halpha.cont', 'vel'):
+                assert row[f'truth.{comp}.rscale'] == rscale
+
+    def test_flux_matches_bulge_twin_total_flux(self, run_parts, nobulge_parts):
+        # flux normalization: the single-disk band flux equals the bulge
+        # twin's total_flux (the disk absorbs the whole catalog flux; rows
+        # align because both manifests expand the same population in order)
+        _, config, manifest_bulge, _ = run_parts
+        _, _, manifest_nobulge, _ = nobulge_parts
+        assert (
+            manifest_bulge['galaxy_id'].to_numpy()
+            == manifest_nobulge['galaxy_id'].to_numpy()
+        ).all()
+        for band in config.bands:
+            assert (
+                manifest_nobulge[f'truth.{band}.flux'].to_numpy()
+                == manifest_bulge[f'truth.{band}.total_flux'].to_numpy()
+            ).all()
+
+    def test_priors_single_disk(self, nobulge_parts):
+        spec, config, manifest, _ = nobulge_parts
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        assert not any('bulge' in k for k in truth)
+        priors = scene_priors(truth, config, spec, row=row)
+        names = list(priors.sampled_names) + list(priors.fixed_names)
+        assert not any('bulge' in n for n in names)
+        for band in config.bands:
+            assert f'{band}.flux' in priors.sampled_names
+            rs = priors.get_prior(f'{band}.rscale')
+            assert isinstance(rs, TruncatedNormal)
+            # catalog-mode rscale bounds (scene._CATALOG_RSCALE_LOW/HIGH)
+            assert rs.bounds == (0.005, 2.0)
+
+    def test_all_truths_in_prior_support(self, nobulge_parts):
+        spec, config, manifest, _ = nobulge_parts
+        for _, row in manifest.iterrows():
+            truth = truth_from_row(row)
+            priors = scene_priors(truth, config, spec, row=row)
+            for name in priors.sampled_names:
+                lp = float(priors.get_prior(name).log_prob(truth[name]))
+                assert np.isfinite(lp), f'{name}: truth {truth[name]} out of support'
+
+    def test_build_fit_inputs_single_disk_task(self, nobulge_parts):
+        # end-to-end: mocks + priors -> InferenceTask with no bulge params
+        # and single-disk broadband models
+        from kl_pipe.intensity import InclinedExponentialModel
+        from kl_pipe.sampling import InferenceTask
+
+        spec, config, manifest, _ = nobulge_parts
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        inputs = build_fit_inputs(
+            truth,
+            int(row['noise_seed']),
+            spec,
+            config,
+            broadband_snr=float(row['broadband_snr']),
+            line_snr=float(row['line_snr']),
+            row=row,
+        )
+        for band in config.bands:
+            assert isinstance(
+                inputs.source.broadband_models[band], InclinedExponentialModel
+            )
+        task = InferenceTask.from_obs(
+            inputs.source,
+            inputs.priors,
+            image_obs=inputs.image_obs,
+            grism_obs=inputs.grism_obs,
+        )
+        assert not any('bulge' in n for n in task.sampled_names)
 
 
 # ==============================================================================

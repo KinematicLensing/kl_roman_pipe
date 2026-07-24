@@ -721,29 +721,34 @@ def build_population(
     logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(
         spec.seed, halo_ids, galaxy_ids, logm, cp
     )
-    bulge_nsersic, bulge_r50 = _paint_bulge(
-        spec.seed,
-        halo_ids,
-        galaxy_ids,
-        sample['disk_r50'].to_numpy(dtype=np.float64),
-    )
-
-    population = pd.DataFrame(
+    columns: Dict[str, np.ndarray] = {
+        'pop_index': np.arange(cp.n_galaxies, dtype=np.int64),
+        'galaxy_id': galaxy_ids,
+        'halo_id': halo_ids,
+        'z': z_sample,
+        'z_obs_catalog': sample['observed_redshift_gal'].to_numpy(dtype=np.float64),
+        'logm': logm,
+        'log_sfr': sample['log_sfr'].to_numpy(dtype=np.float64),
+        'f_line_cgs': sample['f_line_cgs'].to_numpy(),
+        'ew_rest_a': sample['ew_rest_a'].to_numpy(),
+        'f_lambda_cont_cgs': sample['f_lambda_cont_cgs'].to_numpy(),
+        'rscale_arcsec': sample['rscale_arcsec'].to_numpy(),
+        'bulge_fraction': sample['bulge_fraction'].to_numpy(dtype=np.float64),
+    }
+    # painted bulge morphology columns exist only when the paint is enabled;
+    # a disk-only twin (paint.bulge: false) omits them so any downstream
+    # bulge read fails loudly instead of using stale values
+    if cp.paint_bulge:
+        bulge_nsersic, bulge_r50 = _paint_bulge(
+            spec.seed,
+            halo_ids,
+            galaxy_ids,
+            sample['disk_r50'].to_numpy(dtype=np.float64),
+        )
+        columns['bulge_r50_arcsec'] = bulge_r50
+        columns['bulge_nsersic'] = bulge_nsersic
+    columns.update(
         {
-            'pop_index': np.arange(cp.n_galaxies, dtype=np.int64),
-            'galaxy_id': galaxy_ids,
-            'halo_id': halo_ids,
-            'z': z_sample,
-            'z_obs_catalog': sample['observed_redshift_gal'].to_numpy(dtype=np.float64),
-            'logm': logm,
-            'log_sfr': sample['log_sfr'].to_numpy(dtype=np.float64),
-            'f_line_cgs': sample['f_line_cgs'].to_numpy(),
-            'ew_rest_a': sample['ew_rest_a'].to_numpy(),
-            'f_lambda_cont_cgs': sample['f_lambda_cont_cgs'].to_numpy(),
-            'rscale_arcsec': sample['rscale_arcsec'].to_numpy(),
-            'bulge_fraction': sample['bulge_fraction'].to_numpy(dtype=np.float64),
-            'bulge_r50_arcsec': bulge_r50,
-            'bulge_nsersic': bulge_nsersic,
             'catalog_bulge_r50_arcsec': sample['bulge_r50'].to_numpy(dtype=np.float64),
             'catalog_bulge_nsersic': sample['bulge_nsersic'].to_numpy(dtype=np.float64),
             'cosi': sample['cosi'].to_numpy(),
@@ -768,6 +773,7 @@ def build_population(
             'gamma2_field': sample['gamma2'].to_numpy(dtype=np.float64),
         }
     )
+    population = pd.DataFrame(columns)
 
     provenance = catalog_provenance(cp.catalog_download, data_dir)
     meta = {
@@ -800,18 +806,30 @@ def build_population(
             'prior': _POP_PRIOR,
             'bulge': _POP_BULGE,
         },
-        'bulge_paint': {
-            'pseudo_weight': BULGE_PSEUDO_WEIGHT,
-            'pseudo_n': BULGE_PSEUDO_N,
-            'classical_n': BULGE_CLASSICAL_N,
-            'size_ratio_median': BULGE_SIZE_RATIO_MEDIAN,
-            'size_ratio_ln_scatter': BULGE_SIZE_RATIO_LN_SCATTER,
-            'size_ratio_max': BULGE_SIZE_RATIO_MAX,
-            'note': (
-                'bulge_nsersic + bulge_r50_arcsec painted (catalog values in '
-                'catalog_* columns); bulge_fraction kept from catalog'
-            ),
-        },
+        'bulge_paint': (
+            {
+                'enabled': True,
+                'pseudo_weight': BULGE_PSEUDO_WEIGHT,
+                'pseudo_n': BULGE_PSEUDO_N,
+                'classical_n': BULGE_CLASSICAL_N,
+                'size_ratio_median': BULGE_SIZE_RATIO_MEDIAN,
+                'size_ratio_ln_scatter': BULGE_SIZE_RATIO_LN_SCATTER,
+                'size_ratio_max': BULGE_SIZE_RATIO_MAX,
+                'note': (
+                    'bulge_nsersic + bulge_r50_arcsec painted (catalog values '
+                    'in catalog_* columns); bulge_fraction kept from catalog'
+                ),
+            }
+            if cp.paint_bulge
+            else {
+                'enabled': False,
+                'note': (
+                    'paint.bulge: false -- disk-only twin; no painted bulge '
+                    'columns (catalog bulge_fraction + catalog_* columns '
+                    'retained for diagnostics)'
+                ),
+            }
+        ),
     }
     return population, meta
 
