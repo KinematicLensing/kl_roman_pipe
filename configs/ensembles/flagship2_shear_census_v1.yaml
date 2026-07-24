@@ -1,18 +1,20 @@
-# Flagship2 catalog-backed shear-bias dev spec: 8 galaxies x 2 ring members
-# from the dev catalog subset (make download-cosmohub-dev), config P.
-# Shakedown-sized for local runs of the catalog population chain.
+# Flagship2 v1 catalog shear-bias census: 100 galaxies x 2 ring members,
+# config P, baseline fit config (unconstrained + adapt, warmup 200). First
+# at-scale GH200 run: measures runtime, convergence, and failure-class rates
+# (wrong-mode / slow-mix vs cosi) on the production row bank. Requires
+# data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
 run:
-  name: flagship2_shear_dev
+  name: flagship2_shear_census_v1
   version: 1
-  description: "Flagship2 catalog population, shear-bias dev shakedown, config P"
-  seed: 20260721
+  description: "Flagship2 v1 catalog, 200-fit shear census, baseline sampler config"
+  seed: 20260724
   measurement: shear_bias
   noise_reps: 1
 
 population:
   type: catalog
   catalog:
-    download: flagship2_dev        # basename of data/cosmohub/<name>.yaml
+    download: flagship2_v1         # basename of data/cosmohub/<name>.yaml
     data_dir: data/cosmohub
   preprocess:
     flux_variant: model3_ext       # extincted model3 Halpha flux
@@ -25,7 +27,7 @@ population:
     bulge_fraction_max: 0.3
     bulge_nsersic_range: null      # catalog-n cut removed (n is painted)
   sample:
-    n_galaxies: 8
+    n_galaxies: 100
     replace: false
   paint:
     # Ubler+2017 Table 2 TFR, inverted to logv|logM form
@@ -71,13 +73,15 @@ fit:
   pin_z_to_truth: true
 
 dispatch:
-  backend: local
+  backend: slurm
   mode: dynamic
-  workers_per_node: 1
-  target_task_walltime_min: 30
-  queue: gh-dev
+  # 8-way GPU packing: N=16 validated for single-disk config P; BulgeDisk
+  # grids are larger, so start at 8 (drop to 4 on RESOURCE_EXHAUSTED)
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gh
   account: JPL-PUB        # TACC allocation (-A); used when dispatched via slurm
-  max_fit_walltime_min: 30
+  max_fit_walltime_min: 60
 
 output:
   save_chains: all
