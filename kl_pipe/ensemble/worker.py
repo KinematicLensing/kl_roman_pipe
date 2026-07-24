@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from kl_pipe.ensemble import ledger
+from kl_pipe.ensemble.collate import is_catastrophic
 from kl_pipe.ensemble.expander import truth_from_row
 from kl_pipe.ensemble.mocks import build_fit_inputs
 from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
@@ -60,9 +61,8 @@ def _atomic_savez(path: Path, arrays: Dict[str, np.ndarray]) -> None:
 _N_PA_STRATIFIED_STARTS = 4
 
 # a fit whose chains come back broken (stuck wrong mode) gets ONE retry with
-# a fresh sampler seed; the retry outcome is recorded, never hidden
-_CATASTROPHIC_RHAT = 1.1
-_CATASTROPHIC_DIV_RATE = 0.9
+# a fresh sampler seed; the retry outcome is recorded, never hidden. The
+# catastrophic threshold is shared with the status tally (see collate).
 _MAX_ATTEMPTS = 2
 
 
@@ -81,13 +81,6 @@ def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS
     centers = lo + (np.arange(n_pa) + 0.5) * (hi - lo) / n_pa
     starts[:, names.index('theta_int')] = centers
     return starts
-
-
-def _is_catastrophic(summary: dict) -> bool:
-    return (
-        summary['max_rhat'] > _CATASTROPHIC_RHAT
-        or summary['divergence_rate'] > _CATASTROPHIC_DIV_RATE
-    )
 
 
 def run_single_fit(
@@ -115,7 +108,7 @@ def run_single_fit(
             row, spec, config, run_dir, truth, noise_seed, sampler_seed
         )
         summary['n_attempts'] = attempt + 1
-        if not _is_catastrophic(summary):
+        if not is_catastrophic(summary):
             break
         print(
             f'[fit {fit_id}] attempt {attempt + 1} catastrophic '

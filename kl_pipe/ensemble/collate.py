@@ -20,6 +20,43 @@ import pandas as pd
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.expander import load_run
 
+# a fit whose chains come back broken (a sampler stuck in a spurious mode --
+# not mere low quality) is catastrophic. Canonical thresholds live here so the
+# worker's retry policy and the status tally always agree.
+CATASTROPHIC_RHAT = 1.1
+CATASTROPHIC_DIV_RATE = 0.9
+
+
+def is_catastrophic(summary) -> bool:
+    """True if a fit's summary shows broken chains.
+
+    Accepts any mapping with ``max_rhat`` and ``divergence_rate`` (a worker
+    summary dict during a run, or a result row read back from parquet).
+    """
+    return (
+        summary['max_rhat'] > CATASTROPHIC_RHAT
+        or summary['divergence_rate'] > CATASTROPHIC_DIV_RATE
+    )
+
+
+def count_catastrophic(run_dir: Path, fit_ids: List[str]) -> int:
+    """Number of the given (succeeded) fits whose recorded summary is catastrophic.
+
+    Reads each fit's per-fit result file. A succeeded fit missing its result
+    file is an inconsistency and raises rather than being silently skipped.
+    """
+    run_dir = Path(run_dir)
+    n = 0
+    for fit_id in fit_ids:
+        path = run_dir / 'results' / f'{fit_id}.parquet'
+        if not path.exists():
+            raise FileNotFoundError(
+                f"succeeded fit {fit_id} has no result file at {path}"
+            )
+        if is_catastrophic(pd.read_parquet(path).iloc[0]):
+            n += 1
+    return n
+
 
 def collate_results(run_dir: Path) -> pd.DataFrame:
     """Merge per-fit result files into run_dir/results.parquet."""
@@ -75,8 +112,12 @@ def print_tally(run_dir: Path) -> Dict[str, List[str]]:
     groups = run_tally(run_dir)
     total = sum(len(v) for v in groups.values())
     print(f'run: {Path(run_dir).name}  ({total} fits)')
+    n_catastrophic = count_catastrophic(run_dir, groups['succeeded'])
     for status in ledger.STATUSES:
-        print(f'  {status:12s} {len(groups[status])}')
+        line = f'  {status:12s} {len(groups[status])}'
+        if status == 'succeeded' and groups['succeeded']:
+            line += f'  (catastrophic: {n_catastrophic})'
+        print(line)
     incomplete = groups['never_run'] + groups['failed'] + groups['stale']
     if incomplete:
         print(f'incomplete ({len(incomplete)}):')

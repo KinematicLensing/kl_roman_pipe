@@ -653,6 +653,69 @@ class TestCollate:
         # a truth-pinned param is recorded as fixed
         assert desc['z']['dist'] == 'fixed'
 
+    def test_is_catastrophic_thresholds(self):
+        from kl_pipe.ensemble.collate import (
+            CATASTROPHIC_DIV_RATE,
+            CATASTROPHIC_RHAT,
+            is_catastrophic,
+        )
+
+        # either broken-chain condition trips it; a clean fit does not
+        assert is_catastrophic(
+            {'max_rhat': CATASTROPHIC_RHAT + 0.1, 'divergence_rate': 0.0}
+        )
+        assert is_catastrophic(
+            {'max_rhat': 1.0, 'divergence_rate': CATASTROPHIC_DIV_RATE + 0.01}
+        )
+        assert not is_catastrophic({'max_rhat': 1.0, 'divergence_rate': 0.0})
+
+    def test_count_catastrophic_over_succeeded(self, run_dir):
+        from kl_pipe.ensemble.collate import count_catastrophic
+
+        _, _, manifest = load_run(run_dir)
+        ids = manifest['fit_id'].tolist()
+        # two catastrophic (bad rhat / bad div), one clean; all recorded succeeded
+        quality = [
+            {'max_rhat': 1.75, 'divergence_rate': 0.1},
+            {'max_rhat': 1.0, 'divergence_rate': 0.94},
+            {'max_rhat': 1.005, 'divergence_rate': 0.02},
+        ]
+        succeeded = ids[:3]
+        for fid, q in zip(succeeded, quality):
+            pd.DataFrame([{'fit_id': fid, 'status': 'succeeded', **q}]).to_parquet(
+                run_dir / 'results' / f'{fid}.parquet', index=False
+            )
+        assert count_catastrophic(run_dir, succeeded) == 2
+
+    def test_count_catastrophic_missing_result_raises(self, run_dir):
+        from kl_pipe.ensemble.collate import count_catastrophic
+
+        # a fit reported succeeded but with no result file is an inconsistency
+        with pytest.raises(FileNotFoundError, match='no result file'):
+            count_catastrophic(run_dir, ['ghostfit'])
+
+    def test_print_tally_reports_catastrophic(self, run_dir, capsys):
+        from kl_pipe.ensemble.collate import print_tally
+
+        _, _, manifest = load_run(run_dir)
+        ids = manifest['fit_id'].tolist()
+        # one clean + one catastrophic succeeded fit
+        for fid, q in zip(
+            ids[:2],
+            [
+                {'max_rhat': 1.005, 'divergence_rate': 0.0},
+                {'max_rhat': 1.6, 'divergence_rate': 0.9},
+            ],
+        ):
+            ledger.try_claim(run_dir, fid)
+            ledger.mark_done(run_dir, fid)
+            pd.DataFrame([{'fit_id': fid, 'status': 'succeeded', **q}]).to_parquet(
+                run_dir / 'results' / f'{fid}.parquet', index=False
+            )
+        print_tally(run_dir)
+        out = capsys.readouterr().out
+        assert 'succeeded    2  (catastrophic: 1)' in out
+
 
 # ==============================================================================
 # Config-sweep axis (emission-line SNR)
