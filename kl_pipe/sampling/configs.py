@@ -332,10 +332,22 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # call -- ~150 s per fit on the production config; float32-safe). See
     # InferenceTask.laplace_preconditioner.
     hessian_method: str = 'fd'
+    # Sample the preconditioned path in unconstrained coordinates (log /
+    # affine-logit bijections chosen from each prior's support bounds, with
+    # the exact Jacobian in the potential and the MAP init + mass matrix
+    # transformed consistently). Removes the -inf prior truncation walls that
+    # NUTS trajectories otherwise cross (each crossing = a divergence); the
+    # posterior in physical coordinates is unchanged by construction. Only
+    # meaningful with precondition='laplace'.
+    precondition_unconstrained: bool = False
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
             raise ValueError("target_accept_prob must be in (0, 1)")
+        if self.precondition_unconstrained and self.precondition != 'laplace':
+            raise ValueError(
+                "precondition_unconstrained requires precondition='laplace'"
+            )
         if self.precondition not in ('none', 'laplace'):
             raise ValueError(
                 f"precondition must be 'none' or 'laplace', got '{self.precondition}'"

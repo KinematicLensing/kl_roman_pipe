@@ -34,6 +34,7 @@ NumPyro documentation: https://num.pyro.ai/
 from __future__ import annotations
 
 import time
+import warnings
 from typing import Dict, Optional, Callable, Tuple, TYPE_CHECKING
 
 import numpy as np
@@ -686,11 +687,46 @@ class NumpyroSampler(Sampler):
         n_params = len(sampled_names)
         log_posterior_fn = self.task.get_log_posterior_fn()
 
-        def potential_fn(theta):
-            return -log_posterior_fn(theta)
+        # optional unconstrained sampling coordinates: bijections chosen from
+        # prior support bounds remove the -inf truncation walls (each NUTS
+        # trajectory crossing a wall is recorded as a divergence); the
+        # physical-space posterior is unchanged by construction
+        transform = None
+        clipped_names: list = []
+        if self.config.precondition_unconstrained:
+            from kl_pipe.sampling.transforms import UnconstrainingTransform
 
-        inv_mass = jnp.asarray(pre.inverse_mass_matrix)
-        theta_map = jnp.asarray(pre.map_point)
+            transform = UnconstrainingTransform.from_priors(self.task.priors)
+
+        if transform is None:
+
+            def potential_fn(theta):
+                return -log_posterior_fn(theta)
+
+            inv_mass = jnp.asarray(pre.inverse_mass_matrix)
+            theta_map = jnp.asarray(pre.map_point)
+        else:
+
+            def potential_fn(eta):
+                theta = transform.inverse(eta)
+                return -log_posterior_fn(theta) - transform.log_jacobian(eta)
+
+            eta_map, clipped = transform.forward_clipped(
+                np.asarray(pre.map_point), u_margin=1e-6
+            )
+            if clipped.any():
+                clipped_names = [
+                    sampled_names[i] for i in np.where(clipped)[0].tolist()
+                ]
+                warnings.warn(
+                    f"MAP point sits on/outside the open prior support for "
+                    f"{clipped_names}; clipped into the support margin for "
+                    f"the NUTS init (the sampler itself is unaffected)."
+                )
+            inv_mass = jnp.asarray(
+                transform.transform_inverse_mass(pre.inverse_mass_matrix, eta_map)
+            )
+            theta_map = jnp.asarray(eta_map)
 
         # Init each chain at the MAP; jitter across chains (for n_chains > 1) by
         # 1% of the per-dim posterior scale (sqrt of the mass-matrix diagonal).
@@ -731,10 +767,14 @@ class NumpyroSampler(Sampler):
             extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
         )
 
-        # potential_fn samples come back as a flat array, already in physical
-        # sampled_names order (no reparam to undo).
+        # potential_fn samples come back as a flat array in sampled_names
+        # order; back-transform to physical coordinates if the chain ran in
+        # unconstrained space.
         samples = np.asarray(mcmc.get_samples())
         grouped = np.asarray(mcmc.get_samples(group_by_chain=True))
+        if transform is not None:
+            samples = np.asarray(transform.inverse(samples))
+            grouped = np.asarray(transform.inverse(grouped))
 
         log_probs = _batched_log_posterior_chunked(
             self.task._log_posterior_jittable, samples
@@ -751,6 +791,11 @@ class NumpyroSampler(Sampler):
             'condition_number': pre.condition_number,
             'n_starts_converged': pre.n_starts_converged,
         }
+        if transform is not None:
+            diagnostics['preconditioner']['unconstrained'] = {
+                'kinds': dict(zip(sampled_names, transform.kind_names)),
+                'map_clipped_params': clipped_names,
+            }
 
         acceptance_fraction = diagnostics.get('mean_accept_prob', None)
         r_hats = diagnostics.get('r_hat', {})
@@ -768,6 +813,7 @@ class NumpyroSampler(Sampler):
             'seed': seed,
             'dense_mass': True,
             'precondition': 'laplace',
+            'precondition_unconstrained': transform is not None,
             'chain_method': chain_method,
         }
         return SamplerResult(
