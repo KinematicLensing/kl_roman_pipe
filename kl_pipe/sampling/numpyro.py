@@ -794,6 +794,12 @@ class NumpyroSampler(Sampler):
             'condition_number': pre.condition_number,
             'n_starts_converged': pre.n_starts_converged,
         }
+        if self.config.precondition_adapt_mass:
+            # final warmup-adapted metric (sampling coordinates): reusable as
+            # a donor mass matrix for sibling fits and escalation reruns
+            diagnostics['adapted_inverse_mass_matrix'] = np.asarray(
+                mcmc.last_state.adapt_state.inverse_mass_matrix
+            )
         if transform is not None:
             diagnostics['preconditioner']['unconstrained'] = {
                 'kinds': dict(zip(sampled_names, transform.kind_names)),
