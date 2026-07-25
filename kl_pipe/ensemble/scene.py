@@ -45,12 +45,16 @@ if TYPE_CHECKING:
 # fainter than F158)
 _BAND_TRUTH = {
     'F087': {'flux': 100.0, 'rscale': 0.3},
+    'F106': {'flux': 105.0, 'rscale': 0.31},
+    'F129': {'flux': 110.0, 'rscale': 0.33},
     'F158': {'flux': 120.0, 'rscale': 0.35},
     'F184': {'flux': 100.0, 'rscale': 0.35},
 }
 # per-band flux prior (mu, sigma, low, high)
 _BAND_FLUX_PRIOR = {
     'F087': (100.0, 20.0, 30.0, 250.0),
+    'F106': (105.0, 21.0, 30.0, 265.0),
+    'F129': (110.0, 22.0, 30.0, 275.0),
     'F158': (120.0, 25.0, 30.0, 300.0),
     'F184': (100.0, 20.0, 30.0, 250.0),
 }

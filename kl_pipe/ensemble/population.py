@@ -61,10 +61,10 @@ F_LIM_CGS = 3.1e-16
 # the SNR the F_LIM anchor corresponds to
 F_LIM_NSIGMA = 5.0
 
-# What source F_LIM is referenced to. This is NOT a free choice: it must
-# match the convention of the published limit, and getting it wrong
-# double-counts (or omits) the extended-source penalty, an order of
-# magnitude in selected number density.
+# What source F_LIM is referenced to. Not a free choice: it must match the
+# convention of the published limit, and getting it wrong double-counts (or
+# omits) the extended-source penalty, an order of magnitude in selected
+# number density.
 #
 #   'point_source'      -- C is taken relative to an unresolved source.
 #   'extended_fiducial' -- C is taken relative to a round galaxy of
@@ -77,7 +77,7 @@ F_LIM_NSIGMA = 5.0
 # Halpha emitters at z ~ 1.5 from WISP (Dore et al. 2018 Fig. 17), and warn
 # that "the point source sensitivity is significantly better than for
 # galaxies with a finite size". If the ROTAC HLWAS number above inherits
-# that mission convention -- likely but NOT yet confirmed against the ROTAC
+# that mission convention -- likely but not yet confirmed against the ROTAC
 # report itself -- then 'extended_fiducial' is correct and 'point_source'
 # double-counts the penalty. The default stays 'point_source' until that is
 # confirmed, so the change is opt-in and the census remains reproducible.

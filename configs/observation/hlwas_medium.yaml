@@ -1,0 +1,37 @@
+# HLWAS Medium-tier observation config: 2 broadbands (F129 + F158) + 4 grism
+# rolls (0/45/90/135 deg), single Halpha line. Structurally identical to
+# canonical_P -- same roll geometry, stamp sizes, pixel scale and Gaussian
+# PSF -- and differs only in the broadband filter pair.
+#
+# canonical_P uses F087 + F158, but F087 is not observed by the HLWAS Medium
+# tier: that tier images in F106, F129 and F158 only (F087 appears in the
+# ~19 deg^2 Deep tier). A wide-survey forecast therefore cannot use F087.
+#
+# F129 + F158 chosen from the three in-tier bands: near-equal depth (5-sigma
+# 26.4 / 26.4 AB), both overlap observed Halpha across the bulk of the
+# selected sample (z ~ 0.55-1.9 puts Halpha at 1.0-1.9 um), and F129 has the
+# sharper PSF of the pair (diffraction FWHM 1.22 lambda/D = 0.138" vs
+# 0.168"), which is where the resolved shape information comes from. F106
+# only helps the z < 0.9 tail. Using all three bands is more information at
+# 1.5x the broadband cost -- a choice, not a requirement.
+#
+# The 4 grism rolls map to the tier's 4 grism passes.
+#
+# canonical_P is deliberately left untouched: census v1, the ESS-gate run and
+# the sigma_eps specs all reference it, and the manifest records
+# observation_config_id, so editing it in place would change what completed
+# runs mean.
+#
+# A realistic-PSF variant (type: roman_wfi, as in canonical_P_roman) is a
+# follow-up gated on the Roman PSF configuration review.
+id: hlwas_medium
+bands: [F129, F158]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband: {type: gaussian, fwhm_arcsec: {F129: 0.18, F158: 0.18}}
+  grism: {type: gaussian, fwhm_arcsec: 0.18}
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}

@@ -472,8 +472,23 @@ def real_run_dir(tmp_path_factory) -> Path:
     tmp = tmp_path_factory.mktemp('real_e2e')
     d = yaml.safe_load(EXAMPLE_SPEC.read_text())
     d['population']['catalog']['data_dir'] = str(DATA_DIR)
+    # cheapest sampler config the spec validator accepts: precondition='none'
+    # requires unconstrained and adapt_mass off (both need the laplace metric)
+    # and escalation off (it donates the first attempt's warmup-adapted mass
+    # matrix, which only that path records), and the dev spec turns all three
+    # on, so they come off together. Running the laplace path here instead
+    # measured over 20 min for a single fit, too slow for a wiring gate; the
+    # production sampler path is covered by the ensemble campaigns.
     d['fit'].update(
-        {'n_warmup': 50, 'n_samples': 50, 'n_chains': 1, 'precondition': 'none'}
+        {
+            'n_warmup': 50,
+            'n_samples': 50,
+            'n_chains': 1,
+            'precondition': 'none',
+            'unconstrained': False,
+            'adapt_mass': False,
+            'escalation': {'enabled': False},
+        }
     )
     d['output'] = {'save_chains': 'none', 'save_mocks': 'none'}
     spec_path = tmp / 'spec.yaml'
