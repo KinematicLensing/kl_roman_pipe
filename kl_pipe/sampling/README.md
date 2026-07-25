@@ -233,7 +233,11 @@ already-compiled gradient; no new compilation; agrees with `'ad'` to well below 
 eigenvalue-floor regularization; requires float64) or `'ad'` (exact second-order
 autodiff; traces and compiles a second-order graph on every call, which dominates
 the preconditioner cost on large joint tasks -- use for float32 runs or as a
-cross-check).
+cross-check). An explicit `init_inverse_mass_matrix` (given in sampling
+coordinates) replaces the Laplace metric as the kernel's initial metric -- e.g.
+donating a previous same-fit run's warmup-adapted matrix
+(`diagnostics['adapted_inverse_mass_matrix']`, recorded with
+`precondition_adapt_mass=True`) to an escalation rerun.
 
 ---
 

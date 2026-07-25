@@ -11,7 +11,11 @@ failures are loud, explicit, and re-runnable, and never abort the worker.
 
 The summary row records recovered posteriors, the MAP, and the inclusive
 quality-column set (rhat/ess/divergences/acceptance/precond diagnostics/
-wallclock) -- gate policy is applied downstream, post hoc.
+wallclock) -- gate policy is applied downstream, post hoc. The one in-run
+exception is the opt-in escalation retry (``fit.escalation``): a first
+attempt failing its convergence gate is rerun once with a stronger sampler
+config and the first attempt's warmup-adapted mass matrix donated as the
+retry's initial metric (see ``run_single_fit``).
 """
 
 from __future__ import annotations
@@ -19,8 +23,9 @@ from __future__ import annotations
 import os
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,8 +33,8 @@ import pandas as pd
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.collate import is_catastrophic
 from kl_pipe.ensemble.expander import truth_from_row
-from kl_pipe.ensemble.mocks import build_fit_inputs
-from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
+from kl_pipe.ensemble.mocks import FitInputs, build_fit_inputs
+from kl_pipe.ensemble.spec import EnsembleSpec, EscalationSpec, ObservationConfig
 
 # sampler-seed stream tag: distinct from the expander's galaxy/noise streams
 _SAMPLER_STREAM = 3
@@ -83,6 +88,53 @@ def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS
     return starts
 
 
+@dataclass
+class _AttemptArtifacts:
+    """In-memory products of one fit attempt (for retries and persistence)."""
+
+    result: object  # SamplerResult
+    inputs: FitInputs
+    task: object  # InferenceTask
+    preconditioner: object  # LaplacePreconditioner or None
+    sampled_names: List[str]
+
+
+def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
+    """True if a fit summary fails the escalation convergence gate.
+
+    The gate is on convergence quality (max_rhat / min_ess), NOT
+    divergences: the silent unconverged class shows zero divergences.
+    """
+    return (
+        float(summary['max_rhat']) > esc.rhat_max
+        or float(summary['min_ess']) < esc.ess_min
+    )
+
+
+def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
+    """First attempt's warmup-adapted inverse mass matrix, pooled over chains.
+
+    Recorded by the sampler only on the adapt-mass preconditioned path (in
+    sampling coordinates); shape (D, D) for one chain or (n_chains, D, D)
+    stacked, pooled here by averaging (each chain adapts to the same
+    posterior; the mean of symmetric positive-definite matrices is again a
+    valid metric).
+    """
+    adapted = diagnostics.get('adapted_inverse_mass_matrix')
+    if adapted is None:
+        raise RuntimeError(
+            "escalation retry needs the first attempt's warmup-adapted "
+            "inverse mass matrix (recorded only with fit.adapt_mass: true) "
+            "-- none found in sampler diagnostics"
+        )
+    adapted = np.asarray(adapted)
+    if adapted.ndim == 3:
+        return adapted.mean(axis=0)
+    if adapted.ndim == 2:
+        return adapted
+    raise RuntimeError(f"unexpected adapted inverse mass matrix shape {adapted.shape}")
+
+
 def run_single_fit(
     row: Dict,
     spec: EnsembleSpec,
@@ -91,20 +143,33 @@ def run_single_fit(
 ) -> dict:
     """Run one fit and return its summary row (also persisted by the caller).
 
-    A catastrophically unconverged result (broken chains: max_rhat > 1.1 or
-    divergence rate > 0.9, i.e. a sampler stuck in a spurious mode -- not
-    mere low quality) is retried once with a fresh sampler seed; the attempt
-    count is recorded in the summary. Raises on any error -- the caller
-    decides how to record the failure.
+    Retry policy (exactly one of the two, never both):
+
+    - ``fit.escalation`` disabled (default): a catastrophically unconverged
+      result (broken chains: max_rhat > 1.1 or divergence rate > 0.9, i.e. a
+      sampler stuck in a spurious mode -- not mere low quality) is retried
+      once with a fresh sampler seed; the attempt count is recorded in the
+      summary.
+    - ``fit.escalation`` enabled: a first attempt failing the convergence
+      gate (max_rhat > rhat_max or min_ess < ess_min) is retried once with
+      the escalation warmup/sample counts and the first attempt's
+      warmup-adapted inverse mass matrix donated as the retry's initial
+      metric (a fresh seed alone measurably does not rescue this class).
+
+    Raises on any error -- the caller decides how to record the failure.
     """
     fit_id = str(row['fit_id'])
     truth = truth_from_row(row)
     noise_seed = int(row['noise_seed'])
 
+    if spec.escalation.enabled:
+        return _run_fit_escalated(row, spec, config, run_dir, truth, noise_seed)
+
     summary = None
+    artifacts = None
     for attempt in range(_MAX_ATTEMPTS):
         sampler_seed = _sampler_seed(noise_seed) + 1000 * attempt
-        summary = _run_fit_attempt(
+        summary, artifacts = _run_fit_attempt(
             row, spec, config, run_dir, truth, noise_seed, sampler_seed
         )
         summary['n_attempts'] = attempt + 1
@@ -121,7 +186,107 @@ def run_single_fit(
             ),
             flush=True,
         )
+    _persist_outputs(run_dir, fit_id, row, artifacts)
     return summary
+
+
+def _run_fit_escalated(
+    row: Dict,
+    spec: EnsembleSpec,
+    config: ObservationConfig,
+    run_dir: Path,
+    truth: Dict[str, float],
+    noise_seed: int,
+) -> dict:
+    """One fit under the escalation policy (see ``run_single_fit``).
+
+    The summary row always carries ``escalated``; when the retry ran it also
+    carries the first attempt's quality metrics (``first_attempt_*``) and
+    ``fit_wallclock_s`` covers BOTH attempts. Chains: the retry's chains
+    replace the first attempt's; the first attempt's are kept alongside
+    (``<fit_id>.attempt1.npz``) only when the retry also fails the gate.
+    """
+    esc = spec.escalation
+    fit_id = str(row['fit_id'])
+    t_start = time.time()
+
+    sampler_seed = _sampler_seed(noise_seed)
+    summary, art1 = _run_fit_attempt(
+        row, spec, config, run_dir, truth, noise_seed, sampler_seed
+    )
+    summary['n_attempts'] = 1
+    summary['escalated'] = False
+    if not needs_escalation(summary, esc):
+        _persist_outputs(run_dir, fit_id, row, art1)
+        return summary
+
+    donor = _donor_mass_matrix(art1.result.diagnostics)
+    print(
+        f'[fit {fit_id}] attempt 1 failed the escalation gate '
+        f"(max_rhat={summary['max_rhat']:.3f} vs {esc.rhat_max}, "
+        f"min_ess={summary['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
+        f'escalating: n_warmup={esc.n_warmup}, n_samples={esc.n_samples}, '
+        f'donated adapted metric',
+        flush=True,
+    )
+    summary2, art2 = _run_fit_attempt(
+        row,
+        spec,
+        config,
+        run_dir,
+        truth,
+        noise_seed,
+        sampler_seed + 1000,
+        n_warmup=esc.n_warmup,
+        n_samples=esc.n_samples,
+        init_inverse_mass=donor,
+        reuse=art1,
+    )
+    summary2['n_attempts'] = 2
+    summary2['escalated'] = True
+    summary2['first_attempt_max_rhat'] = float(summary['max_rhat'])
+    summary2['first_attempt_min_ess'] = float(summary['min_ess'])
+    summary2['first_attempt_n_divergences'] = int(summary['n_divergences'])
+    summary2['first_attempt_divergence_rate'] = float(summary['divergence_rate'])
+    summary2['first_attempt_wallclock_s'] = float(summary['fit_wallclock_s'])
+    # total wallclock over both attempts (per-attempt time stays available
+    # via first_attempt_wallclock_s)
+    summary2['fit_wallclock_s'] = float(time.time() - t_start)
+
+    retry_failed = needs_escalation(summary2, esc)
+    if retry_failed and bool(row['save_chains']):
+        # keep the first attempt's chains for forensics only when the retry
+        # also failed the gate
+        _save_chains(run_dir, f'{fit_id}.attempt1', art1.result, art1.sampled_names)
+    _persist_outputs(run_dir, fit_id, row, art2)
+    print(
+        f'[fit {fit_id}] escalation retry '
+        + (
+            f"still fails the gate (max_rhat={summary2['max_rhat']:.3f}, "
+            f"min_ess={summary2['min_ess']:.0f}); recorded as-is"
+            if retry_failed
+            else f"passed the gate (max_rhat={summary2['max_rhat']:.3f}, "
+            f"min_ess={summary2['min_ess']:.0f})"
+        ),
+        flush=True,
+    )
+    return summary2
+
+
+def _persist_outputs(
+    run_dir: Path, fit_id: str, row: Dict, artifacts: _AttemptArtifacts
+) -> None:
+    """Write the (final) attempt's chains/mocks per the row's save flags."""
+    if bool(row['save_chains']):
+        _save_chains(run_dir, fit_id, artifacts.result, artifacts.sampled_names)
+    if bool(row['save_mocks']):
+        _save_mocks(
+            run_dir,
+            fit_id,
+            artifacts.inputs,
+            artifacts.preconditioner,
+            artifacts.sampled_names,
+        )
 
 
 def _run_fit_attempt(
@@ -132,45 +297,62 @@ def _run_fit_attempt(
     truth: Dict[str, float],
     noise_seed: int,
     sampler_seed: int,
-) -> dict:
+    n_warmup: Optional[int] = None,
+    n_samples: Optional[int] = None,
+    init_inverse_mass: Optional[np.ndarray] = None,
+    reuse: Optional[_AttemptArtifacts] = None,
+) -> Tuple[dict, _AttemptArtifacts]:
+    """Run one sampler attempt; returns (summary row, in-memory artifacts).
+
+    ``n_warmup``/``n_samples`` override the spec's fit settings (escalation
+    retries); ``init_inverse_mass`` is donated to the sampler as the initial
+    NUTS metric in sampling coordinates; ``reuse`` recycles a previous
+    same-fit attempt's inputs, task, and preconditioner (identical by
+    construction -- the mocks and MAP are deterministic in the fit's seeds),
+    skipping their rebuild cost.
+    """
     from kl_pipe.sampling import InferenceTask
     from kl_pipe.sampling.configs import NumpyroSamplerConfig
     from kl_pipe.sampling.numpyro import NumpyroSampler
 
-    fit_id = str(row['fit_id'])
     t_start = time.time()
 
-    inputs = build_fit_inputs(
-        truth,
-        noise_seed,
-        spec,
-        config,
-        broadband_snr=float(row['broadband_snr']),
-        line_snr=float(row['line_snr']),
-        # catalog-mode priors read the row's pop.* columns
-        row=row,
-    )
-    task = InferenceTask.from_obs(
-        inputs.source,
-        inputs.priors,
-        image_obs=inputs.image_obs,
-        grism_obs=inputs.grism_obs,
-    )
+    if reuse is not None:
+        inputs = reuse.inputs
+        task = reuse.task
+    else:
+        inputs = build_fit_inputs(
+            truth,
+            noise_seed,
+            spec,
+            config,
+            broadband_snr=float(row['broadband_snr']),
+            line_snr=float(row['line_snr']),
+            # catalog-mode priors read the row's pop.* columns
+            row=row,
+        )
+        task = InferenceTask.from_obs(
+            inputs.source,
+            inputs.priors,
+            image_obs=inputs.image_obs,
+            grism_obs=inputs.grism_obs,
+        )
 
     sampler_config = NumpyroSamplerConfig(
-        n_samples=spec.n_samples,
-        n_warmup=spec.n_warmup,
+        n_samples=n_samples if n_samples is not None else spec.n_samples,
+        n_warmup=n_warmup if n_warmup is not None else spec.n_warmup,
         n_chains=spec.n_chains,
         target_accept_prob=spec.target_accept,
         precondition=spec.precondition,
         precondition_unconstrained=spec.unconstrained,
         precondition_adapt_mass=spec.adapt_mass,
+        init_inverse_mass_matrix=init_inverse_mass,
         n_map_starts=spec.n_map_starts,
         seed=sampler_seed,
     )
 
-    preconditioner = None
-    if spec.precondition == 'laplace':
+    preconditioner = reuse.preconditioner if reuse is not None else None
+    if preconditioner is None and spec.precondition == 'laplace':
         # build explicitly (rather than letting the sampler build it
         # internally) so the MAP point and precond diagnostics reach the
         # summary row; PA-stratified extra starts guarantee the position-
@@ -202,12 +384,14 @@ def _run_fit_attempt(
     summary['sampler_seed'] = sampler_seed
     summary['has_chains'] = bool(row['save_chains'])
 
-    if bool(row['save_chains']):
-        _save_chains(run_dir, fit_id, result, sampled_names)
-    if bool(row['save_mocks']):
-        _save_mocks(run_dir, fit_id, inputs, preconditioner, sampled_names)
-
-    return summary
+    artifacts = _AttemptArtifacts(
+        result=result,
+        inputs=inputs,
+        task=task,
+        preconditioner=preconditioner,
+        sampled_names=sampled_names,
+    )
+    return summary, artifacts
 
 
 def _summary_row(
