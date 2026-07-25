@@ -11,9 +11,6 @@
 # as the escalation-tier rerun. Forecast ~9 node-hr (3x paired census
 # walltimes at 8-way GH200 packing).
 # Requires data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
-run: measures runtime, convergence, and failure-class rates
-# (wrong-mode / slow-mix vs cosi) on the production row bank. Requires
-# data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
 run:
   name: flagship2_shear_census_v1_essgate
   version: 1
