@@ -1151,3 +1151,41 @@ class TestDiagnostics:
             # kept members only
             kept = members[members['max_rhat'] <= 1.1]
             assert r['axis_value'] == pytest.approx(kept['truth.cosi'].mean())
+
+    def test_dual_convention_galaxy_frame_columns(self, run_dir):
+        from kl_pipe.calibration import rotate_to_galaxy_frame
+        from kl_pipe.ensemble.collate import analysis_table, collate_results
+        from kl_pipe.ensemble.diagnostics import augment_galaxy_frame
+
+        _write_fake_results(run_dir)
+        collate_results(run_dir)
+        t = augment_galaxy_frame(run_dir, analysis_table(run_dir))
+        for c in (
+            'post.g_plus_truth_pa.mean',
+            'post.g_cross_truth_pa.std',
+            'truth.g_plus_truth_pa',
+        ):
+            assert c in t.columns
+        # truth values identical under either rotation convention
+        assert (t['truth.g_plus_truth_pa'] == t['truth.g_plus']).all()
+        # no chains saved: truth-PA mean must equal the exact rotation of the
+        # posterior-mean shear by the truth PA
+        gpm, gxm = rotate_to_galaxy_frame(
+            t['post.g1.mean'].to_numpy(),
+            t['post.g2.mean'].to_numpy(),
+            t['truth.theta_int'].to_numpy(),
+        )
+        np.testing.assert_allclose(t['post.g_plus_truth_pa.mean'], gpm, rtol=1e-12)
+        np.testing.assert_allclose(t['post.g_cross_truth_pa.mean'], gxm, rtol=1e-12)
+
+    def test_pull_table_covers_both_conventions(self, run_dir):
+        from kl_pipe.ensemble.collate import analysis_table, collate_results
+        from kl_pipe.ensemble.diagnostics import augment_galaxy_frame, pull_table
+
+        _write_fake_results(run_dir)
+        collate_results(run_dir)
+        t = augment_galaxy_frame(run_dir, analysis_table(run_dir))
+        pulls = pull_table(t)
+        assert 'pull.g_plus' in pulls.columns
+        assert 'pull.g_plus_truth_pa' in pulls.columns
+        assert np.isfinite(pulls['pull.g_plus_truth_pa']).all()

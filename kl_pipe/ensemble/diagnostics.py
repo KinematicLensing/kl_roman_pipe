@@ -43,8 +43,22 @@ from kl_pipe.ensemble.expander import load_run
 
 # shear is reported in the galaxy frame (g+, gx), not sky-frame (g1, g2): g+/gx
 # are the interpretable kinematic-lensing quantities and their marginals do not
-# rotate fit-to-fit with the intrinsic PA. See augment_galaxy_frame.
-HEADLINE_PARAMS = ('g_plus', 'g_cross', 'cosi', 'theta_int', 'vel.vcirc')
+# rotate fit-to-fit with the intrinsic PA. Both rotation conventions are
+# reported side by side: the 'measured' rotation (each posterior sample by its
+# own theta_int -- the only estimator available on real data, but it folds the
+# shear-PA posterior ridge into g+/gx: census v1 measured a -0.034 additive
+# g+ artifact from that covariance) and the fixed truth-PA rotation
+# (convention-free recovery check, only possible on simulations). See
+# augment_galaxy_frame.
+HEADLINE_PARAMS = (
+    'g_plus',
+    'g_cross',
+    'g_plus_truth_pa',
+    'g_cross_truth_pa',
+    'cosi',
+    'theta_int',
+    'vel.vcirc',
+)
 CORNER_PARAMS = (
     'g1',
     'g2',
@@ -63,8 +77,10 @@ CORNER_PARAMS = (
 PARAM_LABELS = {
     'g1': r'$g_1$',
     'g2': r'$g_2$',
-    'g_plus': r'$g_+$',
-    'g_cross': r'$g_\times$',
+    'g_plus': r'$g_+$ (measured PA)',
+    'g_cross': r'$g_\times$ (measured PA)',
+    'g_plus_truth_pa': r'$g_+$ (truth PA)',
+    'g_cross_truth_pa': r'$g_\times$ (truth PA)',
     'cosi': r'$\cos i$',
     'theta_int': r'$\theta_{\rm int}$',
     'vel.vcirc': r'$v_{\rm circ}$',
@@ -156,13 +172,22 @@ def augment_galaxy_frame(
     """Add galaxy-frame shear columns (g+, gx) to a collated table.
 
     Adds ``truth.g_plus``/``truth.g_cross`` (truth shear rotated by truth PA)
-    and posterior ``post.g_plus.mean``/``.std`` + ``post.g_cross.mean``/``.std``.
-    The posterior columns come from, in order of preference: the per-sample
-    rotation of the saved chain (honours ``angle``, default the module toggle
-    ``GALAXY_FRAME_ANGLE``); the worker-written summary columns; or a
-    marginal-quadrature fallback from the g1/g2 marginals (exact only for an
-    uncorrelated posterior, recorded in ``galaxy_frame_method``). The sky-frame
-    g1/g2 columns are left intact but are no longer the reported shear.
+    and posterior ``post.g_plus.mean``/``.std`` + ``post.g_cross.mean``/``.std``
+    under ``angle`` (default the module toggle ``GALAXY_FRAME_ANGLE``), plus a
+    second, always-truth-PA set ``post.g_plus_truth_pa.*`` /
+    ``post.g_cross_truth_pa.*`` (with ``truth.g_plus_truth_pa`` etc. aliasing
+    the same truth values) so recovery/pull reports show both conventions:
+    'measured' is the only estimator available on real data but folds the
+    shear-PA posterior ridge into g+/gx (census v1: -0.034 additive g+
+    artifact); the truth-PA rotation is the convention-free recovery check.
+
+    The primary posterior columns come from, in order of preference: the
+    per-sample rotation of the saved chain; the worker-written summary
+    columns; or a marginal fallback from the g1/g2 marginals (mean exact at
+    fixed angle, std exact only for an uncorrelated posterior; recorded in
+    ``galaxy_frame_method``). The truth-PA set is chain-based when chains
+    exist and marginal otherwise. The sky-frame g1/g2 columns are left intact
+    but are no longer the reported shear.
     """
     angle = angle or GALAXY_FRAME_ANGLE
     t = table.copy()
@@ -173,9 +198,35 @@ def augment_galaxy_frame(
     )
     t['truth.g_plus'] = gp_t
     t['truth.g_cross'] = gx_t
+    # same truth values under either rotation convention; aliased so generic
+    # pull/recovery code can treat g_plus_truth_pa as a normal parameter
+    t['truth.g_plus_truth_pa'] = gp_t
+    t['truth.g_cross_truth_pa'] = gx_t
 
     have_summary = {'post.g_plus.mean', 'post.g_cross.mean'}.issubset(t.columns)
-    means_p, stds_p, means_x, stds_x, methods = [], [], [], [], []
+    cols: Dict[str, List[float]] = {
+        'post.g_plus.mean': [],
+        'post.g_plus.std': [],
+        'post.g_cross.mean': [],
+        'post.g_cross.std': [],
+        'post.g_plus_truth_pa.mean': [],
+        'post.g_plus_truth_pa.std': [],
+        'post.g_cross_truth_pa.mean': [],
+        'post.g_cross_truth_pa.std': [],
+    }
+    methods = []
+
+    def _marginal_truth_pa(r) -> Tuple[float, float, float, float]:
+        """(mean_p, std_p, mean_x, std_x) at the fixed truth PA (mean exact)."""
+        theta_true = float(r['truth.theta_int'])
+        c2, s2 = np.cos(2 * theta_true), np.sin(2 * theta_true)
+        gpm, gxm = rotate_to_galaxy_frame(
+            r['post.g1.mean'], r['post.g2.mean'], theta_true
+        )
+        std_p = float(np.hypot(r['post.g1.std'] * c2, r['post.g2.std'] * s2))
+        std_x = float(np.hypot(r['post.g1.std'] * s2, r['post.g2.std'] * c2))
+        return float(gpm), std_p, float(gxm), std_x
+
     for _, r in t.iterrows():
         theta_true = float(r['truth.theta_int'])
         chain_path = Path(run_dir) / 'chains' / f"{r['fit_id']}.npz"
@@ -183,38 +234,36 @@ def augment_galaxy_frame(
             npz = np.load(chain_path)
             nm = list(npz['param_names'])
             S = npz['samples']
-            gps, gxs = galaxy_frame_samples(
-                S[:, nm.index('g1')],
-                S[:, nm.index('g2')],
-                S[:, nm.index('theta_int')],
-                theta_true,
-                angle,
-            )
-            means_p.append(float(np.mean(gps)))
-            stds_p.append(float(np.std(gps, ddof=1)))
-            means_x.append(float(np.mean(gxs)))
-            stds_x.append(float(np.std(gxs, ddof=1)))
+            g1s, g2s = S[:, nm.index('g1')], S[:, nm.index('g2')]
+            ths = S[:, nm.index('theta_int')]
+            for conv, prefix in [(angle, ''), ('truth', '_truth_pa')]:
+                gps, gxs = galaxy_frame_samples(g1s, g2s, ths, theta_true, conv)
+                cols[f'post.g_plus{prefix}.mean'].append(float(np.mean(gps)))
+                cols[f'post.g_plus{prefix}.std'].append(float(np.std(gps, ddof=1)))
+                cols[f'post.g_cross{prefix}.mean'].append(float(np.mean(gxs)))
+                cols[f'post.g_cross{prefix}.std'].append(float(np.std(gxs, ddof=1)))
             methods.append('chain')
-        elif have_summary and np.isfinite(r.get('post.g_plus.mean', np.nan)):
-            means_p.append(float(r['post.g_plus.mean']))
-            stds_p.append(float(r['post.g_plus.std']))
-            means_x.append(float(r['post.g_cross.mean']))
-            stds_x.append(float(r['post.g_cross.std']))
-            methods.append('summary')
         else:
-            c2, s2 = np.cos(2 * theta_true), np.sin(2 * theta_true)
-            gpm, gxm = rotate_to_galaxy_frame(
-                r['post.g1.mean'], r['post.g2.mean'], theta_true
-            )
-            means_p.append(float(gpm))
-            means_x.append(float(gxm))
-            stds_p.append(float(np.hypot(r['post.g1.std'] * c2, r['post.g2.std'] * s2)))
-            stds_x.append(float(np.hypot(r['post.g1.std'] * s2, r['post.g2.std'] * c2)))
-            methods.append('marginal-approx')
-    t['post.g_plus.mean'] = means_p
-    t['post.g_plus.std'] = stds_p
-    t['post.g_cross.mean'] = means_x
-    t['post.g_cross.std'] = stds_x
+            if have_summary and np.isfinite(r.get('post.g_plus.mean', np.nan)):
+                cols['post.g_plus.mean'].append(float(r['post.g_plus.mean']))
+                cols['post.g_plus.std'].append(float(r['post.g_plus.std']))
+                cols['post.g_cross.mean'].append(float(r['post.g_cross.mean']))
+                cols['post.g_cross.std'].append(float(r['post.g_cross.std']))
+                methods.append('summary')
+            else:
+                mp, sp, mx, sx = _marginal_truth_pa(r)
+                cols['post.g_plus.mean'].append(mp)
+                cols['post.g_plus.std'].append(sp)
+                cols['post.g_cross.mean'].append(mx)
+                cols['post.g_cross.std'].append(sx)
+                methods.append('marginal-approx')
+            mp, sp, mx, sx = _marginal_truth_pa(r)
+            cols['post.g_plus_truth_pa.mean'].append(mp)
+            cols['post.g_plus_truth_pa.std'].append(sp)
+            cols['post.g_cross_truth_pa.mean'].append(mx)
+            cols['post.g_cross_truth_pa.std'].append(sx)
+    for name, values in cols.items():
+        t[name] = values
     t['galaxy_frame_method'] = methods
     return t
 
