@@ -69,6 +69,16 @@ fit:
   adapt_mass: true
   target_accept: 0.9
   pin_z_to_truth: true
+  # production default (user-ratified 2026-07-25): retry gate-failing fits
+  # once at higher warmup/samples with the first attempt's adapted metric
+  # donated (E5: tree depth 255 -> 48). Thresholds provisional pending the
+  # ESS-gate sizing run (census: rhat 1.05 isolates the 13.5% slow tier).
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
 
 dispatch:
   backend: local
