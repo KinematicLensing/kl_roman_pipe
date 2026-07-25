@@ -1,20 +1,23 @@
-# Production-sizing twin of flagship2_shear_census_v1: identical population
-# (same seed -> same 100 galaxies, orientations, shears, noise) with
-# n_samples raised 300 -> 1300. Purpose: (1) measure ESS scaling with chain
-# length per fit_id (census median min-ESS 94 at 300 samples; ESS 400 needs
-# ~4.3x if scaling is linear), (2) make the production gate (min_ess >= 400)
-# reachable so its thresholds can be ratified on real pass rates, (3) check
-# the corner-plot noise floor at production length. Cost forecast: NUTS cost
-# ~ (warmup + samples), so (200+1300)/(200+300) = 3x the census = ~16
-# node-hr for 200 fits at 8-way GH200 packing.
+# ESS-gate sizing subset: paired rerun of 51 census galaxies (both ring
+# members = 102 fits) at production sampling length (n_samples 1300, same
+# w200-adapt baseline, escalation OFF so the ESS scaling is unconfounded).
+# Selection from the 2026-07-24 census parquet: all 39 galaxies with a
+# gate-failing fit (max_rhat > 1.05 OR min_ess < 50; 43 fits) + 12 clean
+# galaxies stratified over worst-pair min-ESS sextiles (min and max per
+# sextile). Same seed + galaxy_ids subset => identical population draws and
+# noise seeds; pair to the census per (galaxy_id, ring_member). Purpose:
+# (1) ESS scaling with chain length, especially the slow tail, (2) gate
+# pass rates at production length -> ratify production ESS bar, (3) doubles
+# as the escalation-tier rerun. Forecast ~9 node-hr (3x paired census
+# walltimes at 8-way GH200 packing).
 # Requires data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
 run: measures runtime, convergence, and failure-class rates
 # (wrong-mode / slow-mix vs cosi) on the production row bank. Requires
 # data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
 run:
-  name: flagship2_shear_census_v1_s1300
+  name: flagship2_shear_census_v1_essgate
   version: 1
-  description: "Flagship2 v1 catalog, 200-fit census, production sampling length (s=1300)"
+  description: "Census ESS-gate subset: 51 paired galaxies at production sampling length"
   seed: 20260724
   measurement: shear_bias
   noise_reps: 1
@@ -35,8 +38,10 @@ population:
     bulge_fraction_max: 0.3
     bulge_nsersic_range: null      # catalog-n cut removed (n is painted)
   sample:
-    n_galaxies: 100
+    n_galaxies: 100                # full census bank (identical draws/seeds)
     replace: false
+    # gate-failing + stratified-clean subset, provenance in header
+    galaxy_ids: [0, 2, 4, 6, 9, 14, 18, 19, 20, 21, 22, 23, 24, 28, 29, 32, 35, 38, 41, 44, 45, 47, 48, 49, 50, 51, 53, 55, 59, 60, 62, 65, 72, 74, 75, 77, 78, 79, 81, 82, 83, 84, 85, 86, 88, 90, 92, 95, 96, 97, 99]
   paint:
     # Ubler+2017 Table 2 TFR, inverted to logv|logM form
     tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}

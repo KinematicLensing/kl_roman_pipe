@@ -549,3 +549,45 @@ class TestRealCatalog:
             f"max_rhat {summary['max_rhat']:.3f}, "
             f"line_snr {float(manifest.set_index('fit_id').loc[summary['fit_id'], 'line_snr']):.1f}"
         )
+
+
+class TestGalaxyIdSubset:
+    """sample.galaxy_ids restricts the manifest to a paired subset."""
+
+    def test_subset_rows_identical_to_full(self, fake_data_dir, catalog_run, tmp_path):
+        d = _small_spec_dict(fake_data_dir)
+        d['population']['sample']['galaxy_ids'] = [3, 1]
+        spec_path = tmp_path / 'spec_subset.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
+        _, _, sub = load_run(run_dir)
+        _, _, full = load_run(catalog_run)
+
+        assert sorted(sub['galaxy_id'].unique()) == [1, 3]
+        assert len(sub) == 4  # 2 galaxies x 2 ring members
+        # same run name + seed: subset rows must be byte-identical to the
+        # matching full-manifest rows (draws, noise seeds, fit_ids included)
+        expected = full[full['galaxy_id'].isin([1, 3])].reset_index(drop=True)
+        pd.testing.assert_frame_equal(sub.reset_index(drop=True), expected)
+
+    def test_n_fits_accounts_for_subset(self, fake_data_dir, tmp_path):
+        d = _small_spec_dict(fake_data_dir)
+        d['population']['sample']['galaxy_ids'] = [0, 2]
+        spec = spec_from_dict(tmp_path, d)
+        assert spec.n_fits == 4
+
+    @pytest.mark.parametrize(
+        'bad, match',
+        [
+            ([1, 1], 'duplicates'),
+            ([0, 99], 'outside'),
+            ([], 'non-empty'),
+            ('0,1', 'list of ints'),
+            ([0, 1.5], 'ints'),
+        ],
+    )
+    def test_invalid_galaxy_ids_raise(self, fake_data_dir, tmp_path, bad, match):
+        d = _small_spec_dict(fake_data_dir)
+        d['population']['sample']['galaxy_ids'] = bad
+        with pytest.raises((ValueError, TypeError), match=match):
+            spec_from_dict(tmp_path, d)

@@ -305,6 +305,17 @@ def _catalog_rows(
             f"population table has {len(population)} rows, spec expects "
             f"{cp.n_galaxies} galaxies"
         )
+    if cp.galaxy_ids is not None:
+        # restrict AFTER the full-bank build so per-galaxy draws and noise
+        # seeds are identical to the unrestricted run with the same seed;
+        # original row indices are kept so galaxy_id pairs across runs
+        missing = sorted(set(cp.galaxy_ids) - set(population.index))
+        if missing:
+            raise ValueError(
+                f"sample.galaxy_ids {missing} not in the population index "
+                f"(0..{len(population) - 1})"
+            )
+        population = population.loc[sorted(cp.galaxy_ids)]
     # catalog specs carry no population.fixed block; scene defaults apply.
     # broadband bands are BulgeDiskModel (per-galaxy bulge from the catalog)
     # unless the spec disables the bulge paint (disk-only twin)

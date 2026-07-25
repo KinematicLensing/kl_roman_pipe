@@ -583,6 +583,14 @@ class CatalogPopulationSpec:
     # single-disk broadband truth keys, single-disk fit model + priors)
     paint_bulge: bool = True
 
+    # sample.galaxy_ids (optional): restriction to specific population row
+    # indices (0-based, into the seeded n_galaxies sample), applied AFTER the
+    # population build -- the bank and every per-galaxy draw and noise seed
+    # stay identical to the unrestricted run with the same seed. Enables
+    # cheap paired subset reruns (e.g. escalation-tier resampling) keyed by
+    # galaxy_id across runs.
+    galaxy_ids: Optional[Tuple[int, ...]] = None
+
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
@@ -620,6 +628,20 @@ class CatalogPopulationSpec:
             raise ValueError(
                 f"sample.n_galaxies ({self.n_galaxies!r}) must be a positive int"
             )
+        if self.galaxy_ids is not None:
+            if len(self.galaxy_ids) == 0:
+                raise ValueError("sample.galaxy_ids must be non-empty or absent")
+            bad = [i for i in self.galaxy_ids if not isinstance(i, int)]
+            if bad:
+                raise ValueError(f"sample.galaxy_ids must be ints, got {bad!r}")
+            if len(set(self.galaxy_ids)) != len(self.galaxy_ids):
+                raise ValueError("sample.galaxy_ids contains duplicates")
+            out_of_range = [i for i in self.galaxy_ids if not 0 <= i < self.n_galaxies]
+            if out_of_range:
+                raise ValueError(
+                    f"sample.galaxy_ids {out_of_range} outside "
+                    f"[0, n_galaxies={self.n_galaxies})"
+                )
         if self.tfr_slope == 0:
             raise ValueError("paint.tfr.slope must be nonzero")
         if self.tfr_scatter_dex < 0:
@@ -696,8 +718,18 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
     _require_keys(sel, sel_keys, f"{context}.selection")
 
     sample = population['sample']
-    _reject_unknown(sample, ('n_galaxies', 'replace'), f"{context}.sample")
+    _reject_unknown(
+        sample, ('n_galaxies', 'replace', 'galaxy_ids'), f"{context}.sample"
+    )
     _require_keys(sample, ('n_galaxies', 'replace'), f"{context}.sample")
+    galaxy_ids = sample.get('galaxy_ids')
+    if galaxy_ids is not None:
+        if not isinstance(galaxy_ids, list):
+            raise ValueError(
+                f"{context}.sample.galaxy_ids must be a list of ints, got "
+                f"{type(galaxy_ids).__name__}"
+            )
+        galaxy_ids = tuple(galaxy_ids)
     if sample['replace']:
         raise NotImplementedError(
             f"{context}.sample: replace: true (bootstrap resampling) is not "
@@ -756,6 +788,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
             else None
         ),
         n_galaxies=_require_yaml_int(sample, 'n_galaxies', 0, f"{context}.sample"),
+        galaxy_ids=galaxy_ids,
         tfr_logv0=float(tfr['logv0']),
         tfr_logm0=float(tfr['logm0']),
         tfr_slope=float(tfr['slope']),
@@ -1087,7 +1120,8 @@ class EnsembleSpec:
         """Total fits this spec expands to."""
         if self.population_type == 'catalog':
             cp = self.catalog_population
-            return cp.n_galaxies * cp.ring_members * self.m_noise
+            n_gal = len(cp.galaxy_ids) if cp.galaxy_ids is not None else cp.n_galaxies
+            return n_gal * cp.ring_members * self.m_noise
         n_shear = len(self.shear_grid) if self.shear_scheme == 'grid' else 1
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
