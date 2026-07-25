@@ -58,6 +58,27 @@ def count_catastrophic(run_dir: Path, fit_ids: List[str]) -> int:
     return n
 
 
+def count_escalated(run_dir: Path, fit_ids: List[str]) -> int:
+    """Number of the given (succeeded) fits that ran the escalation retry.
+
+    Reads each fit's per-fit result file. Rows from runs without the
+    ``fit.escalation`` feature lack the ``escalated`` column and count as
+    not escalated. A succeeded fit missing its result file raises.
+    """
+    run_dir = Path(run_dir)
+    n = 0
+    for fit_id in fit_ids:
+        path = run_dir / 'results' / f'{fit_id}.parquet'
+        if not path.exists():
+            raise FileNotFoundError(
+                f"succeeded fit {fit_id} has no result file at {path}"
+            )
+        row = pd.read_parquet(path).iloc[0]
+        if 'escalated' in row.index and bool(row['escalated']):
+            n += 1
+    return n
+
+
 def collate_results(run_dir: Path) -> pd.DataFrame:
     """Merge per-fit result files into run_dir/results.parquet."""
     run_dir = Path(run_dir)
@@ -113,10 +134,13 @@ def print_tally(run_dir: Path) -> Dict[str, List[str]]:
     total = sum(len(v) for v in groups.values())
     print(f'run: {Path(run_dir).name}  ({total} fits)')
     n_catastrophic = count_catastrophic(run_dir, groups['succeeded'])
+    n_escalated = count_escalated(run_dir, groups['succeeded'])
     for status in ledger.STATUSES:
         line = f'  {status:12s} {len(groups[status])}'
         if status == 'succeeded' and groups['succeeded']:
             line += f'  (catastrophic: {n_catastrophic})'
+            if n_escalated:
+                line += f'  (escalated: {n_escalated})'
         print(line)
     incomplete = groups['never_run'] + groups['failed'] + groups['stale']
     if incomplete:

@@ -728,6 +728,19 @@ class NumpyroSampler(Sampler):
             )
             theta_map = jnp.asarray(eta_map)
 
+        # optional donated metric: an explicit initial inverse mass matrix in
+        # sampling coordinates (e.g. a previous same-fit run's warmup-adapted
+        # metric) replaces the (transformed) Laplace metric
+        if self.config.init_inverse_mass_matrix is not None:
+            donated = np.asarray(self.config.init_inverse_mass_matrix)
+            if donated.shape != (n_params, n_params):
+                raise ValueError(
+                    f"init_inverse_mass_matrix shape {donated.shape} does not "
+                    f"match the task's sampled dimension ({n_params}, "
+                    f"{n_params})"
+                )
+            inv_mass = jnp.asarray(donated)
+
         # Init each chain at the MAP; jitter across chains (for n_chains > 1) by
         # 1% of the per-dim posterior scale (sqrt of the mass-matrix diagonal).
         n_chains = self.config.n_chains
@@ -823,6 +836,7 @@ class NumpyroSampler(Sampler):
             'dense_mass': True,
             'precondition': 'laplace',
             'precondition_unconstrained': transform is not None,
+            'init_mass_donated': self.config.init_inverse_mass_matrix is not None,
             'chain_method': chain_method,
         }
         return SamplerResult(

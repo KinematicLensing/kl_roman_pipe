@@ -26,8 +26,15 @@ python -m kl_pipe.ensemble collate --run-dir runs/<run_name>
 from kl_pipe.ensemble.spec import (
     CatalogPopulationSpec,
     EnsembleSpec,
+    EscalationSpec,
     ObservationConfig,
     PSFSpec,
 )
 
-__all__ = ['CatalogPopulationSpec', 'EnsembleSpec', 'ObservationConfig', 'PSFSpec']
+__all__ = [
+    'CatalogPopulationSpec',
+    'EnsembleSpec',
+    'EscalationSpec',
+    'ObservationConfig',
+    'PSFSpec',
+]

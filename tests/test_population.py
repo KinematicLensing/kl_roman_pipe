@@ -17,6 +17,7 @@ import pytest
 import yaml
 from scipy import stats
 
+from kl_pipe.ensemble import population
 from kl_pipe.ensemble.population import (
     BULGE_CLASSICAL_N,
     BULGE_PSEUDO_N,
@@ -707,3 +708,69 @@ class TestCLI:
         df = pd.read_parquet(out_dir / 'population.parquet')
         assert len(df) == 20
         assert (out_dir / 'population_meta.json').exists()
+
+
+class TestLineSnrReference:
+    """The source F_LIM is referenced to (population.SNR_LINE_REFERENCE).
+
+    Getting this wrong double-counts (or omits) the extended-source penalty.
+    Wang et al. 2022 Sect. 5 derive the published Roman line-flux limits for
+    a galaxy of half-light radius 0.25 arcsec at 1.5 micron, not for a point
+    source; 'extended_fiducial' encodes that convention.
+    """
+
+    @pytest.fixture(autouse=True)
+    def restore_reference(self):
+        original = population.SNR_LINE_REFERENCE
+        yield
+        population.SNR_LINE_REFERENCE = original
+
+    def test_default_is_point_source(self):
+        # default must stay point-source until the ROTAC convention is
+        # confirmed, so existing runs stay reproducible
+        assert population.SNR_LINE_REFERENCE == 'point_source'
+        assert population.fiducial_compactness() == 1.0
+
+    def test_point_source_reference_is_identity(self):
+        # a point source (C = 1) at exactly F_LIM has SNR = F_LIM_NSIGMA
+        snr = compute_line_snr(np.array([population.F_LIM_CGS]), np.array([1.0]))
+        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
+
+    def test_fiducial_galaxy_lands_on_nsigma(self):
+        # self-consistency: under the extended reference, the very galaxy the
+        # limit was derived for must sit exactly at F_LIM_NSIGMA when its
+        # flux equals F_LIM
+        population.SNR_LINE_REFERENCE = 'extended_fiducial'
+        z_ref = population.F_LIM_REF_LAMBDA_A / population.HALPHA_REST_A - 1.0
+        c_fid = matched_filter_compactness(
+            np.array([population.F_LIM_REF_R50_ARCSEC]),
+            np.array([1.0]),
+            np.array([z_ref]),
+        )
+        snr = compute_line_snr(np.array([population.F_LIM_CGS]), c_fid)
+        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
+
+    def test_extended_reference_rewards_compact_sources(self):
+        # a point source beats the extended fiducial by exactly 1 / C_fid
+        population.SNR_LINE_REFERENCE = 'extended_fiducial'
+        c_ref = population.fiducial_compactness()
+        assert 0.0 < c_ref < 1.0
+        snr = compute_line_snr(np.array([population.F_LIM_CGS]), np.array([1.0]))
+        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA / c_ref, rel=1e-12)
+
+    def test_reference_choice_is_a_pure_rescaling(self):
+        # switching reference must not change the RANKING of galaxies, only
+        # the overall normalization -- the physics of C is untouched
+        f = np.array([1e-16, 3e-16, 5e-16])
+        c = np.array([0.2, 0.5, 0.9])
+        point = compute_line_snr(f, c)
+        population.SNR_LINE_REFERENCE = 'extended_fiducial'
+        extended = compute_line_snr(f, c)
+        ratio = extended / point
+        assert np.allclose(ratio, ratio[0], rtol=1e-12)
+        assert ratio[0] == pytest.approx(1.0 / population.fiducial_compactness())
+
+    def test_unknown_reference_raises(self):
+        population.SNR_LINE_REFERENCE = 'not_a_reference'
+        with pytest.raises(ValueError, match='SNR_LINE_REFERENCE'):
+            population.fiducial_compactness()

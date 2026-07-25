@@ -1,18 +1,28 @@
-# Flagship2 catalog-backed shear-bias dev spec: 8 galaxies x 2 ring members
-# from the dev catalog subset (make download-cosmohub-dev), config P.
-# Shakedown-sized for local runs of the catalog population chain.
+# ESS-gate sizing subset: paired rerun of 51 census galaxies (both ring
+# members = 102 fits) at production sampling length (n_samples 1300, same
+# w200-adapt baseline, escalation OFF so the ESS scaling is unconfounded).
+# Selection from the 2026-07-24 census parquet: all 39 galaxies with a
+# gate-failing fit (max_rhat > 1.05 OR min_ess < 50; 43 fits) + 12 clean
+# galaxies stratified over worst-pair min-ESS sextiles (min and max per
+# sextile). Same seed + galaxy_ids subset => identical population draws and
+# noise seeds; pair to the census per (galaxy_id, ring_member). Purpose:
+# (1) ESS scaling with chain length, especially the slow tail, (2) gate
+# pass rates at production length -> ratify production ESS bar, (3) doubles
+# as the escalation-tier rerun. Forecast ~9 node-hr (3x paired census
+# walltimes at 8-way GH200 packing).
+# Requires data/cosmohub/flagship2_v1 downloaded (login node, async Hive job).
 run:
-  name: flagship2_shear_dev
+  name: flagship2_shear_census_v1_essgate
   version: 1
-  description: "Flagship2 catalog population, shear-bias dev shakedown, config P"
-  seed: 20260721
+  description: "Census ESS-gate subset: 51 paired galaxies at production sampling length"
+  seed: 20260724
   measurement: shear_bias
   noise_reps: 1
 
 population:
   type: catalog
   catalog:
-    download: flagship2_dev        # basename of data/cosmohub/<name>.yaml
+    download: flagship2_v1         # basename of data/cosmohub/<name>.yaml
     data_dir: data/cosmohub
   preprocess:
     flux_variant: model3_ext       # extincted model3 Halpha flux
@@ -25,8 +35,10 @@ population:
     bulge_fraction_max: 0.3
     bulge_nsersic_range: null      # catalog-n cut removed (n is painted)
   sample:
-    n_galaxies: 8
+    n_galaxies: 100                # full census bank (identical draws/seeds)
     replace: false
+    # gate-failing + stratified-clean subset, provenance in header
+    galaxy_ids: [0, 2, 4, 6, 9, 14, 18, 19, 20, 21, 22, 23, 24, 28, 29, 32, 35, 38, 41, 44, 45, 47, 48, 49, 50, 51, 53, 55, 59, 60, 62, 65, 72, 74, 75, 77, 78, 79, 81, 82, 83, 84, 85, 86, 88, 90, 92, 95, 96, 97, 99]
   paint:
     # Ubler+2017 Table 2 TFR, inverted to logv|logM form
     tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
@@ -62,32 +74,24 @@ fit:
   # div 50%, ESS 8. Escalation reruns (longer warmup/samples) key on
   # rhat/ESS, not divergence rate: frozen-metric catastrophes show div=0.
   n_warmup: 200
-  n_samples: 300
+  n_samples: 1300
   n_chains: 2
   precondition: laplace
   unconstrained: true
   adapt_mass: true
   target_accept: 0.9
   pin_z_to_truth: true
-  # retry gate-failing fits once at higher warmup/samples with the first
-  # attempt's adapted metric donated (same-fit donor experiment: mean tree
-  # depth 255 -> 48). Thresholds provisional pending the ESS-gate sizing
-  # run (census: rhat 1.05 isolates the 13.5% slow tier).
-  escalation:
-    enabled: true
-    rhat_max: 1.05
-    ess_min: 50
-    n_warmup: 800
-    n_samples: 1000
 
 dispatch:
-  backend: local
+  backend: slurm
   mode: dynamic
-  workers_per_node: 1
-  target_task_walltime_min: 30
-  queue: gh-dev
+  # 8-way GPU packing: N=16 validated for single-disk config P; BulgeDisk
+  # grids are larger, so start at 8 (drop to 4 on RESOURCE_EXHAUSTED)
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gh
   account: JPL-PUB        # TACC allocation (-A); used when dispatched via slurm
-  max_fit_walltime_min: 30
+  max_fit_walltime_min: 150
 
 output:
   save_chains: all

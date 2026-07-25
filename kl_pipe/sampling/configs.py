@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Optional, Any, Dict, Union
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 
@@ -346,6 +347,17 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # eig-floored soft directions), at the cost of dense-adaptation warmup
     # time. Only meaningful with precondition='laplace'.
     precondition_adapt_mass: bool = False
+    # Explicit initial inverse mass matrix for the preconditioned NUTS kernel,
+    # given in SAMPLING coordinates (unconstrained eta when
+    # precondition_unconstrained, physical theta otherwise). Overrides the
+    # (transformed) Laplace metric as the kernel's starting metric; with
+    # precondition_adapt_mass warmup adaptation starts FROM it. Typical use:
+    # donate the warmup-adapted metric recorded by a previous run of the SAME
+    # fit (diagnostics['adapted_inverse_mass_matrix']) to an escalation rerun.
+    # Only meaningful with precondition='laplace'; must be square, symmetric,
+    # finite, and positive definite (dimension checked against the task at
+    # run time).
+    init_inverse_mass_matrix: Optional[np.ndarray] = None
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
@@ -356,6 +368,24 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
             )
         if self.precondition_adapt_mass and self.precondition != 'laplace':
             raise ValueError("precondition_adapt_mass requires precondition='laplace'")
+        if self.init_inverse_mass_matrix is not None:
+            if self.precondition != 'laplace':
+                raise ValueError(
+                    "init_inverse_mass_matrix requires precondition='laplace'"
+                )
+            m = np.asarray(self.init_inverse_mass_matrix, dtype=float)
+            if m.ndim != 2 or m.shape[0] != m.shape[1]:
+                raise ValueError(
+                    f"init_inverse_mass_matrix must be a square 2D matrix, "
+                    f"got shape {m.shape}"
+                )
+            if not np.all(np.isfinite(m)):
+                raise ValueError("init_inverse_mass_matrix contains non-finite entries")
+            if not np.allclose(m, m.T, rtol=0.0, atol=1e-10 * np.abs(m).max()):
+                raise ValueError("init_inverse_mass_matrix must be symmetric")
+            if np.linalg.eigvalsh(m).min() <= 0:
+                raise ValueError("init_inverse_mass_matrix must be positive definite")
+            self.init_inverse_mass_matrix = m
         if self.precondition not in ('none', 'laplace'):
             raise ValueError(
                 f"precondition must be 'none' or 'laplace', got '{self.precondition}'"

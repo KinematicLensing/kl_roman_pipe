@@ -95,7 +95,9 @@ mocks.py        truth row -> noisy mock observations (model-rendered,
                 matched-filter noise; PSF per config: galsim Gaussian or
                 Roman WFI via galsim.roman.getPSF, z-dependent grism kernel)
 worker.py       claim -> mock -> NUTS (Laplace precond, PA-stratified MAP
-                starts, one retry on broken chains) -> per-fit parquet
+                starts, one retry on broken chains; opt-in fit.escalation:
+                quality-gated retry w/ raised warmup + donated adapted
+                metric) -> per-fit parquet
 ledger.py       lock-free filesystem status (atomic-mkdir claims,
                 done/failed markers, stale detection)
 dispatch.py     local N-worker backend + submit.slurm emission

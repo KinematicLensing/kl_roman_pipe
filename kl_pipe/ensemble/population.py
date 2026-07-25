@@ -52,13 +52,38 @@ HALPHA_REST_A = 6562.8
 C_A_PER_S = 2.998e18
 
 # ROTAC (Roman Observations Time Allocation Committee) HLWAS spectroscopy
-# report: per-pass 5-sigma point-source emission-line flux limit
-# [erg/s/cm2]. Extended sources are penalized by the matched-filter
-# compactness ratio C below.
+# report: per-pass 5-sigma emission-line flux limit [erg/s/cm2]. Sources are
+# penalized (or rewarded) by the matched-filter compactness ratio C below,
+# relative to whatever source the limit itself was derived for -- see
+# SNR_LINE_REFERENCE.
 F_LIM_CGS = 3.1e-16
 
-# the SNR the F_LIM anchor corresponds to (5-sigma point source)
+# the SNR the F_LIM anchor corresponds to
 F_LIM_NSIGMA = 5.0
+
+# What source F_LIM is referenced to. This is NOT a free choice: it must
+# match the convention of the published limit, and getting it wrong
+# double-counts (or omits) the extended-source penalty, an order of
+# magnitude in selected number density.
+#
+#   'point_source'      -- C is taken relative to an unresolved source.
+#   'extended_fiducial' -- C is taken relative to a round galaxy of
+#                          half-light radius F_LIM_REF_R50_ARCSEC observed
+#                          at F_LIM_REF_LAMBDA_A.
+#
+# Wang et al. 2022 (arXiv:2110.01829, Sect. 5) state that the published
+# Roman HLSS line-flux limits are derived "for galaxies with radius 0.25
+# arcsec at 1.5 micron", that radius being the median half-light radius of
+# Halpha emitters at z ~ 1.5 from WISP (Dore et al. 2018 Fig. 17), and warn
+# that "the point source sensitivity is significantly better than for
+# galaxies with a finite size". If the ROTAC HLWAS number above inherits
+# that mission convention -- likely but NOT yet confirmed against the ROTAC
+# report itself -- then 'extended_fiducial' is correct and 'point_source'
+# double-counts the penalty. The default stays 'point_source' until that is
+# confirmed, so the change is opt-in and the census remains reproducible.
+SNR_LINE_REFERENCE = 'point_source'
+F_LIM_REF_R50_ARCSEC = 0.25
+F_LIM_REF_LAMBDA_A = 1.5e4
 
 # Roman primary-mirror diameter [m]; diffraction PSF proxy
 # FWHM = 1.22 lambda / D
@@ -417,18 +442,49 @@ def matched_filter_compactness(
     return sigma_psf / np.sqrt(s1 * s2)
 
 
-def compute_line_snr(f_line: np.ndarray, compactness: np.ndarray) -> np.ndarray:
-    """Per-exposure matched-filter line SNR.
+def fiducial_compactness() -> float:
+    """Compactness C of the source the published flux limit refers to.
 
-    SNR = 5 * (f_line / F_LIM) * C: F_LIM is the 5-sigma point-source
-    limit, so a point source at F_LIM has SNR 5; extended sources are
-    degraded by the compactness ratio C.
+    A round (cos i = 1) galaxy of half-light radius ``F_LIM_REF_R50_ARCSEC``
+    observed at ``F_LIM_REF_LAMBDA_A`` -- the source Wang et al. 2022 derive
+    the Roman HLSS line-flux limits for. Returns 1.0 for a point-source
+    reference, which is the identity normalization.
+    """
+    if SNR_LINE_REFERENCE == 'point_source':
+        return 1.0
+    if SNR_LINE_REFERENCE != 'extended_fiducial':
+        raise ValueError(
+            f"SNR_LINE_REFERENCE must be 'point_source' or "
+            f"'extended_fiducial', got {SNR_LINE_REFERENCE!r}"
+        )
+    z_ref = F_LIM_REF_LAMBDA_A / HALPHA_REST_A - 1.0
+    return float(
+        matched_filter_compactness(
+            np.array([F_LIM_REF_R50_ARCSEC]), np.array([1.0]), np.array([z_ref])
+        )[0]
+    )
+
+
+def compute_line_snr(f_line: np.ndarray, compactness: np.ndarray) -> np.ndarray:
+    """Per-pass matched-filter line SNR.
+
+    SNR = F_LIM_NSIGMA * (f_line / F_LIM) * C / C_ref, where C_ref is the
+    compactness of the source F_LIM is referenced to (``fiducial_compactness``).
+    A source identical to that reference at f_line = F_LIM therefore has
+    SNR = F_LIM_NSIGMA; more compact sources do better and larger ones worse.
+
+    Note this is the PER-PASS SNR, not per-exposure: F_LIM is a per-pass
+    limit, and an HLWAS pass is several dithers. The survey coadds four
+    grism passes, so a galaxy's total line SNR -- the quantity the joint
+    multi-roll fit actually sees, and the one a selection cut should be
+    applied to -- is sqrt(4) times this.
     """
     return (
         F_LIM_NSIGMA
         * np.asarray(f_line, dtype=np.float64)
         / F_LIM_CGS
         * np.asarray(compactness, dtype=np.float64)
+        / fiducial_compactness()
     )
 
 

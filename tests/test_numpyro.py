@@ -1076,6 +1076,67 @@ class TestLaplacePreconditioner:
         vcirc = means[names.index('vel.vcirc')]
         assert abs(vcirc - true_pars['vel.vcirc']) / 200.0 < 0.05
 
+    def test_donated_mass_matrix_pass_through(self, simple_velocity_task):
+        """A previous run's warmup-adapted metric can be donated back as the
+        retry's initial NUTS metric (the ensemble escalation recipe): the
+        first adapt-mass run records ``adapted_inverse_mass_matrix``; a
+        second run accepting it via ``init_inverse_mass_matrix`` completes
+        healthily and records the donation; a dimension mismatch is loud."""
+        task, _ = simple_velocity_task
+        common = dict(
+            n_samples=200,
+            n_warmup=150,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=11,
+            progress=False,
+            precondition='laplace',
+            n_map_starts=3,
+        )
+        first = build_sampler(
+            'numpyro',
+            task,
+            NumpyroSamplerConfig(precondition_adapt_mass=True, **common),
+        ).run()
+        adapted = first.diagnostics['adapted_inverse_mass_matrix']
+        assert adapted is not None
+        adapted = np.asarray(adapted)
+        # per-chain stacked (n_chains, D, D) or single (D, D); pool by mean
+        D = task.n_params
+        if adapted.ndim == 3:
+            assert adapted.shape == (2, D, D)
+            donor = adapted.mean(axis=0)
+        else:
+            assert adapted.shape == (D, D)
+            donor = adapted
+        # symmetrize away accumulated float roundoff before config validation
+        donor = 0.5 * (donor + donor.T)
+
+        retry = build_sampler(
+            'numpyro',
+            task,
+            NumpyroSamplerConfig(
+                precondition_adapt_mass=True,
+                init_inverse_mass_matrix=donor,
+                **common,
+            ),
+        ).run()
+        assert retry.metadata['init_mass_donated'] is True
+        assert first.metadata['init_mass_donated'] is False
+        # donated metric must not break sampling: converged, low divergences
+        assert max(retry.get_rhat().values()) < 1.05
+        assert retry.diagnostics['divergence_rate'] < 0.1
+
+        # wrong dimension fails loudly at run time
+        bad = np.eye(D + 1)
+        sampler = build_sampler(
+            'numpyro',
+            task,
+            NumpyroSamplerConfig(init_inverse_mass_matrix=bad, **common),
+        )
+        with pytest.raises(ValueError, match='does not match'):
+            sampler.run()
+
     def test_preconditioned_matches_standard(self, simple_velocity_task):
         """Preconditioning must not change the posterior: means/stds agree with
         the standard (model-based, adapted) path within MCMC error."""

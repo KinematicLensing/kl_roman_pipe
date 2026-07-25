@@ -583,6 +583,14 @@ class CatalogPopulationSpec:
     # single-disk broadband truth keys, single-disk fit model + priors)
     paint_bulge: bool = True
 
+    # sample.galaxy_ids (optional): restriction to specific population row
+    # indices (0-based, into the seeded n_galaxies sample), applied AFTER the
+    # population build -- the bank and every per-galaxy draw and noise seed
+    # stay identical to the unrestricted run with the same seed. Enables
+    # cheap paired subset reruns (e.g. escalation-tier resampling) keyed by
+    # galaxy_id across runs.
+    galaxy_ids: Optional[Tuple[int, ...]] = None
+
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
@@ -620,6 +628,20 @@ class CatalogPopulationSpec:
             raise ValueError(
                 f"sample.n_galaxies ({self.n_galaxies!r}) must be a positive int"
             )
+        if self.galaxy_ids is not None:
+            if len(self.galaxy_ids) == 0:
+                raise ValueError("sample.galaxy_ids must be non-empty or absent")
+            bad = [i for i in self.galaxy_ids if not isinstance(i, int)]
+            if bad:
+                raise ValueError(f"sample.galaxy_ids must be ints, got {bad!r}")
+            if len(set(self.galaxy_ids)) != len(self.galaxy_ids):
+                raise ValueError("sample.galaxy_ids contains duplicates")
+            out_of_range = [i for i in self.galaxy_ids if not 0 <= i < self.n_galaxies]
+            if out_of_range:
+                raise ValueError(
+                    f"sample.galaxy_ids {out_of_range} outside "
+                    f"[0, n_galaxies={self.n_galaxies})"
+                )
         if self.tfr_slope == 0:
             raise ValueError("paint.tfr.slope must be nonzero")
         if self.tfr_scatter_dex < 0:
@@ -696,8 +718,18 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
     _require_keys(sel, sel_keys, f"{context}.selection")
 
     sample = population['sample']
-    _reject_unknown(sample, ('n_galaxies', 'replace'), f"{context}.sample")
+    _reject_unknown(
+        sample, ('n_galaxies', 'replace', 'galaxy_ids'), f"{context}.sample"
+    )
     _require_keys(sample, ('n_galaxies', 'replace'), f"{context}.sample")
+    galaxy_ids = sample.get('galaxy_ids')
+    if galaxy_ids is not None:
+        if not isinstance(galaxy_ids, list):
+            raise ValueError(
+                f"{context}.sample.galaxy_ids must be a list of ints, got "
+                f"{type(galaxy_ids).__name__}"
+            )
+        galaxy_ids = tuple(galaxy_ids)
     if sample['replace']:
         raise NotImplementedError(
             f"{context}.sample: replace: true (bootstrap resampling) is not "
@@ -756,6 +788,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
             else None
         ),
         n_galaxies=_require_yaml_int(sample, 'n_galaxies', 0, f"{context}.sample"),
+        galaxy_ids=galaxy_ids,
         tfr_logv0=float(tfr['logv0']),
         tfr_logm0=float(tfr['logm0']),
         tfr_slope=float(tfr['slope']),
@@ -774,6 +807,71 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         shear_gmax=float(shear['gmax']),
         logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
         paint_bulge=paint_bulge,
+    )
+
+
+@dataclass(frozen=True)
+class EscalationSpec:
+    """Quality-gated escalation retry policy (spec ``fit.escalation`` block).
+
+    When enabled, a fit whose first attempt fails the convergence gate
+    (``max_rhat > rhat_max`` OR ``min_ess < ess_min``) is retried exactly
+    once with a stronger sampler config: warmup/samples raised to the
+    escalation values and the first attempt's warmup-adapted inverse mass
+    matrix donated as the retry's initial NUTS metric. The gate is on
+    convergence quality, NOT divergences: the silent unconverged class shows
+    zero divergences, and a fresh-seed retry alone does not rescue it (both
+    measured on a 200-fit production-config census, 2026-07-24), so the
+    retry must change the sampler config. Default provenance: rhat 1.05 /
+    min ESS 50 reproduce the census quality gate that isolated the
+    slow-convergence tier; warmup 800 / samples 1000 are 4x/1x the census
+    baseline (200/1000); the same-fit donated metric was measured to cut
+    mean tree depth from >255 to ~48 on a census escalation fit.
+    """
+
+    enabled: bool = False
+    rhat_max: float = 1.05
+    ess_min: float = 50.0
+    n_warmup: int = 800
+    n_samples: int = 1000
+
+    def __post_init__(self):
+        if not isinstance(self.enabled, bool):
+            raise ValueError(
+                f"escalation.enabled must be a boolean, got {self.enabled!r}"
+            )
+        if not isinstance(self.rhat_max, float) or self.rhat_max <= 1.0:
+            raise ValueError(
+                f"escalation.rhat_max ({self.rhat_max!r}) must be a float > 1.0"
+            )
+        if not isinstance(self.ess_min, float) or self.ess_min <= 0:
+            raise ValueError(
+                f"escalation.ess_min ({self.ess_min!r}) must be a positive float"
+            )
+        for name, value in [
+            ('n_warmup', self.n_warmup),
+            ('n_samples', self.n_samples),
+        ]:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(
+                    f"escalation.{name} ({value!r}) must be a positive int"
+                )
+
+
+def _parse_escalation(block, context: str) -> EscalationSpec:
+    """Parse the optional ``fit.escalation`` block (absent = disabled)."""
+    if block is None:
+        return EscalationSpec()
+    if not isinstance(block, dict):
+        raise ValueError(f"{context}: must be a mapping, got {block!r}")
+    allowed = ('enabled', 'rhat_max', 'ess_min', 'n_warmup', 'n_samples')
+    _reject_unknown(block, allowed, context)
+    return EscalationSpec(
+        enabled=block.get('enabled', False),
+        rhat_max=float(block.get('rhat_max', 1.05)),
+        ess_min=float(block.get('ess_min', 50.0)),
+        n_warmup=_require_yaml_int(block, 'n_warmup', 800, context),
+        n_samples=_require_yaml_int(block, 'n_samples', 1000, context),
     )
 
 
@@ -858,6 +956,10 @@ class EnsembleSpec:
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
     catalog_population: Optional[CatalogPopulationSpec] = None
+
+    # quality-gated escalation retry (fit.escalation block; disabled by
+    # default -- see EscalationSpec)
+    escalation: EscalationSpec = EscalationSpec()
 
     def __post_init__(self):
         if self.population_type not in _POPULATION_TYPES:
@@ -977,6 +1079,29 @@ class EnsembleSpec:
                 "sampled-z (narrow spec-z prior) is planned but not wired in "
                 "v1; set fit.pin_z_to_truth: true"
             )
+        if self.escalation.enabled:
+            # the retry donates the first attempt's warmup-adapted inverse
+            # mass matrix, which only exists on the adapt-mass preconditioned
+            # path
+            if self.precondition != 'laplace' or not self.adapt_mass:
+                raise ValueError(
+                    "fit.escalation.enabled requires fit.precondition: "
+                    "laplace and fit.adapt_mass: true (the escalation retry "
+                    "donates the first attempt's warmup-adapted inverse mass "
+                    "matrix, recorded only on that path)"
+                )
+            if self.escalation.n_warmup < self.n_warmup:
+                raise ValueError(
+                    f"fit.escalation.n_warmup ({self.escalation.n_warmup}) "
+                    f"must be >= fit.n_warmup ({self.n_warmup}): the retry "
+                    f"must not be weaker than the first attempt"
+                )
+            if self.escalation.n_samples < self.n_samples:
+                raise ValueError(
+                    f"fit.escalation.n_samples ({self.escalation.n_samples}) "
+                    f"must be >= fit.n_samples ({self.n_samples}): the retry "
+                    f"must not be weaker than the first attempt"
+                )
 
     @property
     def n_axis_steps(self) -> int:
@@ -995,7 +1120,8 @@ class EnsembleSpec:
         """Total fits this spec expands to."""
         if self.population_type == 'catalog':
             cp = self.catalog_population
-            return cp.n_galaxies * cp.ring_members * self.m_noise
+            n_gal = len(cp.galaxy_ids) if cp.galaxy_ids is not None else cp.n_galaxies
+            return n_gal * cp.ring_members * self.m_noise
         n_shear = len(self.shear_grid) if self.shear_scheme == 'grid' else 1
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
@@ -1199,6 +1325,7 @@ class EnsembleSpec:
                 'n_map_starts',
                 'pin_z_to_truth',
                 'shear_prior_sigma',
+                'escalation',
             ),
             f"{path}:fit",
         )
@@ -1206,6 +1333,7 @@ class EnsembleSpec:
             raise NotImplementedError(
                 f"v1 supports the numpyro sampler only, got " f"{fit.get('sampler')!r}"
             )
+        escalation = _parse_escalation(fit.get('escalation'), f"{path}:fit.escalation")
 
         dispatch = raw['dispatch']
         _reject_unknown(
@@ -1270,6 +1398,7 @@ class EnsembleSpec:
             target_accept=float(fit.get('target_accept', 0.8)),
             n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
+            escalation=escalation,
             backend=str(dispatch.get('backend', 'local')),
             mode=str(dispatch.get('mode', 'dynamic')),
             workers_per_node=int(dispatch.get('workers_per_node', 1)),
