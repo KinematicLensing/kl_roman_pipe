@@ -9,7 +9,10 @@ Callable per-piece or as one report::
 Outputs (under ``run_dir/diagnostics/``):
 - ``quality.csv``     per-fit quality columns + gate flags
 - ``pulls.csv``       per-fit (post - truth)/sigma for the headline params
-- ``sigma_eps.csv``   per-cosi-bin + collapsed sigma_eps
+- ``sigma_eps.csv``   per-axis-bin + collapsed sigma_eps (catalog runs with a
+  degenerate manifest axis fall back to quantile bins over the truth column)
+- ``sigma_eps_line_snr.csv`` + ``sigma_eps_vs_line_snr.png`` when per-fit
+  line SNR varies and is not already the plot axis (catalog mode)
 - ``recovery_<param>.png``, ``pulls.png``, ``quality_vs_cosi.png``,
   ``sigma_eps_vs_cosi.png``
 - ``corner_<fit_id>.png`` + ``datavector_<fit_id>.png`` for every gated-out
@@ -85,6 +88,38 @@ def measurement_axis(spec) -> Tuple[str, str, str, str]:
     if spec.measurement == 'sigma_eps_vs_line_snr':
         return ('sweep_step', 'line_snr', 'emission-line SNR', 'log')
     return ('cosi_bin', 'truth.cosi', 'cos i (bin center)', 'linear')
+
+
+def quantile_bins(values: pd.Series, n_bins: int = 5) -> pd.Series:
+    """Integer quantile-bin labels (0..n_bins-1) over a continuous column.
+
+    Catalog-mode runs draw cosi / line SNR from the row bank instead of a
+    sweep grid, so their manifest bin columns are degenerate; quantile bins
+    over the continuous truth column restore a usable plot axis. Ties are
+    broken by rank so equal-count bins always exist.
+    """
+    n_bins = min(n_bins, int(values.nunique()))
+    if n_bins < 1:
+        raise ValueError('quantile_bins needs at least one finite value')
+    ranked = values.rank(method='first')
+    return pd.qcut(ranked, n_bins, labels=False).astype(int)
+
+
+def resolve_plot_axis(
+    table: pd.DataFrame, group_col: str, value_col: str, axis_label: str
+) -> Tuple[pd.DataFrame, str, str]:
+    """Fall back to quantile bins when the manifest plot axis is degenerate.
+
+    Sweep runs carry a real grid in ``group_col``; catalog runs write a
+    single placeholder bin for every fit, which would collapse the binned
+    plots to one point. Returns (table, group_col, axis_label), with an
+    ``axis_qbin`` column added when the fallback fires.
+    """
+    if table[group_col].nunique() == 1 and table[value_col].nunique() > 1:
+        table = table.copy()
+        table['axis_qbin'] = quantile_bins(table[value_col])
+        return table, 'axis_qbin', axis_label.replace('bin center', 'bin mean')
+    return table, group_col, axis_label
 
 
 def quality_table(table: pd.DataFrame) -> pd.DataFrame:
@@ -249,7 +284,8 @@ def sigma_eps_table(
                 {
                     'gate': mask_name,
                     'axis_step': int(step),
-                    'axis_value': float(group[value_col].iloc[0]),
+                    # bin mean; identical to the shared value for sweep axes
+                    'axis_value': float(group[value_col].mean()),
                     'n_fits': len(group),
                     'sigma_eps': se,
                     'sigma_eps_err': err,
@@ -609,6 +645,9 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     group_col, value_col, axis_label, xscale = measurement_axis(spec)
 
     table = augment_galaxy_frame(run_dir, table)
+    table, group_col, axis_label = resolve_plot_axis(
+        table, group_col, value_col, axis_label
+    )
     quality = quality_table(table)
     pulls = pull_table(table)
     sigma = sigma_eps_table(run_dir, table, group_col, value_col)
@@ -621,6 +660,22 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     plot_quality_vs_cosi(table, out_dir)
     plot_sigma_eps(sigma, out_dir, axis_label=axis_label, xscale=xscale)
     plot_sigma_eps_slide(sigma, out_dir, axis_label=axis_label)
+
+    # per-fit line SNR varies in catalog mode even when the plot axis is
+    # cosi; emit the line-SNR-binned sigma_eps alongside
+    if value_col != 'line_snr' and table.get('line_snr') is not None:
+        if table['line_snr'].nunique() > 1:
+            table = table.copy()
+            table['line_snr_qbin'] = quantile_bins(table['line_snr'])
+            sigma_snr = sigma_eps_table(run_dir, table, 'line_snr_qbin', 'line_snr')
+            sigma_snr.to_csv(out_dir / 'sigma_eps_line_snr.csv', index=False)
+            plot_sigma_eps(
+                sigma_snr,
+                out_dir,
+                axis_label='emission-line SNR (bin mean)',
+                xscale='log',
+                filename='sigma_eps_vs_line_snr.png',
+            )
 
     # per-fit deep dives: every gated-out fit + one good fit per axis step
     flagged = quality.loc[quality['low_quality'], 'fit_id'].tolist()

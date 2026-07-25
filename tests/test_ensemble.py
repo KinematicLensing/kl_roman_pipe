@@ -1086,3 +1086,68 @@ class TestDiagnostics:
         # no chains saved -> marginal approx; widths are ~0.03 by
         # construction, so sigma_eps must land near 0.03
         assert 0.02 < head['sigma_eps'].iloc[0] < 0.04
+
+    def test_quantile_bins_equal_counts(self):
+        from kl_pipe.ensemble.diagnostics import quantile_bins
+
+        vals = pd.Series(np.linspace(0.05, 0.95, 40))
+        bins = quantile_bins(vals, n_bins=5)
+        assert sorted(bins.unique()) == [0, 1, 2, 3, 4]
+        assert bins.value_counts().nunique() == 1  # equal-count bins
+        # monotone: higher values land in higher bins
+        assert (bins.sort_index().diff().dropna() >= 0).all()
+
+    def test_quantile_bins_fewer_uniques_than_bins(self):
+        from kl_pipe.ensemble.diagnostics import quantile_bins
+
+        vals = pd.Series([0.2, 0.2, 0.8])
+        bins = quantile_bins(vals, n_bins=5)
+        assert bins.nunique() <= 2
+
+    def test_resolve_plot_axis_degenerate_catalog(self):
+        from kl_pipe.ensemble.diagnostics import resolve_plot_axis
+
+        # catalog-mode manifest: single placeholder cosi_bin, continuous cosi
+        table = pd.DataFrame(
+            {
+                'cosi_bin': 0,
+                'truth.cosi': np.linspace(0.05, 0.95, 20),
+            }
+        )
+        out, group_col, label = resolve_plot_axis(
+            table, 'cosi_bin', 'truth.cosi', 'cos i (bin center)'
+        )
+        assert group_col == 'axis_qbin'
+        assert out['axis_qbin'].nunique() == 5
+        assert label == 'cos i (bin mean)'
+        # sweep-mode table with a real grid is untouched
+        sweep = pd.DataFrame(
+            {'cosi_bin': [0, 0, 1, 1], 'truth.cosi': [0.2, 0.2, 0.8, 0.8]}
+        )
+        out2, group_col2, label2 = resolve_plot_axis(
+            sweep, 'cosi_bin', 'truth.cosi', 'cos i (bin center)'
+        )
+        assert group_col2 == 'cosi_bin'
+        assert 'axis_qbin' not in out2.columns
+
+    def test_sigma_eps_axis_value_is_bin_mean(self, run_dir):
+        from kl_pipe.ensemble.collate import analysis_table, collate_results
+        from kl_pipe.ensemble.diagnostics import (
+            augment_galaxy_frame,
+            quantile_bins,
+            sigma_eps_table,
+        )
+
+        _write_fake_results(run_dir)
+        collate_results(run_dir)
+        table = augment_galaxy_frame(run_dir, analysis_table(run_dir))
+        table = table.copy()
+        table['axis_qbin'] = quantile_bins(table['truth.cosi'], n_bins=2)
+        sig = sigma_eps_table(run_dir, table, 'axis_qbin', 'truth.cosi')
+        excl = sig[(sig['gate'] == 'exclude_catastrophic') & (sig['axis_step'] >= 0)]
+        for _, r in excl.iterrows():
+            members = table[table['axis_qbin'] == r['axis_step']]
+            # catastrophic fit is masked from the gate, so recompute on the
+            # kept members only
+            kept = members[members['max_rhat'] <= 1.1]
+            assert r['axis_value'] == pytest.approx(kept['truth.cosi'].mean())
