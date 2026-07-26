@@ -184,6 +184,15 @@ test-tng-diagnostics: $(CYVERSE_DATA_MARKER)
 	@echo "Running TNG50 diagnostic plotting tests (slow)..."
 	@conda run -n klpipe pytest tests/ -v -m tng_diagnostics
 
+# the only tests that exercise the real Flagship2 catalog end to end, so
+# every selection change should be gated on them. They need the cosmohub
+# parquet (make download-cosmohub-dev) and the tier is deselected by every
+# other test target, including test-extended.
+.PHONY: test-cosmohub
+test-cosmohub:
+	@echo "Running real-catalog (cosmohub) tests..."
+	@conda run -n klpipe pytest tests/ -v -m cosmohub
+
 .PHONY: test-sampling
 test-sampling:
 	@echo "Running MCMC sampling tests (excluding nautilus)..."
