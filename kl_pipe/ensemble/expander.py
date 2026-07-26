@@ -35,7 +35,11 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from kl_pipe.ensemble.population import build_population, write_population
+from kl_pipe.ensemble.population import (
+    N_GRISM_PASSES,
+    build_population,
+    write_population,
+)
 from kl_pipe.ensemble.scene import scene_truth_defaults
 from kl_pipe.ensemble.spec import DrawSpec, EnsembleSpec, ObservationConfig
 
@@ -56,7 +60,8 @@ POP_PREFIX = 'pop.'
 _POP_PASSTHROUGH = (
     'halo_id',
     'galaxy_id',
-    'snr_line',
+    'snr_line_per_pass',
+    'snr_line_total',
     'ew_rest_a',
     'logm',
     'logm_obs',
@@ -305,6 +310,17 @@ def _catalog_rows(
             f"population table has {len(population)} rows, spec expects "
             f"{cp.n_galaxies} galaxies"
         )
+    # the selection cuts on the line SNR coadded over N_GRISM_PASSES, while
+    # each roll's mock is drawn at one pass's depth; if the config's roll
+    # count differs, the depth the fit sees is not the depth selected for
+    if len(config.grism_rolls_deg) != N_GRISM_PASSES:
+        raise ValueError(
+            f"observation config '{config.id}' has "
+            f"{len(config.grism_rolls_deg)} grism rolls but the population "
+            f"selection assumes N_GRISM_PASSES = {N_GRISM_PASSES} when "
+            f"coadding the line SNR; the selected depth would not match the "
+            f"fitted depth"
+        )
     if cp.galaxy_ids is not None:
         # restrict AFTER the full-bank build so per-galaxy draws and noise
         # seeds are identical to the unrestricted run with the same seed;
@@ -407,9 +423,12 @@ def _catalog_rows(
                     # per-galaxy imaging depth anchor is a documented future
                     # step of the catalog integration
                     'broadband_snr': spec.broadband_snr,
-                    # per-galaxy physical per-exposure line SNR from the
-                    # population's matched-filter calculation
-                    'line_snr': float(g['snr_line']),
+                    # per-galaxy PER-PASS line SNR from the population's
+                    # matched-filter calculation: the mock noise is drawn
+                    # once per grism roll, so each roll gets one pass's
+                    # depth. The coadded depth the fit sees, and the one the
+                    # selection cut is applied to, is snr_line_total.
+                    'line_snr': float(g['snr_line_per_pass']),
                     'save_chains': spec.save_chains == 'all',
                     'save_mocks': spec.save_mocks == 'all',
                 }

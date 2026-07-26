@@ -268,15 +268,40 @@ def augment_galaxy_frame(
     return t
 
 
+# parameters whose residual must be wrapped before forming a pull, with
+# their period. theta_int is a position angle: it is defined modulo pi, so a
+# recovered value just below pi against a truth just above 0 is a match, not
+# a ~pi discrepancy. Without wrapping, such fits show enormous spurious
+# pulls and inflate the apparent wrong-mode rate.
+_PULL_WRAP_PERIODS = {'theta_int': np.pi}
+
+
+def _wrapped_residual(
+    post_mean: pd.Series, truth: pd.Series, period: float
+) -> pd.Series:
+    """Residual on a periodic parameter, wrapped to (-period/2, period/2]."""
+    resid = post_mean - truth
+    return resid - period * np.round(resid / period)
+
+
 def pull_table(
     table: pd.DataFrame, params: Sequence[str] = HEADLINE_PARAMS
 ) -> pd.DataFrame:
-    """Per-fit recovery pulls (post.mean - truth) / post.std."""
+    """Per-fit recovery pulls (post.mean - truth) / post.std.
+
+    Residuals on periodic parameters (see ``_PULL_WRAP_PERIODS``) are wrapped
+    into the principal branch first.
+    """
     out = table[['fit_id', 'cosi_bin', 'truth.cosi']].copy()
     for p in params:
-        out[f'pull.{p}'] = (table[f'post.{p}.mean'] - table[f'truth.{p}']) / table[
-            f'post.{p}.std'
-        ]
+        period = _PULL_WRAP_PERIODS.get(p)
+        if period is None:
+            resid = table[f'post.{p}.mean'] - table[f'truth.{p}']
+        else:
+            resid = _wrapped_residual(
+                table[f'post.{p}.mean'], table[f'truth.{p}'], period
+            )
+        out[f'pull.{p}'] = resid / table[f'post.{p}.std']
     return out
 
 

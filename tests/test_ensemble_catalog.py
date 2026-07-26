@@ -124,15 +124,17 @@ class TestCatalogExpand:
             assert partner['truth.z'] == row['truth.z']
             assert partner['noise_seed'] != row['noise_seed']
 
-    def test_line_snr_is_population_snr_line(self, run_parts):
-        # per-fit line SNR = the population's PHYSICAL per-exposure
-        # matched-filter snr_line, not the (rejected) observation.snr.line
+    def test_line_snr_is_population_snr_line_per_pass(self, run_parts):
+        # per-fit line SNR = the population's PHYSICAL PER-PASS matched-filter
+        # SNR, not the (rejected) observation.snr.line and not the coadded
+        # snr_line_total: the mock noise is drawn once per grism roll, so each
+        # roll carries one pass's depth
         _, _, manifest, population = run_parts
         pop = population.set_index('pop_index')
         for _, row in manifest.iterrows():
-            expected = float(pop.loc[row['galaxy_id'], 'snr_line'])
+            expected = float(pop.loc[row['galaxy_id'], 'snr_line_per_pass'])
             assert row['line_snr'] == expected
-            assert row['pop.snr_line'] == expected
+            assert row['pop.snr_line_per_pass'] == expected
 
     def test_broadband_snr_is_spec_scalar(self, run_parts):
         spec, _, manifest, _ = run_parts

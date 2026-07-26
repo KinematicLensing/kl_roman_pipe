@@ -35,10 +35,10 @@ import numpy as np
 import yaml
 
 from kl_pipe.ensemble.population import (
-    F_LIM_CGS,
+    F_LIM_PER_PASS_CGS,
     F_LIM_NSIGMA,
     _draw_geometry,
-    compute_line_snr,
+    compute_line_snr_per_pass,
     load_flagship2_catalog,
     matched_filter_compactness,
     preprocess,
@@ -123,10 +123,10 @@ def main() -> None:
 
     # four (depth, compactness) SNR arrays
     variants = {
-        ('per-pass', 'on '): compute_line_snr(f_line, compact),
-        ('per-pass', 'off'): compute_line_snr(f_line, ones),
-        ('coadded ', 'on '): compute_line_snr(f_line, compact) * sqrt_n,
-        ('coadded ', 'off'): compute_line_snr(f_line, ones) * sqrt_n,
+        ('per-pass', 'on '): compute_line_snr_per_pass(f_line, compact),
+        ('per-pass', 'off'): compute_line_snr_per_pass(f_line, ones),
+        ('coadded ', 'on '): compute_line_snr_per_pass(f_line, compact) * sqrt_n,
+        ('coadded ', 'off'): compute_line_snr_per_pass(f_line, ones) * sqrt_n,
     }
 
     area = _sky_area_deg2(cp.catalog_download, data_dir)
@@ -137,7 +137,9 @@ def main() -> None:
         f"pool (z + B/T) : {n_pool:,}"
         + (f"   ({n_pool / area:.0f}/deg^2)" if area else "")
     )
-    print(f"F_LIM (per-pass): {F_LIM_CGS:.3e} erg/s/cm^2 @ {F_LIM_NSIGMA:.0f}-sigma")
+    print(
+        f"F_LIM (per-pass): {F_LIM_PER_PASS_CGS:.3e} erg/s/cm^2 @ {F_LIM_NSIGMA:.0f}-sigma"
+    )
     print(
         f"n_coadd_passes : {args.n_coadd_passes}  (coadded SNR = per-pass x {sqrt_n:.2f})"
     )

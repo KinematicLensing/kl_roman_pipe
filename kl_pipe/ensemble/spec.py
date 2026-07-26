@@ -549,9 +549,17 @@ class CatalogPopulationSpec:
 
     # selection
     z_range: Tuple[float, float]
-    snr_line_min: float  # per-exposure matched-filter line SNR floor
+    # matched-filter line SNR floor on the COADDED depth over all grism
+    # passes -- the depth the joint multi-roll fit sees, not one pass's
+    snr_line_total_min: float
     bulge_fraction_max: Optional[float]  # None = no cut
     bulge_nsersic_range: Optional[Tuple[float, float]]  # None = no cut
+    # floor on disk r50 / diffraction PSF FWHM at observed Halpha. Sub-PSF
+    # galaxies carry no velocity gradient to fit, and the extended-fiducial
+    # flux-limit reference rewards compact sources, so without this the
+    # selection admits objects an order of magnitude below the PSF.
+    # None = no cut.
+    min_r50_over_psf_fwhm: Optional[float]
 
     # sample
     n_galaxies: int  # subsampled without replacement
@@ -606,9 +614,15 @@ class CatalogPopulationSpec:
             raise ValueError(
                 f"selection.z_range ({z_lo}, {z_hi}) must satisfy 0 < lo < hi"
             )
-        if self.snr_line_min <= 0:
+        if self.snr_line_total_min <= 0:
             raise ValueError(
-                f"selection.snr_line_min ({self.snr_line_min}) must be positive"
+                f"selection.snr_line_total_min ({self.snr_line_total_min}) "
+                f"must be positive"
+            )
+        if self.min_r50_over_psf_fwhm is not None and self.min_r50_over_psf_fwhm <= 0:
+            raise ValueError(
+                f"selection.min_r50_over_psf_fwhm "
+                f"({self.min_r50_over_psf_fwhm}) must be positive or null"
             )
         if self.bulge_fraction_max is not None and not (
             0.0 < self.bulge_fraction_max <= 1.0
@@ -713,7 +727,20 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
     _require_keys(pre, ('flux_variant', 'h'), f"{context}.preprocess")
 
     sel = population['selection']
-    sel_keys = ('z_range', 'snr_line_min', 'bulge_fraction_max', 'bulge_nsersic_range')
+    if 'snr_line_min' in sel:
+        raise ValueError(
+            f"{context}.selection.snr_line_min is the PER-PASS line SNR but "
+            f"was applied as though it were the total, so a cut written as "
+            f"10 selected a coadded 20. Replace it with snr_line_total_min, "
+            f"the SNR coadded over every grism pass (per-pass x sqrt(passes))"
+        )
+    sel_keys = (
+        'z_range',
+        'snr_line_total_min',
+        'bulge_fraction_max',
+        'bulge_nsersic_range',
+        'min_r50_over_psf_fwhm',
+    )
     _reject_unknown(sel, sel_keys, f"{context}.selection")
     _require_keys(sel, sel_keys, f"{context}.selection")
 
@@ -778,7 +805,12 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         flux_variant=str(pre['flux_variant']),
         h=float(pre['h']),
         z_range=_parse_pair(sel['z_range'], f"{context}.selection.z_range"),
-        snr_line_min=float(sel['snr_line_min']),
+        snr_line_total_min=float(sel['snr_line_total_min']),
+        min_r50_over_psf_fwhm=(
+            float(sel['min_r50_over_psf_fwhm'])
+            if sel['min_r50_over_psf_fwhm'] is not None
+            else None
+        ),
         bulge_fraction_max=(
             float(bulge_fraction_max) if bulge_fraction_max is not None else None
         ),
@@ -1193,13 +1225,14 @@ class EnsembleSpec:
                 population, f"{path}:population"
             )
             # per-fit line SNR comes from the population table (matched-filter
-            # snr_line per galaxy); a scalar here would be silently ignored,
-            # so reject it outright
+            # snr_line_per_pass per galaxy); a scalar here would be silently
+            # ignored, so reject it outright
             if 'line' in snr:
                 raise ValueError(
                     f"{path}:observation.snr.line is not valid for catalog "
                     f"populations: per-fit line SNR comes from the population "
-                    f"table's matched-filter snr_line column; remove it"
+                    f"table's matched-filter snr_line_per_pass column; "
+                    f"remove it"
                 )
             ring_enabled = catalog_population.ring_members == 2
         else:

@@ -30,10 +30,10 @@ pytestmark = [
 
 
 def _dev_spec(tmp_path: Path, n_galaxies: int = 100) -> EnsembleSpec:
-    """Example spec with a real-data-sized selection (snr_line_min 5 keeps
+    """Example spec with a real-data-sized selection (snr_line_total_min 5 keeps
     ~400 of the dev box's ~280k disks; 10 keeps only ~50)."""
     d = yaml.safe_load(EXAMPLE_SPEC.read_text())
-    d['population']['selection']['snr_line_min'] = 5.0
+    d['population']['selection']['snr_line_total_min'] = 5.0
     d['population']['sample']['n_galaxies'] = n_galaxies
     d['population']['catalog']['data_dir'] = str(DATA_DIR)
     path = tmp_path / 'spec.yaml'
@@ -63,7 +63,7 @@ class TestRealCatalog:
         print(f"kills: {meta['kills']}")
         print(
             f"medians: ew_rest={df['ew_rest_a'].median():.1f} A, "
-            f"snr_line={df['snr_line'].median():.1f}, "
+            f"snr_line_total={df['snr_line_total'].median():.1f}, "
             f"vcirc={df['vcirc_kms'].median():.1f} km/s"
         )
 
@@ -82,7 +82,7 @@ class TestRealCatalog:
     def test_physical_ranges(self, real_build):
         df, _ = real_build
         assert df['z'].between(0.55, 1.9).all()
-        assert (df['snr_line'] >= 5.0).all()
+        assert (df['snr_line_total'] >= 5.0).all()
         assert df['cosi'].between(0.05, 0.95).all()
         assert (df['vcirc_kms'] > 0).all()
         assert (df['sigma0_kms'] >= 5.0).all()

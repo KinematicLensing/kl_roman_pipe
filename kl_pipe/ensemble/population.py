@@ -51,37 +51,79 @@ HALPHA_REST_A = 6562.8
 # f_lambda = f_nu * c / lambda^2 [erg/cm2/s/A]
 C_A_PER_S = 2.998e18
 
-# ROTAC (Roman Observations Time Allocation Committee) HLWAS spectroscopy
-# report: per-pass 5-sigma emission-line flux limit [erg/s/cm2]. Sources are
-# penalized (or rewarded) by the matched-filter compactness ratio C below,
-# relative to whatever source the limit itself was derived for -- see
-# SNR_LINE_REFERENCE.
-F_LIM_CGS = 3.1e-16
+# ROTAC (Roman Observations Time Allocation Committee) Final Report and
+# Recommendations, 2025-04-24 v3, Sect. 3.1: the HLWAS medium tier reaches a
+# "spectroscopic depth of 1.5 x 10^-16 erg/cm2/sec (5 sigma line flux limit,
+# texp ~ 1500 sec)" [erg/s/cm2]. Sect. 4.4.3 gives the exposure structure
+# behind that texp: four grism passes at distinct roll angles, two dither
+# positions per pass, 189.75 s per exposure (8 x 189.75 = 1518 s). This is
+# therefore the COADDED limit over all four passes -- the depth the joint
+# multi-roll fit sees. Sources are penalized (or rewarded) by the
+# matched-filter compactness ratio C below, relative to the source the limit
+# itself was derived for -- see SNR_LINE_REFERENCE.
+F_LIM_COADD_CGS = 1.5e-16
 
-# the SNR the F_LIM anchor corresponds to
+# grism passes the coadded limit covers (ROTAC Sect. 4.4.3). Must equal the
+# number of grism rolls in the observation config, or the total SNR the fit
+# sees differs from the total the selection assumed; the expander enforces
+# that when it builds catalog manifest rows.
+N_GRISM_PASSES = 4
+
+# a single pass is sqrt(N) shallower than the coadd. This is the limit the
+# per-pass SNR is referenced to, and the per-pass SNR is what normalizes the
+# noise of each individual grism roll's mock (see mocks.grism_line_noise).
+F_LIM_PER_PASS_CGS = F_LIM_COADD_CGS * np.sqrt(N_GRISM_PASSES)
+
+# the SNR the flux-limit anchor corresponds to (ROTAC Sect. 3.1: "5 sigma
+# emission line integrated flux limit"). Wang et al. 2022 additionally
+# characterize the Reference HLSS at 6.5 sigma; ROTAC does not, so no
+# sigma-convention conversion applies to the number above.
 F_LIM_NSIGMA = 5.0
 
-# What source F_LIM is referenced to. Not a free choice: it must match the
-# convention of the published limit, and getting it wrong double-counts (or
-# omits) the extended-source penalty, an order of magnitude in selected
-# number density.
+# What source the flux limit is referenced to. Not a free choice: it must
+# match the convention of the published limit, and getting it wrong
+# double-counts (or omits) the extended-source penalty, an order of
+# magnitude in selected number density.
 #
 #   'point_source'      -- C is taken relative to an unresolved source.
 #   'extended_fiducial' -- C is taken relative to a round galaxy of
 #                          half-light radius F_LIM_REF_R50_ARCSEC observed
 #                          at F_LIM_REF_LAMBDA_A.
 #
-# Wang et al. 2022 (arXiv:2110.01829, Sect. 5) state that the published
-# Roman HLSS line-flux limits are derived "for galaxies with radius 0.25
-# arcsec at 1.5 micron", that radius being the median half-light radius of
-# Halpha emitters at z ~ 1.5 from WISP (Dore et al. 2018 Fig. 17), and warn
-# that "the point source sensitivity is significantly better than for
-# galaxies with a finite size". If the ROTAC HLWAS number above inherits
-# that mission convention -- likely but not yet confirmed against the ROTAC
-# report itself -- then 'extended_fiducial' is correct and 'point_source'
-# double-counts the penalty. The default stays 'point_source' until that is
-# confirmed, so the change is opt-in and the census remains reproducible.
-SNR_LINE_REFERENCE = 'point_source'
+# The ROTAC limit is an extended-source limit. It does not say so in the
+# sentence quoting the number, but four independent lines agree:
+#
+#   - The committee's own request to the HLSS PIT (Appendix B.2, item 1a)
+#     asks for "Line flux limits for a realistic extended source at 1.1,
+#     1.2, 1.5, 1.8, 1.9 mu". The parallel imaging request (B.1, item 1a)
+#     asks separately for "point sources and rexp=0.3 arcsec extended
+#     sources", so the distinction is deliberate and spectroscopy was asked
+#     for extended only.
+#   - Sect. 3.1 labels the imaging depth "5 sigma point source" and, in the
+#     same sentence, the spectroscopic depth only "5 sigma line flux limit".
+#     The point-source qualifier is used where it applies.
+#   - Sect. 4.2.1 refers the reader to Wang et al. 2022 for HLWAS
+#     spectroscopy. Wang Sect. 5.1 adopts "line flux limits derived for
+#     galaxies with radius 0.25 arcsec at 1.5 micron", that radius being the
+#     median half-light radius of Halpha emitters at z ~ 1.5 from WISP (Dore
+#     et al. 2018 Fig. 17), and warns that "the point source sensitivity is
+#     significantly better than for galaxies with a finite size".
+#   - Arithmetic. Wang's 8.5e-17 (5 sigma, 0.25") is at 8 x 301 s; scaled to
+#     ROTAC's 8 x 190 s in the background-limited regime that is ~1.1e-16,
+#     within 1.4x of the 1.5e-16 ROTAC published (ROTAC Sect. 4.4.3 notes it
+#     ran its own ETC calculation folding in chip gaps and ecliptic-latitude
+#     variation, so a somewhat shallower characteristic depth is expected). A
+#     point-source limit would be ~4e-17, i.e. 3-4x DEEPER than the number
+#     published -- the wrong direction by a wide margin.
+#
+# End-to-end cross-check: under 'extended_fiducial' this selection returns
+# 4114 Halpha/deg2 at the published coadded depth over 99.5 deg2 of
+# Flagship2, against the 5917/deg2 ROTAC forecasts for the medium tier
+# (14.2M Halpha redshifts over 2400 deg2, Sect. 4.4.3) -- 0.70x, the right
+# ballpark for a pure line-SNR count against a secure-redshift count.
+# 'point_source' returns 504/deg2, low by 12x against a forecast made with
+# the same ETC that produced the flux limit we consume.
+SNR_LINE_REFERENCE = 'extended_fiducial'
 F_LIM_REF_R50_ARCSEC = 0.25
 F_LIM_REF_LAMBDA_A = 1.5e4
 
@@ -392,13 +434,25 @@ def preprocess(df: pd.DataFrame, spec: CatalogPopulationSpec) -> pd.DataFrame:
 # =============================================================================
 
 
+def psf_fwhm_arcsec(z: np.ndarray) -> np.ndarray:
+    """Diffraction PSF FWHM at the observed Halpha wavelength [arcsec].
+
+    FWHM = 1.22 * lambda_obs / D with lambda_obs = HALPHA_REST_A * (1 + z).
+    Used both by the compactness ratio and by the resolvability cut, so the
+    two share one PSF definition.
+    """
+    lambda_obs_m = HALPHA_REST_A * (1.0 + np.asarray(z, dtype=np.float64)) * 1e-10
+    return 1.22 * lambda_obs_m / ROMAN_APERTURE_M * ARCSEC_PER_RAD
+
+
 def matched_filter_compactness(
     reff_arcsec: np.ndarray, cosi: np.ndarray, z: np.ndarray
 ) -> np.ndarray:
     """Matched-filter SNR compactness ratio C in (0, 1].
 
-    The line-flux limit F_LIM is a point-source (5-sigma) limit; an
-    extended source's matched-filter SNR is degraded by
+    C is the matched-filter SNR of a source relative to an unresolved one at
+    the same line flux; ``fiducial_compactness`` supplies the reference the
+    published flux limit is normalized to. An extended source is degraded by
 
         C = sigma_psf / sqrt(s1 * s2),  s_i = sqrt(sigma_psf^2 + sig_i^2)
 
@@ -431,9 +485,7 @@ def matched_filter_compactness(
         raise ValueError("matched_filter_compactness: reff_arcsec must be positive")
 
     # diffraction PSF proxy: FWHM = 1.22 lambda/D [rad] -> arcsec -> sigma
-    lambda_obs_m = HALPHA_REST_A * (1.0 + z) * 1e-10  # A -> m
-    fwhm_arcsec = 1.22 * lambda_obs_m / ROMAN_APERTURE_M * ARCSEC_PER_RAD
-    sigma_psf = fwhm_arcsec / FWHM_TO_SIGMA
+    sigma_psf = psf_fwhm_arcsec(z) / FWHM_TO_SIGMA
 
     sig_maj = reff_arcsec / R50_TO_SIGMA
     sig_min = cosi * sig_maj
@@ -465,27 +517,41 @@ def fiducial_compactness() -> float:
     )
 
 
-def compute_line_snr(f_line: np.ndarray, compactness: np.ndarray) -> np.ndarray:
-    """Per-pass matched-filter line SNR.
+def compute_line_snr_per_pass(
+    f_line: np.ndarray, compactness: np.ndarray
+) -> np.ndarray:
+    """Matched-filter line SNR in a SINGLE grism pass.
 
-    SNR = F_LIM_NSIGMA * (f_line / F_LIM) * C / C_ref, where C_ref is the
-    compactness of the source F_LIM is referenced to (``fiducial_compactness``).
-    A source identical to that reference at f_line = F_LIM therefore has
-    SNR = F_LIM_NSIGMA; more compact sources do better and larger ones worse.
+    SNR = F_LIM_NSIGMA * (f_line / F_LIM_PER_PASS_CGS) * C / C_ref, where
+    C_ref is the compactness of the source the flux limit is referenced to
+    (``fiducial_compactness``). A source identical to that reference at
+    f_line = F_LIM_PER_PASS_CGS therefore has SNR = F_LIM_NSIGMA; more
+    compact sources do better and larger ones worse.
 
-    Note this is the PER-PASS SNR, not per-exposure: F_LIM is a per-pass
-    limit, and an HLWAS pass is several dithers. The survey coadds four
-    grism passes, so a galaxy's total line SNR -- the quantity the joint
-    multi-roll fit actually sees, and the one a selection cut should be
-    applied to -- is sqrt(4) times this.
+    This is the quantity that normalizes the noise of each individual grism
+    roll's mock (mocks.grism_line_noise is called once per roll). It is NOT
+    the quantity to apply a selection cut to -- use
+    ``compute_line_snr_total``, since the fit ingests every pass.
     """
     return (
         F_LIM_NSIGMA
         * np.asarray(f_line, dtype=np.float64)
-        / F_LIM_CGS
+        / F_LIM_PER_PASS_CGS
         * np.asarray(compactness, dtype=np.float64)
         / fiducial_compactness()
     )
+
+
+def compute_line_snr_total(f_line: np.ndarray, compactness: np.ndarray) -> np.ndarray:
+    """Matched-filter line SNR coadded over all ``N_GRISM_PASSES`` passes.
+
+    sqrt(N_GRISM_PASSES) times ``compute_line_snr_per_pass``, equivalently
+    the SNR referenced directly to the published coadded limit
+    ``F_LIM_COADD_CGS``. This is the depth the joint multi-roll fit sees and
+    the quantity a selection cut belongs on: cutting the per-pass SNR at 10
+    selects a total of 20, which is not what the number reads as.
+    """
+    return np.sqrt(N_GRISM_PASSES) * compute_line_snr_per_pass(f_line, compactness)
 
 
 # =============================================================================
@@ -737,13 +803,35 @@ def build_population(
         cosi,
         pre['true_redshift_gal'].to_numpy(dtype=np.float64),
     )
-    snr_line = compute_line_snr(pre['f_line_cgs'].to_numpy(), compactness)
+    f_line = pre['f_line_cgs'].to_numpy()
+    snr_line_per_pass = compute_line_snr_per_pass(f_line, compactness)
+    snr_line_total = compute_line_snr_total(f_line, compactness)
     pre = pre.assign(
-        cosi=cosi, theta_int=theta_int, compactness=compactness, snr_line=snr_line
+        cosi=cosi,
+        theta_int=theta_int,
+        compactness=compactness,
+        snr_line_per_pass=snr_line_per_pass,
+        snr_line_total=snr_line_total,
     )
 
-    snr_mask = pre['snr_line'].to_numpy() >= cp.snr_line_min
-    kills['snr_line'] = int((~snr_mask).sum())
+    # resolvability: a galaxy much smaller than the PSF has no measurable
+    # velocity gradient, so there is nothing for a kinematic fit to recover.
+    # The cut belongs here rather than in the model: referencing the flux
+    # limit to the extended fiducial REWARDS compact sources (C -> 1), so the
+    # corrected selection actively pulls in sub-PSF objects that the
+    # point-source reference happened to screen out.
+    if cp.min_r50_over_psf_fwhm is not None:
+        r50_over_fwhm = pre['disk_r50'].to_numpy(dtype=np.float64) / psf_fwhm_arcsec(
+            pre['true_redshift_gal'].to_numpy(dtype=np.float64)
+        )
+        res_mask = r50_over_fwhm >= cp.min_r50_over_psf_fwhm
+        kills['resolvability'] = int((~res_mask).sum())
+        pre = pre.loc[res_mask].reset_index(drop=True)
+    else:
+        kills['resolvability'] = 0
+
+    snr_mask = pre['snr_line_total'].to_numpy() >= cp.snr_line_total_min
+    kills['snr_line_total'] = int((~snr_mask).sum())
     selected = pre.loc[snr_mask].reset_index(drop=True)
     n_selected = len(selected)
 
@@ -813,7 +901,8 @@ def build_population(
             'g2': g2,
             'vcirc_kms': vcirc,
             'sigma0_kms': sigma0,
-            'snr_line': sample['snr_line'].to_numpy(),
+            'snr_line_per_pass': sample['snr_line_per_pass'].to_numpy(),
+            'snr_line_total': sample['snr_line_total'].to_numpy(),
             'compactness': sample['compactness'].to_numpy(),
             'logm_obs': logm_obs,
             'prior_vcirc_mu_kms': prior_mu,
@@ -844,10 +933,17 @@ def build_population(
         'n_selected': n_selected,
         'n_sampled': int(cp.n_galaxies),
         'flux_variant': cp.flux_variant,
-        'f_lim_cgs': F_LIM_CGS,
+        'f_lim_coadd_cgs': F_LIM_COADD_CGS,
+        'f_lim_per_pass_cgs': F_LIM_PER_PASS_CGS,
+        'n_grism_passes': N_GRISM_PASSES,
+        'snr_line_reference': SNR_LINE_REFERENCE,
+        'fiducial_compactness': fiducial_compactness(),
         'f_lim_provenance': (
-            'ROTAC HLWAS spectroscopy per-pass 5-sigma point-source '
-            'emission-line flux limit'
+            f'ROTAC Final Report 2025-04-24 v3 Sect. 3.1: HLWAS medium-tier '
+            f'{F_LIM_COADD_CGS:.1e} erg/s/cm2, {F_LIM_NSIGMA:g}-sigma line '
+            f'flux limit coadded over {N_GRISM_PASSES} grism passes '
+            f'(texp ~ 1500 s; Sect. 4.4.3). Referenced to a '
+            f'{SNR_LINE_REFERENCE} source'
         ),
         'psf_proxy': (
             f'diffraction FWHM = 1.22 * lambda_obs / {ROMAN_APERTURE_M} m; '

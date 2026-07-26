@@ -28,7 +28,8 @@ from kl_pipe.ensemble.population import (
     FLAGSHIP2_COLUMNS,
     R50_TO_SIGMA,
     build_population,
-    compute_line_snr,
+    compute_line_snr_per_pass,
+    compute_line_snr_total,
     load_flagship2_catalog,
     matched_filter_compactness,
     preprocess,
@@ -155,9 +156,10 @@ def catalog_spec_dict(data_dir: Path, **population_overrides) -> dict:
             'preprocess': {'flux_variant': 'model3_ext', 'h': 0.67},
             'selection': {
                 'z_range': [0.55, 1.9],
-                'snr_line_min': 0.5,
+                'snr_line_total_min': 0.5,
                 'bulge_fraction_max': None,
                 'bulge_nsersic_range': None,
+                'min_r50_over_psf_fwhm': None,
             },
             'sample': {'n_galaxies': 300, 'replace': False},
             'paint': {
@@ -270,9 +272,10 @@ def _cp(**overrides) -> CatalogPopulationSpec:
         flux_variant='model3_ext',
         h=0.67,
         z_range=(0.55, 1.9),
-        snr_line_min=0.5,
+        snr_line_total_min=0.5,
         bulge_fraction_max=None,
         bulge_nsersic_range=None,
+        min_r50_over_psf_fwhm=None,
         n_galaxies=10,
         tfr_logv0=2.384,
         tfr_logm0=10.50,
@@ -394,10 +397,14 @@ class TestCompactness:
         )
         assert c[0] > 0.999
 
-    def test_snr_point_source_anchor(self):
-        # a point source exactly at F_LIM has SNR 5 by construction
-        snr = compute_line_snr(np.array([3.1e-16]), np.array([1.0]))
-        np.testing.assert_allclose(snr, [5.0], rtol=1e-12)
+    def test_snr_reference_source_anchor(self):
+        # the source the limit is referenced to, at exactly the per-pass
+        # limit, has SNR = F_LIM_NSIGMA -- true under either reference
+        snr = compute_line_snr_per_pass(
+            np.array([population.F_LIM_PER_PASS_CGS]),
+            np.array([population.fiducial_compactness()]),
+        )
+        np.testing.assert_allclose(snr, [population.F_LIM_NSIGMA], rtol=1e-12)
 
     def test_nonpositive_reff_raises(self):
         with pytest.raises(ValueError, match='positive'):
@@ -461,11 +468,11 @@ class TestBuildPopulation:
         assert (theta >= 0).all() and (theta < np.pi).all()
 
     def test_selection_monotonic_in_snr_min(self, fake_data_dir, tmp_path):
-        # raising snr_line_min never increases the selected count
+        # raising snr_line_total_min never increases the selected count
         counts = []
         for i, snr_min in enumerate([0.5, 2.0, 5.0, 8.0]):
             d = catalog_spec_dict(fake_data_dir)
-            d['population']['selection']['snr_line_min'] = snr_min
+            d['population']['selection']['snr_line_total_min'] = snr_min
             d['population']['sample']['n_galaxies'] = 1
             sub = tmp_path / f's{i}'
             sub.mkdir()
@@ -608,6 +615,56 @@ class TestBulgePaint:
         with pytest.raises(ValueError, match='bulge_nsersic_range'):
             build_population(spec)
 
+    def test_resolvability_cut_removes_sub_psf_galaxies(self, fake_data_dir, tmp_path):
+        # a sub-PSF disk has no velocity gradient to fit, and the
+        # extended-fiducial flux reference rewards compact sources, so the cut
+        # is what keeps the selection above the resolution limit
+        from kl_pipe.ensemble.population import psf_fwhm_arcsec
+
+        # the fake catalog draws disk_r50 from U(0.1, 0.6) arcsec against a
+        # PSF FWHM of ~0.15 arcsec, so r50 / FWHM spans ~0.65-4; a floor of
+        # 1.0 lands inside that range and actually removes rows
+        floor = 1.0
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 50
+        d['population']['selection']['min_r50_over_psf_fwhm'] = floor
+        df, meta = build_population(spec_from_dict(tmp_path, d))
+        ratio = df['rscale_arcsec'].to_numpy() * R50_TO_SIGMA / psf_fwhm_arcsec(df['z'])
+        assert (ratio >= floor).all()
+        assert meta['kills']['resolvability'] > 0
+
+    def test_resolvability_cut_null_keeps_everything(self, fake_data_dir, tmp_path):
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['selection']['min_r50_over_psf_fwhm'] = None
+        _, meta = build_population(spec_from_dict(tmp_path, d))
+        assert meta['kills']['resolvability'] == 0
+
+    def test_resolvability_cut_only_shrinks_selection(self, fake_data_dir, tmp_path):
+        counts = []
+        for floor in (None, 0.25, 0.5, 1.0):
+            d = catalog_spec_dict(fake_data_dir)
+            d['population']['sample']['n_galaxies'] = 10
+            d['population']['selection']['min_r50_over_psf_fwhm'] = floor
+            _, meta = build_population(spec_from_dict(tmp_path, d))
+            counts.append(meta['n_selected'])
+        assert counts == sorted(counts, reverse=True)
+
+    def test_nonpositive_resolvability_floor_raises(self, fake_data_dir, tmp_path):
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['selection']['min_r50_over_psf_fwhm'] = 0.0
+        with pytest.raises(ValueError, match='min_r50_over_psf_fwhm'):
+            spec_from_dict(tmp_path, d)
+
+    def test_legacy_snr_line_min_key_raises(self, fake_data_dir, tmp_path):
+        # the old key was the PER-PASS SNR applied as if it were the total,
+        # so silently accepting it would keep selecting sqrt(N) deeper than
+        # the number reads
+        d = catalog_spec_dict(fake_data_dir)
+        del d['population']['selection']['snr_line_total_min']
+        d['population']['selection']['snr_line_min'] = 10.0
+        with pytest.raises(ValueError, match='snr_line_total_min'):
+            spec_from_dict(tmp_path, d)
+
 
 # ==============================================================================
 # Spec parsing (catalog branch)
@@ -725,37 +782,50 @@ class TestLineSnrReference:
         yield
         population.SNR_LINE_REFERENCE = original
 
-    def test_default_is_point_source(self):
-        # default must stay point-source until the ROTAC convention is
-        # confirmed, so existing runs stay reproducible
-        assert population.SNR_LINE_REFERENCE == 'point_source'
-        assert population.fiducial_compactness() == 1.0
+    def test_default_is_extended_fiducial(self):
+        # the ROTAC limit is an extended-source limit: the committee asked
+        # the HLSS PIT for "line flux limits for a realistic extended source"
+        # (Appendix B.2 item 1a) while asking separately for point-source and
+        # extended imaging depths (B.1 item 1a), Sect. 3.1 labels only the
+        # imaging depth "5 sigma point source", and Sect. 4.2.1 refers to
+        # Wang et al. 2022, whose limits are for r50 = 0.25 arcsec. A
+        # point-source reading would also put our yield 12x below the 14.2M
+        # Halpha over 2400 deg2 that ROTAC forecasts in Sect. 4.4.3.
+        assert population.SNR_LINE_REFERENCE == 'extended_fiducial'
+        assert 0.0 < population.fiducial_compactness() < 1.0
 
     def test_point_source_reference_is_identity(self):
-        # a point source (C = 1) at exactly F_LIM has SNR = F_LIM_NSIGMA
-        snr = compute_line_snr(np.array([population.F_LIM_CGS]), np.array([1.0]))
+        # a point source (C = 1) at exactly the per-pass limit has
+        # SNR = F_LIM_NSIGMA when the limit is referenced to a point source
+        population.SNR_LINE_REFERENCE = 'point_source'
+        assert population.fiducial_compactness() == 1.0
+        snr = compute_line_snr_per_pass(
+            np.array([population.F_LIM_PER_PASS_CGS]), np.array([1.0])
+        )
         assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
 
     def test_fiducial_galaxy_lands_on_nsigma(self):
         # self-consistency: under the extended reference, the very galaxy the
         # limit was derived for must sit exactly at F_LIM_NSIGMA when its
         # flux equals F_LIM
-        population.SNR_LINE_REFERENCE = 'extended_fiducial'
         z_ref = population.F_LIM_REF_LAMBDA_A / population.HALPHA_REST_A - 1.0
         c_fid = matched_filter_compactness(
             np.array([population.F_LIM_REF_R50_ARCSEC]),
             np.array([1.0]),
             np.array([z_ref]),
         )
-        snr = compute_line_snr(np.array([population.F_LIM_CGS]), c_fid)
+        snr = compute_line_snr_per_pass(
+            np.array([population.F_LIM_PER_PASS_CGS]), c_fid
+        )
         assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
 
     def test_extended_reference_rewards_compact_sources(self):
         # a point source beats the extended fiducial by exactly 1 / C_fid
-        population.SNR_LINE_REFERENCE = 'extended_fiducial'
         c_ref = population.fiducial_compactness()
         assert 0.0 < c_ref < 1.0
-        snr = compute_line_snr(np.array([population.F_LIM_CGS]), np.array([1.0]))
+        snr = compute_line_snr_per_pass(
+            np.array([population.F_LIM_PER_PASS_CGS]), np.array([1.0])
+        )
         assert snr[0] == pytest.approx(population.F_LIM_NSIGMA / c_ref, rel=1e-12)
 
     def test_reference_choice_is_a_pure_rescaling(self):
@@ -763,14 +833,73 @@ class TestLineSnrReference:
         # the overall normalization -- the physics of C is untouched
         f = np.array([1e-16, 3e-16, 5e-16])
         c = np.array([0.2, 0.5, 0.9])
-        point = compute_line_snr(f, c)
-        population.SNR_LINE_REFERENCE = 'extended_fiducial'
-        extended = compute_line_snr(f, c)
+        c_fid = population.fiducial_compactness()
+        extended = compute_line_snr_per_pass(f, c)
+        population.SNR_LINE_REFERENCE = 'point_source'
+        point = compute_line_snr_per_pass(f, c)
         ratio = extended / point
         assert np.allclose(ratio, ratio[0], rtol=1e-12)
-        assert ratio[0] == pytest.approx(1.0 / population.fiducial_compactness())
+        assert ratio[0] == pytest.approx(1.0 / c_fid)
 
     def test_unknown_reference_raises(self):
         population.SNR_LINE_REFERENCE = 'not_a_reference'
         with pytest.raises(ValueError, match='SNR_LINE_REFERENCE'):
             population.fiducial_compactness()
+
+
+class TestLineSnrCoadd:
+    """Per-pass vs coadded line SNR.
+
+    The published limit is the coadd over N_GRISM_PASSES passes; a single
+    pass is sqrt(N) shallower. Selection cuts belong on the total (the depth
+    the joint multi-roll fit sees), while each roll's mock noise is
+    normalized to one pass.
+    """
+
+    def test_total_is_sqrt_n_times_per_pass(self):
+        f = np.array([1e-16, 4e-16])
+        c = np.array([0.3, 0.8])
+        ratio = compute_line_snr_total(f, c) / compute_line_snr_per_pass(f, c)
+        expected = np.sqrt(population.N_GRISM_PASSES)
+        np.testing.assert_allclose(ratio, expected, rtol=1e-12)
+
+    def test_per_pass_limit_is_sqrt_n_shallower_than_coadd(self):
+        assert population.F_LIM_PER_PASS_CGS == pytest.approx(
+            population.F_LIM_COADD_CGS * np.sqrt(population.N_GRISM_PASSES), rel=1e-12
+        )
+
+    def test_reference_source_at_coadd_limit_hits_nsigma(self):
+        # the source the published coadded limit was derived for, at exactly
+        # that flux, sits at F_LIM_NSIGMA in the coadd
+        snr = compute_line_snr_total(
+            np.array([population.F_LIM_COADD_CGS]),
+            np.array([population.fiducial_compactness()]),
+        )
+        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
+
+
+class TestPublishedConstants:
+    """The survey numbers the whole selection chain hangs on.
+
+    Every other test in this module references these symbolically, so
+    without a literal pin an edit to any of them would rescale the selected
+    number density with nothing failing. Each value is quoted from its
+    source below; changing one means the source changed.
+    """
+
+    def test_flux_limit_matches_rotac(self):
+        # ROTAC Final Report 2025-04-24 v3, Sect. 3.1: HLWAS medium tier
+        # "1.5 x 10^-16 erg/cm2/sec (5 sigma line flux limit, texp ~ 1500
+        # sec)", the coadd over the 4 grism passes of Sect. 4.4.3
+        assert population.F_LIM_COADD_CGS == 1.5e-16
+        assert population.F_LIM_NSIGMA == 5.0
+        assert population.N_GRISM_PASSES == 4
+
+    def test_extended_fiducial_matches_wang22(self):
+        # Wang et al. 2022 (arXiv:2110.01829) Sect. 5.1: limits derived
+        # "for galaxies with radius 0.25 arcsec at 1.5 micron"
+        assert population.F_LIM_REF_R50_ARCSEC == 0.25
+        assert population.F_LIM_REF_LAMBDA_A == 1.5e4
+        # the resulting reference compactness, which divides every galaxy's
+        # C and therefore sets the overall yield normalization
+        assert population.fiducial_compactness() == pytest.approx(0.4148, abs=5e-5)
