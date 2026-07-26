@@ -29,6 +29,7 @@ from kl_pipe.pixel import BoxPixel, PixelResponse, _PIXEL_RESPONSE_UNSET
 from kl_pipe.psf import PSFData
 from kl_pipe.render import RenderConfig
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.fiber import build_fiber_pars_for_line, get_fiber_mask, precompute_PSF_convolved_fiber_mask, get_resolution_matrix_fiber
 
 import galsim as gs
 
@@ -375,15 +376,9 @@ class FiberObs:
     variance: Optional[jnp.ndarray] = None
     mask: Optional[jnp.ndarray] = None
     pixel_response_fft: Optional[jnp.ndarray] = None
-    psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
-    # _rc_was_default: internal flag — True when build_grism_obs supplied the
-    # default render_config (caller passed render_config=None), False when the
-    # caller passed an explicit one. Read by InferenceTask.from_obs to decide
-    # whether to auto-derive a priors-sized rc + rebuild via with_render_config.
-    # init=False keeps it out of the constructor kwargs; build_grism_obs sets
-    # it via object.__setattr__ (the standard escape hatch for frozen
-    # dataclasses), and pytree unflatten restores it the same way.
-    bp_array: Optional[jnp.ndarray] = None
+    psf: Optional[object] = None
+    #bp_array: Optional[jnp.ndarray] = None
+    throughput: Optional[jnp.ndarray] = None
     ATMPSF_conv_fiber_mask: Optional[jnp.ndarray] = None
     resolution_matrix: Optional[jnp.ndarray] = None
     _rc_was_default: bool = field(default=False, init=False, repr=False)
@@ -926,6 +921,7 @@ def build_fiber_obs(
     render_config: Optional[RenderConfig] = None,
     ATMPSF_conv_fiber_mask = None,
     resolution_matrix = None,
+    throughput = None,
 ) -> FiberObs:
     """Build fiber spectrograph observation
 
@@ -961,8 +957,6 @@ def build_fiber_obs(
     oversample = render_config.oversample # canonical
 
     cube_pars = fiber_pars.to_cube_pars(z)
-    #cube_pars = fiber_pars.cube_pars
-
     psf_data = None
     fine_image_pars = None
     pixel_response_fft = None
@@ -998,12 +992,20 @@ def build_fiber_obs(
     if mask is not None:
         mask = jnp.asarray(mask, dtype=bool) #don't know how to use the mask yet
 
-    throughput = gs.Bandpass(
-        fiber_pars.obs_conf['BANDPASS'],'nm',
-        blue_limit=cube_pars.lambda_grid[0],
-        red_limit=cube_pars.lambda_grid[-1],
-    )
-    bp_array = jnp.array(throughput(cube_pars.lambda_grid))
+    if throughput is None:
+        if fiber_pars.throughput is None and fiber_pars.bandpass_path is not None:
+            throughput_function = gs.Bandpass(
+                fiber_pars.bandpass_path,'nm',
+                blue_limit=cube_pars.lambda_grid[0],
+                red_limit=cube_pars.lambda_grid[-1],
+            )
+            throughput = jnp.asarray(throughput_function(cube_pars.lambda_grid))
+        elif fiber_pars.throughput is not None:
+            throughput = jnp.asarray(fiber_pars.throughput) #needs to be correct length
+        elif fiber_pars.throughput is None and fiber_pars.bandpass_path is None:
+            throughput = jnp.ones(cube_pars.lambda_grid)
+    else:
+        throughput = jnp.asarray(throughput)
 
     if ATMPSF_conv_fiber_mask is None:
         if oversample > 1:
@@ -1026,7 +1028,7 @@ def build_fiber_obs(
         mask=mask,
         pixel_response_fft=pixel_response_fft,
         psf=psf, #this is the galsim psf object
-        bp_array = bp_array,
+        throughput = throughput,
         ATMPSF_conv_fiber_mask=ATMPSF_conv_fiber_mask,
         resolution_matrix=resolution_matrix,
     )
@@ -1035,82 +1037,3 @@ def build_fiber_obs(
     if rc_was_default:
         object.__setattr__(obs, '_rc_was_default', True)
     return obs
-
-#maybe put these in the fiber.py file
-def get_fiber_mask(image_pars, fiber_pars):
-    from photutils.geometry import (
-        circular_overlap_grid as cog,
-    )
-
-    #print(Nrow_f, Ncol_f)
-    #spatial_shape = fiber_pars.output_shape
-    #mNx, mNy = spatial_shape[1], spatial_shape[0]
-
-    mNx, mNy = image_pars.Nrow, image_pars.Ncol
-    mscale = image_pars.pixel_scale #is this in arcsec/pixel?
-    fiber_cen = [
-        fiber_pars.fiber_dx,#fiber_pars.obs_conf['FIBERDX'],
-        fiber_pars.fiber_dy,#fiber_pars.obs_conf['FIBERDY'],
-    ]  # dx, dy in arcsec
-    fiber_rad = fiber_pars.fiber_radius #fiber_pars.obs_conf['FIBERRAD']  # radius in arcsec
-    xmin, xmax = -mNx / 2 * mscale, mNx / 2 * mscale
-    ymin, ymax = -mNy / 2 * mscale, mNy / 2 * mscale
-    mask = cog(
-        xmin - fiber_cen[0],
-        xmax - fiber_cen[0],
-        ymin - fiber_cen[1],
-        ymax - fiber_cen[1],
-        mNx,
-        mNy,
-        fiber_rad,
-        1,
-        2,
-    )
-    return mask
-
-import matplotlib.pyplot as plt
-def precompute_PSF_convolved_fiber_mask(image_pars, fiber_pars, galsim_psf):
-    '''get atm-PSF convolved fiber mask'''
-    mNx, mNy = image_pars.Nrow, image_pars.Ncol
-    mscale = image_pars.pixel_scale
-
-    mask = gs.InterpolatedImage(
-    gs.Image(array=get_fiber_mask(image_pars, fiber_pars)), scale=mscale
-    )
-
-    # convolve fiber mask with atmospheric PSF
-    maskC = mask if galsim_psf is None else gs.Convolve([mask, galsim_psf])
-    ary = maskC.drawImage(nx=mNx, ny=mNy, scale=mscale).array
-
-    # replace galsim convolution?
-    # fiber_psf_data = self.configure_fiber_psf(galsim_psf, fiber_pars.cube_pars)
-    # if self._fiber_psf_data is not None:
-    # from kl_pipe.psf import convolve_fft
-    # oversample = self._fiber_psf_data.oversample
-    # maskC = convolve_fft(self.get_fiber_mask(fiber_pars), self._fiber_psf_data) #mask needs to be 5x bigger in size if oversampling = 5
-    # else:
-    # maskC = self.get_fiber_mask(fiber_pars)
-    # print('maskC', maskC)
-    # ary=maskC
-
-    ATMPSF_conv_fiber_mask = jnp.array(ary)
-    return ATMPSF_conv_fiber_mask
-
-def get_resolution_matrix_fiber(fiber_pars, cube_pars):
-    from scipy.sparse import dia_matrix
-
-    diameter_in_pixel = fiber_pars.fiber_blur #fiber_pars.obs_conf['FIBRBLUR']
-    sigma = diameter_in_pixel / 4.0
-    x_in_pixel = jnp.arange(-5, 6)
-    # assume Gaussian for now
-    kernel = jnp.exp(-0.5 * (x_in_pixel / sigma) ** 2) / (
-        (2 * jnp.pi) ** 0.5 * sigma
-    )
-    # get the resolution matrix (sparse matrix)
-    band = jnp.array([kernel]).repeat(cube_pars.n_lambda, axis=0).T
-    offset = jnp.arange(kernel.shape[0] // 2, -(kernel.shape[0] // 2) - 1, -1)
-    Rmat = dia_matrix(
-        (band, offset), shape=(cube_pars.n_lambda, cube_pars.n_lambda)
-    )
-    resolution_mat = jnp.array(Rmat.toarray())  # need to figure out how to make jnp array of sparse matrix directly. but oh well, for now this
-    return resolution_mat

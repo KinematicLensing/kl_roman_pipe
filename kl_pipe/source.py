@@ -291,7 +291,6 @@ class SourceModel:
             obs.grism_pars.image_pars.pixel_scale,
         )
 
-    #I don't need to worry about rendering photometric images. That's done in render_broadband above
     def render_fiber(
         self,
         pars: dict,
@@ -333,33 +332,24 @@ class SourceModel:
             image_rotation=image_rotation,
         )
 
-        #replace fiber_observe_cube() from old code with the stuff here
-        #for the fiber spectra, I don't need to convolve cube slices with the PSF; just convolve the fiber mask with PSF
-        #wave = obs.cube_pars.lambda_grid
-
         #needs to be updated to handle oversampling scenario?
         spec_1D = jnp.sum(
                 (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
                 axis=(0, 1))
-        
-        #is the cube already rotated? #yes yes
-        #print(np.shape(cube))
-        #plt.imshow(cube[:,:,0])
 
-        spec_1D = spec_1D *  obs.bp_array
+        spec_1D = spec_1D *  obs.throughput
 
         #these things aren't in render_grism so I'm not so sure if they should be included here either.. for now ignore
-        #but it's important to account for situations where one fiber is exposed for longer than another, right?
-        #I guess for a case like that, I'm supposed to have a different parameter value for Halpha.flux? no, that would not make sense
-        factor = (
-            jnp.pi
-            * (obs.fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
-            * obs.fiber_pars.obs_conf['EXPTIME']
-            / obs.fiber_pars.obs_conf['GAIN']
-        )  # units cm^2 * seconds * ADU/electron ?
-        spec_1D = spec_1D * factor
+        #but it's important to account for situations where one fiber is exposed for longer than another, right? well it depends on the units
+        #factor = (
+            #jnp.pi
+            #* (obs.fiber_pars.obs_conf['DIAMETER'] / 2.0) ** 2
+            #* obs.fiber_pars.obs_conf['EXPTIME']
+            #/ obs.fiber_pars.obs_conf['GAIN']
+        #)
+        spec_1D = spec_1D #* factor
 
-        # fiber PSF can result in degrade in spectra resolution
+        # fiber PSF can result in degradation in spectral resolution
         if obs.resolution_matrix is not None:
             spec_1D = jnp.dot(obs.resolution_matrix, spec_1D)
 
