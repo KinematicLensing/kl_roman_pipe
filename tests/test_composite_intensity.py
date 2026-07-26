@@ -1062,3 +1062,75 @@ class TestCompositeGridSizing:
 
         rel = float(jnp.abs(auto - fine).max()) / float(jnp.abs(fine).max())
         assert rel < 1e-4, f'auto grid under-resolves: rel max diff {rel:.2e}'
+
+
+# ==============================================================================
+# Sampled bulge Sersic index
+# ==============================================================================
+
+
+class TestSampledBulgeIndex:
+    """bulge_nsersic=None exposes the index as a sampled parameter.
+
+    Pinning the index at its own painted truth flatters the recovery and
+    suppresses one leg of the index / bulge_frac / bulge_hlr degeneracy.
+    """
+
+    def test_none_adds_the_parameter(self):
+        fixed = BulgeDiskModel(bulge_nsersic=4.0, shared_centroids=True)
+        free = BulgeDiskModel(bulge_nsersic=None, shared_centroids=True)
+        added = tuple(p for p in free.PARAMETER_NAMES if p not in fixed.PARAMETER_NAMES)
+        assert added == ('bulge_n_sersic',)
+        assert len(free.PARAMETER_NAMES) == len(fixed.PARAMETER_NAMES) + 1
+
+    def test_property_reports_sampled_as_none(self):
+        assert BulgeDiskModel(bulge_nsersic=None).bulge_nsersic is None
+        assert BulgeDiskModel(bulge_nsersic=2.5).bulge_nsersic == 2.5
+        # the default stays a fixed de Vaucouleurs bulge
+        assert BulgeDiskModel().bulge_nsersic == 4.0
+
+    def test_sampled_at_a_value_matches_the_fixed_model(self, bulge_disk_shared_pars):
+        # freeing the index must not perturb the forward model: evaluated at
+        # n, the sampled model has to render exactly what the model built
+        # with that n fixed renders
+        n = 2.5
+        ip = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='xy')
+        fixed = BulgeDiskModel(bulge_nsersic=n, shared_centroids=True)
+        free = BulgeDiskModel(bulge_nsersic=None, shared_centroids=True)
+
+        pars_fixed = dict(bulge_disk_shared_pars)
+        pars_free = dict(bulge_disk_shared_pars, bulge_n_sersic=n)
+        img_fixed = fixed.render_image(fixed.pars2theta(pars_fixed), image_pars=ip)
+        img_free = free.render_image(free.pars2theta(pars_free), image_pars=ip)
+
+        np.testing.assert_allclose(img_free, img_fixed, rtol=1e-12, atol=0.0)
+
+    def test_index_changes_the_render(self, bulge_disk_shared_pars):
+        # guards the mapping: a different n must actually reach the bulge
+        ip = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='xy')
+        free = BulgeDiskModel(bulge_nsersic=None, shared_centroids=True)
+        a = free.render_image(
+            free.pars2theta(dict(bulge_disk_shared_pars, bulge_n_sersic=1.0)),
+            image_pars=ip,
+        )
+        b = free.render_image(
+            free.pars2theta(dict(bulge_disk_shared_pars, bulge_n_sersic=4.0)),
+            image_pars=ip,
+        )
+        assert float(jnp.abs(a - b).max()) > 1e-6 * float(jnp.abs(a).max())
+
+    def test_gradient_flows_to_the_index(self, bulge_disk_shared_pars):
+        # NUTS needs a finite, non-zero gradient along the new direction
+        ip = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='xy')
+        free = BulgeDiskModel(bulge_nsersic=None, shared_centroids=True)
+        theta = free.pars2theta(dict(bulge_disk_shared_pars, bulge_n_sersic=2.5))
+        idx = free.PARAMETER_NAMES.index('bulge_n_sersic')
+        grad = jax.grad(lambda t: jnp.sum(free.render_image(t, image_pars=ip) ** 2))(
+            theta
+        )
+        assert jnp.isfinite(grad[idx])
+        assert abs(float(grad[idx])) > 0.0
+
+    def test_out_of_range_fixed_index_still_raises(self):
+        with pytest.raises(ValueError, match='emulator validity range'):
+            BulgeDiskModel(bulge_nsersic=7.0)

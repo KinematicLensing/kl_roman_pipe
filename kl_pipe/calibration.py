@@ -345,7 +345,7 @@ def measure_shear_bias_shrinkage_corrected(
 
         s_j    = 1 - sigma_post_j^2 / sigma_prior^2
         ghat_j = mu_j / s_j                     (width-corrected estimate)
-        w_j    = 1 / sigma_like_j^2             (DATA-ONLY inverse variance)
+        w_j    = 1 / sigma_like_j^2             (data-only inverse variance)
 
     then fits ghat = (1 + m) * g_true + c by weighted least squares.
 
@@ -430,16 +430,15 @@ def measure_shear_bias_shrinkage_corrected(
     n_downweighted = 0
 
     if estimator == 'robust':
-        # A Huber loss is NOT sufficient here, and the reason is physical: a
-        # wrong-mode fit is CONFIDENTLY wrong, so it arrives with both a large
-        # residual and a small reported width. Measured on the planted-outlier
-        # test, such a fit carries 48x a clean fit's data-only weight, and
-        # Huber's linear downweighting (delta/|u|) still leaves it at ~4x --
-        # enough for 2% contamination to move m by ~0.8. A redescending loss
-        # is required, so the biweight zeroes them instead of taming them.
+        # A Huber loss does not suffice here. A wrong-mode fit is confidently
+        # wrong, so it arrives with both a large residual and a small reported
+        # width: on the planted-outlier test such a fit carries 48x a clean
+        # fit's data-only weight, and Huber's linear downweighting leaves it
+        # at ~4x, enough for 2% contamination to move m by ~0.8. The biweight
+        # redescends to zero instead.
         #
         # Redescending losses have local minima, hence the repeated-median
-        # (Siegel) seed: 50% breakdown, and it ignores the very weights the
+        # (Siegel) seed: 50% breakdown, and it ignores the weights the
         # outliers inflate.
         from scipy.stats import siegelslopes
 

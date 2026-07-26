@@ -966,6 +966,11 @@ class EnsembleSpec:
     target_accept: float
     n_map_starts: int
     pin_z_to_truth: bool
+    # sample the bulge Sersic index instead of pinning it at the painted
+    # truth. Adds {band}.bulge_n_sersic with a population prior; expect the
+    # bulge decomposition to loosen, since the index is degenerate with
+    # bulge_frac and bulge_hlr and pinning it suppressed one leg of that.
+    sample_bulge_nsersic: bool
 
     # dispatch
     backend: str
@@ -1111,6 +1116,22 @@ class EnsembleSpec:
                 "sampled-z (narrow spec-z prior) is planned but not wired in "
                 "v1; set fit.pin_z_to_truth: true"
             )
+        if self.sample_bulge_nsersic:
+            # the index only exists when the scene has a bulge, so silently
+            # accepting the flag would leave the fit unchanged while the spec
+            # claims otherwise
+            if self.catalog_population is None:
+                raise ValueError(
+                    "fit.sample_bulge_nsersic requires a catalog population: "
+                    "sampled-mode scenes are single-disk and have no bulge "
+                    "index to sample"
+                )
+            if not self.catalog_population.paint_bulge:
+                raise ValueError(
+                    "fit.sample_bulge_nsersic requires population.paint.bulge: "
+                    "true; with the bulge paint disabled the bands are "
+                    "single-disk and there is no index to sample"
+                )
         if self.escalation.enabled:
             # the retry donates the first attempt's warmup-adapted inverse
             # mass matrix, which only exists on the adapt-mass preconditioned
@@ -1357,6 +1378,7 @@ class EnsembleSpec:
                 'target_accept',
                 'n_map_starts',
                 'pin_z_to_truth',
+                'sample_bulge_nsersic',
                 'shear_prior_sigma',
                 'escalation',
             ),
@@ -1431,6 +1453,7 @@ class EnsembleSpec:
             target_accept=float(fit.get('target_accept', 0.8)),
             n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
+            sample_bulge_nsersic=bool(fit.get('sample_bulge_nsersic', False)),
             escalation=escalation,
             backend=str(dispatch.get('backend', 'local')),
             mode=str(dispatch.get('mode', 'dynamic')),

@@ -382,6 +382,96 @@ class TruncatedNormal(Prior):
 
 
 @dataclass(frozen=True)
+class TruncatedNormalMixture(Prior):
+    """
+    Weighted mixture of truncated normals on disjoint or overlapping supports.
+
+    Exists so a population painted from a mixture can be marginalized under
+    the distribution that generated it, rather than under a unimodal
+    approximation to it. Bulge Sersic index is the motivating case: the
+    literature distribution is a pseudobulge/classical mixture split at
+    n = 2, and moment-matching it to a single normal would misspecify the
+    population being recovered.
+
+    Parameters
+    ----------
+    components : tuple of TruncatedNormal
+        Mixture components.
+    weights : tuple of float
+        Mixture weights; must be positive and sum to 1.
+
+    Examples
+    --------
+    >>> # Gadotti 2009 bulge index: 70% pseudobulge, 30% classical
+    >>> prior = TruncatedNormalMixture(
+    ...     (TruncatedNormal(1.5, 0.9, 0.5, 2.0),
+    ...      TruncatedNormal(3.4, 1.3, 2.0, 6.0)),
+    ...     (0.7, 0.3),
+    ... )
+    """
+
+    components: Tuple[TruncatedNormal, ...]
+    weights: Tuple[float, ...]
+
+    def __post_init__(self):
+        if len(self.components) < 2:
+            raise ValueError(
+                f"a mixture needs >= 2 components, got {len(self.components)}"
+            )
+        if len(self.weights) != len(self.components):
+            raise ValueError(
+                f"{len(self.weights)} weights for {len(self.components)} components"
+            )
+        if any(w <= 0 for w in self.weights):
+            raise ValueError(f"weights must be positive, got {self.weights}")
+        total = float(sum(self.weights))
+        if abs(total - 1.0) > 1e-12:
+            raise ValueError(f"weights must sum to 1, got {total}")
+
+    def log_prob(self, value: jnp.ndarray) -> jnp.ndarray:
+        # logsumexp over components. Out-of-support components contribute
+        # -inf, which logsumexp handles; a value outside EVERY component's
+        # support gives -inf overall, as it must.
+        terms = jnp.stack(
+            [
+                jnp.log(w) + c.log_prob(value)
+                for c, w in zip(self.components, self.weights)
+            ]
+        )
+        return jax.scipy.special.logsumexp(terms, axis=0)
+
+    def sample(self, rng_key: jax.Array, shape: Tuple[int, ...] = ()) -> jnp.ndarray:
+        # pick a component per draw, then sample every component and gather;
+        # sampling all of them keeps the shapes static for JIT
+        pick_key, *comp_keys = random.split(rng_key, len(self.components) + 1)
+        idx = random.choice(
+            pick_key, len(self.components), shape=shape, p=jnp.array(self.weights)
+        )
+        draws = jnp.stack(
+            [c.sample(k, shape) for c, k in zip(self.components, comp_keys)]
+        )
+        return jnp.take_along_axis(draws, idx[None, ...], axis=0)[0]
+
+    @property
+    def bounds(self) -> Tuple[float, float]:
+        return (
+            min(c.low for c in self.components),
+            max(c.high for c in self.components),
+        )
+
+    def __repr__(self) -> str:
+        parts = ', '.join(f'{w}*{c!r}' for c, w in zip(self.components, self.weights))
+        return f"TruncatedNormalMixture({parts})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'truncated_normal_mixture',
+            'components': [c.to_dict() for c in self.components],
+            'weights': [float(w) for w in self.weights],
+        }
+
+
+@dataclass(frozen=True)
 class LogNormal(Prior):
     """
     Log-normal prior: ln(x) ~ Normal(mu, sigma), support x > 0.

@@ -649,6 +649,66 @@ class TestBulgePaint:
             counts.append(meta['n_selected'])
         assert counts == sorted(counts, reverse=True)
 
+    def test_painted_index_spans_the_full_emulator_support(
+        self, fake_data_dir, tmp_path
+    ):
+        # the classical component runs to the emulator's full 6.0 support;
+        # cutting it at 4 would misspecify 10.7% of all bulges for no saving
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 300
+        df, _ = build_population(spec_from_dict(tmp_path, d))
+        n = df['bulge_nsersic'].to_numpy()
+        assert n.max() <= population.BULGE_N_MAX
+        assert n.min() >= population.BULGE_PSEUDO_N[2]
+        assert population.BULGE_N_MAX == 6.0
+        # the mixture must stay pseudobulge-dominated
+        assert 0.6 < float((n <= 2.0).mean()) < 0.8
+        # and the classical tail past 4 must actually be populated
+        assert float((n > 4.0).mean()) > 0.03
+
+    def test_scene_prior_is_the_generating_distribution(self):
+        # the fit prior is the paint itself, not an approximation to it, so
+        # the marginalization over bulge index is exact -- the same property
+        # bulge_hlr has. Checked with a two-sample KS test.
+        import jax
+        import numpy as _np
+        from kl_pipe.ensemble.scene import _bulge_nsersic_prior
+
+        rng = _np.random.default_rng(0)
+        painted = _np.array(
+            [
+                population._truncated_normal(
+                    rng,
+                    *(
+                        population.BULGE_PSEUDO_N
+                        if rng.uniform() < population.BULGE_PSEUDO_WEIGHT
+                        else population.BULGE_CLASSICAL_N
+                    ),
+                )
+                for _ in range(20000)
+            ]
+        )
+        drawn = _np.asarray(
+            _bulge_nsersic_prior().sample(jax.random.PRNGKey(0), (20000,))
+        )
+        # p > 0.01 with n = 2e4 per sample: the KS test resolves shape
+        # differences far smaller than the unimodal approximation this
+        # replaced (which shifted ~11% of the mass)
+        assert stats.ks_2samp(painted, drawn).pvalue > 0.01
+
+    def test_scene_prior_supports_every_painted_value(self, fake_data_dir, tmp_path):
+        # a painted truth outside the prior support would be unrecoverable
+        import jax.numpy as jnp
+        from kl_pipe.ensemble.scene import _bulge_nsersic_prior
+
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 200
+        df, _ = build_population(spec_from_dict(tmp_path, d))
+        logp = _bulge_nsersic_prior().log_prob(
+            jnp.asarray(df['bulge_nsersic'].to_numpy())
+        )
+        assert bool(jnp.all(jnp.isfinite(logp)))
+
     def test_nonpositive_resolvability_floor_raises(self, fake_data_dir, tmp_path):
         d = catalog_spec_dict(fake_data_dir)
         d['population']['selection']['min_r50_over_psf_fwhm'] = 0.0

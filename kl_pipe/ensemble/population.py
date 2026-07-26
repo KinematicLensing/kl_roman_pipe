@@ -171,11 +171,14 @@ _POP_BULGE = 15
 # (Fisher & Drory 2008). Component medians and widths from Gadotti 2009
 # Table 3 (i band): pseudobulge n = 1.5 +/- 0.9, classical n = 3.4 +/- 1.3.
 # Mixture weight for a disk-dominated sample from Mendez-Abreu et al. 2010:
-# ~70% of bulges at B/T <= 0.3 have n <= 2. Upper bound 6.0 = catalog /
-# Sersic-emulator support.
+# ~70% of bulges at B/T <= 0.3 have n <= 2. Upper bound 6.0 = the Sersic
+# emulator's support, and the renderer is validated over that whole range.
+# Stopping the classical component short of it would misspecify 10.7% of all
+# bulges at no saving: render grid and per-render cost are flat in n.
+BULGE_N_MAX = 6.0
 BULGE_PSEUDO_WEIGHT = 0.7
 BULGE_PSEUDO_N = (1.5, 0.9, 0.5, 2.0)  # (mu, sd, low, high)
-BULGE_CLASSICAL_N = (3.4, 1.3, 2.0, 6.0)
+BULGE_CLASSICAL_N = (3.4, 1.3, 2.0, BULGE_N_MAX)
 # Bulge-to-disk size ratio bulge_r50 / disk_r50: lognormal. Median 0.3
 # brackets the direct z ~ 0.5-2.5 measurement (Lang et al. 2014: ~0.2, bulge
 # n fixed) and local Gadotti 2009-derived values (0.25-0.36 by bulge type);

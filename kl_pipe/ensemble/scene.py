@@ -25,6 +25,9 @@ import math
 from typing import Dict, Optional, TYPE_CHECKING
 
 from kl_pipe.ensemble.population import (
+    BULGE_CLASSICAL_N,
+    BULGE_PSEUDO_N,
+    BULGE_PSEUDO_WEIGHT,
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MEDIAN,
 )
@@ -33,6 +36,7 @@ from kl_pipe.priors import (
     LogNormal,
     PriorDict,
     TruncatedNormal,
+    TruncatedNormalMixture,
     Uniform,
     make_tf_prior,
 )
@@ -67,6 +71,8 @@ _BULGE_H_OVER_HLR = 0.5
 # bulge_hlr per galaxy from the catalog columns
 _BULGE_FRAC_DEFAULT = 0.1
 _BULGE_HLR_DEFAULT = 0.2  # arcsec
+# overridden per galaxy by the catalog expander from the bulge paint
+_BULGE_N_SERSIC_DEFAULT = 4.0
 
 # shared scene defaults (flagship values)
 _SHARED_TRUTH = {
@@ -86,7 +92,9 @@ def _geometry_components(config: 'ObservationConfig') -> tuple:
 
 
 def build_source_model(
-    config: 'ObservationConfig', bulge_nsersic: Optional[float] = None
+    config: 'ObservationConfig',
+    bulge_nsersic: Optional[float] = None,
+    sample_bulge_nsersic: bool = False,
 ) -> 'SourceModel':
     """SourceModel matching the observation config's bands and lines.
 
@@ -96,11 +104,18 @@ def build_source_model(
         Defines the scene's bands and lines.
     bulge_nsersic : float, optional
         If set (catalog mode), broadband bands carry a bulge: each band is a
-        ``BulgeDiskModel`` with this fixed per-galaxy Sersic index, shared
-        disk/bulge centroid, and shear applied to both components. The Halpha
-        line and its continuum stay disk-only (the line traces the star-
-        forming disk, not the old bulge). If None (sampled mode), every
-        component is a single ``InclinedExponentialModel`` as before.
+        ``BulgeDiskModel`` with shared disk/bulge centroid and shear applied
+        to both components. The Halpha line and its continuum stay disk-only
+        (the line traces the star-forming disk, not the old bulge). If None
+        (sampled mode), every component is a single
+        ``InclinedExponentialModel`` as before.
+    sample_bulge_nsersic : bool
+        If True, the bulge Sersic index becomes the sampled parameter
+        ``{band}.bulge_n_sersic`` rather than being fixed at the painted
+        value. ``bulge_nsersic`` then only decides whether the scene has a
+        bulge and supplies the truth; it is not handed to the model, since
+        pinning a fit parameter at its own truth flatters the recovery.
+        Requires ``bulge_nsersic`` to be set.
     """
     from kl_pipe.intensity import BulgeDiskModel, InclinedExponentialModel
     from kl_pipe.lines import EmissionLine
@@ -115,11 +130,16 @@ def build_source_model(
             )
 
     if bulge_nsersic is None:
+        if sample_bulge_nsersic:
+            raise ValueError(
+                "sample_bulge_nsersic requires bulge_nsersic to be set: it "
+                "decides whether the scene has a bulge at all"
+            )
         broadband_models = {band: InclinedExponentialModel() for band in config.bands}
     else:
         broadband_models = {
             band: BulgeDiskModel(
-                bulge_nsersic=bulge_nsersic,
+                bulge_nsersic=None if sample_bulge_nsersic else bulge_nsersic,
                 shared_centroids=True,
                 shear_bulge=True,
             )
@@ -183,6 +203,7 @@ def scene_truth_defaults(
             truth[f'{band}.disk_h_over_r'] = 0.1
             truth[f'{band}.bulge_hlr'] = _BULGE_HLR_DEFAULT
             truth[f'{band}.bulge_h_over_hlr'] = _BULGE_H_OVER_HLR
+            truth[f'{band}.bulge_n_sersic'] = _BULGE_N_SERSIC_DEFAULT
             truth[f'{band}.x0'] = 0.0
             truth[f'{band}.y0'] = 0.0
         else:
@@ -254,6 +275,20 @@ _BULGE_FRAC_SCALE = 0.08
 # removes only the >3-sigma tail (ln(1/0.3)/0.4 = 3.0), a negligible
 # mismatch that keeps the prior JIT-simple and the render grid finite.
 _EXP_R50_OVER_RSCALE = 1.6783  # exponential-disk r50 / scale-length ratio
+
+# bulge_n_sersic: prior == the distribution the paint draws from, so the
+# marginalization is exact, as for bulge_hlr above.
+
+
+def _bulge_nsersic_prior() -> TruncatedNormalMixture:
+    """Bulge Sersic index prior: the population paint's own mixture."""
+    return TruncatedNormalMixture(
+        (
+            TruncatedNormal(*BULGE_PSEUDO_N),
+            TruncatedNormal(*BULGE_CLASSICAL_N),
+        ),
+        (BULGE_PSEUDO_WEIGHT, 1.0 - BULGE_PSEUDO_WEIGHT),
+    )
 
 
 def scene_priors(
@@ -377,6 +412,8 @@ def scene_priors(
                 math.log(bulge_hlr_median), BULGE_SIZE_RATIO_LN_SCATTER
             )
             prior_spec[f'{band}.bulge_h_over_hlr'] = truth[f'{band}.bulge_h_over_hlr']
+            if spec.sample_bulge_nsersic:
+                prior_spec[f'{band}.bulge_n_sersic'] = _bulge_nsersic_prior()
         else:
             prior_spec[f'{band}.flux'] = TruncatedNormal(
                 truth[f'{band}.flux'], sigma, low, high

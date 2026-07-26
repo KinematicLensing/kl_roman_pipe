@@ -22,6 +22,7 @@ from kl_pipe.priors import (
     LogUniform,
     LogNormal,
     TruncatedNormal,
+    TruncatedNormalMixture,
     PriorDict,
     make_tf_prior,
 )
@@ -637,3 +638,76 @@ class TestPriorSerialization:
             'low': None,
             'high': None,
         }
+
+
+# ==============================================================================
+# TruncatedNormalMixture
+# ==============================================================================
+
+
+def _bulge_mixture() -> TruncatedNormalMixture:
+    """The Gadotti 2009 pseudobulge/classical split used by the population."""
+    return TruncatedNormalMixture(
+        (TruncatedNormal(1.5, 0.9, 0.5, 2.0), TruncatedNormal(3.4, 1.3, 2.0, 6.0)),
+        (0.7, 0.3),
+    )
+
+
+class TestTruncatedNormalMixture:
+    def test_pdf_integrates_to_one(self):
+        m = _bulge_mixture()
+        x = jnp.linspace(0.5, 6.0, 200001)
+        integral = float(jnp.trapezoid(jnp.exp(m.log_prob(x)), x))
+        assert integral == pytest.approx(1.0, abs=1e-4)
+
+    def test_outside_every_component_is_neg_inf(self):
+        m = _bulge_mixture()
+        assert float(m.log_prob(jnp.array(0.2))) == -np.inf
+        assert float(m.log_prob(jnp.array(6.5))) == -np.inf
+
+    def test_matches_weighted_component_density(self):
+        # inside a single component's support the mixture is exactly that
+        # component's density times its weight
+        m = _bulge_mixture()
+        v = jnp.array(1.2)  # pseudobulge-only region
+        expected = np.log(0.7) + float(TruncatedNormal(1.5, 0.9, 0.5, 2.0).log_prob(v))
+        assert float(m.log_prob(v)) == pytest.approx(expected, rel=1e-12)
+
+    def test_bounds_span_all_components(self):
+        assert _bulge_mixture().bounds == (0.5, 6.0)
+
+    def test_sampling_reproduces_the_density(self):
+        m = _bulge_mixture()
+        s = np.asarray(m.sample(random.PRNGKey(0), (200000,)))
+        x = jnp.linspace(0.5, 6.0, 200001)
+        pdf = jnp.exp(m.log_prob(x))
+        analytic_mean = float(jnp.trapezoid(x * pdf, x))
+        # standard error of the mean over 2e5 draws is std/sqrt(N) ~ 0.003;
+        # 0.02 is ~6 sigma, so this catches a wrong mixture, not noise
+        assert s.mean() == pytest.approx(analytic_mean, abs=0.02)
+        # the component weights must show up as the mass below the split
+        assert np.mean(s <= 2.0) == pytest.approx(0.7, abs=0.01)
+        assert s.min() >= 0.5 and s.max() <= 6.0
+
+    def test_jit_and_grad(self):
+        m = _bulge_mixture()
+        assert np.isfinite(float(jax.jit(m.log_prob)(jnp.array(3.0))))
+        g = float(jax.grad(m.log_prob)(jnp.array(3.0)))
+        assert np.isfinite(g)
+
+    def test_validation(self):
+        tn = TruncatedNormal(1.0, 1.0, 0.0, 2.0)
+        with pytest.raises(ValueError, match='>= 2 components'):
+            TruncatedNormalMixture((tn,), (1.0,))
+        with pytest.raises(ValueError, match='weights for'):
+            TruncatedNormalMixture((tn, tn), (0.5, 0.3, 0.2))
+        with pytest.raises(ValueError, match='must be positive'):
+            TruncatedNormalMixture((tn, tn), (1.2, -0.2))
+        with pytest.raises(ValueError, match='sum to 1'):
+            TruncatedNormalMixture((tn, tn), (0.5, 0.4))
+
+    def test_to_dict_roundtrips_components(self):
+        d = _bulge_mixture().to_dict()
+        assert d['dist'] == 'truncated_normal_mixture'
+        assert d['weights'] == [0.7, 0.3]
+        assert [c['dist'] for c in d['components']] == ['truncated_normal'] * 2

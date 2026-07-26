@@ -230,7 +230,7 @@ def test_gradient_through_emulator():
 # ==============================================================================
 
 
-@pytest.mark.parametrize("n", [1.0, 2.0, 4.0])
+@pytest.mark.parametrize("n", [1.0, 2.0, 4.0, 5.0, 6.0])
 def test_flux_conservation(n):
     """Total rendered flux matches input flux on a large grid."""
     model = InclinedSersicModel()
@@ -280,7 +280,7 @@ def test_render_vs_call_faceon():
 # ==============================================================================
 
 
-@pytest.mark.parametrize("n", [1.0, 2.0, 4.0])
+@pytest.mark.parametrize("n", [1.0, 2.0, 4.0, 5.0, 6.0])
 def test_faceon_vs_galsim(sersic_output_dir, n):
     """Face-on Sersic with PSF vs GalSim Sersic."""
     Re = 2.0  # arcsec
@@ -452,9 +452,10 @@ def test_oversample_convergence(sersic_output_dir):
 # ==============================================================================
 
 
-@pytest.mark.parametrize("n", [1.0, 2.0, 3.0, 4.0])
+@pytest.mark.parametrize("n", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
 def test_sersic_normalization_integral(n):
     """Numerical radial integral of face-on Sersic profile must equal flux."""
+    from scipy import optimize, special
     from scipy.integrate import quad
 
     flux = 1.0
@@ -465,9 +466,17 @@ def test_sersic_normalization_integral(n):
     def integrand(r):
         return 2.0 * np.pi * r * I0 * np.exp(-bn * (r / Re) ** (1.0 / n))
 
-    # upper limit: exp(-bn * s^{1/n}) negligible for s >> (20/bn)^n
-    r_max = Re * max(50.0, (20.0 / bn) ** n)
-    measured_flux, _ = quad(integrand, 0, r_max, limit=300)
+    # Upper limit from the exact tail: the flux outside radius R is
+    # Gamma(2n, x)/Gamma(2n) with x = bn * (R/Re)^(1/n), so invert that for a
+    # 1e-9 tail and convert back to radius. The previous heuristic,
+    # max(50, (20/bn)^n), SHRANK with n -- (20/bn)^n is only 25 at n=6 -- so
+    # it clamped to 50*Re while n=6 needs ~1000*Re, truncating 0.6% of the
+    # flux and making this a test of the integration domain rather than of
+    # the normalization. It passed at n=4 only marginally (5.97e-4 against a
+    # 1e-3 gate).
+    x = optimize.brentq(lambda t: special.gammaincc(2.0 * n, t) - 1e-9, 1.0, 500.0)
+    r_max = Re * (x / bn) ** n
+    measured_flux, _ = quad(integrand, 0, r_max, limit=500)
     rel_err = abs(measured_flux - flux) / flux
     assert rel_err < 1e-3, (
         f"Normalization: measured={measured_flux:.6f}, expected={flux}, "

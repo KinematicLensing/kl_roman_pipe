@@ -608,3 +608,127 @@ class TestGalaxyIdSubset:
         d['population']['sample']['galaxy_ids'] = bad
         with pytest.raises((ValueError, TypeError), match=match):
             spec_from_dict(tmp_path, d)
+
+
+# ==============================================================================
+# Sampled bulge Sersic index (fit.sample_bulge_nsersic)
+# ==============================================================================
+
+
+class TestSampledBulgeIndex:
+    """Freeing the bulge index removes a truth pin from the fit.
+
+    Census v1 handed the painted per-galaxy index to the model as a
+    constructor argument, so the fit knew it exactly.
+    """
+
+    def _inputs(self, data_dir, tmp_path, sample_bulge_nsersic):
+        d = _small_spec_dict(data_dir)
+        d['run']['name'] = f'pop_test_bulgen_{int(sample_bulge_nsersic)}'
+        d['fit']['sample_bulge_nsersic'] = sample_bulge_nsersic
+        spec_path = tmp_path / f'spec_{int(sample_bulge_nsersic)}.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        run_dir = expand(
+            spec_path, REGISTRY, tmp_path / f'r{int(sample_bulge_nsersic)}'
+        )
+        spec, config, manifest = load_run(run_dir)
+        row = manifest.iloc[0].to_dict()
+        truth = {
+            k[len('truth.') :]: v for k, v in row.items() if k.startswith('truth.')
+        }
+        return spec, config, row, truth
+
+    def test_defaults_to_pinned(self, fake_data_dir, tmp_path):
+        spec, _, _, _ = self._inputs(fake_data_dir, tmp_path, False)
+        assert spec.sample_bulge_nsersic is False
+
+    def test_adds_one_sampled_index_per_band(self, fake_data_dir, tmp_path):
+        spec_off, cfg, row_off, truth_off = self._inputs(fake_data_dir, tmp_path, False)
+        spec_on, _, row_on, truth_on = self._inputs(fake_data_dir, tmp_path, True)
+
+        off = build_fit_inputs(
+            truth_off,
+            int(row_off['noise_seed']),
+            spec_off,
+            cfg,
+            broadband_snr=float(row_off['broadband_snr']),
+            line_snr=float(row_off['line_snr']),
+            row=row_off,
+        )
+        on = build_fit_inputs(
+            truth_on,
+            int(row_on['noise_seed']),
+            spec_on,
+            cfg,
+            broadband_snr=float(row_on['broadband_snr']),
+            line_snr=float(row_on['line_snr']),
+            row=row_on,
+        )
+        added = set(on.priors.sampled_names) - set(off.priors.sampled_names)
+        assert added == {f'{band}.bulge_n_sersic' for band in cfg.bands}
+
+    def test_truth_is_the_painted_index_not_the_model_default(
+        self, fake_data_dir, tmp_path
+    ):
+        # the recovery target must be this galaxy's painted index; if the
+        # expander failed to write it, truth would silently be the scene
+        # default and every fit would appear to recover n = 4
+        _, cfg, row, truth = self._inputs(fake_data_dir, tmp_path, True)
+        painted = float(row['pop.bulge_nsersic'])
+        for band in cfg.bands:
+            assert truth[f'{band}.bulge_n_sersic'] == pytest.approx(painted)
+
+    def test_painted_truth_lies_inside_the_prior_support(self, fake_data_dir, tmp_path):
+        spec, cfg, row, truth = self._inputs(fake_data_dir, tmp_path, True)
+        inputs = build_fit_inputs(
+            truth,
+            int(row['noise_seed']),
+            spec,
+            cfg,
+            broadband_snr=float(row['broadband_snr']),
+            line_snr=float(row['line_snr']),
+            row=row,
+        )
+        for band in cfg.bands:
+            name = f'{band}.bulge_n_sersic'
+            logp = float(inputs.priors.get_prior(name).log_prob(truth[name]))
+            assert np.isfinite(logp), f'{name} truth outside its own prior'
+
+    def test_requires_a_bulge(self):
+        # sampling an index for a scene that has no bulge is a spec error
+        from kl_pipe.ensemble.scene import build_source_model
+
+        with pytest.raises(ValueError, match='requires bulge_nsersic'):
+            build_source_model(
+                _observation_config(), bulge_nsersic=None, sample_bulge_nsersic=True
+            )
+
+    def test_spec_rejects_the_flag_without_the_bulge_paint(
+        self, fake_data_dir, tmp_path
+    ):
+        # accepting it silently would leave the fit unchanged while the spec
+        # claims the index is sampled
+        d = _nobulge_spec_dict(fake_data_dir)
+        d['fit']['sample_bulge_nsersic'] = True
+        path = tmp_path / 'nobulge_sample_n.yaml'
+        path.write_text(yaml.safe_dump(d))
+        with pytest.raises(ValueError, match='population.paint.bulge'):
+            EnsembleSpec.from_yaml(path)
+
+    def test_spec_rejects_the_flag_in_sampled_mode(self, tmp_path):
+        d = yaml.safe_load(
+            (
+                REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
+            ).read_text()
+        )
+        d['fit']['sample_bulge_nsersic'] = True
+        path = tmp_path / 'sampled_sample_n.yaml'
+        path.write_text(yaml.safe_dump(d))
+        with pytest.raises(ValueError, match='requires a catalog population'):
+            EnsembleSpec.from_yaml(path)
+
+
+def _observation_config():
+    from kl_pipe.ensemble.spec import ObservationConfig
+
+    return ObservationConfig.from_yaml(REGISTRY / 'canonical_P.yaml')

@@ -480,7 +480,11 @@ def build_fit_inputs(
         )
     use_bulge = is_catalog and spec.catalog_population.paint_bulge
     bulge_nsersic = float(row['pop.bulge_nsersic']) if use_bulge else None
-    source = build_source_model(config, bulge_nsersic=bulge_nsersic)
+    source = build_source_model(
+        config,
+        bulge_nsersic=bulge_nsersic,
+        sample_bulge_nsersic=use_bulge and spec.sample_bulge_nsersic,
+    )
     priors = scene_priors(truth, config, spec, row=row)
 
     sampled = set(priors.sampled_names) | set(priors.fixed_names)

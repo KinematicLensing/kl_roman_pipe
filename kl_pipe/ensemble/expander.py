@@ -381,6 +381,7 @@ def _catalog_rows(
                         truth[f'{band}.disk_rscale'] = rscale
                         truth[f'{band}.bulge_frac'] = float(g['bulge_fraction'])
                         truth[f'{band}.bulge_hlr'] = float(g['bulge_r50_arcsec'])
+                        truth[f'{band}.bulge_n_sersic'] = float(g['bulge_nsersic'])
                     else:
                         truth[f'{band}.rscale'] = rscale
                 truth['Halpha.rscale'] = rscale
