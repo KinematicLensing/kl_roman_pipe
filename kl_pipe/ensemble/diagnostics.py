@@ -36,6 +36,8 @@ from kl_pipe.calibration import (
     GALAXY_FRAME_ANGLE,
     compute_shape_noise,
     galaxy_frame_samples,
+    measure_shear_bias,
+    measure_shear_bias_shrinkage_corrected,
     rotate_to_galaxy_frame,
 )
 from kl_pipe.ensemble.collate import analysis_table
@@ -328,6 +330,78 @@ def _galaxy_frame_sigmas(run_dir: Path, row: pd.Series) -> Tuple[float, float, s
     gp = np.sqrt((s1 * c2) ** 2 + (s2 * s2t) ** 2)
     gx = np.sqrt((s1 * s2t) ** 2 + (s2 * c2) ** 2)
     return float(gp), float(gx), 'marginal-approx'
+
+
+# shear components reported in the calibration table, as
+# (truth column suffix, posterior column suffix) pairs
+_BIAS_COMPONENTS = ('g1', 'g2', 'g_plus', 'g_cross')
+
+
+def shear_bias_table(
+    table: pd.DataFrame, sigma_prior: float, s_min: Optional[float] = None
+) -> pd.DataFrame:
+    """Shear calibration (m, c) per component under three estimators.
+
+    Emits the uncorrected posterior-mean regression alongside the
+    shrinkage-corrected forms so the size of the prior-shrinkage artifact is
+    visible rather than implicit: under a Gaussian(0, sigma_prior) shear
+    prior the naive slope is suppressed by the ensemble-mean shrinkage, which
+    is a property of the prior and not of the pipeline.
+
+    ``robust`` is the number to report. It is the one that survives the
+    wrong-mode fits, which arrive confidently wrong and therefore carry both
+    a large residual and a large weight.
+    """
+    rows: List[dict] = []
+    for comp in _BIAS_COMPONENTS:
+        truth_col, mean_col, std_col = (
+            f'truth.{comp}',
+            f'post.{comp}.mean',
+            f'post.{comp}.std',
+        )
+        if not {truth_col, mean_col, std_col}.issubset(table.columns):
+            continue
+        g_true = table[truth_col].to_numpy(dtype=float)
+        mu = table[mean_col].to_numpy(dtype=float)
+        sd = table[std_col].to_numpy(dtype=float)
+        if np.ptp(g_true) == 0.0:
+            # ring-style specs inject one shear value; a slope is undefined
+            continue
+
+        naive = measure_shear_bias(g_true, mu)
+        rows.append(
+            {
+                'component': comp,
+                'estimator': 'naive',
+                'm': naive.m,
+                'sigma_m': naive.sigma_m,
+                'c': naive.c,
+                'sigma_c': naive.sigma_c,
+                'n_used': len(g_true),
+                'n_clipped': 0,
+                'n_outliers': 0,
+                'mean_shrinkage': np.nan,
+            }
+        )
+        for est in ('wls', 'robust'):
+            r = measure_shear_bias_shrinkage_corrected(
+                g_true, mu, sd, sigma_prior, s_min=s_min, estimator=est
+            )
+            rows.append(
+                {
+                    'component': comp,
+                    'estimator': f'corrected_{est}',
+                    'm': r.m,
+                    'sigma_m': r.sigma_m,
+                    'c': r.c,
+                    'sigma_c': r.sigma_c,
+                    'n_used': r.n_used,
+                    'n_clipped': r.n_clipped,
+                    'n_outliers': r.n_outliers,
+                    'mean_shrinkage': r.mean_shrinkage,
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def sigma_eps_table(
@@ -725,9 +799,12 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     quality = quality_table(table)
     pulls = pull_table(table)
     sigma = sigma_eps_table(run_dir, table, group_col, value_col)
+    bias = shear_bias_table(table, spec.shear_fit_prior_sigma)
     quality.to_csv(out_dir / 'quality.csv', index=False)
     pulls.to_csv(out_dir / 'pulls.csv', index=False)
     sigma.to_csv(out_dir / 'sigma_eps.csv', index=False)
+    if len(bias):
+        bias.to_csv(out_dir / 'shear_bias.csv', index=False)
 
     plot_recovery(table, out_dir)
     plot_pulls(table, out_dir)
@@ -781,5 +858,17 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
                 f"+/- {head['sigma_eps_err'].iloc[0]:.4f} "
                 f"({int(head['n_fits'].iloc[0])} fits)"
             )
+    for _, r in bias[bias['estimator'] == 'corrected_robust'].iterrows():
+        print(
+            f"  m[{r['component']}] = {r['m']:+.3f} +/- {r['sigma_m']:.3f}, "
+            f"c = {r['c']:+.4f} +/- {r['sigma_c']:.4f} "
+            f"(<s> = {r['mean_shrinkage']:.2f}, {int(r['n_outliers'])} outliers)"
+        )
     print(f'  outputs: {out_dir}')
-    return {'quality': quality, 'pulls': pulls, 'sigma_eps': sigma, 'out_dir': out_dir}
+    return {
+        'quality': quality,
+        'pulls': pulls,
+        'sigma_eps': sigma,
+        'shear_bias': bias,
+        'out_dir': out_dir,
+    }
