@@ -1,7 +1,3 @@
-#I should keep fiber-specific operations here, after the cube. Don't keep things in spectral.py
-#I think I should also keep FiberPars here for now. I don't want to put it in dispersion.py
-#photometric imaging needs to be kept separate
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,7 +13,6 @@ if TYPE_CHECKING:
 
 from kl_pipe.parameters import ImagePars
 
-####WIP
 @dataclass(frozen=True)
 class FiberPars:
     image_pars: ImagePars
