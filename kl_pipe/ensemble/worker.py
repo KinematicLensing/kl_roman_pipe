@@ -475,9 +475,11 @@ def _summary_row(
             out[f'post.{nm}.median'] = float(np.median(arr))
 
     # priors actually used for this fit (ground truth: the object passed to the
-    # sampler). Flat prior.<param>.{dist,loc,scale,low,high} columns, every
-    # param -- sampled and fixed (dist='fixed', loc=value) -- so the collated
-    # table records exactly how each parameter was set.
+    # sampler). Flat prior.<param>.{dist,loc,scale,low,high,parent} columns,
+    # every param -- sampled and fixed (dist='fixed', loc=value) -- so the
+    # collated table records exactly how each parameter was set. 'parent' is
+    # None except for conditional priors, where it names the parameter the
+    # prior conditions on.
     if priors is not None:
         for name, rec in priors.describe().items():
             out[f'prior.{name}.dist'] = rec['dist']
@@ -485,6 +487,7 @@ def _summary_row(
             out[f'prior.{name}.scale'] = rec['scale']
             out[f'prior.{name}.low'] = rec['low']
             out[f'prior.{name}.high'] = rec['high']
+            out[f'prior.{name}.parent'] = rec.get('parent')
     return out
 
 

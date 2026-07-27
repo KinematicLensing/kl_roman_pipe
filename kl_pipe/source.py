@@ -93,13 +93,22 @@ def _component_priors_for_intensity(
     Skips params absent from both lookups; ``_extract_worst_case_params``
     tolerates missing names.
     """
-    from kl_pipe.priors import PriorDict
+    from kl_pipe.priors import ConditionalLogNormal, LogUniform, PriorDict
 
     spec = {}
     for name in model_param_names:
         for key in (f'{prefix}.{name}', name):
             if key in priors._param_spec:
-                spec[name] = priors._param_spec[key]
+                entry = priors._param_spec[key]
+                if isinstance(entry, ConditionalLogNormal):
+                    # the parent is a dotted key that this bare-named view does
+                    # not contain. Callers use the view only for the support
+                    # (worst-case grid sizing, prior-safety bounds), so stand
+                    # in the widest prior with the same support rather than
+                    # carrying a dependency the view cannot resolve.
+                    low, high = entry.bounds
+                    entry = LogUniform(low, high)
+                spec[name] = entry
                 break
     return PriorDict(spec)
 

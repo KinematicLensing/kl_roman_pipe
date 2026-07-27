@@ -14,8 +14,11 @@ import jax
 import jax.numpy as jnp
 import jax.random as random
 
+import math
+
 from kl_pipe.priors import (
     Prior,
+    ConditionalLogNormal,
     Uniform,
     Gaussian,
     Normal,
@@ -23,6 +26,7 @@ from kl_pipe.priors import (
     LogNormal,
     TruncatedNormal,
     TruncatedNormalMixture,
+    TruncatedLogNormal,
     PriorDict,
     make_tf_prior,
 )
@@ -711,3 +715,215 @@ class TestTruncatedNormalMixture:
         assert d['dist'] == 'truncated_normal_mixture'
         assert d['weights'] == [0.7, 0.3]
         assert [c['dist'] for c in d['components']] == ['truncated_normal'] * 2
+
+
+# ==============================================================================
+# Truncated Log-Normal
+# ==============================================================================
+
+
+class TestTruncatedLogNormal:
+    def test_validation(self):
+        with pytest.raises(ValueError, match='sigma'):
+            TruncatedLogNormal(0.0, 0.0, 0.1, 1.0)
+        with pytest.raises(ValueError, match='low'):
+            TruncatedLogNormal(0.0, 1.0, 0.0, 1.0)
+        with pytest.raises(ValueError, match='high'):
+            TruncatedLogNormal(0.0, 1.0, 1.0, 0.5)
+
+    def test_bounds_and_support(self):
+        p = TruncatedLogNormal(math.log(0.2), 0.5, 0.05, 1.0)
+        assert p.bounds == (0.05, 1.0)
+        assert float(p.log_prob(jnp.array(0.04))) == -np.inf
+        assert float(p.log_prob(jnp.array(1.5))) == -np.inf
+        assert np.isfinite(float(p.log_prob(jnp.array(0.2))))
+
+    def test_normalized_over_the_truncation_interval(self):
+        p = TruncatedLogNormal(math.log(0.2), 0.5, 0.05, 1.0)
+        x = np.linspace(0.05, 1.0, 200001)
+        pdf = np.exp(np.asarray(p.log_prob(jnp.array(x))))
+        assert np.trapz(pdf, x) == pytest.approx(1.0, abs=1e-4)
+
+    def test_samples_stay_in_support(self):
+        p = TruncatedLogNormal(math.log(0.2), 0.8, 0.05, 1.0)
+        draws = np.asarray(p.sample(random.PRNGKey(0), (20000,)))
+        assert draws.min() >= 0.05 and draws.max() <= 1.0
+
+
+# ==============================================================================
+# Conditional Log-Normal
+# ==============================================================================
+
+
+def _ratio_prior(parent='disk_rscale', median=0.4, dex=0.25):
+    return ConditionalLogNormal(
+        parent, math.log(median), dex * math.log(10.0), 0.01, 5.0
+    )
+
+
+class TestConditionalLogNormal:
+    def test_validation(self):
+        with pytest.raises(ValueError, match='parent'):
+            ConditionalLogNormal('', 0.0, 1.0, 0.1, 1.0)
+        with pytest.raises(ValueError, match='sigma_ratio'):
+            ConditionalLogNormal('p', 0.0, 0.0, 0.1, 1.0)
+        with pytest.raises(ValueError, match='low'):
+            ConditionalLogNormal('p', 0.0, 1.0, -0.1, 1.0)
+        with pytest.raises(ValueError, match='high'):
+            ConditionalLogNormal('p', 0.0, 1.0, 1.0, 0.5)
+
+    def test_unconditional_calls_raise(self):
+        p = _ratio_prior()
+        with pytest.raises(TypeError, match='without its parent'):
+            p.log_prob(jnp.array(0.1))
+        with pytest.raises(TypeError, match='without its parent'):
+            p.sample(random.PRNGKey(0))
+
+    def test_bounds_do_not_move_with_the_parent(self):
+        # grid sizing and the unconstraining transform read bounds, so the
+        # support has to be static even though the density shifts
+        p = _ratio_prior()
+        assert p.bounds == (0.01, 5.0)
+
+    def test_matches_the_collapsed_prior_at_a_concrete_parent(self):
+        p = _ratio_prior()
+        collapsed = p.at_parent(0.3)
+        for v in (0.05, 0.12, 0.4, 2.0):
+            given = float(p.log_prob_given(jnp.array(v), jnp.array(0.3)))
+            assert given == pytest.approx(float(collapsed.log_prob(jnp.array(v))))
+
+    def test_normalized_for_a_given_parent(self):
+        p = _ratio_prior()
+        x = np.linspace(0.01, 5.0, 400001)
+        pdf = np.exp(np.asarray(p.log_prob_given(jnp.array(x), jnp.array(0.3))))
+        assert np.trapz(pdf, x) == pytest.approx(1.0, abs=1e-4)
+
+    def test_draws_recover_the_ratio_distribution(self):
+        p = _ratio_prior(median=0.4, dex=0.25)
+        parent = 0.3
+        draws = np.asarray(
+            p.sample_given(random.PRNGKey(0), jnp.array(parent), (200000,))
+        )
+        ratio = draws / parent
+        assert np.median(ratio) == pytest.approx(0.4, rel=0.02)
+        assert np.std(np.log10(ratio)) == pytest.approx(0.25, rel=0.02)
+
+    def test_nonpositive_parent_is_out_of_support(self):
+        p = _ratio_prior()
+        assert float(p.log_prob_given(jnp.array(0.1), jnp.array(0.0))) == -np.inf
+        assert float(p.log_prob_given(jnp.array(0.1), jnp.array(-1.0))) == -np.inf
+
+    def test_to_dict_records_the_parent(self):
+        d = _ratio_prior().to_dict()
+        assert d['dist'] == 'conditional_lognormal'
+        assert d['parent'] == 'disk_rscale'
+        assert d['loc'] == pytest.approx(math.log(0.4))
+
+
+class TestConditionalPriorsInPriorDict:
+    def _pd(self):
+        return PriorDict(
+            {
+                'cosi': Uniform(0.05, 0.95),
+                'disk_rscale': LogNormal(math.log(0.21), 0.237 * math.log(10.0)),
+                'vel.rscale': _ratio_prior(),
+            }
+        )
+
+    def test_dependency_bookkeeping(self):
+        pd = self._pd()
+        assert pd.conditional_parents == {'vel.rscale': 'disk_rscale'}
+        order = pd.topological_order
+        assert order.index('disk_rscale') < order.index('vel.rscale')
+        assert sorted(order) == pd.sampled_names
+
+    def test_log_prior_uses_the_sampled_parent(self):
+        pd = self._pd()
+        i_parent = pd.sampled_names.index('disk_rscale')
+        i_child = pd.sampled_names.index('vel.rscale')
+        theta = jnp.array([0.5, 0.21, 0.08][: len(pd.sampled_names)])
+
+        # moving the parent must change the child's contribution
+        expected = pd.get_prior('vel.rscale').log_prob_given(
+            theta[i_child], theta[i_parent]
+        )
+        others = sum(
+            float(pd.get_prior(n).log_prob(theta[i]))
+            for i, n in enumerate(pd.sampled_names)
+            if n != 'vel.rscale'
+        )
+        assert float(pd.log_prior(theta)) == pytest.approx(float(expected) + others)
+
+    def test_gradient_with_respect_to_the_parent_is_correct(self):
+        # the truncation normalization depends on the parent; dropping it
+        # leaves the density right and the parent gradient wrong
+        pd = self._pd()
+        theta = jnp.array([0.5, 0.21, 0.08])
+        grad = np.asarray(jax.grad(pd.log_prior)(theta))
+        eps = 1e-6
+        fd = np.array(
+            [
+                float(
+                    (
+                        pd.log_prior(theta.at[i].add(eps))
+                        - pd.log_prior(theta.at[i].add(-eps))
+                    )
+                    / (2 * eps)
+                )
+                for i in range(theta.size)
+            ]
+        )
+        np.testing.assert_allclose(grad, fd, rtol=1e-5, atol=1e-6)
+
+    def test_log_prior_is_jittable(self):
+        pd = self._pd()
+        theta = jnp.array([0.5, 0.21, 0.08])
+        assert float(jax.jit(pd.log_prior)(theta)) == pytest.approx(
+            float(pd.log_prior(theta))
+        )
+
+    def test_sampling_respects_the_dependency(self):
+        pd = self._pd()
+        draws = np.asarray(pd.sample(random.PRNGKey(3), 20000))
+        parent = draws[:, pd.sampled_names.index('disk_rscale')]
+        child = draws[:, pd.sampled_names.index('vel.rscale')]
+        ratio = child / parent
+        assert np.median(ratio) == pytest.approx(0.4, rel=0.05)
+
+    def test_fixed_parent_collapses_to_an_unconditional_prior(self):
+        pd = PriorDict({'vel.rscale': _ratio_prior('p'), 'p': 0.3})
+        prior = pd.get_prior('vel.rscale')
+        assert isinstance(prior, TruncatedLogNormal)
+        assert pd.conditional_parents == {}
+        # the collapsed prior is the conditional evaluated at the pinned value
+        ref = _ratio_prior('p').at_parent(0.3)
+        assert prior == ref
+        assert pd.describe()['vel.rscale']['dist'] == 'truncated_lognormal'
+
+    def test_unknown_parent_raises(self):
+        with pytest.raises(KeyError, match='not a parameter'):
+            PriorDict({'a': _ratio_prior('nope')})
+
+    def test_dependency_cycles_raise(self):
+        with pytest.raises(ValueError, match='cycle'):
+            PriorDict({'a': _ratio_prior('a')})
+        with pytest.raises(ValueError, match='cycle'):
+            PriorDict({'a': _ratio_prior('b'), 'b': _ratio_prior('a')})
+
+    def test_describe_records_the_parent(self):
+        assert self._pd().describe()['vel.rscale']['parent'] == 'disk_rscale'
+
+
+class TestMixtureFlatSchema:
+    def test_to_dict_carries_the_flat_keys(self):
+        # every describe() consumer reads dist/loc/scale/low/high; a mixture
+        # that omitted them raised KeyError when writing the summary row
+        d = _bulge_mixture().to_dict()
+        for key in ('dist', 'loc', 'scale', 'low', 'high'):
+            assert key in d
+        assert d['loc'] == pytest.approx(0.7 * 1.5 + 0.3 * 3.4)
+        assert d['low'] == 0.5 and d['high'] == 6.0
+
+    def test_summary_row_schema_is_complete(self):
+        rec = PriorDict({'n': _bulge_mixture()}).describe()['n']
+        assert all(rec[k] is not None for k in ('dist', 'loc', 'scale', 'low', 'high'))

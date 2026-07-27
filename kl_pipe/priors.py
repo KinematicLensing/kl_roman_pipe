@@ -464,8 +464,22 @@ class TruncatedNormalMixture(Prior):
         return f"TruncatedNormalMixture({parts})"
 
     def to_dict(self) -> Dict[str, Optional[float]]:
+        # flat loc/scale summarize the mixture (weighted mean and total sd);
+        # components/weights carry the lossless description. The flat keys are
+        # part of the schema every consumer reads, so they must be present
+        # even where a single loc/scale cannot capture a bimodal prior.
+        mean = sum(w * c.mu for c, w in zip(self.components, self.weights))
+        var = sum(
+            w * (c.sigma**2 + (c.mu - mean) ** 2)
+            for c, w in zip(self.components, self.weights)
+        )
+        low, high = self.bounds
         return {
             'dist': 'truncated_normal_mixture',
+            'loc': float(mean),
+            'scale': float(math.sqrt(var)),
+            'low': float(low),
+            'high': float(high),
             'components': [c.to_dict() for c in self.components],
             'weights': [float(w) for w in self.weights],
         }
@@ -540,6 +554,236 @@ class LogNormal(Prior):
             'scale': float(self.sigma),
             'low': None,
             'high': None,
+        }
+
+
+@dataclass(frozen=True)
+class TruncatedLogNormal(Prior):
+    """
+    Log-normal prior truncated to [low, high], support 0 < low <= x <= high.
+
+    Same density as :class:`LogNormal` renormalized over the truncation
+    interval. Finite bounds matter beyond the density itself: grid sizing
+    (``RenderConfig.for_priors``) and bounded optimizers read ``bounds``, and
+    an unbounded-below size parameter sends the worst-case ``maxk`` to
+    infinity.
+
+    Parameters
+    ----------
+    mu : float
+        Mean of ln(x) (natural log).
+    sigma : float
+        Standard deviation of ln(x) (must be positive).
+    low : float
+        Lower truncation bound (must be positive).
+    high : float
+        Upper truncation bound.
+    """
+
+    mu: float
+    sigma: float
+    low: float
+    high: float
+
+    def __post_init__(self):
+        if self.sigma <= 0:
+            raise ValueError(f"sigma ({self.sigma}) must be positive")
+        if self.low <= 0:
+            raise ValueError(f"low ({self.low}) must be positive for a log-normal")
+        if self.high <= self.low:
+            raise ValueError(f"high ({self.high}) must be > low ({self.low})")
+
+    def log_prob(self, value: jnp.ndarray) -> jnp.ndarray:
+        return _trunc_lognormal_log_prob(
+            value, self.mu, self.sigma, self.low, self.high
+        )
+
+    def sample(self, rng_key: jax.Array, shape: Tuple[int, ...] = ()) -> jnp.ndarray:
+        return _trunc_lognormal_sample(
+            rng_key, self.mu, self.sigma, self.low, self.high, shape
+        )
+
+    @property
+    def bounds(self) -> Tuple[float, float]:
+        return (self.low, self.high)
+
+    def __repr__(self) -> str:
+        return f"TruncatedLogNormal({self.mu}, {self.sigma}, {self.low}, {self.high})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'truncated_lognormal',
+            'loc': float(self.mu),
+            'scale': float(self.sigma),
+            'low': float(self.low),
+            'high': float(self.high),
+        }
+
+
+def _norm_cdf(x: jnp.ndarray) -> jnp.ndarray:
+    """Standard normal CDF via error function."""
+    return 0.5 * (1.0 + jax.scipy.special.erf(x / jnp.sqrt(2.0)))
+
+
+def _norm_ppf(p: jnp.ndarray) -> jnp.ndarray:
+    """Standard normal inverse CDF (quantile function)."""
+    return jnp.sqrt(2.0) * jax.scipy.special.erfinv(2.0 * p - 1.0)
+
+
+def _trunc_lognormal_log_prob(value, mu, sigma, low, high):
+    """Truncated log-normal log density; ``mu`` may be a traced array."""
+    safe = jnp.where(value > 0, value, 1.0)
+    log_x = jnp.log(safe)
+    z = (log_x - mu) / sigma
+    log_pdf = -log_x - jnp.log(sigma) - 0.5 * jnp.log(2 * jnp.pi) - 0.5 * z**2
+
+    # renormalize over the truncation interval. When mu is traced (the
+    # conditional case) this factor depends on a sampled parameter, so
+    # dropping it would give the wrong gradient with respect to the parent.
+    alpha = (jnp.log(low) - mu) / sigma
+    beta = (jnp.log(high) - mu) / sigma
+    log_Z = jnp.log(_norm_cdf(beta) - _norm_cdf(alpha))
+
+    in_bounds = (value >= low) & (value <= high)
+    return jnp.where(in_bounds, log_pdf - log_Z, -jnp.inf)
+
+
+def _trunc_lognormal_sample(rng_key, mu, sigma, low, high, shape):
+    """Inverse-CDF draw from a truncated log-normal; ``mu`` may be traced."""
+    cdf_low = _norm_cdf((jnp.log(low) - mu) / sigma)
+    cdf_high = _norm_cdf((jnp.log(high) - mu) / sigma)
+    u = random.uniform(rng_key, shape)
+    p = cdf_low + u * (cdf_high - cdf_low)
+    return jnp.exp(mu + sigma * _norm_ppf(p))
+
+
+@dataclass(frozen=True)
+class ConditionalLogNormal(Prior):
+    """
+    Log-normal prior on the ratio of this parameter to another sampled one.
+
+    If ``r = x / x_parent`` is log-normal with median ``exp(mu_ratio)`` and
+    log-scatter ``sigma_ratio``, then ``x`` given the parent is log-normal
+    with location shifted by ``ln(x_parent)``. Expressing the relation this
+    way keeps the model parameters intrinsic to their components -- nothing
+    is reparameterized into a ratio -- while the relational structure lives
+    entirely in the prior.
+
+    The truncation bounds are absolute, not relative to the parent, so the
+    support does not move with the parent and ``RenderConfig.for_priors`` and
+    ``UnconstrainingTransform`` see a static interval.
+
+    ``PriorDict`` resolves the parent value and calls ``log_prob_given``;
+    calling ``log_prob`` directly raises, since the density is undefined
+    without a parent.
+
+    Parameters
+    ----------
+    parent : str
+        Name of the sampled parameter this prior conditions on.
+    mu_ratio : float
+        Mean of ln(x / x_parent) (natural log).
+    sigma_ratio : float
+        Standard deviation of ln(x / x_parent) (must be positive).
+    low, high : float
+        Absolute truncation bounds on x (low must be positive).
+
+    Examples
+    --------
+    >>> # kinematic turnover radius at 0.4x the disk scale length
+    >>> import math
+    >>> prior = ConditionalLogNormal(
+    ...     'F129.disk_rscale', math.log(0.4), 0.25 * math.log(10.0), 0.01, 5.0
+    ... )
+    """
+
+    parent: str
+    mu_ratio: float
+    sigma_ratio: float
+    low: float
+    high: float
+
+    def __post_init__(self):
+        if not self.parent:
+            raise ValueError("parent must be a non-empty parameter name")
+        if self.sigma_ratio <= 0:
+            raise ValueError(f"sigma_ratio ({self.sigma_ratio}) must be positive")
+        if self.low <= 0:
+            raise ValueError(f"low ({self.low}) must be positive for a log-normal")
+        if self.high <= self.low:
+            raise ValueError(f"high ({self.high}) must be > low ({self.low})")
+
+    def log_prob_given(
+        self, value: jnp.ndarray, parent_value: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Log density of ``value`` given the parent's value. JIT-safe."""
+        safe_parent = jnp.where(parent_value > 0, parent_value, 1.0)
+        mu = self.mu_ratio + jnp.log(safe_parent)
+        lp = _trunc_lognormal_log_prob(value, mu, self.sigma_ratio, self.low, self.high)
+        return jnp.where(parent_value > 0, lp, -jnp.inf)
+
+    def sample_given(
+        self,
+        rng_key: jax.Array,
+        parent_value: jnp.ndarray,
+        shape: Tuple[int, ...] = (),
+    ) -> jnp.ndarray:
+        """Draw from the conditional given the parent's value."""
+        mu = self.mu_ratio + jnp.log(parent_value)
+        return _trunc_lognormal_sample(
+            rng_key, mu, self.sigma_ratio, self.low, self.high, shape
+        )
+
+    def at_parent(self, parent_value: float) -> TruncatedLogNormal:
+        """Collapse to an unconditional prior at a concrete parent value.
+
+        Used when the parent is a fixed (not sampled) parameter, and by
+        diagnostics that need a plain prior object.
+        """
+        pv = float(parent_value)
+        if pv <= 0:
+            raise ValueError(f"parent value ({pv}) must be positive")
+        return TruncatedLogNormal(
+            self.mu_ratio + math.log(pv), self.sigma_ratio, self.low, self.high
+        )
+
+    def log_prob(self, value: jnp.ndarray) -> jnp.ndarray:
+        raise TypeError(
+            f"ConditionalLogNormal is undefined without its parent "
+            f"'{self.parent}'; use log_prob_given(value, parent_value). "
+            f"PriorDict.log_prior resolves this automatically."
+        )
+
+    def sample(self, rng_key: jax.Array, shape: Tuple[int, ...] = ()) -> jnp.ndarray:
+        raise TypeError(
+            f"ConditionalLogNormal is undefined without its parent "
+            f"'{self.parent}'; use sample_given(rng_key, parent_value, shape). "
+            f"PriorDict.sample resolves this automatically."
+        )
+
+    @property
+    def bounds(self) -> Tuple[float, float]:
+        return (self.low, self.high)
+
+    @property
+    def ratio_median(self) -> float:
+        """Median of x / x_parent."""
+        return float(math.exp(self.mu_ratio))
+
+    def __repr__(self) -> str:
+        return (
+            f"ConditionalLogNormal({self.parent!r}, {self.mu_ratio}, "
+            f"{self.sigma_ratio}, {self.low}, {self.high})"
+        )
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'conditional_lognormal',
+            'parent': self.parent,
+            'loc': float(self.mu_ratio),
+            'scale': float(self.sigma_ratio),
+            'low': float(self.low),
+            'high': float(self.high),
         }
 
 
@@ -621,10 +865,75 @@ class PriorDict:
                     f"Parameter '{name}' must be Prior or numeric, got {type(value)}"
                 )
 
+        # a conditional whose parent is fixed is not conditional on anything
+        # sampled -- collapse it to the plain truncated log-normal it induces,
+        # so describe() records the prior that was actually used
+        for name, prior in list(self._priors.items()):
+            if isinstance(prior, ConditionalLogNormal) and prior.parent in self._fixed:
+                collapsed = prior.at_parent(self._fixed[prior.parent])
+                self._priors[name] = collapsed
+                self._param_spec[name] = collapsed
+
         # Establish ordering for sampled parameters (stable sorted ordering)
         self._sampled_names = sorted(self._priors.keys())
         self._fixed_names = sorted(self._fixed.keys())
         self._all_names = self._sampled_names + self._fixed_names
+
+        # Conditional-prior dependency graph over sampled parameters
+        self._conditional_parents: Dict[str, str] = {
+            name: prior.parent
+            for name, prior in self._priors.items()
+            if isinstance(prior, ConditionalLogNormal)
+        }
+        for name, parent in self._conditional_parents.items():
+            if parent not in self._priors:
+                raise KeyError(
+                    f"conditional prior '{name}' names parent '{parent}', which is "
+                    f"not a parameter of this PriorDict"
+                )
+        self._topological_order = self._build_topological_order()
+        self._parent_index = {
+            name: self._sampled_names.index(parent)
+            for name, parent in self._conditional_parents.items()
+        }
+
+    def _build_topological_order(self) -> List[str]:
+        """Sampled names ordered so every conditional follows its parent.
+
+        Alphabetical apart from the reordering the dependencies force, so the
+        order is deterministic for a given spec. Raises on a dependency cycle.
+        """
+        order: List[str] = []
+        done = set()
+        visiting = set()
+
+        def visit(name: str, chain: List[str]) -> None:
+            if name in done:
+                return
+            if name in visiting:
+                cycle = ' -> '.join(chain + [name])
+                raise ValueError(f"conditional prior dependency cycle: {cycle}")
+            visiting.add(name)
+            parent = self._conditional_parents.get(name)
+            if parent is not None:
+                visit(parent, chain + [name])
+            visiting.discard(name)
+            done.add(name)
+            order.append(name)
+
+        for name in self._sampled_names:
+            visit(name, [])
+        return order
+
+    @property
+    def conditional_parents(self) -> Dict[str, str]:
+        """Map of conditional parameter name -> the name it conditions on."""
+        return dict(self._conditional_parents)
+
+    @property
+    def topological_order(self) -> List[str]:
+        """Sampled names ordered so every conditional follows its parent."""
+        return list(self._topological_order)
 
     @property
     def sampled_names(self) -> List[str]:
@@ -695,8 +1004,10 @@ class PriorDict:
 
         Returns a dict mapping each parameter name (sampled and fixed) to the
         flat ``{dist, loc, scale, low, high}`` schema. Fixed parameters use
-        ``dist='fixed'`` with ``loc`` holding the pinned value. Lossless for
-        all built-in priors; records exactly how each param was set per fit.
+        ``dist='fixed'`` with ``loc`` holding the pinned value. Conditional
+        priors add ``parent``; mixtures add ``components`` and ``weights``
+        alongside their flat summary. Records exactly how each param was set
+        per fit.
         """
         out: Dict[str, Dict[str, Optional[float]]] = {}
         for name in self._sampled_names:
@@ -727,7 +1038,12 @@ class PriorDict:
         """
         log_prob = jnp.array(0.0)
         for i, name in enumerate(self._sampled_names):
-            log_prob = log_prob + self._priors[name].log_prob(theta[i])
+            prior = self._priors[name]
+            if name in self._parent_index:
+                term = prior.log_prob_given(theta[i], theta[self._parent_index[name]])
+            else:
+                term = prior.log_prob(theta[i])
+            log_prob = log_prob + term
         return log_prob
 
     def sample(self, rng_key: jax.Array, n_samples: int = 1) -> jnp.ndarray:
@@ -746,11 +1062,22 @@ class PriorDict:
         jnp.ndarray
             Array of shape (n_samples, n_sampled) with samples.
         """
+        # keys are assigned by alphabetical index, not draw order, so a
+        # parameter's draws are unchanged by whether some other parameter in
+        # the dict happens to be conditional
         keys = random.split(rng_key, len(self._sampled_names))
-        samples = []
-        for key, name in zip(keys, self._sampled_names):
-            samples.append(self._priors[name].sample(key, (n_samples,)))
-        return jnp.stack(samples, axis=-1)
+        key_for = dict(zip(self._sampled_names, keys))
+
+        drawn: Dict[str, jnp.ndarray] = {}
+        for name in self._topological_order:
+            prior = self._priors[name]
+            if name in self._conditional_parents:
+                parent = drawn[self._conditional_parents[name]]
+                drawn[name] = prior.sample_given(key_for[name], parent, (n_samples,))
+            else:
+                drawn[name] = prior.sample(key_for[name], (n_samples,))
+
+        return jnp.stack([drawn[name] for name in self._sampled_names], axis=-1)
 
     def theta_to_full_pars(self, theta: jnp.ndarray) -> Dict[str, float]:
         """

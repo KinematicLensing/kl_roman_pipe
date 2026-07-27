@@ -33,6 +33,7 @@ NumPyro documentation: https://num.pyro.ai/
 
 from __future__ import annotations
 
+import math
 import time
 import warnings
 from typing import Dict, Optional, Callable, Tuple, TYPE_CHECKING
@@ -46,8 +47,11 @@ from kl_pipe.sampling.base import Sampler, SamplerResult
 from kl_pipe.sampling.configs import NumpyroSamplerConfig, ReparamStrategy
 from kl_pipe.priors import (
     Prior,
+    ConditionalLogNormal,
     Gaussian,
     TruncatedNormal,
+    TruncatedNormalMixture,
+    TruncatedLogNormal,
     Uniform,
     LogUniform,
     LogNormal,
@@ -57,7 +61,9 @@ if TYPE_CHECKING:
     from kl_pipe.sampling.task import InferenceTask, LaplacePreconditioner
 
 
-def compute_reparam_scales(prior: Prior, name: str) -> Tuple[float, float]:
+def compute_reparam_scales(
+    prior: Prior, name: str, parent_loc: Optional[float] = None
+) -> Tuple[float, float]:
     """
     Compute (loc, scale) for Z-score reparameterization.
 
@@ -109,6 +115,29 @@ def compute_reparam_scales(prior: Prior, name: str) -> Tuple[float, float]:
         log_mid = (jnp.log(prior.low) + jnp.log(prior.high)) / 2
         log_scale = (jnp.log(prior.high) - jnp.log(prior.low)) / 4
         return float(jnp.exp(log_mid)), float(jnp.exp(log_mid) * log_scale)
+
+    elif isinstance(prior, TruncatedLogNormal):
+        # underlying log-normal moments; truncation is enforced by log_prob
+        median = float(math.exp(prior.mu))
+        return median, median * float(prior.sigma)
+
+    elif isinstance(prior, TruncatedNormalMixture):
+        # weighted mean and total mixture spread; this is a conditioning
+        # hint, so a single centre for a bimodal prior is adequate
+        rec = prior.to_dict()
+        return float(rec['loc']), float(rec['scale'])
+
+    elif isinstance(prior, ConditionalLogNormal):
+        # centre on the parent's own centre scaled by the median ratio; the
+        # parent is sampled, so this is a static stand-in for conditioning
+        # only, not part of the density
+        if parent_loc is None:
+            raise ValueError(
+                f"conditional prior '{name}' needs its parent's centre to "
+                f"compute a reparameterization scale; pass parent_loc"
+            )
+        loc = float(prior.ratio_median * parent_loc)
+        return loc, loc * float(prior.sigma_ratio)
 
     else:
         raise TypeError(f"Unknown prior type for '{name}': {type(prior)}")
@@ -253,11 +282,19 @@ class NumpyroSampler(Sampler):
             return {name: (0.0, 1.0) for name in self.task.sampled_names}
 
         elif strategy == ReparamStrategy.PRIOR:
-            # Use prior statistics
+            # Use prior statistics. Topological order so a conditional prior's
+            # parent already has a centre when the child is reached.
+            priors = self.task.priors
+            parents = priors.conditional_parents
             scales = {}
-            for name in self.task.sampled_names:
-                prior = self.task.priors.get_prior(name)
-                scales[name] = compute_reparam_scales(prior, name)
+            for name in priors.topological_order:
+                prior = priors.get_prior(name)
+                parent = parents.get(name)
+                scales[name] = compute_reparam_scales(
+                    prior,
+                    name,
+                    parent_loc=None if parent is None else scales[parent][0],
+                )
             return scales
 
         else:

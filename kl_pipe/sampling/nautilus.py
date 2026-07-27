@@ -129,13 +129,29 @@ class NautilusSampler(Sampler):
                         u[i], a, b, loc=prior.mu, scale=prior.sigma
                     )
 
+                elif prior_class == 'LogNormal':
+                    theta[i] = np.exp(
+                        stats.norm.ppf(u[i], loc=prior.mu, scale=prior.sigma)
+                    )
+
+                elif prior_class == 'TruncatedLogNormal':
+                    a = (np.log(prior.low) - prior.mu) / prior.sigma
+                    b = (np.log(prior.high) - prior.mu) / prior.sigma
+                    theta[i] = np.exp(
+                        stats.truncnorm.ppf(u[i], a, b, loc=prior.mu, scale=prior.sigma)
+                    )
+
                 else:
-                    # Fallback: assume bounded and use linear transform
-                    if low is not None and high is not None:
-                        theta[i] = low + u[i] * (high - low)
-                    else:
-                        # Unbounded - use normal approximation
-                        theta[i] = stats.norm.ppf(u[i])
+                    # no generic fallback: a linear or normal stand-in would
+                    # sample a different prior than the one the posterior is
+                    # defined against, and nothing downstream would show it.
+                    # Conditional priors need the parent drawn first, which
+                    # this positional unit-cube loop cannot express.
+                    raise NotImplementedError(
+                        f"nautilus has no prior transform for '{name}' "
+                        f"({prior_class}). Add an explicit inverse-CDF branch; "
+                        f"use numpyro for conditional priors."
+                    )
 
             return theta
 
