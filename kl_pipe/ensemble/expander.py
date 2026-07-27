@@ -36,6 +36,8 @@ import numpy as np
 import pandas as pd
 
 from kl_pipe.ensemble.population import (
+    CENTROID_SCATTER_ARCSEC,
+    CONT_CENTROID_OFFSET_ARCSEC,
     N_GRISM_PASSES,
     build_population,
     write_population,
@@ -52,10 +54,6 @@ _GALAXY_STREAM = 1
 _NOISE_STREAM = 2
 _CENTROID_STREAM = 3
 
-# Per-component centroid offset. Each component is registered independently,
-# so the offsets are drawn separately rather than shared. The width matches
-# the fit prior, which is about one Roman pixel.
-CENTROID_SCATTER_ARCSEC = 0.1
 
 TRUTH_PREFIX = 'truth.'
 POP_PREFIX = 'pop.'
@@ -406,14 +404,20 @@ def _catalog_rows(
                 truth['vel.v0'] = float(g['v0_kms'])
 
                 # each component is registered independently, so every one
-                # gets its own offset; the continuum shares the line's, being
-                # the same object in the same grism exposure
+                # gets its own offset. The continuum sits near the line but
+                # not on it: the line traces clumpy star formation while the
+                # continuum traces the older stellar disk, so it takes the
+                # line's position plus a small physical offset
                 crng = _centroid_rng(spec.seed, int(g['halo_id']), int(g['galaxy_id']))
                 for comp in list(config.bands) + ['Halpha']:
                     truth[f'{comp}.x0'] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
                     truth[f'{comp}.y0'] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
-                truth['Halpha.cont.x0'] = truth['Halpha.x0']
-                truth['Halpha.cont.y0'] = truth['Halpha.y0']
+                truth['Halpha.cont.x0'] = truth['Halpha.x0'] + crng.normal(
+                    0.0, CONT_CENTROID_OFFSET_ARCSEC
+                )
+                truth['Halpha.cont.y0'] = truth['Halpha.y0'] + crng.normal(
+                    0.0, CONT_CENTROID_OFFSET_ARCSEC
+                )
                 # continuum amplitude from the catalog rest-frame EW:
                 # EW_obs [nm] = ew_rest_a [A] * (1 + z) / 10, and
                 # flux_per_nm = line_flux / EW_obs [flux / nm] -- the scene's

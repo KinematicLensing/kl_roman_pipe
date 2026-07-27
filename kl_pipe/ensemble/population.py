@@ -164,17 +164,53 @@ _POP_STRUCTURE = 16
 # constants, so the prior is the distribution the truth was drawn from.
 #
 # Turnover radius of the arctan rotation curve, in disk scale lengths.
-# Miller et al. 2011 fit this functional form to DEIMOS curves out to z ~ 1.3.
-# The median is theirs; the scatter is read off the r_t/r_opt distribution in
-# Courteau 1997 at r_opt = 3.2 r_s and is approximate.
-VEL_RSCALE_RATIO_MEDIAN = 0.4
-VEL_RSCALE_RATIO_DEX = 0.25
+# Derived from the PROBES-I public per-galaxy rotation-curve fits (Stone et
+# al. 2022, ApJS 262, 33; Zenodo 10.5281/zenodo.10456320): 753 late-type,
+# clean-photometry galaxies with published tanh and Courteau-97 turnover
+# radii, converted to the arctan form by least-squares refit of each
+# galaxy's model curve over 0-3.2 R_d and divided by R_d = Re(r-band)/1.678.
+# Measured: median 0.56 (0.53 for v_c > 120 km/s, our selected regime),
+# scatter 0.28 dex; form systematic (tanh vs C97) 0.02 dex, refit-range
+# systematic +/-0.05 dex over 2.2-4.5 R_d, denominator systematic (Sersic vs
+# nonparametric half-light radius; n < 2 subset) <= 0.03 dex. Adopted below
+# rounded to one significant figure, scatter likewise.
+#
+# No z ~ 1 survey publishes this distribution, so the anchor is z ~ 0 and the
+# redshift extrapolation is the stated residual systematic. z ~ 1 surveys
+# either pin the turnover as a resolution nuisance (Weiner et al. 2006,
+# Kassin et al. 2007: fixed 0.2") or fit it freely and never tabulate it
+# (Miller et al. 2011, whose Fig. 2 caption calls r_t ~ 0.4 R_d typical --
+# consistent with the adopted median at 0.35 sigma; Stott et al. 2016 fit
+# the same arctan form to ~600 KROSS galaxies and release no turnover
+# column). Catinella et al. 2006's Polyex template scales convert to
+# r_t/R_d = 0.24-0.57 with a matching luminosity trend, bracketing the
+# adopted value from an independent local tradition.
+VEL_RSCALE_RATIO_MEDIAN = 0.5
+VEL_RSCALE_RATIO_DEX = 0.3
 
 # Halpha extent relative to the stellar continuum. Nelson et al. 2012 measure
-# a median of 1.3 at z ~ 1 in 3D-HST and quote no population width, so the
-# scatter is assumed rather than measured.
+# a median of 1.3 and an rms scatter of 0.2 dex at z ~ 1 in 3D-HST, on the
+# ratio of effective radii, which for two exponentials is the ratio of scale
+# lengths. Both numbers come from that one sample rather than being mixed
+# across sources. Their rms is the observed one and so includes measurement
+# error, making this a slight over-dispersion of the intrinsic population
+# rather than an underestimate. Matharu et al. 2022 measure 1.2 +/- 0.1 over
+# 0.5 < z < 1.7 with no redshift evolution, consistent with the median here,
+# but quote no population width, so they cannot supply the scatter.
 HALPHA_RSCALE_RATIO_MEDIAN = 1.3
-HALPHA_RSCALE_RATIO_DEX = 0.15
+HALPHA_RSCALE_RATIO_DEX = 0.2
+
+# Per-component astrometric centroid offset. Each component's offset is drawn
+# separately rather than shared; about one Roman pixel.
+CENTROID_SCATTER_ARCSEC = 0.1
+
+# Offset between the ionized-gas and stellar-continuum centroids of the same
+# galaxy. Star formation is clumpy and need not be centered on the older
+# stellar disk, so the two are close but not identical. Half a Roman pixel is
+# 0.42-0.48 kpc over our redshift range, about 11% of the median Halpha
+# half-light radius at z ~ 1 (Nelson et al. 2012), which is the right order
+# given that clumps carry only 10-15% of the star formation.
+CONT_CENTROID_OFFSET_ARCSEC = 0.055
 
 # Systemic velocity relative to the catalog redshift. One grism pixel at
 # 1.1 nm is about 200 km/s at the observed Halpha wavelength, and the line

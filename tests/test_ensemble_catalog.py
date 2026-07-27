@@ -24,6 +24,7 @@ from kl_pipe.ensemble.expander import (
     truth_from_row,
 )
 from kl_pipe.ensemble.mocks import build_fit_inputs
+from kl_pipe.ensemble.population import CONT_CENTROID_OFFSET_ARCSEC
 from kl_pipe.ensemble.scene import scene_priors
 from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
 from kl_pipe.priors import (
@@ -227,9 +228,13 @@ class TestCatalogExpand:
         ]
         assert any(o != 0.0 for o in offsets)
         assert len(set(offsets)) == len(offsets)
-        # the continuum shares the line's centroid: same object, same exposure
-        assert row['truth.Halpha.cont.x0'] == row['truth.Halpha.x0']
-        assert row['truth.Halpha.cont.y0'] == row['truth.Halpha.y0']
+        # the continuum sits near the line but not on it: clumpy star
+        # formation need not centre on the older stellar disk, so the offset
+        # is a distinct draw bounded by its own scatter
+        for axis in ('x0', 'y0'):
+            delta = abs(row[f'truth.Halpha.cont.{axis}'] - row[f'truth.Halpha.{axis}'])
+            assert delta > 0.0
+            assert delta < 5.0 * CONT_CENTROID_OFFSET_ARCSEC
 
     def test_kinematic_truths_from_population(self, run_parts):
         _, _, manifest, population = run_parts
@@ -484,8 +489,10 @@ class TestNoBulgeCatalog:
             rs = priors.get_prior(f'{band}.rscale')
             # population size distribution, not a truth-centered prior
             assert isinstance(rs, TruncatedLogNormal)
-            # catalog-mode rscale bounds (scene._CATALOG_RSCALE_LOW/HIGH)
-            assert rs.bounds == (0.005, 2.0)
+            # catalog-mode rscale bounds (scene._CATALOG_RSCALE_LOW/HIGH);
+            # ceiling raised 2.0 -> 3.0 on 2026-07-27 so painted size-ratio
+            # products keep prior support (see the constant's provenance)
+            assert rs.bounds == (0.005, 3.0)
 
     def test_all_truths_in_prior_support(self, nobulge_parts):
         spec, config, manifest, _ = nobulge_parts

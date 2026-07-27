@@ -30,6 +30,8 @@ from kl_pipe.ensemble.population import (
     BULGE_PSEUDO_WEIGHT,
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MEDIAN,
+    CENTROID_SCATTER_ARCSEC,
+    CONT_CENTROID_OFFSET_ARCSEC,
     HALPHA_RSCALE_RATIO_DEX,
     HALPHA_RSCALE_RATIO_MEDIAN,
     VEL_RSCALE_RATIO_DEX,
@@ -77,9 +79,20 @@ _BAND_FLUX_PRIOR = {
 # would cost about 14% of the apparent-shape lever overall and 38% in the
 # lowest-inclination bin, so it is carried as an open systematic.
 _DISK_H_OVER_R = 0.1
-# The bulge has no anchor of its own. Costantin et al. 2018 measure C/A = 0.65
-# for CALIFA bulges; the conversion to a scale-height ratio is approximate and
-# a bulge capped at B/T = 0.3 carries little of the inclination signal.
+
+# Centroid support, wide enough that no painted offset approaches it.
+_CENTROID_BOUNDS = (-0.5, 0.5)
+# The grism continuum's centroid is the line's plus an independent physical
+# offset, so its marginal width is the two paint scatters in quadrature. Given
+# marginally rather than as a prior conditional on the line centroid: the
+# continuum is strongly detected, so this direction should be data-dominated,
+# and a marginal prior cannot impose a closeness the data has not shown.
+_CONT_CENTROID_SIGMA = math.hypot(CENTROID_SCATTER_ARCSEC, CONT_CENTROID_OFFSET_ARCSEC)
+# The bulge has no anchor of its own. Bertola et al. 1991 measure a mean
+# intrinsic C/A = 0.65 for the bulges of 32 disk galaxies; Costantin et al.
+# 2018 find 0.55 for CALIFA bulges. The conversion to a scale-height ratio is
+# approximate and a bulge capped at B/T = 0.3 carries little of the
+# inclination signal.
 _BULGE_H_OVER_HLR = 0.5
 # base bulge truth defaults; the catalog expander overrides bulge_frac and
 # bulge_hlr per galaxy from the catalog columns
@@ -256,12 +269,20 @@ def scene_truth_defaults(
 
 
 # catalog-mode rscale prior bounds [arcsec]. The sampled-mode (0.05, 1.0)
-# bounds do NOT contain the catalog truths: the dev population's selected
-# disk scale lengths span 0.0086-1.18 arcsec (flagship2_dev, snr_line >= 5
-# selection, measured 2026-07-21), so bounds are set below/above the
-# observed extremes rather than silently clipping truth out of support
+# bounds do NOT contain the catalog truths, so bounds are set below/above the
+# reachable extremes rather than silently clipping truth out of support. The
+# ceiling must clear the painted products, not just the catalog sizes: the
+# line and turnover truths are catalog size x lognormal ratio, and at the old
+# ceiling of 2.0 a real dev draw landed at Halpha.rscale = 2.12 (1 of 400,
+# measured 2026-07-27), leaving that truth with zero prior support. At 3.0
+# the exceedance under the fitted size population drops from 2.8e-3 to
+# 4.2e-4 per galaxy for the line size (7e-5 for the turnover), so a rare
+# census draw can still land outside and will fail the truth-in-support
+# check loudly, which is the intended behavior. The render grid is unchanged
+# (oversample 3, pad 2, per-eval cost flat; PSF damping sets the k-space
+# extent, measured 2026-07-27).
 _CATALOG_RSCALE_LOW = 0.005
-_CATALOG_RSCALE_HIGH = 2.0
+_CATALOG_RSCALE_HIGH = 3.0
 
 # Population distributions replacing the truth-centered priors, fitted to the
 # selected Flagship2 sample (flagship2_dev at snr_line_total_min 20, n = 400,
@@ -396,8 +417,8 @@ def scene_priors(
             truth['Halpha.rscale'], 0.08, rscale_low, rscale_high
         ),
         'Halpha.h_over_r': truth['Halpha.h_over_r'],
-        'Halpha.x0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
-        'Halpha.y0': TruncatedNormal(0.0, 0.1, -0.5, 0.5),
+        'Halpha.x0': TruncatedNormal(0.0, CENTROID_SCATTER_ARCSEC, *_CENTROID_BOUNDS),
+        'Halpha.y0': TruncatedNormal(0.0, CENTROID_SCATTER_ARCSEC, *_CENTROID_BOUNDS),
         'Halpha.dispersion': TruncatedNormal(
             truth['Halpha.dispersion'], 20.0, 5.0, 150.0
         ),
@@ -407,7 +428,8 @@ def scene_priors(
         'Halpha.cont.flux_per_nm': TruncatedNormal(
             truth['Halpha.cont.flux_per_nm'], 15.0, 0.0, 200.0
         ),
-        # continuum shape pinned to truth (flagship convention)
+        # continuum shape pinned to truth (flagship convention); catalog mode
+        # replaces the scale length with the population prior below
         'Halpha.cont.rscale': truth['Halpha.cont.rscale'],
         'Halpha.cont.h_over_r': truth['Halpha.cont.h_over_r'],
         'Halpha.cont.x0': truth['Halpha.cont.x0'],
@@ -423,8 +445,12 @@ def scene_priors(
 
     for band in config.bands:
         _, sigma, low, high = _BAND_FLUX_PRIOR[band]
-        prior_spec[f'{band}.x0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
-        prior_spec[f'{band}.y0'] = TruncatedNormal(0.0, 0.1, -0.5, 0.5)
+        prior_spec[f'{band}.x0'] = TruncatedNormal(
+            0.0, CENTROID_SCATTER_ARCSEC, *_CENTROID_BOUNDS
+        )
+        prior_spec[f'{band}.y0'] = TruncatedNormal(
+            0.0, CENTROID_SCATTER_ARCSEC, *_CENTROID_BOUNDS
+        )
         if bulge_bands:
             # catalog broadband = BulgeDiskModel. Sampled: total_flux,
             # disk_rscale (truth-centered, interim convention), bulge_frac,
@@ -492,8 +518,22 @@ def scene_priors(
         # parameter marginalizes with the rest, so no measurement is reused.
         ln10 = math.log(10.0)
         parent = f'{config.bands[0]}.disk_rscale'
-        for band in config.bands:
-            key = f'{band}.disk_rscale' if bulge_bands else f'{band}.rscale'
+        # The continuum under the line is the same stellar disk as the
+        # broadband, so the paint gives it the same catalog scale length. It
+        # still gets its own independent population prior rather than being
+        # tied to a band: the continuum is observed at the redshifted line
+        # wavelength, which sweeps from blueward of the bluer band to redward
+        # of the redder one across the sample, so the correct tie coefficient
+        # is per-galaxy and depends on a chromatic size gradient we do not
+        # paint. Sampling the three independently keeps the fit from assuming
+        # the gradient is absent; it discards information, so it can only
+        # widen the posterior rather than bias it.
+        size_keys = [
+            f'{band}.disk_rscale' if bulge_bands else f'{band}.rscale'
+            for band in config.bands
+        ]
+        size_keys.append('Halpha.cont.rscale')
+        for key in size_keys:
             prior_spec[key] = TruncatedLogNormal(
                 _CATALOG_RSCALE_LOG10_MU * ln10,
                 _CATALOG_RSCALE_LOG10_SIGMA * ln10,
@@ -527,6 +567,16 @@ def scene_priors(
                     _BULGE_HLR_LOW,
                     _BULGE_HLR_HIGH,
                 )
+
+        # continuum centroid: sampled on the quadrature width rather than
+        # pinned at truth, so the line-to-continuum offset is measured rather
+        # than assumed
+        prior_spec['Halpha.cont.x0'] = TruncatedNormal(
+            0.0, _CONT_CENTROID_SIGMA, *_CENTROID_BOUNDS
+        )
+        prior_spec['Halpha.cont.y0'] = TruncatedNormal(
+            0.0, _CONT_CENTROID_SIGMA, *_CENTROID_BOUNDS
+        )
 
         # continuum amplitude: population distribution of the catalog
         # equivalent widths, which is both leak-free and tighter than the
