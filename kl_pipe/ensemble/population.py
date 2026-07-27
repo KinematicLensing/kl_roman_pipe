@@ -156,6 +156,31 @@ _POP_PAINT = 12
 _POP_SHEAR = 13
 _POP_PRIOR = 14
 _POP_BULGE = 15
+_POP_STRUCTURE = 16
+
+# Component scales relative to the catalog disk scale length. The catalog
+# gives one size per galaxy; the rotation curve and the line-emitting gas do
+# not share it, so each carries a painted ratio. Fit priors use these same
+# constants, so the prior is the distribution the truth was drawn from.
+#
+# Turnover radius of the arctan rotation curve, in disk scale lengths.
+# Miller et al. 2011 fit this functional form to DEIMOS curves out to z ~ 1.3.
+# The median is theirs; the scatter is read off the r_t/r_opt distribution in
+# Courteau 1997 at r_opt = 3.2 r_s and is approximate.
+VEL_RSCALE_RATIO_MEDIAN = 0.4
+VEL_RSCALE_RATIO_DEX = 0.25
+
+# Halpha extent relative to the stellar continuum. Nelson et al. 2012 measure
+# a median of 1.3 at z ~ 1 in 3D-HST and quote no population width, so the
+# scatter is assumed rather than measured.
+HALPHA_RSCALE_RATIO_MEDIAN = 1.3
+HALPHA_RSCALE_RATIO_DEX = 0.15
+
+# Systemic velocity relative to the catalog redshift. One grism pixel at
+# 1.1 nm is about 200 km/s at the observed Halpha wavelength, and the line
+# centroid is measured to tens of km/s, so a painted offset of this size sits
+# well inside what the data constrains.
+V0_SCATTER_KMS = 25.0
 
 # Literature-anchored bulge morphology paint. Flagship2 assigns the bulge
 # Sersic index and bulge size as random draws uncorrelated with every other
@@ -630,6 +655,34 @@ def _paint_kinematics(
     return vcirc, sigma0
 
 
+def _paint_structure(
+    seed: int,
+    halo_ids: np.ndarray,
+    galaxy_ids: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Paint the component scale ratios and the systemic velocity offset.
+
+    Returns the kinematic and Halpha scale lengths as ratios to the catalog
+    disk scale length, plus v0 in km/s. One generator per galaxy; the draw
+    order is part of the determinism contract.
+    """
+    n = len(halo_ids)
+    vel_ratio = np.empty(n, dtype=np.float64)
+    line_ratio = np.empty(n, dtype=np.float64)
+    v0 = np.empty(n, dtype=np.float64)
+    ln10 = np.log(10.0)
+    for i in range(n):
+        rng = _galaxy_rng(seed, _POP_STRUCTURE, halo_ids[i], galaxy_ids[i])
+        vel_ratio[i] = VEL_RSCALE_RATIO_MEDIAN * np.exp(
+            rng.normal(0.0, VEL_RSCALE_RATIO_DEX * ln10)
+        )
+        line_ratio[i] = HALPHA_RSCALE_RATIO_MEDIAN * np.exp(
+            rng.normal(0.0, HALPHA_RSCALE_RATIO_DEX * ln10)
+        )
+        v0[i] = rng.normal(0.0, V0_SCATTER_KMS)
+    return vel_ratio, line_ratio, v0
+
+
 def _draw_shear(
     seed: int,
     halo_ids: np.ndarray,
@@ -865,6 +918,7 @@ def build_population(
         spec.seed, halo_ids, galaxy_ids, logm, z_sample, cp
     )
     g1, g2 = _draw_shear(spec.seed, halo_ids, galaxy_ids, cp)
+    vel_ratio, line_ratio, v0_kms = _paint_structure(spec.seed, halo_ids, galaxy_ids)
     logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(
         spec.seed, halo_ids, galaxy_ids, logm, cp
     )
@@ -881,6 +935,9 @@ def build_population(
         'f_lambda_cont_cgs': sample['f_lambda_cont_cgs'].to_numpy(),
         'rscale_arcsec': sample['rscale_arcsec'].to_numpy(),
         'bulge_fraction': sample['bulge_fraction'].to_numpy(dtype=np.float64),
+        'vel_rscale_ratio': vel_ratio,
+        'halpha_rscale_ratio': line_ratio,
+        'v0_kms': v0_kms,
     }
     # painted bulge morphology columns exist only when the paint is enabled;
     # a disk-only twin (paint.bulge: false) omits them so any downstream

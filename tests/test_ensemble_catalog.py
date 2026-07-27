@@ -26,7 +26,13 @@ from kl_pipe.ensemble.expander import (
 from kl_pipe.ensemble.mocks import build_fit_inputs
 from kl_pipe.ensemble.scene import scene_priors
 from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
-from kl_pipe.priors import LogNormal, TruncatedNormal, Uniform
+from kl_pipe.priors import (
+    LogNormal,
+    TruncatedLogNormal,
+    TruncatedNormal,
+    Uniform,
+)
+
 
 from test_population import (
     catalog_spec_dict,
@@ -34,6 +40,21 @@ from test_population import (
     spec_from_dict,
     write_fake_catalog,
 )
+
+
+def prior_logp_at_truth(priors, truth, name):
+    """Prior log-prob of one parameter at its truth.
+
+    A conditional prior has no density without its parent, so resolve the
+    parent's truth for it. Per-parameter rather than the joint log-prior so a
+    failure names the offending parameter.
+    """
+    prior = priors.get_prior(name)
+    parent = priors.conditional_parents.get(name)
+    if parent is None:
+        return float(prior.log_prob(truth[name]))
+    return float(prior.log_prob_given(truth[name], truth[parent]))
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
@@ -163,9 +184,52 @@ class TestCatalogExpand:
                 assert row[f'truth.{band}.disk_rscale'] == rscale
                 assert row[f'truth.{band}.bulge_frac'] == float(g['bulge_fraction'])
                 assert row[f'truth.{band}.bulge_hlr'] == float(g['bulge_r50_arcsec'])
-            # line + continuum + velocity stay single-disk
-            for comp in ('Halpha', 'Halpha.cont', 'vel'):
-                assert row[f'truth.{comp}.rscale'] == rscale
+            # the continuum under the line is the same stellar disk, so it
+            # shares the catalog scale exactly; the line and the rotation
+            # curve carry their painted ratios to it
+            assert row['truth.Halpha.cont.rscale'] == rscale
+            assert row['truth.Halpha.rscale'] == rscale * float(
+                g['halpha_rscale_ratio']
+            )
+            assert row['truth.vel.rscale'] == rscale * float(g['vel_rscale_ratio'])
+
+    def test_painted_ratios_follow_the_literature_distributions(self, run_parts):
+        # the paint constants are the same objects the fit priors are built
+        # from, so a drift here would silently desynchronise prior and truth
+        from kl_pipe.ensemble.population import (
+            HALPHA_RSCALE_RATIO_MEDIAN,
+            VEL_RSCALE_RATIO_MEDIAN,
+            V0_SCATTER_KMS,
+        )
+
+        _, _, _, population = run_parts
+        vel = population['vel_rscale_ratio'].to_numpy()
+        line = population['halpha_rscale_ratio'].to_numpy()
+        v0 = population['v0_kms'].to_numpy()
+        assert (vel > 0).all() and (line > 0).all()
+        # loose bracket: 4 galaxies cannot pin a median, only catch a wrong
+        # centre or a wrong units convention
+        assert 0.1 < np.median(vel) < 1.6
+        assert 0.4 < np.median(line) < 4.0
+        assert np.median(vel) < np.median(line)  # turnover inside the line
+        assert abs(np.mean(v0)) < 5 * V0_SCATTER_KMS
+        assert VEL_RSCALE_RATIO_MEDIAN < HALPHA_RSCALE_RATIO_MEDIAN
+
+    def test_component_centroids_are_drawn_not_pinned(self, run_parts):
+        # every component keeps its own registration offset; pinning them all
+        # at zero would leave the fit prior centred exactly on truth
+        _, config, manifest, _ = run_parts
+        row = manifest.iloc[0]
+        offsets = [
+            row[f'truth.{comp}.{axis}']
+            for comp in list(config.bands) + ['Halpha']
+            for axis in ('x0', 'y0')
+        ]
+        assert any(o != 0.0 for o in offsets)
+        assert len(set(offsets)) == len(offsets)
+        # the continuum shares the line's centroid: same object, same exposure
+        assert row['truth.Halpha.cont.x0'] == row['truth.Halpha.x0']
+        assert row['truth.Halpha.cont.y0'] == row['truth.Halpha.y0']
 
     def test_kinematic_truths_from_population(self, run_parts):
         _, _, manifest, population = run_parts
@@ -276,7 +340,7 @@ class TestCatalogPriors:
             truth = truth_from_row(row)
             priors = scene_priors(truth, config, spec, row=row)
             for name in priors.sampled_names:
-                lp = float(priors.get_prior(name).log_prob(truth[name]))
+                lp = prior_logp_at_truth(priors, truth, name)
                 assert np.isfinite(lp), f'{name}: truth {truth[name]} out of support'
 
     def test_row_required_in_catalog_mode(self, run_parts):
@@ -382,8 +446,14 @@ class TestNoBulgeCatalog:
             rscale = float(pop.loc[row['galaxy_id'], 'rscale_arcsec'])
             for band in config.bands:
                 assert row[f'truth.{band}.rscale'] == rscale
-            for comp in ('Halpha', 'Halpha.cont', 'vel'):
-                assert row[f'truth.{comp}.rscale'] == rscale
+            # continuum shares the disk scale; line and rotation curve carry
+            # their painted ratios to it
+            g = pop.loc[row['galaxy_id']]
+            assert row['truth.Halpha.cont.rscale'] == rscale
+            assert row['truth.Halpha.rscale'] == rscale * float(
+                g['halpha_rscale_ratio']
+            )
+            assert row['truth.vel.rscale'] == rscale * float(g['vel_rscale_ratio'])
 
     def test_flux_matches_bulge_twin_total_flux(self, run_parts, nobulge_parts):
         # flux normalization: the single-disk band flux equals the bulge
@@ -412,7 +482,8 @@ class TestNoBulgeCatalog:
         for band in config.bands:
             assert f'{band}.flux' in priors.sampled_names
             rs = priors.get_prior(f'{band}.rscale')
-            assert isinstance(rs, TruncatedNormal)
+            # population size distribution, not a truth-centered prior
+            assert isinstance(rs, TruncatedLogNormal)
             # catalog-mode rscale bounds (scene._CATALOG_RSCALE_LOW/HIGH)
             assert rs.bounds == (0.005, 2.0)
 
@@ -422,7 +493,7 @@ class TestNoBulgeCatalog:
             truth = truth_from_row(row)
             priors = scene_priors(truth, config, spec, row=row)
             for name in priors.sampled_names:
-                lp = float(priors.get_prior(name).log_prob(truth[name]))
+                lp = prior_logp_at_truth(priors, truth, name)
                 assert np.isfinite(lp), f'{name}: truth {truth[name]} out of support'
 
     def test_build_fit_inputs_single_disk_task(self, nobulge_parts):

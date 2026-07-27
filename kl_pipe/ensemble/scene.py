@@ -30,11 +30,17 @@ from kl_pipe.ensemble.population import (
     BULGE_PSEUDO_WEIGHT,
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MEDIAN,
+    HALPHA_RSCALE_RATIO_DEX,
+    HALPHA_RSCALE_RATIO_MEDIAN,
+    VEL_RSCALE_RATIO_DEX,
+    VEL_RSCALE_RATIO_MEDIAN,
 )
 from kl_pipe.priors import (
+    ConditionalLogNormal,
     Gaussian,
     LogNormal,
     PriorDict,
+    TruncatedLogNormal,
     TruncatedNormal,
     TruncatedNormalMixture,
     Uniform,
@@ -63,9 +69,17 @@ _BAND_FLUX_PRIOR = {
     'F184': (100.0, 20.0, 30.0, 250.0),
 }
 
-# bulge structure defaults for catalog-mode broadband (BulgeDiskModel).
-# the disk uses a thin h_over_r=0.1; the bulge is a rounder spheroid.
-# bulge_h_over_hlr has no catalog column -> fixed nuisance, not sampled.
+# Vertical structure, pinned on both sides (painted and fit at the same
+# value), so it is a stated model assumption rather than a recovered
+# quantity. The disk value is the GalSim InclinedExponential default.
+# Hoffmann et al. 2022 measure C/A = 0.24 for disc-dominated galaxies below
+# z = 1, which maps to h_over_r 0.42-0.53 through the renderer; adopting that
+# would cost about 14% of the apparent-shape lever overall and 38% in the
+# lowest-inclination bin, so it is carried as an open systematic.
+_DISK_H_OVER_R = 0.1
+# The bulge has no anchor of its own. Costantin et al. 2018 measure C/A = 0.65
+# for CALIFA bulges; the conversion to a scale-height ratio is approximate and
+# a bulge capped at B/T = 0.3 carries little of the inclination signal.
 _BULGE_H_OVER_HLR = 0.5
 # base bulge truth defaults; the catalog expander overrides bulge_frac and
 # bulge_hlr per galaxy from the catalog columns
@@ -200,7 +214,7 @@ def scene_truth_defaults(
             truth[f'{band}.total_flux'] = bt['flux']
             truth[f'{band}.bulge_frac'] = _BULGE_FRAC_DEFAULT
             truth[f'{band}.disk_rscale'] = bt['rscale']
-            truth[f'{band}.disk_h_over_r'] = 0.1
+            truth[f'{band}.disk_h_over_r'] = _DISK_H_OVER_R
             truth[f'{band}.bulge_hlr'] = _BULGE_HLR_DEFAULT
             truth[f'{band}.bulge_h_over_hlr'] = _BULGE_H_OVER_HLR
             truth[f'{band}.bulge_n_sersic'] = _BULGE_N_SERSIC_DEFAULT
@@ -209,14 +223,14 @@ def scene_truth_defaults(
         else:
             truth[f'{band}.flux'] = bt['flux']
             truth[f'{band}.rscale'] = bt['rscale']
-            truth[f'{band}.h_over_r'] = 0.1
+            truth[f'{band}.h_over_r'] = _DISK_H_OVER_R
             truth[f'{band}.x0'] = 0.0
             truth[f'{band}.y0'] = 0.0
 
     # geometry defaults on the line components (bands handled above, since
     # their thickness key differs between single-disk and bulge-disk)
     for comp in ('Halpha', 'Halpha.cont'):
-        truth[f'{comp}.h_over_r'] = 0.1
+        truth[f'{comp}.h_over_r'] = _DISK_H_OVER_R
         truth[f'{comp}.x0'] = 0.0
         truth[f'{comp}.y0'] = 0.0
 
@@ -248,6 +262,30 @@ def scene_truth_defaults(
 # observed extremes rather than silently clipping truth out of support
 _CATALOG_RSCALE_LOW = 0.005
 _CATALOG_RSCALE_HIGH = 2.0
+
+# Population distributions replacing the truth-centered priors, fitted to the
+# selected Flagship2 sample (flagship2_dev at snr_line_total_min 20, n = 400,
+# measured 2026-07-25). log10 median and log10 scatter.
+_CATALOG_RSCALE_LOG10_MU = -0.672
+_CATALOG_RSCALE_LOG10_SIGMA = 0.237
+_CONT_FLUX_LOG10_MU = 0.770
+_CONT_FLUX_LOG10_SIGMA = 0.305
+# support wide enough to contain the selected sample's continuum amplitudes,
+# which span roughly 1.3-93 in the scene's internal flux units per nm
+_CONT_FLUX_LOW = 0.05
+_CONT_FLUX_HIGH = 400.0
+# bulge half-light radius support. Matched to the disk floor rather than set
+# lower: the smallest allowed size drives the worst-case maxk, so an
+# unnecessarily small floor enlarges the render grid on every evaluation.
+# The population's bulge sizes reach about 0.006 arcsec at four sigma.
+_BULGE_HLR_LOW = 0.005
+_BULGE_HLR_HIGH = 2.0
+
+# Systemic velocity prior width. One grism pixel at 1.1 nm is about 200 km/s
+# at the observed Halpha wavelength; the line centroid is measured to roughly
+# 14 km/s at line SNR 20 and 40 km/s at SNR 7, so this leaves v0 data-
+# dominated across the sample rather than encoding knowledge we do not have.
+_V0_PRIOR_SIGMA_KMS = 200.0
 
 # informative population priors for the bulge decomposition. A flat
 # bulge_frac (Uniform) + flat bulge_hlr (LogUniform) add no curvature along
@@ -446,6 +484,64 @@ def scene_priors(
             cp.sigma0_min_kms,
             150.0,
         )
+
+        # Sizes. The catalog disk scale is the only measured size, so the
+        # broadband disk carries the population distribution and the line and
+        # rotation-curve scales condition on the sampled value through the
+        # same ratio distributions the paint used. Conditioning on a sampled
+        # parameter marginalizes with the rest, so no measurement is reused.
+        ln10 = math.log(10.0)
+        parent = f'{config.bands[0]}.disk_rscale'
+        for band in config.bands:
+            key = f'{band}.disk_rscale' if bulge_bands else f'{band}.rscale'
+            prior_spec[key] = TruncatedLogNormal(
+                _CATALOG_RSCALE_LOG10_MU * ln10,
+                _CATALOG_RSCALE_LOG10_SIGMA * ln10,
+                rscale_low,
+                rscale_high,
+            )
+        if not bulge_bands:
+            parent = f'{config.bands[0]}.rscale'
+        prior_spec['vel.rscale'] = ConditionalLogNormal(
+            parent,
+            math.log(VEL_RSCALE_RATIO_MEDIAN),
+            VEL_RSCALE_RATIO_DEX * ln10,
+            rscale_low,
+            rscale_high,
+        )
+        prior_spec['Halpha.rscale'] = ConditionalLogNormal(
+            parent,
+            math.log(HALPHA_RSCALE_RATIO_MEDIAN),
+            HALPHA_RSCALE_RATIO_DEX * ln10,
+            rscale_low,
+            rscale_high,
+        )
+        if bulge_bands:
+            # bulge size relative to its own band's disk, from the same paint
+            # constants, so the truth-derived median is gone
+            for band in config.bands:
+                prior_spec[f'{band}.bulge_hlr'] = ConditionalLogNormal(
+                    f'{band}.disk_rscale',
+                    math.log(BULGE_SIZE_RATIO_MEDIAN * _EXP_R50_OVER_RSCALE),
+                    BULGE_SIZE_RATIO_LN_SCATTER,
+                    _BULGE_HLR_LOW,
+                    _BULGE_HLR_HIGH,
+                )
+
+        # continuum amplitude: population distribution of the catalog
+        # equivalent widths, which is both leak-free and tighter than the
+        # truth-centered prior it replaces
+        prior_spec['Halpha.cont.flux_per_nm'] = TruncatedLogNormal(
+            _CONT_FLUX_LOG10_MU * ln10,
+            _CONT_FLUX_LOG10_SIGMA * ln10,
+            _CONT_FLUX_LOW,
+            _CONT_FLUX_HIGH,
+        )
+
+        # systemic velocity: deliberately wider than the painted offset. The
+        # grism measures the line centroid to tens of km/s, so a prior about
+        # one grism pixel wide leaves this direction data-dominated.
+        prior_spec['vel.v0'] = Gaussian(0.0, _V0_PRIOR_SIGMA_KMS)
     else:
         # cosi: population prior. Stratified axis -> uniform over the
         # stratify range (the bin grid IS the random-orientation
