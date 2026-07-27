@@ -489,20 +489,16 @@ class PriorDict:
             samples.append(self._priors[name].sample(key, (n_samples,)))
         return jnp.stack(samples, axis=-1)
 
-    def theta_to_full_pars(
-        self,
-        theta: jnp.ndarray,
-        parameter_names: Tuple[str, ...],
-    ) -> Dict[str, float]:
+    def theta_to_full_pars(self, theta: jnp.ndarray) -> Dict[str, float]:
         """
         Convert sampled theta array to full parameter dict including fixed values.
+
+        ``theta`` is indexed in ``self.sampled_names`` (alphabetical) order.
 
         Parameters
         ----------
         theta : jnp.ndarray
             Array of sampled parameter values.
-        parameter_names : tuple of str
-            The model's PARAMETER_NAMES defining expected parameters.
 
         Returns
         -------

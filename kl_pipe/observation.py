@@ -107,7 +107,7 @@ class ImageObs:
     pixel_response: Optional[PixelResponse] = None
     psf: Optional[object] = None  # galsim.GSObject; static aux for grid validation
     # broadband_key: key into source.broadband_models that this obs renders
-    # (used by SourceModel-based inference; None for legacy KLModel-based use).
+    # (used by SourceModel-based inference; None for rendering-only obs).
     broadband_key: Optional[str] = None
     # _rc_was_default: internal flag — True when build_image_obs supplied the
     # default render_config (caller passed render_config=None), False when the
@@ -186,8 +186,9 @@ class ImageObs:
                 )
 
         if oversample > 1:
-            new_fine_image_pars = self.image_pars.make_fine_scale(oversample)
-            new_fine_X, new_fine_Y = build_map_grid_from_image_pars(new_fine_image_pars)
+            new_fine_X, new_fine_Y = _build_fine_spatial_grids(
+                self.image_pars, oversample
+            )
 
         return dataclasses.replace(
             self,
@@ -348,13 +349,9 @@ class GrismObs:
 
         if oversample > 1:
             new_fine_image_pars = self.cube_pars.image_pars.make_fine_scale(oversample)
-            coarse_ps = self.cube_pars.image_pars.pixel_scale
-            fine_ps = new_fine_image_pars.pixel_scale
-            Nrow_f, Ncol_f = new_fine_image_pars.Nrow, new_fine_image_pars.Ncol
-            kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
-            ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
-            KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
-            new_pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
+            new_pixel_response_fft = _fine_pixel_response_fft(
+                new_fine_image_pars, self.cube_pars.image_pars.pixel_scale
+            )
 
         return dataclasses.replace(
             self,
@@ -382,8 +379,6 @@ class FiberObs:
     ATMPSF_conv_fiber_mask: Optional[jnp.ndarray] = None
     resolution_matrix: Optional[jnp.ndarray] = None
     _rc_was_default: bool = field(default=False, init=False, repr=False)
-
-
 
 # ============================================================================
 # JAX pytree registration
@@ -537,6 +532,68 @@ jax.tree_util.register_pytree_node(GrismObs, _grism_obs_flatten, _grism_obs_unfl
 # ============================================================================
 
 
+def _cast_and_validate_obs_arrays(data, variance, mask):
+    """Cast data/variance/mask to JAX arrays and validate loudly.
+
+    Checks performed eagerly at construction (not inside JIT):
+    - ``variance`` is strictly positive everywhere. A zero/negative entry
+      yields inf/NaN in the Gaussian log-likelihood, and a zero even on a
+      masked-out pixel still poisons reverse-mode gradients through the
+      ``jnp.where`` in ``_gaussian_log_likelihood``.
+    - array ``variance`` and ``mask`` shapes match the data shape (a mismatch
+      would otherwise surface only as a cryptic broadcast error inside the
+      JITed likelihood). Scalar variance is allowed and broadcasts.
+
+    Grism data is dispersed (shape differs from ``image_pars``), so shapes are
+    cross-checked against ``data`` only, never against the grid.
+    """
+    if data is not None:
+        data = jnp.asarray(data)
+    if variance is not None:
+        variance = jnp.asarray(variance)
+        if not bool(jnp.all(variance > 0)):
+            raise ValueError(
+                "variance must be strictly positive everywhere; found "
+                "non-positive entries (zero/negative variance yields inf/NaN "
+                "in the Gaussian log-likelihood and NaN gradients)."
+            )
+        if data is not None and variance.ndim > 0 and variance.shape != data.shape:
+            raise ValueError(
+                f"variance shape {variance.shape} does not match data shape "
+                f"{data.shape} (a scalar variance is allowed and broadcasts)."
+            )
+    if mask is not None:
+        mask = jnp.asarray(mask, dtype=bool)
+        if data is not None and mask.shape != data.shape:
+            raise ValueError(
+                f"mask shape {mask.shape} does not match data shape {data.shape}."
+            )
+    return data, variance, mask
+
+
+def _build_fine_spatial_grids(image_pars, oversample):
+    """Fine-scale coordinate grids for spatial oversampling.
+
+    Returns ``(fine_X, fine_Y)``. Callers guard ``oversample > 1``.
+    """
+    fine_image_pars = image_pars.make_fine_scale(oversample)
+    return build_map_grid_from_image_pars(fine_image_pars)
+
+
+def _fine_pixel_response_fft(fine_image_pars, coarse_pixel_scale):
+    """BoxPixel sinc FT on the fine k-grid, for post-dispersion pixel response.
+
+    The pixel response is a coarse-detector property, so the BoxPixel side is
+    ``coarse_pixel_scale`` even though the k-grid is at the fine pixel scale.
+    """
+    fine_ps = fine_image_pars.pixel_scale
+    Nrow_f, Ncol_f = fine_image_pars.Nrow, fine_image_pars.Ncol
+    kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+    ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+    KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+    return BoxPixel(coarse_pixel_scale).ft(KX, KY)
+
+
 def build_image_obs(
     image_pars: ImagePars,
     *,
@@ -629,15 +686,9 @@ def build_image_obs(
     # fine grids: create when oversample > 1, regardless of PSF.
     # needed for velocity models (spatial oversampling) even without PSF.
     if oversample > 1:
-        fine_image_pars = image_pars.make_fine_scale(oversample)
-        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
+        fine_X, fine_Y = _build_fine_spatial_grids(image_pars, oversample)
 
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
+    data, variance, mask = _cast_and_validate_obs_arrays(data, variance, mask)
 
     obs = ImageObs(
         image_pars=image_pars,
@@ -704,6 +755,13 @@ def build_velocity_obs(
     render_config : RenderConfig, optional
         Rendering recipe (single source of truth for oversampling). When
         omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``.
+
+        Note: there is no ``build_velocity_render_config`` helper (unlike the
+        image/grism cases). Velocity rendering flux-weights an intensity
+        profile for PSF convolution, so a priors-sized rc is derived from that
+        intensity component's helper (``build_image_render_config``). TODO:
+        add a dedicated velocity helper if velocity-only PSF sizing ever needs
+        its own path.
     """
     if render_config is None:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
@@ -776,15 +834,9 @@ def build_velocity_obs(
 
     # fine grids: create when oversample > 1, regardless of PSF
     if oversample > 1:
-        fine_image_pars = image_pars.make_fine_scale(oversample)
-        fine_X, fine_Y = build_map_grid_from_image_pars(fine_image_pars)
+        fine_X, fine_Y = _build_fine_spatial_grids(image_pars, oversample)
 
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
+    data, variance, mask = _cast_and_validate_obs_arrays(data, variance, mask)
     if flux_theta is not None:
         flux_theta = jnp.asarray(flux_theta)
 
@@ -819,7 +871,7 @@ def build_grism_obs(
     mask=None,
     render_config: Optional[RenderConfig] = None,
 ) -> GrismObs:
-    """Build grism observation. Replaces KLModel.configure_grism_psf().
+    """Build grism observation.
 
     Parameters
     ----------
@@ -868,26 +920,16 @@ def build_grism_obs(
             gsparams=gsparams,
         )
 
-    # fine grid: create when oversample > 1, regardless of PSF
+    # fine grid: create when oversample > 1, regardless of PSF. The BoxPixel
+    # sinc is the post-dispersion pixel response (consumed by
+    # SourceModel.render_grism).
     if oversample > 1:
         fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
-        # precompute BoxPixel sinc on fine k-grid for post-dispersion pixel
-        # response (consumed by KLModel.render_grism). pixel response is a
-        # coarse-detector property; sinc uses the coarse pixel_scale.
-        coarse_ps = cube_pars.image_pars.pixel_scale
-        fine_ps = fine_image_pars.pixel_scale
-        Nrow_f, Ncol_f = fine_image_pars.Nrow, fine_image_pars.Ncol
-        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
-        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
-        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
-        pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
+        pixel_response_fft = _fine_pixel_response_fft(
+            fine_image_pars, cube_pars.image_pars.pixel_scale
+        )
 
-    if data is not None:
-        data = jnp.asarray(data)
-    if variance is not None:
-        variance = jnp.asarray(variance)
-    if mask is not None:
-        mask = jnp.asarray(mask, dtype=bool)
+    data, variance, mask = _cast_and_validate_obs_arrays(data, variance, mask)
 
     obs = GrismObs(
         grism_pars=grism_pars,
@@ -949,6 +991,7 @@ def build_fiber_obs(
         ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
         result (from ``kl_pipe.render``).
     """
+
     rc_was_default = render_config is None
     if rc_was_default:
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
@@ -990,20 +1033,27 @@ def build_fiber_obs(
     if mask is not None:
         mask = jnp.asarray(mask, dtype=bool) #don't know how to use the mask yet
 
-    if throughput is None:
-        if fiber_pars.throughput is None and fiber_pars.bandpass_path is not None:
-            throughput_function = gs.Bandpass(
-                fiber_pars.bandpass_path,'nm',
-                blue_limit=cube_pars.lambda_grid[0],
-                red_limit=cube_pars.lambda_grid[-1],
-            )
-            throughput = jnp.asarray(throughput_function(cube_pars.lambda_grid))
-        elif fiber_pars.throughput is not None:
-            throughput = jnp.asarray(fiber_pars.throughput) #needs to be correct length
-        elif fiber_pars.throughput is None and fiber_pars.bandpass_path is None:
-            throughput = jnp.ones(cube_pars.lambda_grid)
-    else:
-        throughput = jnp.asarray(throughput)
+    throughput_function = gs.Bandpass(
+        fiber_pars.bandpass_path,'nm',
+        blue_limit=cube_pars.lambda_grid[0],
+        red_limit=cube_pars.lambda_grid[-1],
+    )
+    throughput = jnp.asarray(throughput_function(cube_pars.lambda_grid))
+
+    #if throughput is None:
+        #if fiber_pars.throughput is None and fiber_pars.bandpass_path is not None:
+            #throughput_function = gs.Bandpass(
+                #fiber_pars.bandpass_path,'nm',
+                #blue_limit=cube_pars.lambda_grid[0],
+                #red_limit=cube_pars.lambda_grid[-1],
+            #)
+            #throughput = jnp.asarray(throughput_function(cube_pars.lambda_grid))
+        #elif fiber_pars.throughput is not None:
+            #throughput = jnp.asarray(fiber_pars.throughput) #needs to be correct length
+        #elif fiber_pars.throughput is None and fiber_pars.bandpass_path is None:
+            #throughput = jnp.ones(cube_pars.lambda_grid)
+    #else:
+        #throughput = jnp.asarray(throughput)
 
     if ATMPSF_conv_fiber_mask is None:
         if oversample > 1:

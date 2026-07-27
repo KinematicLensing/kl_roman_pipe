@@ -3,11 +3,7 @@
 import numpy as np
 import pytest
 
-from kl_pipe.noise import (
-    add_fiberspec_noise,
-    add_intensity_noise,
-    add_velocity_noise,
-)
+from kl_pipe.noise import add_intensity_noise, add_velocity_noise
 
 
 @pytest.fixture
@@ -156,51 +152,3 @@ class TestVelocityNoiseReturnTypes:
         velocity = rng.normal(0, 100, size=(8, 8))
         _, variance = add_velocity_noise(velocity, target_snr=50, seed=0)
         np.testing.assert_allclose(variance, variance.flat[0])
-
-#need to try out tests
-class TestFiberSpectrumNoise:
-    @pytest.fixture
-    def spectrum(self):
-        wavelength_bin = np.arange(32, dtype=float)
-        return 1000.0 * np.exp(-0.5 * ((wavelength_bin - 16.0) / 4.0) ** 2)
-
-    def test_gaussian_only_returns_uniform_variance(self, spectrum):
-        noisy, variance = add_fiberspec_noise(spectrum, target_snr=20, seed=0)
-
-        assert noisy.shape == spectrum.shape
-        assert variance.shape == spectrum.shape
-        np.testing.assert_allclose(variance, variance[0])
-        expected = (np.linalg.norm(spectrum) / 20.0) ** 2
-        np.testing.assert_allclose(variance[0], expected)
-
-    def test_poisson_variance_is_per_bin(self, spectrum):
-        _, variance = add_fiberspec_noise(
-            spectrum,
-            target_snr=20,
-            include_poisson=True,
-            gain=2.0,
-            seed=0,
-        )
-
-        target_var = (np.linalg.norm(spectrum) / 20.0) ** 2
-        gaussian_var = target_var - np.mean(spectrum / 2.0)
-        np.testing.assert_allclose(variance, spectrum / 2.0 + gaussian_var)
-
-    def test_poisson_rejects_negative_expected_counts(self):
-        with pytest.raises(ValueError, match="non-negative expected photon signal"):
-            add_fiberspec_noise(
-                np.array([1.0, -0.1, 2.0]),
-                target_snr=2,
-                include_poisson=True,
-            )
-
-    def test_gaussian_only_allows_signed_spectrum(self):
-        spectrum = np.array([-1.0, 2.0, -0.5])
-        noisy, variance = add_fiberspec_noise(spectrum, target_snr=5, seed=0)
-
-        assert noisy.shape == spectrum.shape
-        assert np.all(variance > 0)
-
-    def test_requires_one_dimensional_input(self):
-        with pytest.raises(ValueError, match="one-dimensional"):
-            add_fiberspec_noise(np.ones((2, 3)), target_snr=5)

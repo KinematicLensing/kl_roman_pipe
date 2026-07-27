@@ -384,7 +384,7 @@ class TestBuildCube:
         pars_cont = dict(pars)
         pars_cont.update(
             {
-                'Halpha.cont.flux': 5.0,
+                'Halpha.cont.flux_per_nm': 5.0,
                 'Halpha.cont.rscale': 0.3,
                 'Halpha.cont.h_over_r': 0.15,
                 'Halpha.cont.x0': 0.0,

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from kl_pipe.spectral import CubePars
 
 from kl_pipe.parameters import ImagePars
+from kl_pipe.constants import C_KMS
 
 
 @dataclass(frozen=True)
@@ -101,9 +102,8 @@ class GrismPars:
         lam_max_line = max(lam_obs)
 
         # velocity window in wavelength units
-        c_kms = 299792.458
         lam_center = 0.5 * (lam_min_line + lam_max_line)
-        dlam_vel = lam_center * velocity_window_kms / c_kms
+        dlam_vel = lam_center * velocity_window_kms / C_KMS
 
         lam_min = lam_min_line - dlam_vel
         lam_max = lam_max_line + dlam_vel
@@ -187,13 +187,22 @@ def disperse_cube(
     if throughput is None:
         throughput = jnp.ones(Nlam)
 
-    # delta_lambda for integration (nm per wavelength pixel)
-    if Nlam >= 2:
-        dlam = jnp.abs(lambda_grid[1] - lambda_grid[0])
-    else:
-        dlam = 1.0
+    # delta_lambda for integration (nm per wavelength pixel). A single-slice
+    # cube carries no spectral information to disperse; refuse loudly rather
+    # than silently integrating with an arbitrary dlam=1 nm.
+    if Nlam < 2:
+        raise ValueError(
+            f"disperse_cube requires Nlam >= 2 (got Nlam={Nlam}); a "
+            f"single-wavelength cube has no spectral axis to disperse."
+        )
+    dlam = jnp.abs(lambda_grid[1] - lambda_grid[0])
 
-    # accumulate dispersed image
+    # accumulate dispersed image. The sequential per-slice loop is intentional:
+    # restructuring it as vmap/scan (same algorithm) cut compile ~10x but
+    # regressed runtime ~2.5x on CPU (benchmarked), and inference is
+    # runtime-dominated. This is a CPU result for same-algorithm variants; a
+    # precomputed fixed-dispersion operator and GPU execution are untested and
+    # could differ.
     dispersed = jnp.zeros((Nrow, Ncol))
 
     for k in range(Nlam):

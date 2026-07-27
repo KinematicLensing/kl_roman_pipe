@@ -65,7 +65,7 @@ def _make_pars(vel_pars, int_pars, z, vel_dispersion, line_fluxes, line_conts=No
     ``line_fluxes``: dict of {line_key: flux}. Halpha is always present in the
     Halpha-only fixture; multi-line fixtures may include NII6584, NII6548.
     ``line_conts``: dict of {line_key: cont_flux}, optional. When provided,
-    each line gets ``<line>.cont.flux`` and the matching ``<line>.cont.*``
+    each line gets ``<line>.cont.flux_per_nm`` and the matching ``<line>.cont.*``
     spatial params (same shape as the line's intensity model).
     """
     pars = {
@@ -92,7 +92,7 @@ def _make_pars(vel_pars, int_pars, z, vel_dispersion, line_fluxes, line_conts=No
     # optional per-line continuum
     if line_conts:
         for line_key, cont_flux in line_conts.items():
-            pars[f'{line_key}.cont.flux'] = cont_flux
+            pars[f'{line_key}.cont.flux_per_nm'] = cont_flux
             pars[f'{line_key}.cont.rscale'] = int_pars['rscale']
             pars[f'{line_key}.cont.h_over_r'] = int_pars['h_over_r']
             pars[f'{line_key}.cont.x0'] = int_pars['x0']

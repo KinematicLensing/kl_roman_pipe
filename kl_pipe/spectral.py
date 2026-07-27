@@ -16,8 +16,8 @@ import numpy as np
 
 from kl_pipe.parameters import ImagePars
 
-# speed of light in km/s
-C_KMS = 299792.458
+# re-exported for back-compat; canonical definition lives in kl_pipe.constants
+from kl_pipe.constants import C_KMS
 
 
 @dataclass(frozen=True)

@@ -93,8 +93,8 @@ _MERGED_PARS_DOTTED = {
     'Halpha.y0': 0.0,
     'Halpha.dispersion': 50.0,
     # Halpha continuum (same spatial profile via continuum=int_model below;
-    # cont.flux is the per-line continuum amplitude)
-    'Halpha.cont.flux': 0.01,
+    # cont.flux_per_nm is the per-line continuum amplitude)
+    'Halpha.cont.flux_per_nm': 0.01,
     'Halpha.cont.rscale': 0.3,
     'Halpha.cont.h_over_r': 0.1,
     'Halpha.cont.x0': 0.0,
@@ -196,7 +196,7 @@ def int_model():
 def source(vel_model, int_model):
     # emission line owns the spatial profile via its own intensity model;
     # continuum=int_model gives the continuum the same spatial shape as the
-    # line, with independent flux via Halpha.cont.flux
+    # line, with independent flux via Halpha.cont.flux_per_nm
     return SourceModel(
         velocity_model=vel_model,
         emission_lines={

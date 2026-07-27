@@ -35,14 +35,11 @@ from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
 
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel, VelocityModel
-    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs, FiberObs
+    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs
     from kl_pipe.spectral import CubePars
 
-# speed of light, km/s
-_C_KMS = 299792.458
+from kl_pipe.constants import C_KMS as _C_KMS  # noqa: E402
 
-import matplotlib.pyplot as plt
-import numpy as np
 
 # ===========================================================================
 # Theta routing helpers (module-level so they JIT cleanly)
@@ -290,7 +287,7 @@ class SourceModel:
             obs.oversample,
             obs.grism_pars.image_pars.pixel_scale,
         )
-
+    
     def render_fiber(
         self,
         pars: dict,
@@ -524,6 +521,12 @@ class SourceModel:
                 cont_theta = _apply_obs_rotation(
                     cont_theta, cont_model.PARAMETER_NAMES, image_rotation
                 )
+                # continuum amplitude is 'flux_per_nm', a spectral density
+                # [flux/nm]. The profile is linear in its amplitude, so I_cont
+                # is already a density surface brightness [flux/arcsec^2/nm] =
+                # SB/nm -- matching the line term's SB/nm voxel. No extra
+                # per-nm factor needed (that is carried by the parameter's
+                # units, enforced by the flux_per_nm name + the guard below).
                 I_cont = cont_model(cont_theta, plane, X, Y)
                 cube_fine = cube_fine + I_cont[:, :, None]
 
@@ -578,13 +581,26 @@ class SourceModel:
         Returns ``(None, None)`` if this line has no continuum.
 
         When ``continuum_key`` is set, the spatial profile is owned by the
-        referenced line's continuum; only this line's ``cont.flux`` is
+        referenced line's continuum; only this line's ``cont.flux_per_nm`` is
         per-line. Other continuum spatial params (``rscale``, ``x0``, ...)
         come from the spatial-owner's ``<owner>.cont.*`` namespace.
         """
         line = self.emission_lines[line_key]
         if line.continuum is None and line.continuum_key is None:
             return None, None
+        # guard: the continuum amplitude is a spectral density named
+        # 'flux_per_nm' [flux/nm], not an integrated 'flux'. Reject the wrong
+        # name loudly rather than silently dropping the amplitude (the
+        # flux_per_nm lookup would otherwise KeyError with a less clear message,
+        # or a stray '.cont.flux' key would be silently ignored).
+        forbidden = f'{line_key}.cont.flux'
+        if forbidden in pars:
+            raise ValueError(
+                f"continuum amplitude is a spectral density: use "
+                f"'{line_key}.cont.flux_per_nm' [flux/nm], not '{forbidden}'. A "
+                f"stellar continuum has no single integrated 'flux' (see "
+                f"docs/units_and_conventions.md)."
+            )
         if line.continuum_key is not None:
             spatial_owner = line.continuum_key
             cont_model = self.emission_lines[spatial_owner].continuum

@@ -616,3 +616,59 @@ class IntensityModel(Model):
         raise NotImplementedError(
             "Subclasses must implement evaluate_in_disk_plane method."
         )
+
+
+class ContinuumModel:
+    """Adapter wrapping an ``IntensityModel`` for use as a stellar continuum.
+
+    A continuum's amplitude is a spectral flux *density* (flux per unit
+    wavelength), unlike an emission line's integrated ``flux``. To keep that
+    explicit in the dotted-key namespace, this adapter relabels the wrapped
+    profile's ``flux`` parameter to ``flux_per_nm`` in ``PARAMETER_NAMES``.
+    ``flux_per_nm`` is a spectral flux density [flux / nm]; because the profile
+    is linear in its amplitude, feeding a density produces a density surface
+    brightness [flux / arcsec^2 / nm] = SB/nm, matching the emission-line term's
+    cube voxel (see ``SourceModel.build_cube`` / ``units_and_conventions.md``).
+
+    The relabel is purely external: the wrapped profile still evaluates from a
+    positionally-identical ``theta`` (only the label at the flux index differs),
+    so ``__call__`` delegates unchanged. All other attributes/methods (``name``,
+    ``maxk``, ``render_image``, ``get_param``, ...) delegate to the wrapped
+    profile via ``__getattr__``. Not an ``IntensityModel`` subclass (its
+    ``PARAMETER_NAMES`` is instance-level, incompatible with the class-level
+    contract), but registered as a virtual subclass so ``isinstance`` holds.
+    """
+
+    def __init__(self, profile: 'IntensityModel'):
+        if isinstance(profile, ContinuumModel):
+            # idempotent: unwrap so double-wrapping is a no-op
+            profile = profile._profile
+        self._profile = profile
+        self.PARAMETER_NAMES = tuple(
+            'flux_per_nm' if p == 'flux' else p for p in profile.PARAMETER_NAMES
+        )
+
+    def __call__(self, theta, plane, x, y, z=None):
+        # theta is positionally identical to the wrapped profile's (only the
+        # flux label changed), so delegate the evaluation unchanged.
+        return self._profile(theta, plane, x, y, z)
+
+    def theta2pars(self, theta) -> dict:
+        return {name: float(theta[i]) for i, name in enumerate(self.PARAMETER_NAMES)}
+
+    def pars2theta(self, pars: dict) -> jnp.ndarray:
+        return jnp.array([pars[name] for name in self.PARAMETER_NAMES])
+
+    @property
+    def name(self) -> str:
+        return f'continuum({self._profile.name})'
+
+    def __getattr__(self, item):
+        # only reached for attributes not set on the adapter; delegate to the
+        # wrapped profile. Guard _profile to avoid recursion before __init__.
+        if item == '_profile':
+            raise AttributeError(item)
+        return getattr(self._profile, item)
+
+
+IntensityModel.register(ContinuumModel)

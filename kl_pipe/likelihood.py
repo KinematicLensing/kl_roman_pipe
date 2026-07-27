@@ -32,7 +32,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs
+    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs, FiberObs
     from kl_pipe.source import SourceModel
 
 
@@ -132,7 +132,6 @@ def _log_likelihood_fiber_source(
     model_img = source.render_fiber(pars, obs, spectral_oversample=spectral_oversample)
     return _gaussian_log_likelihood(obs.data, model_img, obs.variance, obs.mask)
 
-
 def _log_likelihood_velocity_source(
     theta_sampled: jnp.ndarray,
     source: 'SourceModel',
@@ -145,7 +144,7 @@ def _log_likelihood_velocity_source(
     model_v = source.render_velocity(pars, obs)
     return _gaussian_log_likelihood(obs.data, model_v, obs.variance, obs.mask)
 
-#need to add fiberobs into this
+
 def _log_likelihood_total_source(
     theta_sampled: jnp.ndarray,
     source: 'SourceModel',
@@ -181,7 +180,6 @@ def _log_likelihood_total_source(
                 fixed_pars,
                 spectral_oversample=spectral_oversample,
             )
-
     if fiber_obs:
         for _fiber_key, obs in fiber_obs.items():
             log_l = log_l + _log_likelihood_fiber_source(
@@ -192,7 +190,6 @@ def _log_likelihood_total_source(
                 fixed_pars,
                 spectral_oversample=spectral_oversample,
             )
-
     if velocity_obs is not None:
         log_l = log_l + _log_likelihood_velocity_source(
             theta_sampled, source, velocity_obs, sampled_names, fixed_pars

@@ -102,81 +102,6 @@ def compute_reparam_scales(prior: Prior, name: str) -> Tuple[float, float]:
         raise TypeError(f"Unknown prior type for '{name}': {type(prior)}")
 
 
-def compute_empirical_scales(
-    task: 'InferenceTask',
-    rng_key: jax.Array,
-    n_samples: int = 100,
-) -> Dict[str, Tuple[float, float]]:
-    """
-    Estimate parameter scales empirically from short sampling.
-
-    Runs a quick exploration to estimate posterior means and standard
-    deviations, which are then used for Z-score reparameterization.
-
-    Parameters
-    ----------
-    task : InferenceTask
-        The inference task.
-    rng_key : jax.Array
-        Random key for sampling.
-    n_samples : int
-        Number of samples for estimation.
-
-    Returns
-    -------
-    dict
-        Mapping from parameter name to (loc, scale) tuple.
-    """
-    import numpyro
-    import numpyro.distributions as dist
-    from numpyro.infer import MCMC, NUTS
-
-    # Start with prior-based scales for initial run
-    prior_scales = {}
-    for name in task.sampled_names:
-        prior = task.priors.get_prior(name)
-        prior_scales[name] = compute_reparam_scales(prior, name)
-
-    # Build simple model with prior scaling
-    def preconditioning_model():
-        theta_physical = []
-        for name in task.sampled_names:
-            loc, scale = prior_scales[name]
-            z = numpyro.sample(f"_z_{name}", dist.Normal(0, 1))
-            param = loc + scale * z
-            theta_physical.append(param)
-
-        theta = jnp.stack(theta_physical)
-        log_post = task.get_log_posterior_fn()(theta)
-        numpyro.factor("log_posterior", log_post)
-
-    # Run short MCMC
-    kernel = NUTS(preconditioning_model, dense_mass=False)  # Diagonal for speed
-    mcmc = MCMC(
-        kernel, num_warmup=100, num_samples=n_samples, num_chains=1, progress_bar=False
-    )
-    mcmc.run(rng_key)
-
-    # Extract samples and compute scales
-    samples = mcmc.get_samples()
-    empirical_scales = {}
-
-    for name in task.sampled_names:
-        loc_prior, scale_prior = prior_scales[name]
-        z_samples = samples[f"_z_{name}"]
-        # Convert to physical space
-        physical_samples = loc_prior + scale_prior * z_samples
-        # Estimate from samples
-        emp_loc = float(jnp.mean(physical_samples))
-        emp_scale = float(jnp.std(physical_samples))
-        # Guard against degenerate cases
-        if emp_scale < 1e-10:
-            emp_scale = scale_prior
-        empirical_scales[name] = (emp_loc, emp_scale)
-
-    return empirical_scales
-
-
 # Chunk size for end-of-sampling log-posterior evaluation. vmap-ing the full
 # log-posterior over ALL samples at once gives every intermediate in the
 # likelihood (notably the oversampled k-space FFT render grids) a batch
@@ -300,16 +225,9 @@ class NumpyroSampler(Sampler):
         # == 'laplace' and none is supplied, run() computes one.
         self._preconditioner = preconditioner
 
-    def _compute_reparam_scales(
-        self, rng_key: jax.Array
-    ) -> Dict[str, Tuple[float, float]]:
+    def _compute_reparam_scales(self) -> Dict[str, Tuple[float, float]]:
         """
         Compute reparameterization scales based on config strategy.
-
-        Parameters
-        ----------
-        rng_key : jax.Array
-            Random key (needed for empirical strategy).
 
         Returns
         -------
@@ -329,13 +247,6 @@ class NumpyroSampler(Sampler):
                 prior = self.task.priors.get_prior(name)
                 scales[name] = compute_reparam_scales(prior, name)
             return scales
-
-        elif strategy == ReparamStrategy.EMPIRICAL:
-            # Run short preconditioning phase
-            n_precond = max(
-                50, int(self.config.n_warmup * self.config.empirical_warmup_frac)
-            )
-            return compute_empirical_scales(self.task, rng_key, n_samples=n_precond)
 
         else:
             raise ValueError(f"Unknown reparam strategy: {strategy}")
@@ -581,7 +492,7 @@ class NumpyroSampler(Sampler):
         rng_key, init_key, sample_key = random.split(rng_key, 3)
 
         # Compute reparameterization scales
-        self._reparam_scales = self._compute_reparam_scales(rng_key)
+        self._reparam_scales = self._compute_reparam_scales()
 
         # Build model
         model = self._build_numpyro_model(self._reparam_scales)
@@ -626,13 +537,14 @@ class NumpyroSampler(Sampler):
         n_total_samples = self.config.n_samples * self.config.n_chains
         samples_list = []
         for name in self.task.sampled_names:
-            if name in samples_dict:
-                samples_list.append(np.array(samples_dict[name]).flatten())
-            else:
-                # Fallback: compute from z samples
-                z_samples = np.array(samples_dict[f"_z_{name}"]).flatten()
-                loc, scale = self._reparam_scales[name]
-                samples_list.append(loc + scale * z_samples)
+            # the model registers a deterministic site (physical space) for
+            # every sampled name, so it is always present; assert rather than
+            # silently reconstructing from the _z_ latents.
+            assert name in samples_dict, (
+                f"expected deterministic site '{name}' missing from numpyro "
+                f"samples; model construction changed?"
+            )
+            samples_list.append(np.array(samples_dict[name]).flatten())
 
         samples = np.column_stack(samples_list)
 

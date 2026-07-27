@@ -27,7 +27,7 @@ Sample space (17-dim):
 - Emission line:   Halpha.flux, Halpha.rscale, Halpha.x0, Halpha.y0,
                    Halpha.dispersion                          (h_over_r fixed)
 - Continuum under line:
-                   Halpha.cont.flux                           (others fixed to line spatial truth)
+                   Halpha.cont.flux_per_nm                           (others fixed to line spatial truth)
 The continuum is intentionally non-zero so the flat continuum trace is
 visible above the noise floor in the dispersed grism image.
 
@@ -111,10 +111,33 @@ SPATIAL_OVERSAMPLE = 3
 # short (just step-size adaptation) instead of the ~300 iters dense-mass needs
 # to climb from an identity metric. Validated ~5x faster (8.5 vs 42.5 min) with
 # equal recovery + better convergence; see experiments/sweverett/flagship_speedup.
-# Production should bump to n_samples=1000, n_chains=4, max_tree_depth=10.
-N_WARMUP = 50
-N_SAMPLES = 300
-N_CHAINS = 2
+#
+# Two configs selectable via the --flagship-long pytest flag (see conftest.py):
+#   short (default): fast gating run.
+#   long: production-depth run for cleaner posteriors (make test-flagship-long).
+# Only sampler depth differs between them -- truth, priors, and the joint-Nsigma
+# pass criterion are identical.
+SHORT_CONFIG = {
+    'n_warmup': 50,
+    'n_samples': 300,
+    'n_chains': 2,
+    'max_tree_depth': 8,
+    'chain_method': 'vectorized',  # 2 chains batched -- modest peak memory
+}
+# Long mode: 4 chains vectorized, 2000 samples, depth 10 -- production-depth for
+# clean posteriors (8000 draws). Earlier this config was SIGKILLed at the end of
+# sampling ("zsh: killed" at 100%); root cause was NOT the sampler but the
+# wrapper computing log_prob by vmap-ing the FFT-rendering likelihood over all
+# n_samples*n_chains at once (a transient that scaled with sample count and
+# OOM'd). Fixed in numpyro.py via chunked evaluation (_batched_log_posterior_
+# chunked); peak memory now bounded regardless of sample count.
+LONG_CONFIG = {
+    'n_warmup': 200,
+    'n_samples': 2000,
+    'n_chains': 4,
+    'max_tree_depth': 10,
+    'chain_method': 'vectorized',
+}
 
 
 # Headline parameter subset for the small corner plot.
@@ -166,7 +189,7 @@ def _true_pars_dotted() -> Dict[str, float]:
         # spatial truth; only the continuum flux is sampled. The continuum
         # produces a flat trace across the dispersed grism image visible above
         # the noise floor at this SNR.
-        'Halpha.cont.flux': 25.0,
+        'Halpha.cont.flux_per_nm': 25.0,
         'Halpha.cont.rscale': 0.25,
         'Halpha.cont.h_over_r': 0.1,
         'Halpha.cont.x0': 0.0,
@@ -210,7 +233,7 @@ def _flagship_priors(true: Dict[str, float]) -> PriorDict:
             # Continuum under Halpha (only flux sampled; spatial profile fixed
             # to line spatial truth so the inference doesn't have to also solve
             # a continuum-line spatial degeneracy at this SNR).
-            'Halpha.cont.flux': TruncatedNormal(25.0, 15.0, 0.0, 200.0),
+            'Halpha.cont.flux_per_nm': TruncatedNormal(25.0, 15.0, 0.0, 200.0),
             'Halpha.cont.rscale': true['Halpha.cont.rscale'],
             'Halpha.cont.h_over_r': true['Halpha.cont.h_over_r'],
             'Halpha.cont.x0': true['Halpha.cont.x0'],
@@ -275,10 +298,11 @@ def _save_summary_txt(
     runtime_sec: float,
     true_pars: Dict[str, float],
     joint_nsigma: float,
+    sampler_config: Dict[str, int],
 ):
     """Plain-text dump: sampler stats, R-hat, ESS, per-param recovery."""
     summary = result.get_summary()
-    rhats = result.get_rhat() if N_CHAINS > 1 else None
+    rhats = result.get_rhat() if sampler_config['n_chains'] > 1 else None
     ess = result.get_ess()
     lines = []
     lines.append('=' * 80)
@@ -286,7 +310,9 @@ def _save_summary_txt(
     lines.append('=' * 80)
     lines.append(f'Sampler:     numpyro NUTS')
     lines.append(
-        f'Chains:      {N_CHAINS}    Warmup: {N_WARMUP}    Samples/chain: {N_SAMPLES}'
+        f'Chains:      {sampler_config["n_chains"]}    '
+        f'Warmup: {sampler_config["n_warmup"]}    '
+        f'Samples/chain: {sampler_config["n_samples"]}'
     )
     lines.append(f'Runtime:     {runtime_sec:.1f} s')
     lines.append(f'Joint Nsigma: {joint_nsigma:.3f}')
@@ -319,8 +345,15 @@ def _save_summary_txt(
 class TestFlagship:
     """Top-level visual regression: joint Roman-like broadband + grism inference."""
 
-    def test_recover_joint_phot_grism(self, output_dir):
+    def test_recover_joint_phot_grism(self, output_dir, request):
         """End-to-end: synth Roman-like data, run NUTS, validate via joint Nsigma."""
+        long_mode = request.config.getoption('--flagship-long')
+        sampler_config = LONG_CONFIG if long_mode else SHORT_CONFIG
+        print(
+            f"\nFlagship sampler config: {'long' if long_mode else 'short'} "
+            f"-> {sampler_config}"
+        )
+
         pars_dotted = _true_pars_dotted()
 
         image_pars = ImagePars(
@@ -442,10 +475,10 @@ class TestFlagship:
         # ====================================================================
 
         config = NumpyroSamplerConfig(
-            n_samples=N_SAMPLES,
-            n_warmup=N_WARMUP,
-            n_chains=N_CHAINS,
-            chain_method='vectorized',
+            n_samples=sampler_config['n_samples'],
+            n_warmup=sampler_config['n_warmup'],
+            n_chains=sampler_config['n_chains'],
+            chain_method=sampler_config['chain_method'],
             seed=42,
             progress=False,
             reparam_strategy='prior',
@@ -454,7 +487,7 @@ class TestFlagship:
             precondition='laplace',  # MAP init + fixed Laplace mass -> ~5x faster
             # warmup on this correlated joint posterior (see flagship_speedup)
             target_accept_prob=0.8,
-            max_tree_depth=8,
+            max_tree_depth=sampler_config['max_tree_depth'],
             init_strategy='prior',  # narrow priors are centered on truth
         )
         sampler = build_sampler('numpyro', task, config)
@@ -512,19 +545,23 @@ class TestFlagship:
             'name': 'numpyro NUTS',
             'runtime': runtime,
             'settings': {
-                'chains': N_CHAINS,
-                'warmup': N_WARMUP,
-                'samples': N_SAMPLES,
+                'chains': sampler_config['n_chains'],
+                'warmup': sampler_config['n_warmup'],
+                'samples': sampler_config['n_samples'],
                 'SNR_F087': SNR_BROADBAND,
                 'SNR_grism': SNR_GRISM,
                 'z': Z,
             },
         }
+        # smooth/smooth1d (bin units) de-jag the marginals for presentation; mild
+        # (1.0) so structure is preserved -- these are slide/paper assets.
         fig_corner = plot_corner(
             result,
             true_values=pars_dotted,
             map_values=map_pars_dotted,
             sampler_info=sampler_info,
+            smooth=1.0,
+            smooth1d=1.0,
         )
         fig_corner.savefig(output_dir / 'corner_full.png', dpi=120, bbox_inches='tight')
         plt.close(fig_corner)
@@ -537,6 +574,8 @@ class TestFlagship:
             map_values=map_pars_dotted,
             sampler_info=sampler_info,
             include_derived=True,
+            smooth=1.0,
+            smooth1d=1.0,
         )
         fig_headline.savefig(
             output_dir / 'corner_headline.png', dpi=150, bbox_inches='tight'
@@ -565,6 +604,7 @@ class TestFlagship:
             runtime_sec=runtime,
             true_pars=pars_dotted,
             joint_nsigma=joint_nsigma,
+            sampler_config=sampler_config,
         )
 
         # ====================================================================

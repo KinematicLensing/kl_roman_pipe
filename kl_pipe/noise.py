@@ -11,7 +11,6 @@ Current contents
   map.
 - ``add_velocity_noise``: Gaussian-only on a (signed) velocity map. Poisson
   enters at the spectral-cube layer, never on the moment.
-- ``add_fiberspec_noise``: Poisson + Gaussian on a one-dimensional spectrum.
 
 SNR convention (current baseline: matched-filter)
 -------------------------------------------------

@@ -141,7 +141,7 @@ def _make_pars(
         pars[f'{line_key}.dispersion'] = vel_dispersion
     if line_conts:
         for line_key, cont_flux in line_conts.items():
-            pars[f'{line_key}.cont.flux'] = cont_flux
+            pars[f'{line_key}.cont.flux_per_nm'] = cont_flux
             pars[f'{line_key}.cont.rscale'] = int_pars['rscale']
             pars[f'{line_key}.cont.h_over_r'] = int_pars['h_over_r']
             pars[f'{line_key}.cont.x0'] = int_pars['x0']
@@ -195,7 +195,7 @@ class TestSourceModelParameters:
         assert 'Halpha.rscale' in pars
         assert 'Halpha.dispersion' in pars
         # opt-in continuum (when EmissionLine has continuum= set)
-        assert 'Halpha.cont.flux' in pars
+        assert 'Halpha.cont.flux_per_nm' in pars
 
     def test_pars_keys_multi_line(self, source_ha_nii):
         """SourceModel with Ha + NII6548 + NII6584: per-line keys for each line."""
@@ -261,6 +261,20 @@ class TestDispersion:
         lam = jnp.linspace(1300, 1320, Nlam)
         result = disperse_cube(cube, gp, lam)
         assert result.shape == (Nrow, Ncol)
+
+    def test_disperse_single_wavelength_raises(self):
+        """A single-slice cube has no spectral axis to disperse -> loud raise."""
+        cube = jnp.ones((16, 16, 1))
+        ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
+        gp = GrismPars(
+            image_pars=ip,
+            dispersion=1.1,
+            lambda_ref=1312.0,
+            dispersion_angle=0.0,
+        )
+        lam = jnp.array([1312.0])
+        with pytest.raises(ValueError, match='Nlam >= 2'):
+            disperse_cube(cube, gp, lam)
 
     def test_disperse_flux_conservation(self):
         """Total flux conserved through dispersion."""
@@ -2631,7 +2645,7 @@ class TestAnalytical:
         int_model = InclinedExponentialModel()
         # opt-in continuum on the Halpha line; SourceModel requires the
         # ``continuum=`` field on EmissionLine for cube assembly to include
-        # the per-line continuum term (Halpha.cont.flux is sampled per-line).
+        # the per-line continuum term (Halpha.cont.flux_per_nm is sampled per-line).
         source = SourceModel(
             velocity_model=vel_model,
             emission_lines={
@@ -2678,14 +2692,22 @@ class TestAnalytical:
         )
         cp = gp.to_cube_pars(z=z)
 
-        # with continuum (Halpha.cont.flux = cont_val)
-        source_pars_cont = {**base_pars, **cont_spatial, 'Halpha.cont.flux': cont_val}
+        # with continuum (Halpha.cont.flux_per_nm = cont_val)
+        source_pars_cont = {
+            **base_pars,
+            **cont_spatial,
+            'Halpha.cont.flux_per_nm': cont_val,
+        }
         grism_cont = np.array(
             source.render_grism(source_pars_cont, _make_grism_obs_no_psf(gp, cp))
         )
 
-        # without continuum (Halpha.cont.flux = 0)
-        source_pars_nocont = {**base_pars, **cont_spatial, 'Halpha.cont.flux': 0.0}
+        # without continuum (Halpha.cont.flux_per_nm = 0)
+        source_pars_nocont = {
+            **base_pars,
+            **cont_spatial,
+            'Halpha.cont.flux_per_nm': 0.0,
+        }
         grism_nocont = np.array(
             source.render_grism(source_pars_nocont, _make_grism_obs_no_psf(gp, cp))
         )
@@ -2693,7 +2715,7 @@ class TestAnalytical:
         diff = grism_cont - grism_nocont
 
         # build expected by explicitly dispersing the continuum contribution
-        # using SourceModel's continuum semantic (Halpha.cont.flux is the
+        # using SourceModel's continuum semantic (Halpha.cont.flux_per_nm is the
         # continuum's own flux, not a multiplier on the line). Build the
         # continuum theta + spatial profile the same way source.build_cube
         # does internally, then mirror the full pipeline (disperse + sinc +
@@ -2747,3 +2769,123 @@ class TestAnalytical:
         assert (
             rel_max < 1e-4
         ), f"Continuum pedestal rel error {rel_max:.2e} exceeds 1e-4"
+
+
+class TestContinuumModel:
+    """ContinuumModel adapter: flux -> flux_per_nm relabel, wrapping, guard."""
+
+    def test_relabels_flux_to_flux_per_nm(self):
+        from kl_pipe.model import ContinuumModel
+
+        profile = InclinedExponentialModel()
+        cont = ContinuumModel(profile)
+        assert 'flux' not in cont.PARAMETER_NAMES
+        assert 'flux_per_nm' in cont.PARAMETER_NAMES
+        # same index position as the wrapped profile's flux, other names intact
+        i = profile.PARAMETER_NAMES.index('flux')
+        assert cont.PARAMETER_NAMES[i] == 'flux_per_nm'
+        assert [p for p in cont.PARAMETER_NAMES if p != 'flux_per_nm'] == [
+            p for p in profile.PARAMETER_NAMES if p != 'flux'
+        ]
+
+    def test_call_delegates_positionally(self):
+        """__call__ passes theta straight through (only the label changed)."""
+        from kl_pipe.model import ContinuumModel
+
+        profile = InclinedExponentialModel()
+        cont = ContinuumModel(profile)
+        pars = {
+            'cosi': 0.7,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'flux': 3.0,
+            'rscale': 0.3,
+            'h_over_r': 0.1,
+            'x0': 0.0,
+            'y0': 0.0,
+        }
+        theta = profile.pars2theta(pars)
+        ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
+        X, Y = build_map_grid_from_image_pars(ip)
+        np.testing.assert_array_equal(
+            np.array(cont(theta, 'obs', X, Y)),
+            np.array(profile(theta, 'obs', X, Y)),
+        )
+
+    def test_idempotent_double_wrap(self):
+        from kl_pipe.model import ContinuumModel
+
+        profile = InclinedExponentialModel()
+        once = ContinuumModel(profile)
+        twice = ContinuumModel(once)
+        assert twice._profile is profile  # unwrapped, not nested
+        assert twice.PARAMETER_NAMES == once.PARAMETER_NAMES
+
+    def test_isinstance_intensity_model(self):
+        from kl_pipe.model import ContinuumModel, IntensityModel
+
+        assert isinstance(ContinuumModel(InclinedExponentialModel()), IntensityModel)
+
+    def test_emission_line_auto_wraps_raw_model(self):
+        from kl_pipe.model import ContinuumModel
+
+        line = EmissionLine(
+            intensity=InclinedExponentialModel(),
+            continuum=InclinedExponentialModel(),
+        )
+        assert isinstance(line.continuum, ContinuumModel)
+        assert 'flux_per_nm' in line.continuum.PARAMETER_NAMES
+
+    def test_emission_line_accepts_prewrapped(self):
+        from kl_pipe.model import ContinuumModel
+
+        wrapped = ContinuumModel(InclinedExponentialModel())
+        line = EmissionLine(intensity=InclinedExponentialModel(), continuum=wrapped)
+        # idempotent: not double-wrapped
+        assert isinstance(line.continuum, ContinuumModel)
+        assert not isinstance(line.continuum._profile, ContinuumModel)
+
+    def test_wrong_flux_name_raises_loudly(self):
+        """Passing '<line>.cont.flux' (integrated) instead of flux_per_nm raises."""
+        source = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(
+                    intensity=InclinedExponentialModel(),
+                    continuum=InclinedExponentialModel(),
+                ),
+            },
+        )
+        z = 1.0
+        gp = GrismPars(
+            image_pars=_ANALYTICAL_IMAGE_PARS,
+            dispersion=1.1,
+            lambda_ref=LINE_LAMBDAS['Halpha'] * (1 + z),
+            dispersion_angle=0.0,
+        )
+        cp = gp.to_cube_pars(z=z)
+        pars = {
+            'cosi': 0.5,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'z': z,
+            'vel.v0': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.rscale': 0.5,
+            'Halpha.flux': 100.0,
+            'Halpha.rscale': 0.15,
+            'Halpha.h_over_r': 0.1,
+            'Halpha.x0': 0.0,
+            'Halpha.y0': 0.0,
+            'Halpha.dispersion': 50.0,
+            'Halpha.cont.rscale': 0.15,
+            'Halpha.cont.h_over_r': 0.1,
+            'Halpha.cont.x0': 0.0,
+            'Halpha.cont.y0': 0.0,
+            # WRONG: integrated 'flux' instead of the density 'flux_per_nm'
+            'Halpha.cont.flux': 1.0,
+        }
+        with pytest.raises(ValueError, match='flux_per_nm'):
+            source.render_grism(pars, _make_grism_obs_no_psf(gp, cp))

@@ -173,6 +173,11 @@ test-flagship:
 	@echo "Running flagship Roman-like joint phot+grism recovery test..."
 	@conda run -n klpipe pytest tests/test_flagship.py -v -s --override-ini="markers=slow"
 
+.PHONY: test-flagship-long
+test-flagship-long:
+	@echo "Running flagship test (long production config -- cleaner posteriors)..."
+	@conda run -n klpipe pytest tests/test_flagship.py -v -s --flagship-long --override-ini="markers=slow"
+
 .PHONY: test-basic
 test-basic:
 	@echo "Running fast tests (excluding TNG50 and slow, no download required)..."

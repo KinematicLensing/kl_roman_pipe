@@ -350,7 +350,7 @@ class TestPriorDict:
         )
 
         theta = jnp.array([0.5, 200.0])  # [cosi, vcirc] in sorted order
-        full_pars = priors.theta_to_full_pars(theta, ('vcirc', 'cosi', 'v0'))
+        full_pars = priors.theta_to_full_pars(theta)
 
         assert full_pars['cosi'] == 0.5
         assert full_pars['vcirc'] == 200.0

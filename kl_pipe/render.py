@@ -579,7 +579,8 @@ def _extract_worst_case_params(model, priors) -> tuple:
         prior = spec
         if hasattr(prior, 'low') and hasattr(prior, 'high'):
             if name in ('rscale', 'hlr'):
-                # smallest scale → highest maxk
+                # smallest scale → highest maxk (also the velocity-gradient
+                # worst case: smallest rscale → steepest gradient → highest k_G)
                 worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.high
             elif name == 'cosi':
@@ -598,10 +599,6 @@ def _extract_worst_case_params(model, priors) -> tuple:
             elif name == 'vcirc':
                 # largest vcirc → steepest velocity gradient → highest k_G
                 worst_maxk_params[name] = prior.high
-                worst_stepk_params[name] = prior.high
-            elif name == 'rscale':
-                # smallest rscale → steepest velocity gradient → highest k_G
-                worst_maxk_params[name] = prior.low
                 worst_stepk_params[name] = prior.high
             else:
                 mid = 0.5 * (prior.low + prior.high)

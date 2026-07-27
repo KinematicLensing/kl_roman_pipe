@@ -565,8 +565,10 @@ class InferenceTask:
         early-warmup transient. See
         ``experiments/sweverett/flagship_speedup`` for the validating study.
 
-        The optimizer uses the prior bounds (``get_bounds``), so iterates stay
-        in-support; the Hessian is taken at the interior MAP.
+        The optimizer runs unbounded in scaled coordinates (``theta = loc +
+        scale * u``); out-of-support iterates receive ``-inf`` log-posterior
+        from the prior, which acts as a soft barrier keeping the converged MAP
+        in-support. The Hessian is taken at that MAP.
 
         Parameters
         ----------
@@ -722,7 +724,7 @@ class InferenceTask:
         *,
         image_obs: Optional[Dict[str, 'ImageObs']] = None,
         grism_obs: Optional[Dict[str, 'GrismObs']] = None,
-        fiber_obs: Optional[Dict[str, 'FiberObs']] = None, #can be multiple FiberObs? yes
+        fiber_obs: Optional[Dict[str, 'FiberObs']] = None,
         velocity_obs: Optional['VelocityObs'] = None,
         meta_pars: Optional[Dict] = None,
         spectral_oversample: Optional[int] = None,
@@ -820,7 +822,7 @@ class InferenceTask:
                         f"grism_obs['{grism_key}'] has no data; cannot "
                         f"build a likelihood"
                     )
-
+                
         # fiber_obs: non-empty requires velocity + emission line
         if fiber_obs:
             if source.velocity_model is None:
@@ -836,7 +838,6 @@ class InferenceTask:
                         f"fiber_obs['{fiber_key}'] has no data; cannot "
                         f"build a likelihood"
                     )
-
 
         # velocity_obs: requires velocity_model; optional flux_weight_key
         if velocity_obs is not None:
@@ -897,13 +898,14 @@ class InferenceTask:
                 grism_key: _check_source_priors_fit_obs(source, priors, obs)
                 for grism_key, obs in grism_obs.items()
             }
-            
+
         #_check_source_priors_fit_obs: unrecognized obs type FiberObs
         #if fiber_obs:
             #fiber_obs = {
                 #fiber_key: _check_source_priors_fit_obs(source, priors, obs)
                 #for fiber_key, obs in fiber_obs.items()
             #}
+
         if velocity_obs is not None:
             velocity_obs = _check_source_priors_fit_obs(source, priors, velocity_obs)
 
@@ -933,7 +935,7 @@ class InferenceTask:
                 )
             spectral_oversample = unique.pop()
         elif spectral_oversample is None:
-            spectral_oversample = 15  # unused (no grism, fiber), but pass a concrete int
+            spectral_oversample = 15  # unused (no grism), but pass a concrete int
 
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,
