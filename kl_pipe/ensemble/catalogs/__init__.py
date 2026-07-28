@@ -16,9 +16,12 @@ from kl_pipe.ensemble.catalogs.base import (
     load_catalog,
     validate_contract,
 )
+from kl_pipe.ensemble.catalogs.cosmos25 import Cosmos25Adapter
 from kl_pipe.ensemble.catalogs.flagship2 import Flagship2Adapter
 
-_ADAPTERS = {adapter.kind: adapter for adapter in (Flagship2Adapter(),)}
+_ADAPTERS = {
+    adapter.kind: adapter for adapter in (Flagship2Adapter(), Cosmos25Adapter())
+}
 
 
 def get_catalog_adapter(kind: str) -> CatalogAdapter:
@@ -40,5 +43,6 @@ __all__ = [
     'get_catalog_adapter',
     'load_catalog',
     'validate_contract',
+    'Cosmos25Adapter',
     'Flagship2Adapter',
 ]

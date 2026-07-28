@@ -20,6 +20,7 @@ CYVERSE_DATA_MARKER = $(CYVERSE_DATA_DIR)/.cyverse_data_downloaded
 
 # CosmoHub (Euclid Flagship2) data configuration
 COSMOHUB_DATA_DIR = $(DATA_DIR)/cosmohub
+COSMOS2025_DATA_DIR = $(DATA_DIR)/cosmos2025
 
 TNG50_DATA_DIR = $(DATA_DIR)/tng50
 
@@ -141,6 +142,11 @@ download-cosmohub-dev:
 .PHONY: download-cosmohub-data
 download-cosmohub-data:
 	@conda run -n klpipe python scripts/download_cosmohub.py $(COSMOHUB_DATA_DIR)/flagship2_v1.yaml
+
+# COSMOS2025 (COSMOS-Web) public catalog sections; idempotent like the above
+.PHONY: download-cosmos2025
+download-cosmos2025:
+	@conda run -n klpipe python scripts/download_cosmos2025.py $(COSMOS2025_DATA_DIR)
 
 .PHONY: download-q1-data
 download-q1-data:

@@ -91,7 +91,8 @@ spec.py         EnsembleSpec + ObservationConfig registry (strict YAML validatio
 scene.py        canonical galaxy scene: truth defaults + fit prior rules
 catalogs/       per-catalog adapters: raw schema, unique row key, preprocess
                 to contract columns, catalog-fitted prior constants; selected
-                by population.catalog.kind (default flagship2)
+                by population.catalog.kind (default flagship2; cosmos25 =
+                COSMOS-Web + painted Halpha, see data/cosmos2025/README.md)
 population.py   catalog-backed population: adapter rows + selection +
                 kinematic/structure paint (generic across catalogs)
 expander.py     spec -> manifest.parquet (deterministic seeds, CRN rule,

@@ -1,0 +1,32 @@
+# HLWAS Medium-tier observation config with the realistic Roman WFI PSF:
+# the hlwas_medium band pair (F129 + F158, the tier's near-equal-depth
+# filters; see hlwas_medium.yaml for the band-choice rationale) with the
+# roman_wfi PSF blocks of canonical_P_roman (galsim.roman.getPSF,
+# monochromatic; broadband at each band's effective wavelength, grism at
+# the observed Halpha wavelength with the kernel stamp pinned at the
+# ensemble's largest observed wavelength). Same roll/stamp geometry as
+# canonical_P. The z-tiered fit-kernel folding_threshold schedule follows
+# canonical_P_roman (see its header for the measurement behind the tiers);
+# mock/truth renders keep the galsim default kernels.
+#
+# The Roman PSF configuration (sca, pupil_bin, tier schedule) is still
+# subject to the pre-production review.
+id: hlwas_medium_roman
+bands: [F129, F158]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}
