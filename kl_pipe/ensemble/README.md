@@ -89,6 +89,11 @@ Gotchas that have bitten before:
 ```
 spec.py         EnsembleSpec + ObservationConfig registry (strict YAML validation)
 scene.py        canonical galaxy scene: truth defaults + fit prior rules
+catalogs/       per-catalog adapters: raw schema, unique row key, preprocess
+                to contract columns, catalog-fitted prior constants; selected
+                by population.catalog.kind (default flagship2)
+population.py   catalog-backed population: adapter rows + selection +
+                kinematic/structure paint (generic across catalogs)
 expander.py     spec -> manifest.parquet (deterministic seeds, CRN rule,
                 fit_id, provenance snapshot)
 mocks.py        truth row -> noisy mock observations (model-rendered,
@@ -109,4 +114,7 @@ __main__.py     CLI: expand | run | worker | status | collate | slurm | reclaim
 Generic vs paper-specific: everything except `scene.py`, `mocks.py`, and the
 `ObservationConfig` schema is datavector-agnostic; those three form the
 "datavector recipe" for the Roman imaging+grism paper (see the architecture
-section of `docs/ensemble_workflow.md` for the extension seam).
+section of `docs/ensemble_workflow.md` for the extension seam). Analogously,
+everything catalog-specific (schema, preprocess, fitted prior constants)
+lives behind a `catalogs/` adapter, so swapping the input catalog is one new
+adapter module plus a spec `catalog.kind` value.

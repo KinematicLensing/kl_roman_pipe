@@ -35,6 +35,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
     CENTROID_SCATTER_ARCSEC,
     CONT_CENTROID_OFFSET_ARCSEC,
@@ -60,10 +61,10 @@ POP_PREFIX = 'pop.'
 
 # population-table columns carried through to the manifest (prefixed 'pop.')
 # for prior construction (prior_vcirc_*), selection/binning diagnostics, and
-# future BulgeDisk truth wiring (bulge_*)
+# future BulgeDisk truth wiring (bulge_*). The catalog adapter's id columns
+# are prepended at expansion time; bulge columns apply only when the
+# catalog carries them.
 _POP_PASSTHROUGH = (
-    'halo_id',
-    'galaxy_id',
     'snr_line_per_pass',
     'snr_line_total',
     'ew_rest_a',
@@ -113,10 +114,9 @@ def _galaxy_rng(spec_seed: int, cosi_bin: int, galaxy_id: int):
     return np.random.default_rng(ss)
 
 
-def _centroid_rng(spec_seed: int, halo_id: int, galaxy_id: int):
-    ss = np.random.SeedSequence(
-        [spec_seed, _CENTROID_STREAM, int(halo_id), int(galaxy_id)]
-    )
+def _centroid_rng(spec_seed: int, ids: tuple):
+    """CENTROID-stream generator keyed on the catalog adapter's id values."""
+    ss = np.random.SeedSequence([spec_seed, _CENTROID_STREAM, *(int(v) for v in ids)])
     return np.random.default_rng(ss)
 
 
@@ -348,12 +348,15 @@ def _catalog_rows(
     # unless the spec disables the bulge paint (disk-only twin)
     base_truth = scene_truth_defaults(config, {}, bulge_bands=cp.paint_bulge)
     ring_members = (0, 90) if cp.ring_members == 2 else (0,)
+    adapter = get_catalog_adapter(cp.catalog_kind)
     # painted bulge columns are absent from a no-bulge population; keep
-    # bulge_fraction (catalog fact, misspecification diagnostic) either way
-    pop_passthrough = tuple(
+    # bulge_fraction (catalog fact, misspecification diagnostic) whenever
+    # the catalog carries one
+    pop_passthrough = adapter.id_columns + tuple(
         c
         for c in _POP_PASSTHROUGH
-        if cp.paint_bulge or c not in ('bulge_r50_arcsec', 'bulge_nsersic')
+        if (cp.paint_bulge or c not in ('bulge_r50_arcsec', 'bulge_nsersic'))
+        and (adapter.has_bulge or c != 'bulge_fraction')
     )
 
     rows: List[dict] = []
@@ -408,7 +411,7 @@ def _catalog_rows(
                 # not on it: the line traces clumpy star formation while the
                 # continuum traces the older stellar disk, so it takes the
                 # line's position plus a small physical offset
-                crng = _centroid_rng(spec.seed, int(g['halo_id']), int(g['galaxy_id']))
+                crng = _centroid_rng(spec.seed, tuple(g[c] for c in adapter.id_columns))
                 for comp in list(config.bands) + ['Halpha']:
                     truth[f'{comp}.x0'] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
                     truth[f'{comp}.y0'] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)

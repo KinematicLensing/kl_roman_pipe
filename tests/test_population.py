@@ -18,6 +18,8 @@ import yaml
 from scipy import stats
 
 from kl_pipe.ensemble import population
+from kl_pipe.ensemble.catalogs import get_catalog_adapter, load_catalog
+from kl_pipe.ensemble.catalogs.flagship2 import FLAGSHIP2_COLUMNS
 from kl_pipe.ensemble.population import (
     BULGE_CLASSICAL_N,
     BULGE_PSEUDO_N,
@@ -25,17 +27,17 @@ from kl_pipe.ensemble.population import (
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MAX,
     BULGE_SIZE_RATIO_MEDIAN,
-    FLAGSHIP2_COLUMNS,
     R50_TO_SIGMA,
     build_population,
     compute_line_snr_per_pass,
     compute_line_snr_total,
-    load_flagship2_catalog,
     matched_filter_compactness,
-    preprocess,
     write_population,
 )
 from kl_pipe.ensemble.spec import CatalogPopulationSpec, EnsembleSpec
+
+# the flagship2 adapter under test (loader + preprocess live on it now)
+FLAGSHIP2 = get_catalog_adapter('flagship2')
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'flagship2_shear_dev.yaml'
@@ -225,38 +227,87 @@ def built(fake_data_dir, tmp_path_factory):
 class TestLoader:
     def test_missing_parquet_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match='download-cosmohub-dev'):
-            load_flagship2_catalog('nope', tmp_path)
+            load_catalog(FLAGSHIP2, 'nope', tmp_path)
 
     def test_missing_sidecar_raises(self, tmp_path):
         write_fake_catalog(tmp_path, fake_flagship2_rows(n=20))
         (tmp_path / 'flagship2_fake.provenance.json').unlink()
         with pytest.raises(RuntimeError, match='provenance'):
-            load_flagship2_catalog('flagship2_fake', tmp_path)
+            load_catalog(FLAGSHIP2, 'flagship2_fake', tmp_path)
 
     def test_sha_mismatch_raises(self, tmp_path):
         parquet_path = write_fake_catalog(tmp_path, fake_flagship2_rows(n=20))
         with parquet_path.open('ab') as f:
             f.write(b'corruption')
         with pytest.raises(RuntimeError, match='sha256 mismatch'):
-            load_flagship2_catalog('flagship2_fake', tmp_path)
+            load_catalog(FLAGSHIP2, 'flagship2_fake', tmp_path)
 
     def test_missing_column_raises(self, tmp_path):
         df = fake_flagship2_rows(n=20).drop(columns=['bulge_nsersic'])
         write_fake_catalog(tmp_path, df)
         with pytest.raises(ValueError, match='bulge_nsersic'):
-            load_flagship2_catalog('flagship2_fake', tmp_path)
+            load_catalog(FLAGSHIP2, 'flagship2_fake', tmp_path)
 
     def test_duplicate_compound_id_raises(self, tmp_path):
         df = fake_flagship2_rows(n=20)
         df = pd.concat([df, df.iloc[[0]]], ignore_index=True)
         write_fake_catalog(tmp_path, df)
         with pytest.raises(ValueError, match='duplicate'):
-            load_flagship2_catalog('flagship2_fake', tmp_path)
+            load_catalog(FLAGSHIP2, 'flagship2_fake', tmp_path)
 
     def test_valid_catalog_loads(self, fake_data_dir):
-        df = load_flagship2_catalog('flagship2_fake', fake_data_dir)
+        df = load_catalog(FLAGSHIP2, 'flagship2_fake', fake_data_dir)
         assert len(df) == 400
         assert set(df.columns) == set(FLAGSHIP2_COLUMNS)
+
+
+# ==============================================================================
+# Catalog adapter seam
+# ==============================================================================
+
+
+class TestCatalogAdapter:
+    def test_unknown_kind_raises(self):
+        with pytest.raises(ValueError, match='unknown catalog kind'):
+            get_catalog_adapter('cosmos99')
+
+    def test_lookup_is_case_insensitive(self):
+        assert get_catalog_adapter('Flagship2') is FLAGSHIP2
+
+    def test_flagship2_id_columns_are_the_seed_key(self):
+        # (halo_id, galaxy_id) in this order is the per-galaxy seed key
+        # composition; changing it breaks every frozen census draw
+        assert FLAGSHIP2.id_columns == ('halo_id', 'galaxy_id')
+
+    def test_spec_kind_defaults_to_flagship2(self, fake_data_dir, tmp_path):
+        spec = spec_from_dict(tmp_path, catalog_spec_dict(fake_data_dir))
+        assert spec.catalog_population.catalog_kind == 'flagship2'
+
+    def test_spec_explicit_kind_parses(self, fake_data_dir, tmp_path):
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['catalog']['kind'] = 'flagship2'
+        spec = spec_from_dict(tmp_path, d)
+        assert spec.catalog_population.catalog_kind == 'flagship2'
+
+    def test_spec_unknown_kind_rejected(self, fake_data_dir, tmp_path):
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['catalog']['kind'] = 'cosmos99'
+        with pytest.raises(ValueError, match='unknown catalog kind'):
+            spec_from_dict(tmp_path, d)
+
+    def test_preprocess_output_matches_contract(self):
+        from kl_pipe.ensemble.catalogs import validate_contract
+
+        pre = FLAGSHIP2.preprocess(fake_flagship2_rows(n=50, seed=11), _cp())
+        validate_contract(FLAGSHIP2, pre)  # exact column-set equality
+        assert set(pre.columns) == set(FLAGSHIP2.contract_columns())
+
+    def test_contract_violation_raises(self):
+        from kl_pipe.ensemble.catalogs import validate_contract
+
+        pre = FLAGSHIP2.preprocess(fake_flagship2_rows(n=50, seed=11), _cp())
+        with pytest.raises(ValueError, match='violates the contract'):
+            validate_contract(FLAGSHIP2, pre.drop(columns=['ew_rest_a']))
 
 
 # ==============================================================================
@@ -300,16 +351,16 @@ class TestPreprocess:
         df = fake_flagship2_rows(n=400, seed=42)
         n_zero = int((df['disk_r50'].to_numpy() <= 0).sum())
         assert n_zero > 0  # generator plants ~3%
-        pre = preprocess(df, _cp())
+        pre = FLAGSHIP2.preprocess(df, _cp())
         assert len(pre) == len(df) - n_zero
-        assert pre.attrs['n_dropped_one_component'] == n_zero
+        assert pre.attrs['kills']['one_component'] == n_zero
         assert (pre['rscale_arcsec'] > 0).all()
 
     def test_h_mass_correction_exact(self):
         # logM*_phys = column - 2*log10(h); for h = 0.67 the shift is
         # -2*log10(0.67) = +0.34785039... dex, applied identically per row
         df = fake_flagship2_rows(n=50, seed=7)
-        pre = preprocess(df, _cp(h=0.67))
+        pre = FLAGSHIP2.preprocess(df, _cp(h=0.67))
         raw = df.loc[df['disk_r50'] > 0, 'log_stellar_mass'].to_numpy(np.float64)
         shift = -2.0 * np.log10(0.67)
         assert abs(shift - 0.3478503946) < 1e-10
@@ -329,7 +380,7 @@ class TestPreprocess:
         df['true_redshift_gal'] = np.float32(1.0)
         df['logf_halpha_model3_ext'] = np.float32(np.log10(2e-16))
         df['euclid_nisp_j'] = np.float32(1e-28)
-        pre = preprocess(df, _cp())
+        pre = FLAGSHIP2.preprocess(df, _cp())
         # recompute expected from the float32-stored inputs
         z = float(np.float32(1.0))
         lam = 6562.8 * (1.0 + z)
@@ -356,7 +407,7 @@ class TestPreprocess:
         df['euclid_nisp_y'] = np.float32(1e-28)
         df['euclid_nisp_j'] = np.float32(2e-28)
         df['euclid_nisp_h'] = np.float32(4e-28)
-        pre = preprocess(df, _cp())
+        pre = FLAGSHIP2.preprocess(df, _cp())
         lam = pre['lambda_obs_a'].to_numpy()
         f_nu_used = pre['f_lambda_cont_cgs'].to_numpy() * lam**2 / 2.998e18
         np.testing.assert_allclose(f_nu_used, [1e-28, 2e-28, 4e-28], rtol=1e-6)
@@ -367,7 +418,7 @@ class TestPreprocess:
         df['euclid_nisp_y'] = np.float32(0.0)
         df['euclid_nisp_h'] = np.float32(0.0)
         with pytest.raises(ValueError, match='non-finite or non-positive'):
-            preprocess(df, _cp())
+            FLAGSHIP2.preprocess(df, _cp())
 
 
 # ==============================================================================

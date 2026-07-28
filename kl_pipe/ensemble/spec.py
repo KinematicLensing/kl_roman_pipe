@@ -494,7 +494,7 @@ _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
 _MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr', 'shear_bias')
 _SAMPLED_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr')
-_FLUX_VARIANTS = ('model3_ext', 'model3', 'model1_ext', 'model1')
+_CATALOG_DEFAULT_KIND = 'flagship2'
 _CATALOG_DEFAULT_DATA_DIR = 'data/cosmohub'
 
 # spec draw/fixed keys may be shared top-level params, aliased short names, or
@@ -533,19 +533,20 @@ class DrawSpec:
 class CatalogPopulationSpec:
     """Catalog-backed population block (``population.type: catalog``).
 
-    Galaxies come from Flagship2 catalog rows (structural + flux truths),
-    with kinematics painted on via scaling relations, an isotropic
-    orientation redraw, and per-pair shear draws. All keys are required in
-    the YAML unless a default is stated; unknown keys raise.
+    Galaxies come from input-catalog rows (structural + flux truths; the
+    catalog adapter selected by ``catalog.kind`` owns the schema and
+    preprocess), with kinematics painted on via scaling relations, an
+    isotropic orientation redraw, and per-pair shear draws. All keys are
+    required in the YAML unless a default is stated; unknown keys raise.
     """
 
     # catalog
-    catalog_download: str  # basename of data/cosmohub/<name>.yaml query spec
+    catalog_download: str  # basename of <data_dir>/<name>.parquet download
     catalog_data_dir: str  # default 'data/cosmohub'
 
     # preprocess
-    flux_variant: str  # Halpha flux column variant
-    h: float  # Flagship cosmology little-h; logM*_phys = col - 2*log10(h)
+    flux_variant: str  # Halpha flux column variant (adapter vocabulary)
+    h: float  # catalog cosmology little-h; logM*_phys = col - 2*log10(h)
 
     # selection
     z_range: Tuple[float, float]
@@ -591,6 +592,10 @@ class CatalogPopulationSpec:
     # single-disk broadband truth keys, single-disk fit model + priors)
     paint_bulge: bool = True
 
+    # catalog.kind (default 'flagship2'): selects the catalog adapter that
+    # owns the raw schema, unique row key, and preprocess
+    catalog_kind: str = _CATALOG_DEFAULT_KIND
+
     # sample.galaxy_ids (optional): restriction to specific population row
     # indices (0-based, into the seeded n_galaxies sample), applied AFTER the
     # population build -- the bank and every per-galaxy draw and noise seed
@@ -602,10 +607,15 @@ class CatalogPopulationSpec:
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
-        if self.flux_variant not in _FLUX_VARIANTS:
+        # local import: the registry imports nothing from this module at
+        # module level, so the lookup is cycle-free
+        from kl_pipe.ensemble.catalogs import get_catalog_adapter
+
+        adapter = get_catalog_adapter(self.catalog_kind)  # unknown kind raises
+        if self.flux_variant not in adapter.flux_variants:
             raise ValueError(
-                f"preprocess.flux_variant '{self.flux_variant}'; supported: "
-                f"{_FLUX_VARIANTS}"
+                f"preprocess.flux_variant '{self.flux_variant}'; supported "
+                f"by catalog '{adapter.kind}': {adapter.flux_variants}"
             )
         if self.h <= 0:
             raise ValueError(f"preprocess.h ({self.h}) must be positive")
@@ -719,7 +729,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
     _require_keys(population, allowed, context)
 
     catalog = population['catalog']
-    _reject_unknown(catalog, ('download', 'data_dir'), f"{context}.catalog")
+    _reject_unknown(catalog, ('kind', 'download', 'data_dir'), f"{context}.catalog")
     _require_keys(catalog, ('download',), f"{context}.catalog")
 
     pre = population['preprocess']
@@ -800,6 +810,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
     bulge_fraction_max = sel['bulge_fraction_max']
     bulge_nsersic_range = sel['bulge_nsersic_range']
     return CatalogPopulationSpec(
+        catalog_kind=str(catalog.get('kind', _CATALOG_DEFAULT_KIND)),
         catalog_download=str(catalog['download']),
         catalog_data_dir=str(catalog.get('data_dir', _CATALOG_DEFAULT_DATA_DIR)),
         flux_variant=str(pre['flux_variant']),

@@ -287,11 +287,16 @@ Join truth with recovery via `kl_pipe.ensemble.collate.analysis_table(run_dir)`
 (manifest ⨝ results on `fit_id`), then feed `kl_pipe/calibration.py`:
 `rotate_to_galaxy_frame`, `measure_shear_bias`, `compute_shape_noise`.
 
-## Catalog-mode (Flagship2) runs
+## Catalog-mode runs
 
 Catalog-backed specs (`population.type: catalog`, e.g.
 `configs/ensembles/flagship2_shear_dev.yaml`) reuse the same
-expand -> run/slurm -> collate flow. The only differences:
+expand -> run/slurm -> collate flow. Everything catalog-specific (raw
+schema, unique row key, preprocess to standardized columns, catalog-fitted
+prior constants) lives in a `kl_pipe/ensemble/catalogs/` adapter selected by
+`population.catalog.kind` (default `flagship2`); the selection, paint, and
+expansion machinery is catalog-agnostic. The only operational differences
+from sampled mode:
 
 1. **Catalog data must be present** at the spec's `population.catalog.data_dir`
    (default `data/cosmohub/<download>.parquet`). Download it with the
@@ -306,8 +311,8 @@ expand -> run/slurm -> collate flow. The only differences:
    The Q1 validation anchor is `python scripts/download_q1.py` (IRSA TAP).
 
 2. **`expand` auto-materializes the population.** For a catalog spec, `expand`
-   builds `population.parquet` (Flagship2 rows + isotropic cos i redraw +
-   Tully-Fisher / sigma0 paint + bulge morphology paint + ring-pair shear)
+   builds `population.parquet` (adapter catalog rows + isotropic cos i redraw
+   + Tully-Fisher / sigma0 paint + bulge morphology paint + ring-pair shear)
    *and* `manifest.parquet` in one step -- no separate command. Broadband
    bands render as bulge+disk; the grism line + continuum stay single-disk.
 

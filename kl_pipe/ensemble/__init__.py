@@ -7,7 +7,8 @@ Modules
 -------
 spec       Ensemble spec + observation-config registry (YAML, validated)
 scene      Canonical galaxy scene: truth defaults + fit prior rules
-population Catalog-backed population (Flagship2 rows + kinematic paint)
+catalogs   Per-catalog adapters (schema, row key, preprocess, priors)
+population Catalog-backed population (adapter rows + kinematic paint)
 expander   Deterministic spec -> manifest.parquet expansion
 mocks      Per-fit on-the-fly mock observation construction
 worker     Claim -> mock -> fit -> per-fit-result loop

@@ -34,14 +34,13 @@ from typing import Optional
 import numpy as np
 import yaml
 
+from kl_pipe.ensemble.catalogs import get_catalog_adapter, load_catalog
 from kl_pipe.ensemble.population import (
     F_LIM_PER_PASS_CGS,
     F_LIM_NSIGMA,
     _draw_geometry,
     compute_line_snr_per_pass,
-    load_flagship2_catalog,
     matched_filter_compactness,
-    preprocess,
 )
 from kl_pipe.ensemble.spec import EnsembleSpec
 
@@ -95,11 +94,12 @@ def main() -> None:
     data_dir = Path(cp.catalog_data_dir)
 
     # selection chain up to the SNR computation (mirrors build_population)
-    raw = load_flagship2_catalog(cp.catalog_download, data_dir)
-    pre = preprocess(raw, cp)
+    adapter = get_catalog_adapter(cp.catalog_kind)
+    raw = load_catalog(adapter, cp.catalog_download, data_dir)
+    pre = adapter.preprocess(raw, cp)
     n_disk = len(pre)
 
-    z = pre['true_redshift_gal'].to_numpy(dtype=np.float64)
+    z = pre['z'].to_numpy(dtype=np.float64)
     zmask = (z >= cp.z_range[0]) & (z <= cp.z_range[1])
     pre = pre.loc[zmask].reset_index(drop=True)
     if cp.bulge_fraction_max is not None:
@@ -109,12 +109,11 @@ def main() -> None:
 
     cosi, _ = _draw_geometry(
         spec.seed,
-        pre['halo_id'].to_numpy(),
-        pre['galaxy_id'].to_numpy(),
+        pre[list(adapter.id_columns)].to_numpy(),
         cp.cosi_range,
     )
     reff = pre['disk_r50'].to_numpy(dtype=np.float64)
-    zz = pre['true_redshift_gal'].to_numpy(dtype=np.float64)
+    zz = pre['z'].to_numpy(dtype=np.float64)
     f_line = pre['f_line_cgs'].to_numpy()
 
     compact = matched_filter_compactness(reff, cosi, zz)

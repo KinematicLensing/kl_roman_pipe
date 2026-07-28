@@ -268,39 +268,12 @@ def scene_truth_defaults(
     return truth
 
 
-# catalog-mode rscale prior bounds [arcsec]. The sampled-mode (0.05, 1.0)
-# bounds do NOT contain the catalog truths, so bounds are set below/above the
-# reachable extremes rather than silently clipping truth out of support. The
-# ceiling must clear the painted products, not just the catalog sizes: the
-# line and turnover truths are catalog size x lognormal ratio, and at the old
-# ceiling of 2.0 a real dev draw landed at Halpha.rscale = 2.12 (1 of 400,
-# measured 2026-07-27), leaving that truth with zero prior support. At 3.0
-# the exceedance under the fitted size population drops from 2.8e-3 to
-# 4.2e-4 per galaxy for the line size (7e-5 for the turnover), so a rare
-# census draw can still land outside and will fail the truth-in-support
-# check loudly, which is the intended behavior. The render grid is unchanged
-# (oversample 3, pad 2, per-eval cost flat; PSF damping sets the k-space
-# extent, measured 2026-07-27).
-_CATALOG_RSCALE_LOW = 0.005
-_CATALOG_RSCALE_HIGH = 3.0
-
-# Population distributions replacing the truth-centered priors, fitted to the
-# selected Flagship2 sample (flagship2_dev at snr_line_total_min 20, n = 400,
-# measured 2026-07-25). log10 median and log10 scatter.
-_CATALOG_RSCALE_LOG10_MU = -0.672
-_CATALOG_RSCALE_LOG10_SIGMA = 0.237
-_CONT_FLUX_LOG10_MU = 0.770
-_CONT_FLUX_LOG10_SIGMA = 0.305
-# support wide enough to contain the selected sample's continuum amplitudes,
-# which span roughly 1.3-93 in the scene's internal flux units per nm
-_CONT_FLUX_LOW = 0.05
-_CONT_FLUX_HIGH = 400.0
-# bulge half-light radius support. Matched to the disk floor rather than set
-# lower: the smallest allowed size drives the worst-case maxk, so an
-# unnecessarily small floor enlarges the render grid on every evaluation.
-# The population's bulge sizes reach about 0.006 arcsec at four sigma.
-_BULGE_HLR_LOW = 0.005
-_BULGE_HLR_HIGH = 2.0
+# Catalog-mode prior bounds and population distributions (the size and
+# continuum-amplitude populations of the selected sample, and the support
+# bounds sized against the catalog's reachable truths) are catalog-fitted
+# numbers and live on each catalog adapter as ``prior_constants`` -- see
+# ``kl_pipe.ensemble.catalogs`` for the values and their provenance.
+# ``scene_priors`` reads them off the spec's adapter in catalog mode.
 
 # Systemic velocity prior width. One grism pixel at 1.1 nm is about 200 km/s
 # at the observed Halpha wavelength; the line centroid is measured to roughly
@@ -317,15 +290,9 @@ _V0_PRIOR_SIGMA_KMS = 200.0
 # is flat, without centering on truth: honest marginalization (assert the
 # population, not the answer), regularizing without biasing shear.
 #
-# bulge_frac: matched to the selected population. Flagship2 dev, z 0.55-1.9,
-# two-component disks, B/T <= 0.3 (the bulge_fraction_max selection cut):
-# B/T mean 0.080, std 0.080, n=206k (measured 2026-07-23; stable against a
-# brightest-decile flux cut). The truncation follows the spec's own
-# bulge_fraction_max selection cut (prior support == selected population
-# support); loc/scale stay fixed at the B/T <= 0.3 measurement, which the
-# production specs use.
-_BULGE_FRAC_LOC = 0.08
-_BULGE_FRAC_SCALE = 0.08
+# bulge_frac: matched to the selected population (adapter prior_constants;
+# the truncation follows the spec's own bulge_fraction_max selection cut, so
+# prior support == selected population support).
 # bulge_hlr: exactly the generating distribution of the population's bulge
 # size paint (population.py BULGE_SIZE_RATIO_*): a LogNormal on the bulge-to-
 # disk size ratio, median set per galaxy from the disk size. Prior ==
@@ -377,6 +344,7 @@ def scene_priors(
     PriorDict
         Sampled priors + fixed values; z pinned to the fit's truth z.
     """
+    from kl_pipe.ensemble.catalogs import get_catalog_adapter
     from kl_pipe.ensemble.spec import DrawSpec
 
     is_catalog = spec.catalog_population is not None
@@ -385,6 +353,13 @@ def scene_priors(
             "catalog-mode priors require the manifest row (pop.prior_vcirc_* "
             "columns); pass row"
         )
+    # catalog-fitted prior constants (population distributions + support
+    # bounds) come off the spec's catalog adapter
+    pc = (
+        get_catalog_adapter(spec.catalog_population.catalog_kind).prior_constants
+        if is_catalog
+        else None
+    )
 
     def population_prior(name: str, draw: DrawSpec):
         if draw.dist == 'uniform':
@@ -394,9 +369,9 @@ def scene_priors(
         raise ValueError(f"no prior rule for draw dist '{draw.dist}' ({name})")
 
     # catalog truths carry the catalog disk scale length, which exceeds the
-    # sampled-mode rscale bounds (see _CATALOG_RSCALE_* provenance)
-    rscale_low = _CATALOG_RSCALE_LOW if is_catalog else 0.05
-    rscale_high = _CATALOG_RSCALE_HIGH if is_catalog else 1.0
+    # sampled-mode rscale bounds (see the adapter prior_constants provenance)
+    rscale_low = pc.rscale_low if is_catalog else 0.05
+    rscale_high = pc.rscale_high if is_catalog else 1.0
 
     prior_spec: Dict[str, object] = {
         # injected shear: wide, uninformative prior so posterior widths
@@ -465,8 +440,8 @@ def scene_priors(
             prior_spec[f'{band}.disk_h_over_r'] = truth[f'{band}.disk_h_over_r']
             bf_max = spec.catalog_population.bulge_fraction_max
             prior_spec[f'{band}.bulge_frac'] = TruncatedNormal(
-                _BULGE_FRAC_LOC,
-                _BULGE_FRAC_SCALE,
+                pc.bulge_frac_loc,
+                pc.bulge_frac_scale,
                 0.0,
                 1.0 if bf_max is None else float(bf_max),
             )
@@ -535,8 +510,8 @@ def scene_priors(
         size_keys.append('Halpha.cont.rscale')
         for key in size_keys:
             prior_spec[key] = TruncatedLogNormal(
-                _CATALOG_RSCALE_LOG10_MU * ln10,
-                _CATALOG_RSCALE_LOG10_SIGMA * ln10,
+                pc.rscale_log10_mu * ln10,
+                pc.rscale_log10_sigma * ln10,
                 rscale_low,
                 rscale_high,
             )
@@ -564,8 +539,8 @@ def scene_priors(
                     f'{band}.disk_rscale',
                     math.log(BULGE_SIZE_RATIO_MEDIAN * _EXP_R50_OVER_RSCALE),
                     BULGE_SIZE_RATIO_LN_SCATTER,
-                    _BULGE_HLR_LOW,
-                    _BULGE_HLR_HIGH,
+                    pc.bulge_hlr_low,
+                    pc.bulge_hlr_high,
                 )
 
         # continuum centroid: sampled on the quadrature width rather than
@@ -582,10 +557,10 @@ def scene_priors(
         # equivalent widths, which is both leak-free and tighter than the
         # truth-centered prior it replaces
         prior_spec['Halpha.cont.flux_per_nm'] = TruncatedLogNormal(
-            _CONT_FLUX_LOG10_MU * ln10,
-            _CONT_FLUX_LOG10_SIGMA * ln10,
-            _CONT_FLUX_LOW,
-            _CONT_FLUX_HIGH,
+            pc.cont_flux_log10_mu * ln10,
+            pc.cont_flux_log10_sigma * ln10,
+            pc.cont_flux_low,
+            pc.cont_flux_high,
         )
 
         # systemic velocity: deliberately wider than the painted offset. The

@@ -1,27 +1,28 @@
 """
-Catalog-backed galaxy population: Flagship2 rows + kinematic paint.
+Catalog-backed galaxy population: catalog rows + kinematic paint.
 
 Builds the per-galaxy population table for ``population.type: catalog``
 ensemble campaigns. Structural and flux truths (disk sizes, Halpha flux,
-continuum, bulge fraction, redshift) come from Euclid Flagship2 catalog
-rows; kinematics (vcirc via an inverted Tully-Fisher relation, sigma0 via an
-affine-in-z relation) and bulge morphology (Sersic index + size; Flagship2
-assigns these as uncorrelated random draws, see BULGE_* constants) are
-painted on with seeded scatter; orientation is an isotropic redraw (the
-catalog inclination is kept for validation only); shear is drawn per ring
-pair.
+continuum, redshift, bulge fraction where the catalog has one) come from an
+input catalog behind a ``CatalogAdapter`` (``kl_pipe.ensemble.catalogs``;
+the spec's ``population.catalog.kind`` selects it); kinematics (vcirc via
+an inverted Tully-Fisher relation, sigma0 via an affine-in-z relation) and
+bulge morphology (Sersic index + size, for catalogs whose own bulge
+assignments are unusable -- see BULGE_* constants) are painted on with
+seeded scatter; orientation is an isotropic redraw (the catalog inclination
+is kept for validation only); shear is drawn per ring pair.
 
 Determinism contract
 --------------------
 - Every per-galaxy draw uses a numpy SeedSequence keyed on
-  ``[spec.seed, STREAM_TAG, halo_id, galaxy_id]``. Flagship2 ``galaxy_id``
-  is a within-halo index (NOT globally unique); the (halo_id, galaxy_id)
-  pair is the unique catalog key, so both ids enter the seed key. Draws are
-  therefore independent of catalog row order and of the selection applied:
-  a galaxy keeps its cosi/theta/paint/shear values under any superset
-  catalog download.
+  ``[spec.seed, STREAM_TAG, *ids]`` where ``ids`` are the row's values of
+  the adapter's ``id_columns``, in the adapter's declared order (for
+  Flagship2: (halo_id, galaxy_id), since its galaxy_id is a within-halo
+  index and only the pair is unique). Draws are therefore independent of
+  catalog row order and of the selection applied: a galaxy keeps its
+  cosi/theta/paint/shear values under any superset catalog download.
 - The subsample draw uses a single stream keyed ``[spec.seed, SAMPLE_TAG]``
-  over the selected rows sorted by (halo_id, galaxy_id).
+  over the selected rows sorted by the id columns.
 - Stream tags are disjoint from the expander's (1/2/3).
 
 This module is numpy+pandas only (population building is a one-shot host
@@ -30,7 +31,6 @@ task, not traced model code).
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
@@ -38,6 +38,12 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from kl_pipe.ensemble.catalogs import (
+    catalog_provenance,
+    get_catalog_adapter,
+    load_catalog,
+    validate_contract,
+)
 from kl_pipe.ensemble.spec import CatalogPopulationSpec, EnsembleSpec
 
 # =============================================================================
@@ -140,12 +146,6 @@ ARCSEC_PER_RAD = 180.0 / np.pi * 3600.0
 # exponential disk: r50 = 1.678 * scalelength; the matched-filter Gaussian
 # proxy takes sigma_major = the exponential scalelength = r50 / 1.678
 R50_TO_SIGMA = 1.678
-
-# Euclid NISP band edges [Angstrom] for continuum selection at the observed
-# Halpha wavelength: Y covers lambda < 11900, J covers [11900, 15450),
-# H covers >= 15450 (nominal NISP passband boundaries)
-NISP_YJ_EDGE_A = 11900.0
-NISP_JH_EDGE_A = 15450.0
 
 # seed-stream domain tags (disjoint from expander's 1/2/3); per-galaxy
 # streams key [seed, TAG, halo_id, galaxy_id], the sample stream keys
@@ -250,249 +250,6 @@ BULGE_SIZE_RATIO_MEDIAN = 0.3
 BULGE_SIZE_RATIO_LN_SCATTER = 0.4
 BULGE_SIZE_RATIO_MAX = 1.0
 
-# full Flagship2 query-spec schema (data/cosmohub/flagship2_dev.yaml);
-# downloads are validated against this exact column set
-FLAGSHIP2_COLUMNS = (
-    'galaxy_id',
-    'halo_id',
-    'ra_gal',
-    'dec_gal',
-    'true_redshift_gal',
-    'observed_redshift_gal',
-    'logf_halpha_model3',
-    'logf_halpha_model3_ext',
-    'logf_halpha_model1',
-    'logf_halpha_model1_ext',
-    'halpha_scatter',
-    'logf_n2_model3_ext',
-    'logf_o3_model3_ext',
-    'log_stellar_mass',
-    'log_sfr',
-    'disk_r50',
-    'disk_scalelength',
-    'disk_axis_ratio',
-    'disk_angle',
-    'disk_ellipticity',
-    'inclination_angle',
-    'bulge_fraction',
-    'bulge_r50',
-    'bulge_nsersic',
-    'bulge_axis_ratio',
-    'euclid_nisp_y',
-    'euclid_nisp_j',
-    'euclid_nisp_h',
-    'euclid_nisp_y_el_model3_ext',
-    'euclid_nisp_j_el_model3_ext',
-    'euclid_nisp_h_el_model3_ext',
-    'euclid_vis',
-    'euclid_vis_el_model3_ext',
-    'kappa',
-    'gamma1',
-    'gamma2',
-)
-
-
-# =============================================================================
-# Catalog loading
-# =============================================================================
-
-
-def load_flagship2_catalog(name: str, data_dir: Union[str, Path]) -> pd.DataFrame:
-    """Load and verify a named Flagship2 catalog download.
-
-    Reads ``<data_dir>/<name>.parquet``, verifies its sha256 against the
-    mandatory ``<name>.provenance.json`` sidecar, and validates the exact
-    36-column schema, non-emptiness, and (halo_id, galaxy_id) uniqueness.
-
-    Parameters
-    ----------
-    name : str
-        Basename of the download (e.g. 'flagship2_dev').
-    data_dir : str or Path
-        Directory holding the parquet + provenance sidecar.
-
-    Returns
-    -------
-    pd.DataFrame
-        The raw catalog rows.
-    """
-    data_dir = Path(data_dir)
-    parquet_path = data_dir / f'{name}.parquet'
-    if not parquet_path.exists():
-        raise FileNotFoundError(
-            f"catalog parquet not found: {parquet_path}; run "
-            f"'make download-cosmohub-dev' (or download-cosmohub-data for "
-            f"the production bank)"
-        )
-    sidecar_path = data_dir / f'{name}.provenance.json'
-    if not sidecar_path.exists():
-        raise RuntimeError(
-            f"provenance sidecar not found: {sidecar_path}; provenance is "
-            f"mandatory (re-download via 'make download-cosmohub-dev' to "
-            f"regenerate it)"
-        )
-    provenance = json.loads(sidecar_path.read_text())
-    if 'sha256' not in provenance:
-        raise RuntimeError(f"{sidecar_path}: sidecar carries no 'sha256' key")
-    actual_sha = hashlib.sha256(parquet_path.read_bytes()).hexdigest()
-    if actual_sha != provenance['sha256']:
-        raise RuntimeError(
-            f"catalog sha256 mismatch for {parquet_path}: file has "
-            f"{actual_sha}, provenance sidecar records "
-            f"{provenance['sha256']}; the download is corrupt or was "
-            f"modified -- re-download it"
-        )
-
-    df = pd.read_parquet(parquet_path)
-    missing = [c for c in FLAGSHIP2_COLUMNS if c not in df.columns]
-    extra = [c for c in df.columns if c not in FLAGSHIP2_COLUMNS]
-    if missing or extra:
-        raise ValueError(
-            f"{parquet_path}: schema mismatch vs the Flagship2 query spec; "
-            f"missing columns {missing}, unexpected columns {extra}"
-        )
-    if len(df) == 0:
-        raise ValueError(f"{parquet_path}: catalog is empty")
-    # flagship2 galaxy_id is a within-halo index; (halo_id, galaxy_id) is
-    # the unique key all seed streams rely on
-    if df.duplicated(subset=['halo_id', 'galaxy_id']).any():
-        raise ValueError(
-            f"{parquet_path}: duplicate (halo_id, galaxy_id) pairs; the "
-            f"per-galaxy seed keys require a unique compound id"
-        )
-    return df
-
-
-def catalog_provenance(name: str, data_dir: Union[str, Path]) -> dict:
-    """Load the provenance sidecar for a named catalog download."""
-    sidecar_path = Path(data_dir) / f'{name}.provenance.json'
-    if not sidecar_path.exists():
-        raise RuntimeError(f"provenance sidecar not found: {sidecar_path}")
-    return json.loads(sidecar_path.read_text())
-
-
-# =============================================================================
-# Preprocessing
-# =============================================================================
-
-
-def preprocess(df: pd.DataFrame, spec: CatalogPopulationSpec) -> pd.DataFrame:
-    """Derive physical population columns from raw Flagship2 rows.
-
-    Drops one-component rows (``disk_r50 <= 0``: bulge-only galaxies with
-    no disk), corrects the stellar mass for little-h, converts the Halpha
-    flux variant to linear flux, and derives the observed-frame continuum
-    and rest-frame equivalent width at the observed Halpha wavelength.
-
-    Unit chain (dimensional sanity):
-    - f_line = 10**logf [erg/s/cm2] (integrated line flux)
-    - lambda_obs = 6562.8 * (1 + z) [A]
-    - f_nu (NISP band containing lambda_obs) [erg/cm2/s/Hz]
-    - f_lambda = f_nu * c / lambda_obs^2
-      -> [erg/cm2/s/Hz] * [A/s] / [A^2] = [erg/cm2/s/A]
-    - EW_obs = f_line / f_lambda -> [erg/s/cm2] / [erg/cm2/s/A] = [A]
-    - EW_rest = EW_obs / (1 + z) [A]
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Raw catalog rows (full 36-column schema).
-    spec : CatalogPopulationSpec
-        Preprocess settings (flux_variant, h).
-
-    Returns
-    -------
-    pd.DataFrame
-        One row per two-component galaxy with derived physical columns;
-        ``attrs['n_dropped_one_component']`` records the dropped count.
-    """
-    n_raw = len(df)
-    disk_mask = df['disk_r50'].to_numpy() > 0.0
-    out = df.loc[disk_mask].reset_index(drop=True).copy()
-    n_dropped = int(n_raw - len(out))
-    if len(out) == 0:
-        raise ValueError(
-            f"preprocess: all {n_raw} rows are one-component (disk_r50 <= 0)"
-        )
-
-    # little-h mass correction: Flagship masses carry h^-2; physical
-    # logM* = catalog column - 2*log10(h)
-    logm = out['log_stellar_mass'].to_numpy(dtype=np.float64) - 2.0 * np.log10(spec.h)
-
-    flux_col = f'logf_halpha_{spec.flux_variant}'
-    f_line = 10.0 ** out[flux_col].to_numpy(dtype=np.float64)  # erg/s/cm2
-
-    z = out['true_redshift_gal'].to_numpy(dtype=np.float64)
-    lambda_obs_a = HALPHA_REST_A * (1.0 + z)  # A
-
-    # NISP band selection at the observed Halpha wavelength
-    f_nu_y = out['euclid_nisp_y'].to_numpy(dtype=np.float64)
-    f_nu_j = out['euclid_nisp_j'].to_numpy(dtype=np.float64)
-    f_nu_h = out['euclid_nisp_h'].to_numpy(dtype=np.float64)
-    f_nu = np.where(
-        lambda_obs_a < NISP_YJ_EDGE_A,
-        f_nu_y,
-        np.where(lambda_obs_a < NISP_JH_EDGE_A, f_nu_j, f_nu_h),
-    )  # erg/cm2/s/Hz
-
-    # continuum density and rest-frame EW (see unit chain in docstring)
-    f_lambda_obs = f_nu * C_A_PER_S / lambda_obs_a**2  # erg/cm2/s/A
-    ew_rest_a = f_line / f_lambda_obs / (1.0 + z)  # A
-
-    out['logm'] = logm
-    out['f_line_cgs'] = f_line
-    out['lambda_obs_a'] = lambda_obs_a
-    out['f_lambda_cont_cgs'] = f_lambda_obs
-    out['ew_rest_a'] = ew_rest_a
-    out['rscale_arcsec'] = out['disk_scalelength'].to_numpy(dtype=np.float64)
-
-    derived = {
-        'logm': logm,
-        'f_line_cgs': f_line,
-        'f_lambda_cont_cgs': f_lambda_obs,
-        'ew_rest_a': ew_rest_a,
-        'rscale_arcsec': out['rscale_arcsec'].to_numpy(),
-    }
-    bad_counts = {}
-    for col, values in derived.items():
-        finite = np.isfinite(values)
-        positive = values > 0 if col != 'logm' else np.ones_like(finite, dtype=bool)
-        n_bad = int((~(finite & positive)).sum())
-        if n_bad:
-            bad_counts[col] = n_bad
-    if bad_counts:
-        raise ValueError(
-            f"preprocess: non-finite or non-positive derived values: "
-            f"{bad_counts} (of {len(out)} rows)"
-        )
-
-    keep = [
-        'galaxy_id',
-        'halo_id',
-        'true_redshift_gal',
-        'observed_redshift_gal',
-        'logm',
-        'log_sfr',
-        'f_line_cgs',
-        'lambda_obs_a',
-        'f_lambda_cont_cgs',
-        'ew_rest_a',
-        'rscale_arcsec',
-        'disk_r50',
-        'disk_axis_ratio',
-        'inclination_angle',
-        'bulge_fraction',
-        'bulge_r50',
-        'bulge_nsersic',
-        'kappa',
-        'gamma1',
-        'gamma2',
-    ]
-    out = out[keep]
-    out.attrs['n_dropped_one_component'] = n_dropped
-    return out
-
-
 # =============================================================================
 # Matched-filter line SNR
 # =============================================================================
@@ -531,7 +288,7 @@ def matched_filter_compactness(
     Parameters
     ----------
     reff_arcsec : np.ndarray
-        Disk half-light radius [arcsec] (Flagship2 disk_r50).
+        Disk half-light radius [arcsec] (the contract disk_r50 column).
     cosi : np.ndarray
         Cosine of inclination (minor/major axis ratio of the thin disk).
     z : np.ndarray
@@ -623,31 +380,34 @@ def compute_line_snr_total(f_line: np.ndarray, compactness: np.ndarray) -> np.nd
 # =============================================================================
 
 
-def _galaxy_rng(
-    seed: int, tag: int, halo_id: int, galaxy_id: int
-) -> np.random.Generator:
-    """Per-galaxy generator keyed on the unique (halo_id, galaxy_id) pair."""
-    ss = np.random.SeedSequence([seed, tag, int(halo_id), int(galaxy_id)])
+def _galaxy_rng(seed: int, tag: int, ids: np.ndarray) -> np.random.Generator:
+    """Per-galaxy generator keyed on the row's unique id-column values.
+
+    ``ids`` is one row of the (n, k) id array (the adapter's ``id_columns``
+    values, in declared order); the key composition is part of the
+    determinism contract.
+    """
+    ss = np.random.SeedSequence([seed, tag, *(int(v) for v in ids)])
     return np.random.default_rng(ss)
 
 
 def _draw_geometry(
     seed: int,
-    halo_ids: np.ndarray,
-    galaxy_ids: np.ndarray,
+    ids: np.ndarray,
     cosi_range: Tuple[float, float],
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Isotropic orientation redraw: cosi ~ U(range), theta_int ~ U(0, pi).
 
     One GEOMETRY-stream generator per galaxy (draw order: cosi then theta);
-    O(n_catalog) generator constructions, ~10 s at 300k rows.
+    O(n_catalog) generator constructions, ~10 s at 300k rows. ``ids`` is
+    the (n, k) array of id-column values.
     """
-    n = len(halo_ids)
+    n = len(ids)
     cosi = np.empty(n, dtype=np.float64)
     theta = np.empty(n, dtype=np.float64)
     lo, hi = cosi_range
     for i in range(n):
-        rng = _galaxy_rng(seed, _POP_GEOMETRY, halo_ids[i], galaxy_ids[i])
+        rng = _galaxy_rng(seed, _POP_GEOMETRY, ids[i])
         cosi[i] = rng.uniform(lo, hi)
         theta[i] = rng.uniform(0.0, np.pi)
     return cosi, theta
@@ -655,8 +415,7 @@ def _draw_geometry(
 
 def _paint_kinematics(
     seed: int,
-    halo_ids: np.ndarray,
-    galaxy_ids: np.ndarray,
+    ids: np.ndarray,
     logm: np.ndarray,
     z: np.ndarray,
     spec: CatalogPopulationSpec,
@@ -672,11 +431,11 @@ def _paint_kinematics(
     One PAINT-stream generator per galaxy; draw order (TFR normal first,
     then sigma0 normals) is part of the determinism contract.
     """
-    n = len(halo_ids)
+    n = len(ids)
     vcirc = np.empty(n, dtype=np.float64)
     sigma0 = np.empty(n, dtype=np.float64)
     for i in range(n):
-        rng = _galaxy_rng(seed, _POP_PAINT, halo_ids[i], galaxy_ids[i])
+        rng = _galaxy_rng(seed, _POP_PAINT, ids[i])
         logv = (
             spec.tfr_logv0
             + (logm[i] - spec.tfr_logm0) / spec.tfr_slope
@@ -693,8 +452,7 @@ def _paint_kinematics(
 
 def _paint_structure(
     seed: int,
-    halo_ids: np.ndarray,
-    galaxy_ids: np.ndarray,
+    ids: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Paint the component scale ratios and the systemic velocity offset.
 
@@ -702,13 +460,13 @@ def _paint_structure(
     disk scale length, plus v0 in km/s. One generator per galaxy; the draw
     order is part of the determinism contract.
     """
-    n = len(halo_ids)
+    n = len(ids)
     vel_ratio = np.empty(n, dtype=np.float64)
     line_ratio = np.empty(n, dtype=np.float64)
     v0 = np.empty(n, dtype=np.float64)
     ln10 = np.log(10.0)
     for i in range(n):
-        rng = _galaxy_rng(seed, _POP_STRUCTURE, halo_ids[i], galaxy_ids[i])
+        rng = _galaxy_rng(seed, _POP_STRUCTURE, ids[i])
         vel_ratio[i] = VEL_RSCALE_RATIO_MEDIAN * np.exp(
             rng.normal(0.0, VEL_RSCALE_RATIO_DEX * ln10)
         )
@@ -721,8 +479,7 @@ def _paint_structure(
 
 def _draw_shear(
     seed: int,
-    halo_ids: np.ndarray,
-    galaxy_ids: np.ndarray,
+    ids: np.ndarray,
     spec: CatalogPopulationSpec,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Per-galaxy shear draw shared by both ring members.
@@ -731,11 +488,11 @@ def _draw_shear(
     the row, so the pair shares the draw by construction): iid
     N(0, sigma^2) per component, redrawn until |g| < gmax.
     """
-    n = len(halo_ids)
+    n = len(ids)
     g1 = np.empty(n, dtype=np.float64)
     g2 = np.empty(n, dtype=np.float64)
     for i in range(n):
-        rng = _galaxy_rng(seed, _POP_SHEAR, halo_ids[i], galaxy_ids[i])
+        rng = _galaxy_rng(seed, _POP_SHEAR, ids[i])
         while True:
             a = rng.normal(0.0, spec.shear_sigma)
             b = rng.normal(0.0, spec.shear_sigma)
@@ -748,8 +505,7 @@ def _draw_shear(
 
 def _draw_mass_prior(
     seed: int,
-    halo_ids: np.ndarray,
-    galaxy_ids: np.ndarray,
+    ids: np.ndarray,
     logm: np.ndarray,
     spec: CatalogPopulationSpec,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -760,10 +516,10 @@ def _draw_mass_prior(
     the propagated mass error: sigma_dex = sqrt(scatter_dex^2 +
     (logm_obs_scatter_dex / slope)^2).
     """
-    n = len(halo_ids)
+    n = len(ids)
     logm_obs = np.empty(n, dtype=np.float64)
     for i in range(n):
-        rng = _galaxy_rng(seed, _POP_PRIOR, halo_ids[i], galaxy_ids[i])
+        rng = _galaxy_rng(seed, _POP_PRIOR, ids[i])
         logm_obs[i] = logm[i] + rng.normal(0.0, spec.logm_obs_scatter_dex)
     prior_mu = 10.0 ** (spec.tfr_logv0 + (logm_obs - spec.tfr_logm0) / spec.tfr_slope)
     prior_sigma_dex = np.full(
@@ -788,8 +544,7 @@ def _truncated_normal(
 
 def _paint_bulge(
     seed: int,
-    halo_ids: np.ndarray,
-    galaxy_ids: np.ndarray,
+    ids: np.ndarray,
     disk_r50_arcsec: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Paint bulge Sersic index and size (see BULGE_* constants).
@@ -798,11 +553,11 @@ def _paint_bulge(
     the n rejection draws, then the size-ratio rejection draws) is part of
     the determinism contract.
     """
-    n = len(halo_ids)
+    n = len(ids)
     nsersic = np.empty(n, dtype=np.float64)
     bulge_r50 = np.empty(n, dtype=np.float64)
     for i in range(n):
-        rng = _galaxy_rng(seed, _POP_BULGE, halo_ids[i], galaxy_ids[i])
+        rng = _galaxy_rng(seed, _POP_BULGE, ids[i])
         pars = (
             BULGE_PSEUDO_N if rng.uniform() < BULGE_PSEUDO_WEIGHT else BULGE_CLASSICAL_N
         )
@@ -827,14 +582,15 @@ def build_population(
 ) -> Tuple[pd.DataFrame, dict]:
     """Build the catalog-backed population table for a campaign spec.
 
-    Chain: load + verify catalog -> preprocess -> selection cuts that do
-    not depend on orientation (z_range, bulge cuts) -> per-galaxy isotropic
+    Chain: load + verify catalog (via the spec's catalog adapter) ->
+    adapter preprocess to contract columns -> selection cuts that do not
+    depend on orientation (z_range, bulge cuts) -> per-galaxy isotropic
     orientation redraw -> matched-filter line SNR with the REDRAWN cosi ->
     SNR cut -> seeded subsample of n_galaxies (without replacement) ->
     kinematic paint + shear + mass-prior draws.
 
-    All per-galaxy draws are keyed on (halo_id, galaxy_id), so values are
-    independent of the cut order and of the catalog superset.
+    All per-galaxy draws are keyed on the adapter's id columns, so values
+    are independent of the cut order and of the catalog superset.
 
     Parameters
     ----------
@@ -855,22 +611,30 @@ def build_population(
             "build_population requires a catalog-mode spec "
             "(population.type: catalog)"
         )
+    adapter = get_catalog_adapter(cp.catalog_kind)
     data_dir = Path(data_dir) if data_dir is not None else Path(cp.catalog_data_dir)
 
-    raw = load_flagship2_catalog(cp.catalog_download, data_dir)
+    raw = load_catalog(adapter, cp.catalog_download, data_dir)
     n_raw = len(raw)
-    pre = preprocess(raw, cp)
+    pre = adapter.preprocess(raw, cp)
+    validate_contract(adapter, pre)
     n_disk = len(pre)
-    kills: Dict[str, int] = {'one_component': int(pre.attrs['n_dropped_one_component'])}
+    kills: Dict[str, int] = {k: int(v) for k, v in pre.attrs['kills'].items()}
 
     # orientation-independent cuts first (shrinks the per-galaxy geometry
     # loop; id-keyed streams make the result order-independent)
-    z = pre['true_redshift_gal'].to_numpy(dtype=np.float64)
+    z = pre['z'].to_numpy(dtype=np.float64)
     z_mask = (z >= cp.z_range[0]) & (z <= cp.z_range[1])
     kills['z_range'] = int((~z_mask).sum())
     pre = pre.loc[z_mask].reset_index(drop=True)
 
     if cp.bulge_fraction_max is not None:
+        if not adapter.has_bulge:
+            raise ValueError(
+                f"selection.bulge_fraction_max cuts on the catalog "
+                f"bulge_fraction column, which the '{adapter.kind}' catalog "
+                f"does not carry; remove the cut from the spec"
+            )
         bf_mask = pre['bulge_fraction'].to_numpy() <= cp.bulge_fraction_max
         kills['bulge_fraction'] = int((~bf_mask).sum())
         pre = pre.loc[bf_mask].reset_index(drop=True)
@@ -885,15 +649,20 @@ def build_population(
         )
     kills['bulge_nsersic'] = 0
 
+    if cp.paint_bulge and not adapter.has_bulge:
+        raise ValueError(
+            f"paint.bulge: true requires a catalog with bulge columns; the "
+            f"'{adapter.kind}' catalog carries none -- set paint.bulge: false"
+        )
+
     # isotropic orientation redraw (GEOMETRY stream), then line SNR with
     # the redrawn cosi
-    halo_ids = pre['halo_id'].to_numpy()
-    galaxy_ids = pre['galaxy_id'].to_numpy()
-    cosi, theta_int = _draw_geometry(spec.seed, halo_ids, galaxy_ids, cp.cosi_range)
+    ids = pre[list(adapter.id_columns)].to_numpy()
+    cosi, theta_int = _draw_geometry(spec.seed, ids, cp.cosi_range)
     compactness = matched_filter_compactness(
         pre['disk_r50'].to_numpy(dtype=np.float64),
         cosi,
-        pre['true_redshift_gal'].to_numpy(dtype=np.float64),
+        pre['z'].to_numpy(dtype=np.float64),
     )
     f_line = pre['f_line_cgs'].to_numpy()
     snr_line_per_pass = compute_line_snr_per_pass(f_line, compactness)
@@ -914,7 +683,7 @@ def build_population(
     # point-source reference happened to screen out.
     if cp.min_r50_over_psf_fwhm is not None:
         r50_over_fwhm = pre['disk_r50'].to_numpy(dtype=np.float64) / psf_fwhm_arcsec(
-            pre['true_redshift_gal'].to_numpy(dtype=np.float64)
+            pre['z'].to_numpy(dtype=np.float64)
         )
         res_mask = r50_over_fwhm >= cp.min_r50_over_psf_fwhm
         kills['resolvability'] = int((~res_mask).sum())
@@ -937,60 +706,66 @@ def build_population(
     # seeded subsample without replacement (SAMPLE stream); sorting by the
     # unique compound id first makes the draw independent of catalog row
     # order
-    selected = selected.sort_values(['halo_id', 'galaxy_id']).reset_index(drop=True)
+    id_cols = list(adapter.id_columns)
+    selected = selected.sort_values(id_cols).reset_index(drop=True)
     sample_rng = np.random.default_rng(np.random.SeedSequence([spec.seed, _POP_SAMPLE]))
     picks = sample_rng.choice(n_selected, size=cp.n_galaxies, replace=False)
-    sample = (
-        selected.iloc[np.sort(picks)]
-        .sort_values(['halo_id', 'galaxy_id'])
-        .reset_index(drop=True)
-    )
+    sample = selected.iloc[np.sort(picks)].sort_values(id_cols).reset_index(drop=True)
 
-    halo_ids = sample['halo_id'].to_numpy()
-    galaxy_ids = sample['galaxy_id'].to_numpy()
+    ids = sample[id_cols].to_numpy()
     logm = sample['logm'].to_numpy(dtype=np.float64)
-    z_sample = sample['true_redshift_gal'].to_numpy(dtype=np.float64)
-    vcirc, sigma0 = _paint_kinematics(
-        spec.seed, halo_ids, galaxy_ids, logm, z_sample, cp
-    )
-    g1, g2 = _draw_shear(spec.seed, halo_ids, galaxy_ids, cp)
-    vel_ratio, line_ratio, v0_kms = _paint_structure(spec.seed, halo_ids, galaxy_ids)
-    logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(
-        spec.seed, halo_ids, galaxy_ids, logm, cp
-    )
+    z_sample = sample['z'].to_numpy(dtype=np.float64)
+    vcirc, sigma0 = _paint_kinematics(spec.seed, ids, logm, z_sample, cp)
+    g1, g2 = _draw_shear(spec.seed, ids, cp)
+    vel_ratio, line_ratio, v0_kms = _paint_structure(spec.seed, ids)
+    logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(spec.seed, ids, logm, cp)
     columns: Dict[str, np.ndarray] = {
         'pop_index': np.arange(cp.n_galaxies, dtype=np.int64),
-        'galaxy_id': galaxy_ids,
-        'halo_id': halo_ids,
-        'z': z_sample,
-        'z_obs_catalog': sample['observed_redshift_gal'].to_numpy(dtype=np.float64),
-        'logm': logm,
-        'log_sfr': sample['log_sfr'].to_numpy(dtype=np.float64),
-        'f_line_cgs': sample['f_line_cgs'].to_numpy(),
-        'ew_rest_a': sample['ew_rest_a'].to_numpy(),
-        'f_lambda_cont_cgs': sample['f_lambda_cont_cgs'].to_numpy(),
-        'rscale_arcsec': sample['rscale_arcsec'].to_numpy(),
-        'bulge_fraction': sample['bulge_fraction'].to_numpy(dtype=np.float64),
-        'vel_rscale_ratio': vel_ratio,
-        'halpha_rscale_ratio': line_ratio,
-        'v0_kms': v0_kms,
     }
+    for c in id_cols:
+        columns[c] = sample[c].to_numpy()
+    columns['z'] = z_sample
+    if adapter.has_observed_redshift:
+        columns['z_obs_catalog'] = sample['z_obs'].to_numpy(dtype=np.float64)
+    columns.update(
+        {
+            'logm': logm,
+            'log_sfr': sample['log_sfr'].to_numpy(dtype=np.float64),
+            'f_line_cgs': sample['f_line_cgs'].to_numpy(),
+            'ew_rest_a': sample['ew_rest_a'].to_numpy(),
+            'f_lambda_cont_cgs': sample['f_lambda_cont_cgs'].to_numpy(),
+            'rscale_arcsec': sample['rscale_arcsec'].to_numpy(),
+        }
+    )
+    if adapter.has_bulge:
+        columns['bulge_fraction'] = sample['bulge_fraction'].to_numpy(dtype=np.float64)
+    columns.update(
+        {
+            'vel_rscale_ratio': vel_ratio,
+            'halpha_rscale_ratio': line_ratio,
+            'v0_kms': v0_kms,
+        }
+    )
     # painted bulge morphology columns exist only when the paint is enabled;
     # a disk-only twin (paint.bulge: false) omits them so any downstream
     # bulge read fails loudly instead of using stale values
     if cp.paint_bulge:
         bulge_nsersic, bulge_r50 = _paint_bulge(
             spec.seed,
-            halo_ids,
-            galaxy_ids,
+            ids,
             sample['disk_r50'].to_numpy(dtype=np.float64),
         )
         columns['bulge_r50_arcsec'] = bulge_r50
         columns['bulge_nsersic'] = bulge_nsersic
+    if adapter.has_bulge:
+        columns['catalog_bulge_r50_arcsec'] = sample['bulge_r50'].to_numpy(
+            dtype=np.float64
+        )
+        columns['catalog_bulge_nsersic'] = sample['bulge_nsersic'].to_numpy(
+            dtype=np.float64
+        )
     columns.update(
         {
-            'catalog_bulge_r50_arcsec': sample['bulge_r50'].to_numpy(dtype=np.float64),
-            'catalog_bulge_nsersic': sample['bulge_nsersic'].to_numpy(dtype=np.float64),
             'cosi': sample['cosi'].to_numpy(),
             'theta_int': sample['theta_int'].to_numpy(),
             'g1': g1,
@@ -1003,23 +778,19 @@ def build_population(
             'logm_obs': logm_obs,
             'prior_vcirc_mu_kms': prior_mu,
             'prior_vcirc_sigma_dex': prior_sigma_dex,
-            'catalog_inclination_deg': sample['inclination_angle'].to_numpy(
-                dtype=np.float64
-            ),
-            'catalog_disk_axis_ratio': sample['disk_axis_ratio'].to_numpy(
-                dtype=np.float64
-            ),
-            'kappa': sample['kappa'].to_numpy(dtype=np.float64),
-            'gamma1_field': sample['gamma1'].to_numpy(dtype=np.float64),
-            'gamma2_field': sample['gamma2'].to_numpy(dtype=np.float64),
         }
     )
+    # catalog values carried through purely for validation/diagnostics
+    for out_name, src in adapter.validation_columns.items():
+        columns[out_name] = sample[src].to_numpy(dtype=np.float64)
     population = pd.DataFrame(columns)
 
     provenance = catalog_provenance(cp.catalog_download, data_dir)
     meta = {
         'run_name': spec.run_name,
         'seed': spec.seed,
+        'catalog_kind': adapter.kind,
+        'catalog_id_columns': id_cols,
         'catalog_name': cp.catalog_download,
         'catalog_sha256': provenance['sha256'],
         'catalog_query_id': provenance.get('query_id'),

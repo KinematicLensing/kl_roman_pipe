@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Tuple, TYPE_CHECKING
 
 from kl_pipe.ensemble import scene
+from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
     BULGE_CLASSICAL_N,
     BULGE_PSEUDO_N,
@@ -117,10 +118,13 @@ def catalog_registry(
         raise ValueError("provenance registry is defined for catalog mode only")
     bulge = cp.paint_bulge
 
+    adapter = get_catalog_adapter(cp.catalog_kind)
+    pc = adapter.prior_constants
+    cat_keys = adapter.citation_bibkeys
     sig_cont = scene._CONT_CENTROID_SIGMA
-    r_lo, r_hi = scene._CATALOG_RSCALE_LOW, scene._CATALOG_RSCALE_HIGH
-    size_med = 10.0**scene._CATALOG_RSCALE_LOG10_MU
-    cont_med = 10.0**scene._CONT_FLUX_LOG10_MU
+    r_lo, r_hi = pc.rscale_low, pc.rscale_high
+    size_med = 10.0**pc.rscale_log10_mu
+    cont_med = 10.0**pc.cont_flux_log10_mu
     reg: Dict[str, PriorProvenance] = {}
 
     def add(entry: PriorProvenance) -> None:
@@ -179,9 +183,15 @@ def catalog_registry(
             'catalog',
             'pinned',
             'pinned',
-            'Pinned to the grism spectroscopic value (v1); the systemic '
-            'velocity absorbs the residual.',
-            ('Castander2025',),
+            (
+                'Pinned to the grism spectroscopic value (v1); the systemic '
+                'velocity absorbs the residual.'
+                if adapter.has_observed_redshift
+                else 'Pinned to the catalog photometric redshift, which the '
+                'painted observables treat as truth; the systemic velocity '
+                'absorbs the residual.'
+            ),
+            cat_keys,
         )
     )
 
@@ -263,11 +273,10 @@ def catalog_registry(
                 f'{band} disk scale length',
                 'arcsec',
                 'catalog (one size per galaxy, shared with the continuum)',
-                f'TLN({size_med:.2f}, {scene._CATALOG_RSCALE_LOG10_SIGMA}; '
-                f'[{r_lo}, {r_hi}])',
+                f'TLN({size_med:.2f}, {pc.rscale_log10_sigma}; ' f'[{r_lo}, {r_hi}])',
                 'catalog fit',
                 size_note,
-                ('Castander2025',),
+                cat_keys,
             )
         )
     add(
@@ -291,11 +300,10 @@ def catalog_registry(
             'line-continuum disk scale length',
             'arcsec',
             'catalog (same stellar disk as the bands)',
-            f'TLN({size_med:.2f}, {scene._CATALOG_RSCALE_LOG10_SIGMA}; '
-            f'[{r_lo}, {r_hi}])',
+            f'TLN({size_med:.2f}, {pc.rscale_log10_sigma}; ' f'[{r_lo}, {r_hi}])',
             'catalog fit',
             size_note,
-            ('Castander2025', 'vanderWel2014'),
+            cat_keys + ('vanderWel2014',),
         )
     )
 
@@ -335,13 +343,13 @@ def catalog_registry(
             'continuum flux density under the line',
             'scene units/nm',
             'line flux / observed EW (catalog rest EW)',
-            f'TLN({cont_med:.2f}, {scene._CONT_FLUX_LOG10_SIGMA}; '
-            f'[{scene._CONT_FLUX_LOW}, {scene._CONT_FLUX_HIGH}])',
+            f'TLN({cont_med:.2f}, {pc.cont_flux_log10_sigma}; '
+            f'[{pc.cont_flux_low}, {pc.cont_flux_high}])',
             'catalog fit',
             'Population of the selected catalog equivalent widths; contains '
             'no per-galaxy truth and is tighter than the truth-centered '
             'prior it replaced.',
-            ('Castander2025', 'Khostovan2024'),
+            cat_keys + ('Khostovan2024',),
         )
     )
 
@@ -441,13 +449,13 @@ def catalog_registry(
                     f'{band} bulge-to-total flux ratio',
                     '--',
                     f'catalog; selection B/T <= {cp.bulge_fraction_max}',
-                    f'TN({scene._BULGE_FRAC_LOC}, {scene._BULGE_FRAC_SCALE}; '
+                    f'TN({pc.bulge_frac_loc}, {pc.bulge_frac_scale}; '
                     f'[0, {cp.bulge_fraction_max}])',
                     'catalog fit',
                     'Moments of the selected population. An informative '
                     'prior adds curvature where an unresolved bulge leaves '
                     'the likelihood flat, without centering on truth.',
-                    ('Castander2025', 'Dimauro2018'),
+                    cat_keys + ('Dimauro2018',),
                 )
             )
             add(
@@ -461,7 +469,7 @@ def catalog_registry(
                     f'CLN(disk scale x '
                     f'{BULGE_SIZE_RATIO_MEDIAN * scene._EXP_R50_OVER_RSCALE:.2f}, '
                     f'{BULGE_SIZE_RATIO_LN_SCATTER} ln; '
-                    f'[{scene._BULGE_HLR_LOW}, {scene._BULGE_HLR_HIGH}])',
+                    f'[{pc.bulge_hlr_low}, {pc.bulge_hlr_high}])',
                     'ratio to parent',
                     'The catalog bulge size is an uncorrelated random draw '
                     '(a documented catalog limitation) and is repainted. The '
@@ -515,6 +523,7 @@ def catalog_registry(
 # short human-readable labels for the standalone (non-BibTeX) rendering
 _CITE_LABELS = {
     'Castander2025': 'Castander+25 (Flagship2)',
+    'Shuntov2025': 'Shuntov+25 (COSMOS-Web)',
     'Ubler2017': 'Übler+17',
     'Ubler2019': 'Übler+19',
     'Miller2011': 'Miller+11',

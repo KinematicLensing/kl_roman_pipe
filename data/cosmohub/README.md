@@ -1,6 +1,7 @@
 # CosmoHub downloads (Euclid Flagship2)
 
-Named catalog subsets for the ensemble population backbone. Each
+Named catalog subsets for the `flagship2` catalog adapter
+(`population.catalog.kind: flagship2`, the default). Each
 `<name>.yaml` is a committed query spec (table, columns, region, superset
 cuts); the downloaded `<name>.parquet` and its `<name>.provenance.json`
 sidecar (query id, verbatim SQL, timestamps, sha256) are local-only
