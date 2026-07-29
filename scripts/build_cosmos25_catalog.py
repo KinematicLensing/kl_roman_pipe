@@ -67,7 +67,7 @@ MOCK_COLUMNS = (
     'lambda_OIII_obs',
     'redshift',
     'sfr_young',
-    'log_U',
+    'log_OH',
 )
 
 
@@ -83,7 +83,8 @@ def load_section(path: Path, columns) -> dict:
     if not path.exists():
         raise FileNotFoundError(
             f"{path} not found; run 'make download-cosmos2025' (public "
-            f"sections) or obtain the private painted section"
+            f"sections) or 'python scripts/regen_cosmos25_painting.py' "
+            f"(private painted section)"
         )
     with fits.open(path, memmap=True) as hdul:
         data = hdul[1].data

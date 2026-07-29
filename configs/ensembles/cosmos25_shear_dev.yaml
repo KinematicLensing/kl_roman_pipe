@@ -18,10 +18,10 @@ population:
     download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
     data_dir: data/cosmos2025/private
   preprocess:
-    # painted fluxes with the dust sign inverted back to attenuation and the
-    # Kennicutt constant made Chabrier-consistent (see the adapter module
-    # docstring); 'as_delivered' reproduces the delivering notebook
-    flux_variant: dust_imf_fixed
+    # regenerated painting used verbatim; the dust/IMF correction variants
+    # were retired when the fixes moved upstream into the notebook (see the
+    # adapter module docstring)
+    flux_variant: as_delivered
     h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
   selection:
     z_range: [0.55, 1.9]

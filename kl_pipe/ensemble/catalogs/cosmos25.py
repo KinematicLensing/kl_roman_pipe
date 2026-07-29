@@ -4,29 +4,23 @@ COSMOS25 catalog adapter: real COSMOS-Web sources + painted Halpha.
 Structural truths (single-Sersic sizes, axis ratios) and photometry are
 real SE++ measurements from the COSMOS2025 master catalog (Shuntov et al.
 2025, arXiv:2506.03243); redshifts are LePhare photo-zs treated as truth;
-Halpha fluxes are Jiachuan Xu's painted emission-line section (private,
-row-matched, delivered 2026-07-28). The joined parquet is produced by
+Halpha fluxes are the painted emission-line section regenerated from
+Jiachuan Xu's painting notebook (private, row-matched;
+scripts/regen_cosmos25_painting.py). The joined parquet is produced by
 scripts/build_cosmos25_catalog.py, which gates the row-order join.
 
-Flux variants (``preprocess.flux_variant``):
-
-- ``as_delivered``: the painted fluxes verbatim. The painting applies its
-  nebular dust term with the wrong sign (multiplies the SFR-derived
-  intrinsic luminosity by 10^(+0.4 A) instead of 10^(-0.4 A); confirmed
-  against the delivered file, where every flux carries exactly
-  10^(+0.4 * 2.53 * 1.3 * ebv_minchi2)), and converts SFR to L(Halpha)
-  with the Kennicutt 1998 Salpeter constant 1.26e41 while the input CIGALE
-  SFRs follow a Chabrier-type IMF. Kept for handshakes against the
-  delivering notebook's numbers only.
-- ``dust_fixed``: dust sign corrected, i.e. delivered * 10^(-0.8 A) with
-  A = 2.53 * 1.3 * ebv_minchi2 (Cardelli k at Halpha, nebular-to-stellar
-  scale 1.3, both from the painting recipe).
-- ``dust_imf_fixed``: additionally rescales to the Chabrier-consistent
-  Kennicutt & Evans 2012 constant (log C = 41.27; Table 1), a factor
-  10^41.27 * 7.9e-42 = 1.4711. The production default; the delivered
-  variant's median rest EW(Halpha) of ~300 A (84th pct ~1200 A) against
-  the catalog's own photometry is unphysical, while the corrected
-  variants sit in the literature 100-300 A range.
+The only flux variant is ``as_delivered``: the painted fluxes verbatim.
+History: the original 2026-07-28 delivered file applied its nebular dust
+term with the wrong sign (brightening instead of attenuating) and used
+the Salpeter-calibrated Kennicutt 1998 Halpha constant with Chabrier-IMF
+CIGALE SFRs; this adapter carried ``dust_fixed``/``dust_imf_fixed``
+correction variants that inverted both. The revised notebook (received
+2026-07-29) fixes both upstream (attenuation sign, Kennicutt & Evans 2012
+constant, Curti FMR metallicity-based line ratios, Song et al. 2026
+mass-dependent nebular E(B-V) scaling), so the correction variants were
+retired when the pipeline moved to regenerating the painting from the
+notebook. Median rest EW(Halpha) of the medium-tier sample against the
+catalog's own photometry is ~180 A, in the literature 100-300 A range.
 
 The mass column is LePhare ``mass_med`` (log10 Msun, already physical for
 the catalog's fiducial cosmology), so the spec's little-h key is not
@@ -50,17 +44,6 @@ if TYPE_CHECKING:
 # all 784,016 rows, while v1.1 revised zfinal for 86% of rows -- the painted
 # lines are only coherent with the v1 sections.
 COSMOS25_SOURCE_VERSION = 'v1'
-
-# painting dust constants (IAEstimate.ipynb): Cardelli+89 k(Halpha) and the
-# nebular-to-stellar E(B-V) scale the recipe applied; the dust_* variants
-# must invert exactly what the painting did, so these are pinned to the
-# recipe, not to a preferred extinction law
-PAINT_K_HALPHA = 2.53
-PAINT_DUST_SCALE = 1.3
-
-# Kennicutt 1998 (Salpeter, Eq. 2) -> Kennicutt & Evans 2012 (Table 1,
-# log C = 41.27; Kroupa, "nearly identical" to Chabrier) constant ratio
-IMF_CONSTANT_RATIO = 10**41.27 * 7.9e-42  # = 1.4711
 
 # exponential-disk half-light-to-scale-length ratio, r50 = 1.678 * rscale;
 # the SE++ single-Sersic effective radius is read as the disk r50 under the
@@ -112,35 +95,38 @@ COSMOS25_COLUMNS = (
     'lambda_OIII_obs',
     'redshift',
     'sfr_young',
-    'log_U',
+    'log_OH',
 )
 
 # Catalog-fitted scene-prior constants. Provenance:
 #
 # rscale / continuum-amplitude population distributions: fitted to the
 # selected cosmos25 sample (census cuts: z 0.55-1.9, isotropic-cosi redraw,
-# r50/PSF_FWHM >= 1, line SNR_total >= 20 on the dust_imf_fixed variant;
-# n = 469, measured 2026-07-28), log10 median and log10 scatter. The
-# selected sizes span rscale 0.077-0.90 arcsec.
+# r50/PSF_FWHM >= 1, line SNR_total >= 20 on the as_delivered fluxes of the
+# catalog regenerated from the revised 2026-07-29 painting notebook;
+# n = 294, measured 2026-07-29), log10 median and log10 scatter. The
+# selected sizes span rscale 0.077-0.56 arcsec. (Previous values, measured
+# 2026-07-28 on the dust_imf_fixed correction of the original delivery,
+# n = 469: mu -0.752/-0.196, sigma 0.166/0.319.)
 #
 # rscale support [arcsec]: floor and ceiling sized against the painted size
 # products (catalog rscale x lognormal ratio for the Halpha line and the
 # velocity turnover), matching the Flagship2 bound-setting rule. Under the
-# fitted size population, P(line product > 3.0) = 9e-6 and P(turnover
-# product > 3.0) = 5e-6 per galaxy; P(turnover product < 0.005) = 1.2e-4
-# (measured 2026-07-28, 2e6 Monte Carlo draws). A rare draw outside support
+# fitted size population, P(line product > 3.0) = 4e-6 and P(turnover
+# product > 3.0) = 4e-6 per galaxy; P(turnover product < 0.005) = 1.4e-4
+# (measured 2026-07-29, 2e6 Monte Carlo draws). A rare draw outside support
 # fails the truth-in-support check loudly, which is the intended behavior.
 #
 # continuum support [internal flux units per nm]: the selected sample spans
-# 0.14-22.0 (0.1/99.9 percentiles 0.14/15.5); bounds set well clear on both
+# 0.21-8.4 (0.1/99.9 percentiles 0.21/8.2); bounds set well clear on both
 # sides, mirroring the Flagship2 margin style.
 COSMOS25_PRIOR_CONSTANTS = CatalogPriorConstants(
-    rscale_log10_mu=-0.752,
-    rscale_log10_sigma=0.166,
+    rscale_log10_mu=-0.774,
+    rscale_log10_sigma=0.161,
     rscale_low=0.005,
     rscale_high=3.0,
-    cont_flux_log10_mu=-0.196,
-    cont_flux_log10_sigma=0.319,
+    cont_flux_log10_mu=-0.183,
+    cont_flux_log10_sigma=0.299,
     cont_flux_low=0.01,
     cont_flux_high=100.0,
 )
@@ -152,10 +138,10 @@ class Cosmos25Adapter(CatalogAdapter):
     kind = 'cosmos25'
     columns = COSMOS25_COLUMNS
     id_columns = ('id',)
-    flux_variants = ('dust_imf_fixed', 'dust_fixed', 'as_delivered')
+    flux_variants = ('as_delivered',)
     download_hint = (
-        "run 'make download-cosmos2025', place the private painted section "
-        "under data/cosmos2025/private/, then run "
+        "run 'make download-cosmos2025', regenerate the private painted "
+        "section with 'python scripts/regen_cosmos25_painting.py', then run "
         "'python scripts/build_cosmos25_catalog.py'"
     )
     has_bulge = False
@@ -180,7 +166,7 @@ class Cosmos25Adapter(CatalogAdapter):
         is not positive.
 
         Unit chain (dimensional sanity):
-        - f_line = painted F_Ha [erg/s/cm2], variant-corrected
+        - f_line = painted F_Ha [erg/s/cm2], verbatim
         - lambda_obs = painted lambda_Ha_obs [A] (== 6562.8 * (1 + z))
         - f_nu (SE++ model photometry at lambda_obs) [uJy] * 1e-29
           -> [erg/cm2/s/Hz]
@@ -234,24 +220,15 @@ class Cosmos25Adapter(CatalogAdapter):
                 "6562.8 * (1 + zfinal); the join or the painting is broken"
             )
 
-        # flux variant (module docstring); the painting's dust boost is
-        # exactly 10^(+0.4 k s ebv), so the fix is the delivered flux times
-        # 10^(-0.8 k s ebv)
+        # single variant: the regenerated painting is used verbatim (module
+        # docstring records the retired correction variants)
         f_line = out['F_Ha'].to_numpy(dtype=np.float64)
-        if spec.flux_variant in ('dust_fixed', 'dust_imf_fixed'):
-            ebv = out['ebv_minchi2'].to_numpy(dtype=np.float64)
-            if not np.all(np.isfinite(ebv) & (ebv >= 0.0)):
-                raise ValueError(
-                    "preprocess: non-finite or negative ebv_minchi2 on rows "
-                    "with painted flux; the dust correction would be wrong"
-                )
-            f_line = f_line * 10.0 ** (-0.8 * PAINT_K_HALPHA * PAINT_DUST_SCALE * ebv)
-            if spec.flux_variant == 'dust_imf_fixed':
-                f_line = f_line * IMF_CONSTANT_RATIO
-        elif spec.flux_variant != 'as_delivered':
+        if spec.flux_variant != 'as_delivered':
             raise ValueError(
                 f"unknown flux_variant '{spec.flux_variant}' (spec validation "
-                f"should have caught this)"
+                f"should have caught this); the dust_fixed/dust_imf_fixed "
+                f"corrections were retired when the painting was fixed "
+                f"upstream -- use 'as_delivered'"
             )
 
         # continuum f_nu at lambda_obs from SE++ model photometry: band

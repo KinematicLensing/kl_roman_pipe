@@ -27,9 +27,6 @@ from kl_pipe.ensemble.catalogs.cosmos25 import (
     F150W_PIVOT_A,
     F150W_RED_EDGE_A,
     F277W_PIVOT_A,
-    IMF_CONSTANT_RATIO,
-    PAINT_DUST_SCALE,
-    PAINT_K_HALPHA,
     R50_OVER_RSCALE,
     UJY_TO_CGS,
 )
@@ -108,7 +105,7 @@ def fake_cosmos25_rows(n: int = 400, seed: int = 4321) -> pd.DataFrame:
             'lambda_OIII_obs': 5006.8 * (1.0 + z),
             'redshift': z,
             'sfr_young': 10.0 ** rng.uniform(-0.5, 1.5, n),
-            'log_U': rng.uniform(-4.0, -2.0, n),
+            'log_OH': rng.uniform(7.6, 8.85, n),
         }
     )
     return df[list(COSMOS25_COLUMNS)]
@@ -146,7 +143,7 @@ def catalog_spec_dict(data_dir: Path, **population_overrides) -> dict:
                 'download': 'cosmos25_fake',
                 'data_dir': str(data_dir),
             },
-            'preprocess': {'flux_variant': 'dust_imf_fixed', 'h': 0.70},
+            'preprocess': {'flux_variant': 'as_delivered', 'h': 0.70},
             'selection': {
                 'z_range': [0.55, 1.9],
                 'snr_line_total_min': 0.5,
@@ -190,7 +187,7 @@ def spec_from_dict(tmp_path: Path, d: dict) -> EnsembleSpec:
     return EnsembleSpec.from_yaml(path)
 
 
-def preprocess_spec(flux_variant: str = 'dust_imf_fixed'):
+def preprocess_spec(flux_variant: str = 'as_delivered'):
     """Minimal spec stand-in for direct preprocess calls."""
 
     class _Spec:
@@ -227,11 +224,9 @@ class TestAdapter:
         assert COSMOS25.has_observed_redshift is False
 
     def test_flux_variant_vocabulary(self):
-        assert set(COSMOS25.flux_variants) == {
-            'as_delivered',
-            'dust_fixed',
-            'dust_imf_fixed',
-        }
+        # single variant: the regenerated painting is used verbatim; the
+        # dust/IMF correction variants were retired 2026-07-29
+        assert COSMOS25.flux_variants == ('as_delivered',)
 
     @pytest.mark.parametrize('variant', COSMOS25.flux_variants)
     def test_preprocess_output_matches_contract(self, raw, variant):
@@ -266,49 +261,30 @@ class TestAdapter:
 
 
 class TestFluxVariants:
-    def test_dust_fix_is_exact_inverse_of_the_boost(self, raw):
-        delivered = COSMOS25.preprocess(raw, preprocess_spec('as_delivered'))
-        fixed = COSMOS25.preprocess(raw, preprocess_spec('dust_fixed'))
-        # same rows survive both variants
-        assert (delivered['id'].to_numpy() == fixed['id'].to_numpy()).all()
-        ebv = (
-            raw.set_index('id')
-            .loc[delivered['id'].to_numpy(), 'ebv_minchi2']
-            .to_numpy()
-        )
-        expected = delivered['f_line_cgs'].to_numpy() * 10.0 ** (
-            -0.8 * PAINT_K_HALPHA * PAINT_DUST_SCALE * ebv
-        )
-        np.testing.assert_allclose(fixed['f_line_cgs'], expected, rtol=1e-12)
+    def test_flux_used_verbatim(self, raw):
+        pre = COSMOS25.preprocess(raw, preprocess_spec('as_delivered'))
+        painted = raw.set_index('id').loc[pre['id'].to_numpy(), 'F_Ha'].to_numpy()
+        np.testing.assert_array_equal(pre['f_line_cgs'].to_numpy(), painted)
 
-    def test_imf_fix_is_the_ke12_constant_ratio(self, raw):
-        fixed = COSMOS25.preprocess(raw, preprocess_spec('dust_fixed'))
-        both = COSMOS25.preprocess(raw, preprocess_spec('dust_imf_fixed'))
-        np.testing.assert_allclose(
-            both['f_line_cgs'],
-            fixed['f_line_cgs'].to_numpy() * IMF_CONSTANT_RATIO,
-            rtol=1e-12,
-        )
-        # the ratio itself: Kennicutt 1998 Salpeter 1/7.9e-42 vs K&E12 10^41.27
-        assert IMF_CONSTANT_RATIO == pytest.approx(1.47105, abs=5e-5)
+    @pytest.mark.parametrize('retired', ['dust_fixed', 'dust_imf_fixed'])
+    def test_retired_variants_raise_at_adapter(self, raw, retired):
+        # the corrections moved upstream into the regenerated painting; a
+        # spec still asking for them must fail loudly, not silently
+        # double-correct
+        with pytest.raises(ValueError, match='flux_variant'):
+            COSMOS25.preprocess(raw, preprocess_spec(retired))
 
-    def test_ew_scales_with_the_variant(self, raw):
-        delivered = COSMOS25.preprocess(raw, preprocess_spec('as_delivered'))
-        both = COSMOS25.preprocess(raw, preprocess_spec('dust_imf_fixed'))
-        ratio = both['f_line_cgs'].to_numpy() / delivered['f_line_cgs'].to_numpy()
-        np.testing.assert_allclose(
-            both['ew_rest_a'].to_numpy() / delivered['ew_rest_a'].to_numpy(),
-            ratio,
-            rtol=1e-12,
-        )
+    def test_retired_variant_rejected_at_spec_validation(self, fake_data_dir, tmp_path):
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['preprocess']['flux_variant'] = 'dust_imf_fixed'
+        with pytest.raises(ValueError, match="as_delivered"):
+            spec_from_dict(tmp_path, d)
 
-    def test_negative_ebv_with_painted_flux_raises(self, fake_data_dir):
+    def test_ebv_sentinels_do_not_matter(self):
+        # as_delivered never touches ebv, so sentinel values must not raise
         df = fake_cosmos25_rows(n=50, seed=7)
         bad = df.index[(df['type'] == 0) & np.isfinite(df['F_Ha'])][0]
         df.loc[bad, 'ebv_minchi2'] = -99.0
-        with pytest.raises(ValueError, match='ebv_minchi2'):
-            COSMOS25.preprocess(df, preprocess_spec('dust_fixed'))
-        # the as_delivered variant never touches ebv
         COSMOS25.preprocess(df, preprocess_spec('as_delivered'))
 
 
@@ -437,7 +413,7 @@ class TestBuildPopulation:
         )
         cp = spec.catalog_population
         assert cp.catalog_kind == 'cosmos25'
-        assert cp.flux_variant == 'dust_imf_fixed'
+        assert cp.flux_variant == 'as_delivered'
         assert cp.paint_bulge is False
         assert cp.bulge_fraction_max is None
 
@@ -463,4 +439,6 @@ class TestPriorProvenance:
         # the redshift note reflects a photo-z truth, not grism spectroscopy
         assert 'photometric redshift' in reg['z'].notes
         # catalog-fit entries carry the measured cosmos25 constants
-        assert 'TLN(0.18, 0.166' in reg[f'{config.bands[0]}.rscale'].fit_prior
+        # (n=294 census-selected sample of the regenerated catalog,
+        # 2026-07-29: rscale log10 mu -0.774 -> median 0.17, sigma 0.161)
+        assert 'TLN(0.17, 0.161' in reg[f'{config.bands[0]}.rscale'].fit_prior

@@ -29,22 +29,31 @@ COSMOS team). Column descriptions:
 https://cosmos2025.iap.fr/catalog.html#detailed-column-descriptions
 
 `private/` holds files that are not publicly distributable (Jiachuan
-Xu's painted emission-line section and painting notebook, delivered
-2026-07-28). Never commit or redistribute them.
+Xu's painting notebook and the painted emission-line section regenerated
+from it). Never commit or redistribute them. The painted section is
+produced locally by executing the notebook's own painting cells:
+
+    cp ~/Downloads/IAEstimate.ipynb data/cosmos2025/private/IAEstimate.ipynb
+    python scripts/regen_cosmos25_painting.py   # verbatim cells + density handshake
+
+The original 2026-07-28 delivered file (dust-sign bug; superseded by the
+revised 2026-07-29 notebook) is preserved as
+`*_mock_emission_lines.orig_delivery_20260728.fits`.
 
 The `cosmos25` catalog adapter consumes a single joined parquet
 (`private/cosmos25_v1.parquet`, also private) built from the v1 sections
 plus the painted file:
 
     python scripts/build_cosmos25_catalog.py    # gates the row-order join
-    python scripts/audit_cosmos25_painting.py   # handshake + flux-variant audit
+    python scripts/audit_cosmos25_painting.py   # handshake + EW/waterfall audit
 
-The painted section was built on catalog version v1 (its redshifts are
+The painted section is built on catalog version v1 (its redshifts are
 bitwise-equal to v1 `zfinal`; v1.1 revised most photo-zs), so the join
 requires the v1 sections. The audit's stage-1 handshake must reproduce
-the delivering notebook's densities exactly; see the adapter module
-docstring (`kl_pipe/ensemble/catalogs/cosmos25.py`) for the flux-variant
-definitions (dust-sign and IMF-constant corrections).
+the delivering notebook's densities exactly; the painted fluxes are used
+verbatim (`flux_variant: as_delivered` -- see the adapter module
+docstring, `kl_pipe/ensemble/catalogs/cosmos25.py`, for the history of
+the retired dust/IMF correction variants).
 
 Any publication using these data must cite Shuntov et al. (2025,
 arXiv:2506.03243) and Casey et al. (2023, ApJ 954, 31); see

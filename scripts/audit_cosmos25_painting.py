@@ -4,14 +4,14 @@ Runs on the joined parquet from scripts/build_cosmos25_catalog.py (which
 already gates the row-order join) and reports, per stage:
 
   1  handshake: reproduce the delivering notebook's selections verbatim and
-     require its exact printed densities (deep KL 12.3004, deep WL 58.4793,
-     medium KL 5.7377 per arcmin^2). A mismatch means the join, the painted
-     file, or this reimplementation drifted -- hard failure.
-  2  medium-tier density under the three adapter flux variants
-     (as_delivered / dust_fixed / dust_imf_fixed; see the cosmos25 adapter
-     module docstring for what each corrects and why)
-  3  medium-sample dN/dz per flux variant (CSV + png)
-  4  rest-frame Halpha EW distributions against the catalog's own
+     require its exact printed densities (deep KL 6.8307, deep WL 58.4793,
+     medium KL 1.9276 per arcmin^2; the revised 2026-07-29 notebook, from
+     which scripts/regen_cosmos25_painting.py regenerates the painted
+     section). A mismatch means the join, the painted file, or this
+     reimplementation drifted -- hard failure.
+  2  medium-tier density and the any-line/Halpha-only selection ratio
+  3  medium-sample dN/dz (CSV + png)
+  4  rest-frame Halpha EW distribution against the catalog's own
      photometry -- the physicality check (literature anchor: median rest
      EW(Ha) ~ 100-300 A for star-forming galaxies at z ~ 1-1.5)
   5  kl_pipe production waterfall using the actual population.py selection
@@ -32,11 +32,6 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from kl_pipe.ensemble.catalogs.cosmos25 import (  # noqa: E402
-    IMF_CONSTANT_RATIO,
-    PAINT_DUST_SCALE,
-    PAINT_K_HALPHA,
-)
 from kl_pipe.ensemble.population import (  # noqa: E402
     C_A_PER_S,
     compute_line_snr_total,
@@ -55,10 +50,11 @@ JH_SNR_THRESHOLD = 18
 R_SPATIAL_THRESHOLD = 0.4
 SHAPE_ERROR_THRESHOLD = 0.2
 ROMAN_EFF50PSF = 0.11
-PAINT_K_LINE = {'Ha': PAINT_K_HALPHA, 'OII': 3.60, 'OIII': 2.98}
 
 # the notebook's printed densities [per arcmin^2]; the handshake targets
-HANDSHAKE_TARGETS = {'deep_kl': 12.3004, 'deep_wl': 58.4793, 'medium_kl': 5.7377}
+# (2026-07-29 revised notebook; the original 2026-07-28 delivery printed
+# 12.3004 / 58.4793 / 5.7377 with the dust-sign bug)
+HANDSHAKE_TARGETS = {'deep_kl': 6.8307, 'deep_wl': 58.4793, 'medium_kl': 1.9276}
 
 # kl_pipe census selection values (configs/ensembles/flagship2_shear_census*)
 KL_Z_RANGE = (0.55, 1.9)
@@ -93,6 +89,7 @@ def main() -> int:
     shape_err = np.sqrt((df['e1_err'] ** 2 + df['e2_err'] ** 2) / 2.0).to_numpy()
     is_galaxy = df['type'].to_numpy() == 0
     lam = {line: df[f'lambda_{line}_obs'].to_numpy() for line in LINES}
+    fluxes = {line: df[f'F_{line}'].to_numpy() for line in LINES}
 
     def in_grism(line):
         return (lam[line] > GRISM_MIN_A) & (lam[line] < GRISM_MAX_A)
@@ -107,24 +104,20 @@ def main() -> int:
                 & is_galaxy
             )
 
-    def line_selected(fluxes, lim):
+    def line_selected(lim):
         m = np.zeros(n, dtype=bool)
         for line in LINES:
             with np.errstate(invalid='ignore'):
                 m |= (fluxes[line] > lim) & in_grism(line)
         return m
 
-    delivered = {line: df[f'F_{line}'].to_numpy() for line in LINES}
-
     print('\n=== stage 1: handshake vs notebook printed densities ===')
     got = {
-        'deep_kl': (
-            image_cuts(DEEP_JH_DEPTH) & line_selected(delivered, DEEP_GRISM_LIM)
-        ).sum()
+        'deep_kl': (image_cuts(DEEP_JH_DEPTH) & line_selected(DEEP_GRISM_LIM)).sum()
         / AREA_ARCMIN2,
         'deep_wl': image_cuts(DEEP_JH_DEPTH).sum() / AREA_ARCMIN2,
         'medium_kl': (
-            image_cuts(MEDIUM_JH_DEPTH) & line_selected(delivered, MEDIUM_GRISM_LIM)
+            image_cuts(MEDIUM_JH_DEPTH) & line_selected(MEDIUM_GRISM_LIM)
         ).sum()
         / AREA_ARCMIN2,
     }
@@ -137,53 +130,23 @@ def main() -> int:
         if status == 'mismatch':
             raise RuntimeError(f'handshake failed on {key}')
 
-    # --- flux variants (adapter conventions; ebv sentinel rows carry no
-    # painted flux, so the boost is only evaluated where ebv >= 0) ---
-    ebv = df['ebv_minchi2'].to_numpy()
-    ebv_ok = np.isfinite(ebv) & (ebv >= 0.0)
-    variants = {'as_delivered': delivered}
-    variants['dust_fixed'] = {
-        line: np.where(
-            ebv_ok,
-            delivered[line]
-            * 10
-            ** (
-                -0.8
-                * PAINT_K_LINE[line]
-                * PAINT_DUST_SCALE
-                * np.where(ebv_ok, ebv, 0.0)
-            ),
-            np.nan,
-        )
-        for line in LINES
-    }
-    variants['dust_imf_fixed'] = {
-        line: variants['dust_fixed'][line] * IMF_CONSTANT_RATIO for line in LINES
-    }
-
-    print('\n=== stage 2: medium-tier density by flux variant ===')
-    med_masks = {}
+    print('\n=== stage 2: medium-tier density ===')
     img = image_cuts(MEDIUM_JH_DEPTH)
-    for name, fx in variants.items():
-        med_masks[name] = img & line_selected(fx, MEDIUM_GRISM_LIM)
-        n_sel = med_masks[name].sum()
-        with np.errstate(invalid='ignore'):
-            ha_only = img & (fx['Ha'] > MEDIUM_GRISM_LIM) & in_grism('Ha')
-        print(
-            f'  {name:15s} n = {n_sel:6d}  '
-            f'density = {n_sel/AREA_ARCMIN2:6.3f} /arcmin^2  '
-            f'(x{n_sel/med_masks["as_delivered"].sum():.2f} of delivered; '
-            f'any/Ha = {n_sel/max(ha_only.sum(), 1):.3f})'
-        )
+    med_mask = img & line_selected(MEDIUM_GRISM_LIM)
+    with np.errstate(invalid='ignore'):
+        ha_only = img & (fluxes['Ha'] > MEDIUM_GRISM_LIM) & in_grism('Ha')
+    print(
+        f'  n = {med_mask.sum():6d}  '
+        f'density = {med_mask.sum()/AREA_ARCMIN2:6.3f} /arcmin^2  '
+        f'(any-line/Ha-only = {med_mask.sum()/max(ha_only.sum(), 1):.3f})'
+    )
 
-    print('\n=== stage 3: medium KL dN/dz by flux variant ===')
+    print('\n=== stage 3: medium KL dN/dz ===')
     bins = np.linspace(0, 4, 81)
     z = df['zfinal'].to_numpy()
-    table = {'z_lo': bins[:-1], 'z_hi': bins[1:]}
-    for name, m in med_masks.items():
-        h, _ = np.histogram(z[m], bins=bins)
-        table[name] = h / AREA_ARCMIN2
-    pd.DataFrame(table).to_csv(args.out / 'medium_dndz_variants.csv', index=False)
+    h, _ = np.histogram(z[med_mask], bins=bins)
+    table = {'z_lo': bins[:-1], 'z_hi': bins[1:], 'dn_per_arcmin2': h / AREA_ARCMIN2}
+    pd.DataFrame(table).to_csv(args.out / 'medium_dndz.csv', index=False)
     import matplotlib
 
     matplotlib.use('Agg')
@@ -191,14 +154,12 @@ def main() -> int:
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     zc = 0.5 * (bins[1:] + bins[:-1])
-    for name in med_masks:
-        ax.step(zc, table[name], where='mid', label=name)
+    ax.step(zc, table['dn_per_arcmin2'], where='mid')
     ax.set_xlabel('photo-z (v1 zfinal)')
     ax.set_ylabel('dN/dz per arcmin$^2$ (bin width 0.05)')
-    ax.legend()
     fig.tight_layout()
-    fig.savefig(args.out / 'medium_dndz_variants.png', dpi=150)
-    print(f'  wrote {args.out}/medium_dndz_variants.csv/.png')
+    fig.savefig(args.out / 'medium_dndz.png', dpi=150)
+    print(f'  wrote {args.out}/medium_dndz.csv/.png')
 
     print('\n=== stage 4: rest-frame Halpha EW (medium sample) ===')
     # continuum from SE++ model photometry [uJy -> cgs] at lambda_obs;
@@ -210,21 +171,21 @@ def main() -> int:
         df['flux_model_f150w'].to_numpy(),
     )
     cov = lam_ha < 1.668e4
-    for name, m0 in med_masks.items():
-        m = m0 & cov & (f_nu_ujy > 0) & in_grism('Ha')
-        f_lambda = 1e-29 * f_nu_ujy[m] * C_A_PER_S / lam_ha[m] ** 2
-        ew_rest = variants[name]['Ha'][m] / f_lambda / (1.0 + z[m])
-        q = np.percentile(ew_rest, [16, 50, 84])
-        print(
-            f'  {name:15s} n={m.sum():6d}  EW_rest(Ha) 16/50/84% = '
-            f'{q[0]:7.1f} / {q[1]:7.1f} / {q[2]:7.1f} A'
-        )
+    m = med_mask & cov & (f_nu_ujy > 0) & in_grism('Ha')
+    f_lambda = 1e-29 * f_nu_ujy[m] * C_A_PER_S / lam_ha[m] ** 2
+    ew_rest = fluxes['Ha'][m] / f_lambda / (1.0 + z[m])
+    q = np.percentile(ew_rest, [16, 50, 84])
+    print(
+        f'  n={m.sum():6d}  EW_rest(Ha) 16/50/84% = '
+        f'{q[0]:7.1f} / {q[1]:7.1f} / {q[2]:7.1f} A'
+    )
     print(
         '  (anchor: median rest EW(Ha) ~ 100-300 A for SF galaxies at '
-        'z ~ 1-1.5; the delivered variant sits high by the dust boost)'
+        'z ~ 1-1.5; the regenerated painting measured 181 A on 2026-07-29, '
+        'vs ~300 A for the retired dust-boosted delivery)'
     )
 
-    print('\n=== stage 5: kl_pipe census waterfall (per flux variant) ===')
+    print('\n=== stage 5: kl_pipe census waterfall ===')
     print(
         f'  cuts: galaxy quality -> z in {KL_Z_RANGE} -> '
         f'r50/PSF >= {KL_MIN_R50_OVER_PSF} -> line SNR_total >= {KL_SNR_MIN}'
@@ -232,33 +193,32 @@ def main() -> int:
     rng = np.random.default_rng(42)
     cosi_iso = rng.uniform(0.05, 1.0, n)
     warn_ok = df['warn_flag'].to_numpy() == 0
-    for name, fx in variants.items():
-        f_ha = fx['Ha']
-        with np.errstate(invalid='ignore'):
-            quality = (
-                is_galaxy
-                & warn_ok
-                & np.isfinite(f_ha)
-                & (f_ha > 0)
-                & np.isfinite(r_eff_arcsec)
-                & (r_eff_arcsec > 0)
-            )
-        zin = quality & (z >= KL_Z_RANGE[0]) & (z <= KL_Z_RANGE[1])
-        res = zin.copy()
-        res[zin] = r_eff_arcsec[zin] / psf_fwhm_arcsec(z[zin]) >= KL_MIN_R50_OVER_PSF
-        final = res.copy()
-        final[res] = (
-            compute_line_snr_total(
-                f_ha[res],
-                matched_filter_compactness(r_eff_arcsec[res], cosi_iso[res], z[res]),
-            )
-            >= KL_SNR_MIN
+    f_ha = fluxes['Ha']
+    with np.errstate(invalid='ignore'):
+        quality = (
+            is_galaxy
+            & warn_ok
+            & np.isfinite(f_ha)
+            & (f_ha > 0)
+            & np.isfinite(r_eff_arcsec)
+            & (r_eff_arcsec > 0)
         )
-        print(
-            f'  {name:15s} quality {quality.sum():6d} -> z {zin.sum():6d} '
-            f'-> resolvable {res.sum():6d} -> selected {final.sum():5d}  '
-            f'= {final.sum()/AREA_ARCMIN2:6.3f} /arcmin^2'
+    zin = quality & (z >= KL_Z_RANGE[0]) & (z <= KL_Z_RANGE[1])
+    res = zin.copy()
+    res[zin] = r_eff_arcsec[zin] / psf_fwhm_arcsec(z[zin]) >= KL_MIN_R50_OVER_PSF
+    final = res.copy()
+    final[res] = (
+        compute_line_snr_total(
+            f_ha[res],
+            matched_filter_compactness(r_eff_arcsec[res], cosi_iso[res], z[res]),
         )
+        >= KL_SNR_MIN
+    )
+    print(
+        f'  quality {quality.sum():6d} -> z {zin.sum():6d} '
+        f'-> resolvable {res.sum():6d} -> selected {final.sum():5d}  '
+        f'= {final.sum()/AREA_ARCMIN2:6.3f} /arcmin^2'
+    )
 
     print('\naudit complete')
     return 0
