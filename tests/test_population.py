@@ -1014,3 +1014,51 @@ class TestPublishedConstants:
         # the resulting reference compactness, which divides every galaxy's
         # C and therefore sets the overall yield normalization
         assert population.fiducial_compactness() == pytest.approx(0.4148, abs=5e-5)
+
+
+class TestPaintConstants:
+    """Literal pins for the literature paint constants.
+
+    Same rationale as TestPublishedConstants: every truth the expander
+    paints hangs on these numbers, the prior-provenance registry quotes
+    them, and nothing else fails if one is silently edited. Each value's
+    full provenance lives in the comment block above its definition in
+    population.py; changing one here means that source changed.
+    """
+
+    def test_velocity_turnover_ratio(self):
+        # PROBES-I derivation (r_t / R_d), Miller et al. 2011 Fig. 2 and
+        # Catinella et al. 2006 Polyex conversions bracketing it
+        assert population.VEL_RSCALE_RATIO_MEDIAN == 0.5
+        assert population.VEL_RSCALE_RATIO_DEX == 0.3
+
+    def test_halpha_extent_ratio(self):
+        # Nelson et al. 2012: median 1.3, rms 0.2 dex at z ~ 1 (3D-HST)
+        assert population.HALPHA_RSCALE_RATIO_MEDIAN == 1.3
+        assert population.HALPHA_RSCALE_RATIO_DEX == 0.2
+
+    def test_centroid_scatters(self):
+        # about one Roman pixel per component; gas-vs-stars offset half a
+        # pixel (clump-driven, ~11% of the median Halpha half-light radius)
+        assert population.CENTROID_SCATTER_ARCSEC == 0.1
+        assert population.CONT_CENTROID_OFFSET_ARCSEC == 0.055
+
+    def test_systemic_velocity_scatter(self):
+        # painted v0 offset, well inside the ~200 km/s per-grism-pixel scale
+        assert population.V0_SCATTER_KMS == 25.0
+
+    def test_bulge_sersic_mixture(self):
+        # Fisher & Drory 2008 split at n = 2; Gadotti 2009 Table 3 component
+        # medians/widths; Mendez-Abreu et al. 2010 mixture weight at
+        # B/T <= 0.3; upper bound = Sersic emulator support
+        assert population.BULGE_N_MAX == 6.0
+        assert population.BULGE_PSEUDO_WEIGHT == 0.7
+        assert population.BULGE_PSEUDO_N == (1.5, 0.9, 0.5, 2.0)
+        assert population.BULGE_CLASSICAL_N == (3.4, 1.3, 2.0, 6.0)
+
+    def test_bulge_size_ratio(self):
+        # Lang et al. 2014 / Gadotti 2009 bracket, ln-scatter from Gadotti
+        # Table 3, capped below 1 (bulge larger than its disk is unphysical)
+        assert population.BULGE_SIZE_RATIO_MEDIAN == 0.3
+        assert population.BULGE_SIZE_RATIO_LN_SCATTER == 0.4
+        assert population.BULGE_SIZE_RATIO_MAX == 1.0

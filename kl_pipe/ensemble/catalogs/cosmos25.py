@@ -19,8 +19,16 @@ correction variants that inverted both. The revised notebook (received
 constant, Curti FMR metallicity-based line ratios, Song et al. 2026
 mass-dependent nebular E(B-V) scaling), so the correction variants were
 retired when the pipeline moved to regenerating the painting from the
-notebook. Median rest EW(Halpha) of the medium-tier sample against the
-catalog's own photometry is ~180 A, in the literature 100-300 A range.
+notebook. Median rest EW(Halpha) against the catalog's own photometry
+(this adapter's EW convention) is ~305 A for the flux-limited medium tier
+(F_Ha > 1.5e-16, 0.55 < z < 1.9) and ~650 A for the SNR-selected census
+sample, whose matched-filter cut rides the high-EW tail (measured
+2026-07-30 on the regenerated painting). Both run high against measured
+COSMOS EWs: 3D-HST at a matched flux cut gives median ~90 A with a 95th
+percentile of ~340 A, and an in-field cross-match shows the painted
+line-bright selection is dominated by up-scattered fluxes. Treat the
+painted EW tail as a known model optimism, not a literature-consistent
+population.
 
 The mass column is LePhare ``mass_med`` (log10 Msun, already physical for
 the catalog's fiducial cosmology), so the spec's little-h key is not
@@ -107,7 +115,10 @@ COSMOS25_COLUMNS = (
 # n = 294, measured 2026-07-29), log10 median and log10 scatter. The
 # selected sizes span rscale 0.077-0.56 arcsec. (Previous values, measured
 # 2026-07-28 on the dust_imf_fixed correction of the original delivery,
-# n = 469: mu -0.752/-0.196, sigma 0.166/0.319.)
+# n = 469: mu -0.752/-0.196, sigma 0.166/0.319.) Re-verified 2026-07-30
+# against the full selection of the cosmos25_ab spec (n = 301): measured
+# rscale -0.772/0.154 and continuum -0.177/0.277, within a few percent of
+# the pinned values.
 #
 # rscale support [arcsec]: floor and ceiling sized against the painted size
 # products (catalog rscale x lognormal ratio for the Halpha line and the
