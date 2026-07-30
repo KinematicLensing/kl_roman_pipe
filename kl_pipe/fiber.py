@@ -92,7 +92,7 @@ def build_fiber_pars_for_line(
     bandpass_path: Optional[str] = None,
     throughput: Optional[jnp.ndarray] = None,  # T(lambda), shape (Nlambda,)
     image_pars: ImagePars = None,
-    pixel_scale: float = 0.11,
+    pixel_scale: float = 0.262,
     Nrow: int = 32,
     Ncol: int = 32,
 ) -> FiberPars:

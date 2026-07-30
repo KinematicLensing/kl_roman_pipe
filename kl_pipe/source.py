@@ -35,11 +35,13 @@ from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
 
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel, VelocityModel
-    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs
+    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs, FiberObs
     from kl_pipe.spectral import CubePars
 
 from kl_pipe.constants import C_KMS as _C_KMS  # noqa: E402
 
+import matplotlib.pyplot as plt
+import numpy as np
 
 # ===========================================================================
 # Theta routing helpers (module-level so they JIT cleanly)
@@ -329,10 +331,11 @@ class SourceModel:
             image_rotation=image_rotation,
         )
 
-        #needs to be updated to handle oversampling scenario?
+        #coarse_pixel_scale = obs.fiber_pars.image_pars.pixel_scale
+        cube_pixel_scale = build_cube_pars.image_pars.pixel_scale
         spec_1D = jnp.sum(
-                (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
-                axis=(0, 1))
+                (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube_pixel_scale),
+                axis=(0, 1))* cube_pixel_scale**2
 
         spec_1D = spec_1D *  obs.throughput
 
