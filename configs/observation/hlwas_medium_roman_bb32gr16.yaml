@@ -1,0 +1,27 @@
+# hlwas_medium_roman with the grism stamp alone reduced to 16x16
+# (broadband stays 32x32). Conservative stamp candidate: the grism-16
+# safety case rests on measured physics (surface-brightness weighting,
+# rotation-curve turnover well inside the cutout, +-2 pix dispersion
+# extent; see experiments/sweverett/stamp_gate_safety_sweep/), while the
+# 48x48-broadband conditioning effect of hlwas_medium_roman_bb48gr16 has
+# no established mechanism yet. All other blocks identical to
+# hlwas_medium_roman (see its header for the band/PSF rationale).
+id: hlwas_medium_roman_bb32gr16
+bands: [F129, F158]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 16}

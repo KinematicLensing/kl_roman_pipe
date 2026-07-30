@@ -1,0 +1,28 @@
+# hlwas_medium_roman with asymmetric stamps: broadband 48x48, grism 16x16.
+# Stamp-size Fisher gate (2026-07-29, experiments/sweverett/stamp_gate/):
+# per-eval cost is grism-stamp dominated while shape/shear information is
+# broadband-stamp dominated, so shrinking the grism stamp buys ~2.1x per
+# eval at no measured precision cost and growing the broadband stamp
+# resolves a g1-cosi curvature saddle present at 32x32 (sigma(g2) 28%
+# tighter on the typical-inclination test row). Candidate config pending
+# A/B fit validation against hlwas_medium_roman; all other blocks
+# identical to that file (see its header for the band/PSF rationale).
+id: hlwas_medium_roman_bb48gr16
+bands: [F129, F158]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 48, grism_pix: 16}
