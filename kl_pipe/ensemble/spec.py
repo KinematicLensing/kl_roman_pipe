@@ -1144,15 +1144,16 @@ class EnsembleSpec:
                     "single-disk and there is no index to sample"
                 )
         if self.escalation.enabled:
-            # the retry donates the first attempt's warmup-adapted inverse
-            # mass matrix, which only exists on the adapt-mass preconditioned
-            # path
-            if self.precondition != 'laplace' or not self.adapt_mass:
+            # the retry needs an initial metric from the Laplace path: with
+            # fit.adapt_mass true it donates the first attempt's
+            # warmup-adapted inverse mass matrix; with adapt_mass false
+            # (frozen first-pass metric) the retry re-enables mass
+            # adaptation on top of the Laplace preconditioner instead
+            if self.precondition != 'laplace':
                 raise ValueError(
                     "fit.escalation.enabled requires fit.precondition: "
-                    "laplace and fit.adapt_mass: true (the escalation retry "
-                    "donates the first attempt's warmup-adapted inverse mass "
-                    "matrix, recorded only on that path)"
+                    "laplace (the escalation retry starts from the "
+                    "Laplace-preconditioned metric)"
                 )
             if self.escalation.n_warmup < self.n_warmup:
                 raise ValueError(

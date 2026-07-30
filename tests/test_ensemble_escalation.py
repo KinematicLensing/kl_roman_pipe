@@ -83,10 +83,19 @@ class TestEscalationSpecValidation:
         with pytest.raises(ValueError, match='unknown keys'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
-    def test_enabled_requires_adapt_mass(self, tmp_path):
+    def test_enabled_allows_frozen_first_pass(self, tmp_path):
+        # adapt_mass false + escalation is the frozen-first-pass tier: the
+        # retry re-enables mass adaptation instead of donating a metric
+        # (requires-adapt-mass validation deliberately relaxed 2026-07-30)
         d = _escalation_spec_dict()
         d['fit']['adapt_mass'] = False
-        with pytest.raises(ValueError, match='adapt_mass'):
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.escalation.enabled and spec.adapt_mass is False
+
+    def test_enabled_requires_laplace(self, tmp_path):
+        d = _escalation_spec_dict()
+        d['fit']['precondition'] = 'none'
+        with pytest.raises(ValueError, match='laplace'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
     def test_enabled_must_be_boolean(self, tmp_path):
@@ -226,6 +235,7 @@ class _AttemptRecorder:
         n_warmup=None,
         n_samples=None,
         init_inverse_mass=None,
+        adapt_mass=None,
         reuse=None,
     ):
         self.calls.append(
@@ -234,6 +244,7 @@ class _AttemptRecorder:
                 'n_warmup': n_warmup,
                 'n_samples': n_samples,
                 'init_inverse_mass': init_inverse_mass,
+                'adapt_mass': adapt_mass,
                 'reuse': reuse,
             }
         )
@@ -255,6 +266,17 @@ class _AttemptRecorder:
 def escalation_run(tmp_path):
     """(run_dir, spec, config, first manifest row) with escalation enabled."""
     spec_path = _write_spec(tmp_path, _escalation_spec_dict())
+    run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
+    spec, config, manifest = load_run(run_dir)
+    return run_dir, spec, config, manifest.iloc[0]
+
+
+@pytest.fixture
+def frozen_escalation_run(tmp_path):
+    """Escalation enabled with a frozen first-pass metric (adapt_mass off)."""
+    d = _escalation_spec_dict()
+    d['fit']['adapt_mass'] = False
+    spec_path = _write_spec(tmp_path, d)
     run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
     spec, config, manifest = load_run(run_dir)
     return run_dir, spec, config, manifest.iloc[0]
@@ -312,6 +334,29 @@ class TestEscalationFlow:
         fit_id = str(row['fit_id'])
         assert (run_dir / 'chains' / f'{fit_id}.npz').exists()
         assert not (run_dir / 'chains' / f'{fit_id}.attempt1.npz').exists()
+
+    def test_frozen_first_pass_retries_with_adaptation(
+        self, frozen_escalation_run, monkeypatch
+    ):
+        # frozen-metric tier: attempt 1 runs the spec's adapt_mass=False and
+        # records no adapted metric, so the retry re-enables mass adaptation
+        # instead of donating one
+        run_dir, spec, config, row = frozen_escalation_run
+        assert spec.adapt_mass is False
+        rec = _AttemptRecorder([_BAD_RHAT, _GOOD])
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert len(rec.calls) == 2
+        first, retry = rec.calls
+        assert first['adapt_mass'] is None and first['init_inverse_mass'] is None
+        assert retry['adapt_mass'] is True
+        assert retry['init_inverse_mass'] is None
+        assert retry['n_warmup'] == spec.escalation.n_warmup
+        assert retry['n_samples'] == spec.escalation.n_samples
+        assert isinstance(retry['reuse'], worker._AttemptArtifacts)
+        assert summary['escalated'] is True and summary['n_attempts'] == 2
 
     def test_low_ess_triggers_retry(self, escalation_run, monkeypatch):
         run_dir, spec, config, row = escalation_run

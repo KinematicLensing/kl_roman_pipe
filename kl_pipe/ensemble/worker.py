@@ -220,13 +220,23 @@ def _run_fit_escalated(
         _persist_outputs(run_dir, fit_id, row, art1)
         return summary
 
-    donor = _donor_mass_matrix(art1.result.diagnostics)
+    if spec.adapt_mass:
+        # adaptive first pass: donate its warmup-adapted metric to the retry
+        donor = _donor_mass_matrix(art1.result.diagnostics)
+        retry_adapt_mass = None
+        retry_metric_note = 'donated adapted metric'
+    else:
+        # frozen first pass records no adapted metric; the retry re-enables
+        # mass adaptation on top of the Laplace preconditioner instead
+        donor = None
+        retry_adapt_mass = True
+        retry_metric_note = 'adaptive retry (frozen first pass)'
     print(
         f'[fit {fit_id}] attempt 1 failed the escalation gate '
         f"(max_rhat={summary['max_rhat']:.3f} vs {esc.rhat_max}, "
         f"min_ess={summary['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
         f'escalating: n_warmup={esc.n_warmup}, n_samples={esc.n_samples}, '
-        f'donated adapted metric',
+        f'{retry_metric_note}',
         flush=True,
     )
     summary2, art2 = _run_fit_attempt(
@@ -240,6 +250,7 @@ def _run_fit_escalated(
         n_warmup=esc.n_warmup,
         n_samples=esc.n_samples,
         init_inverse_mass=donor,
+        adapt_mass=retry_adapt_mass,
         reuse=art1,
     )
     summary2['n_attempts'] = 2
@@ -300,16 +311,17 @@ def _run_fit_attempt(
     n_warmup: Optional[int] = None,
     n_samples: Optional[int] = None,
     init_inverse_mass: Optional[np.ndarray] = None,
+    adapt_mass: Optional[bool] = None,
     reuse: Optional[_AttemptArtifacts] = None,
 ) -> Tuple[dict, _AttemptArtifacts]:
     """Run one sampler attempt; returns (summary row, in-memory artifacts).
 
-    ``n_warmup``/``n_samples`` override the spec's fit settings (escalation
-    retries); ``init_inverse_mass`` is donated to the sampler as the initial
-    NUTS metric in sampling coordinates; ``reuse`` recycles a previous
-    same-fit attempt's inputs, task, and preconditioner (identical by
-    construction -- the mocks and MAP are deterministic in the fit's seeds),
-    skipping their rebuild cost.
+    ``n_warmup``/``n_samples``/``adapt_mass`` override the spec's fit
+    settings (escalation retries); ``init_inverse_mass`` is donated to the
+    sampler as the initial NUTS metric in sampling coordinates; ``reuse``
+    recycles a previous same-fit attempt's inputs, task, and preconditioner
+    (identical by construction -- the mocks and MAP are deterministic in the
+    fit's seeds), skipping their rebuild cost.
     """
     from kl_pipe.sampling import InferenceTask
     from kl_pipe.sampling.configs import NumpyroSamplerConfig
@@ -345,7 +357,9 @@ def _run_fit_attempt(
         target_accept_prob=spec.target_accept,
         precondition=spec.precondition,
         precondition_unconstrained=spec.unconstrained,
-        precondition_adapt_mass=spec.adapt_mass,
+        precondition_adapt_mass=(
+            adapt_mass if adapt_mass is not None else spec.adapt_mass
+        ),
         init_inverse_mass_matrix=init_inverse_mass,
         n_map_starts=spec.n_map_starts,
         seed=sampler_seed,
