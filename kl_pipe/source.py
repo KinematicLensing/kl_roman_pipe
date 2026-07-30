@@ -334,7 +334,7 @@ class SourceModel:
         #coarse_pixel_scale = obs.fiber_pars.image_pars.pixel_scale
         cube_pixel_scale = build_cube_pars.image_pars.pixel_scale
         spec_1D = jnp.sum(
-                (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube_pixel_scale),
+                (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
                 axis=(0, 1))* cube_pixel_scale**2
 
         spec_1D = spec_1D *  obs.throughput
