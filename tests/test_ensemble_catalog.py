@@ -43,6 +43,11 @@ from test_population import (
 )
 
 
+def _row_band_snrs(row, config):
+    """Per-band SNR dict from a catalog manifest row."""
+    return {b: float(row[f'broadband_snr_{b}']) for b in config.bands}
+
+
 def prior_logp_at_truth(priors, truth, name):
     """Prior log-prob of one parameter at its truth.
 
@@ -158,9 +163,82 @@ class TestCatalogExpand:
             assert row['line_snr'] == expected
             assert row['pop.snr_line_per_pass'] == expected
 
-    def test_broadband_snr_is_spec_scalar(self, run_parts):
-        spec, _, manifest, _ = run_parts
-        assert (manifest['broadband_snr'] == spec.broadband_snr).all()
+    def test_broadband_snr_is_per_galaxy_published_depth(self, run_parts):
+        # per-fit per-band imaging SNR = the population's matched-filter SNR
+        # against the published point-source depth; the sampled-mode shared
+        # scalar column is gone in catalog mode
+        _, config, manifest, population = run_parts
+        assert 'broadband_snr' not in manifest.columns
+        pop = population.set_index('pop_index')
+        for _, row in manifest.iterrows():
+            for band in config.bands:
+                expected = float(pop.loc[row['galaxy_id'], f'snr_bb_{band.lower()}'])
+                assert row[f'broadband_snr_{band}'] == expected
+        # ...and the population value is the depth-anchor formula, recomputed
+        from kl_pipe.ensemble.population import compute_band_snr
+
+        band = config.bands[0]
+        g = pop.iloc[0]
+        recomputed = compute_band_snr(
+            np.array([g[f'flux_{band.lower()}_ujy']]),
+            np.array([g['rscale_arcsec'] * 1.678]),
+            np.array([g['cosi']]),
+            band,
+        )[0]
+        # rel tolerance: the fake catalog stores float32 columns, and the
+        # rscale*1.678 reconstruction of disk_r50 rounds at that precision
+        assert g[f'snr_bb_{band.lower()}'] == pytest.approx(recomputed, rel=1e-5)
+
+    def test_flux_truths_are_catalog_physical(self, run_parts):
+        # band truth = the catalog's interpolated Roman flux [uJy]; line
+        # truth = the painted flux in 1e-17 erg/s/cm2 (CGS_TO_F17)
+        _, config, manifest, population = run_parts
+        from kl_pipe.ensemble.population import CGS_TO_F17
+
+        pop = population.set_index('pop_index')
+        flux_key = (
+            'total_flux' if 'truth.F129.total_flux' in manifest.columns else 'flux'
+        )
+        for _, row in manifest.iterrows():
+            g = pop.loc[row['galaxy_id']]
+            for band in config.bands:
+                assert row[f'truth.{band}.{flux_key}'] == float(
+                    g[f'flux_{band.lower()}_ujy']
+                )
+            assert row['truth.Halpha.flux'] == pytest.approx(
+                float(g['f_line_cgs']) * CGS_TO_F17, rel=1e-12
+            )
+
+    def test_flux_priors_are_measurement_centered(self, run_parts):
+        # prior center = the population's seeded simulated measurement (NOT
+        # truth), width = the expected measurement error; truth stays inside
+        # support (covered separately by the truth-in-support test)
+        spec, config, manifest, _ = run_parts
+        from kl_pipe.ensemble.expander import truth_from_row
+        from kl_pipe.ensemble.population import CGS_TO_F17
+
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        priors = scene_priors(truth, config, spec, row=row)
+        line_prior = priors.get_prior('Halpha.flux')
+        assert line_prior.mu == pytest.approx(
+            float(row['pop.f_line_obs_cgs']) * CGS_TO_F17, rel=1e-12
+        )
+        assert line_prior.sigma == pytest.approx(
+            float(row['pop.f_line_sigma_cgs']) * CGS_TO_F17, rel=1e-12
+        )
+        assert line_prior.mu != truth['Halpha.flux']
+        flux_key = (
+            'total_flux' if 'truth.F129.total_flux' in manifest.columns else 'flux'
+        )
+        for band in config.bands:
+            p = priors.get_prior(f'{band}.{flux_key}')
+            assert p.mu == pytest.approx(
+                float(row[f'pop.flux_obs_{band.lower()}_ujy']), rel=1e-12
+            )
+            assert p.sigma == pytest.approx(
+                float(row[f'pop.flux_sigma_{band.lower()}_ujy']), rel=1e-12
+            )
 
     def test_continuum_ew_conversion(self, run_parts):
         # flux_per_nm = line_flux / EW_obs with EW_obs [nm] =
@@ -272,11 +350,14 @@ class TestCatalogExpand:
         with pytest.raises(ValueError, match='catalog-mode only'):
             build_manifest(sampled_spec, config, population=pd.DataFrame())
 
-    def test_snr_line_scalar_rejected(self, fake_data_dir, tmp_path):
-        d = _small_spec_dict(fake_data_dir)
-        d['observation']['snr']['line'] = 100
-        with pytest.raises(ValueError, match='snr.line is not valid'):
-            spec_from_dict(tmp_path, d)
+    def test_snr_block_rejected(self, fake_data_dir, tmp_path):
+        # catalog mode derives BOTH channels' per-fit SNRs from the
+        # population table, so any observation.snr block is rejected
+        for block in ({'line': 100}, {'broadband': 300}):
+            d = _small_spec_dict(fake_data_dir)
+            d['observation']['snr'] = block
+            with pytest.raises(ValueError, match='observation.snr is not valid'):
+                spec_from_dict(tmp_path, d)
 
 
 # ==============================================================================
@@ -359,7 +440,7 @@ class TestCatalogPriors:
                 12345,
                 spec,
                 config,
-                broadband_snr=300.0,
+                band_snrs={b: 300.0 for b in config.bands},
                 line_snr=float(manifest.iloc[0]['line_snr']),
             )
 
@@ -517,7 +598,7 @@ class TestNoBulgeCatalog:
             int(row['noise_seed']),
             spec,
             config,
-            broadband_snr=float(row['broadband_snr']),
+            band_snrs=_row_band_snrs(row, config),
             line_snr=float(row['line_snr']),
             row=row,
         )
@@ -601,7 +682,7 @@ class TestRealCatalog:
             int(row['noise_seed']),
             spec,
             config,
-            broadband_snr=float(row['broadband_snr']),
+            band_snrs=_row_band_snrs(row, config),
             line_snr=float(row['line_snr']),
             row=row,
         )
@@ -729,7 +810,7 @@ class TestSampledBulgeIndex:
             int(row_off['noise_seed']),
             spec_off,
             cfg,
-            broadband_snr=float(row_off['broadband_snr']),
+            band_snrs=_row_band_snrs(row_off, cfg),
             line_snr=float(row_off['line_snr']),
             row=row_off,
         )
@@ -738,7 +819,7 @@ class TestSampledBulgeIndex:
             int(row_on['noise_seed']),
             spec_on,
             cfg,
-            broadband_snr=float(row_on['broadband_snr']),
+            band_snrs=_row_band_snrs(row_on, cfg),
             line_snr=float(row_on['line_snr']),
             row=row_on,
         )
@@ -763,7 +844,7 @@ class TestSampledBulgeIndex:
             int(row['noise_seed']),
             spec,
             cfg,
-            broadband_snr=float(row['broadband_snr']),
+            band_snrs=_row_band_snrs(row, cfg),
             line_snr=float(row['line_snr']),
             row=row,
         )

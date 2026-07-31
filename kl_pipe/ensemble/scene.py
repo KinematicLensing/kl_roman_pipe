@@ -31,6 +31,7 @@ from kl_pipe.ensemble.population import (
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MEDIAN,
     CENTROID_SCATTER_ARCSEC,
+    CGS_TO_F17,
     CONT_CENTROID_OFFSET_ARCSEC,
     HALPHA_RSCALE_RATIO_DEX,
     HALPHA_RSCALE_RATIO_MEDIAN,
@@ -562,6 +563,27 @@ def scene_priors(
             pc.cont_flux_low,
             pc.cont_flux_high,
         )
+
+        # flux priors: simulated photometric measurements. The center is the
+        # population's seeded noisy measurement (truth + one draw at the
+        # depth-anchor error), the width is that same expected error, so the
+        # prior is what an external photometry pipeline would deliver rather
+        # than the truth itself. Bounds only guard support (sigma is a few
+        # percent of the center for every selected galaxy).
+        prior_spec['Halpha.flux'] = TruncatedNormal(
+            float(row['pop.f_line_obs_cgs']) * CGS_TO_F17,
+            float(row['pop.f_line_sigma_cgs']) * CGS_TO_F17,
+            pc.line_flux_low,
+            pc.line_flux_high,
+        )
+        for band in config.bands:
+            flux_key = f'{band}.total_flux' if bulge_bands else f'{band}.flux'
+            prior_spec[flux_key] = TruncatedNormal(
+                float(row[f'pop.flux_obs_{band.lower()}_ujy']),
+                float(row[f'pop.flux_sigma_{band.lower()}_ujy']),
+                pc.band_flux_low,
+                pc.band_flux_high,
+            )
 
         # systemic velocity: deliberately wider than the painted offset. The
         # grism measures the line centroid to tens of km/s, so a prior about

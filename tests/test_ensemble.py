@@ -121,6 +121,10 @@ class TestSpecValidation:
         # covered in tests/test_population.py)
         d = _spec_dict()
         d['population']['type'] = 'catalog'
+        # drop the sampled-mode snr block so the error under test (the
+        # sampled-only population keys) is the one that fires, not the
+        # catalog-mode snr-block rejection
+        del d['observation']['snr']
         with pytest.raises(ValueError, match='unknown keys'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
@@ -813,7 +817,12 @@ def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
 
     def first_grism_var(line_snr):
         inp = build_fit_inputs(
-            truth, 12345, dev_spec, canonical_q, broadband_snr=100.0, line_snr=line_snr
+            truth,
+            12345,
+            dev_spec,
+            canonical_q,
+            band_snrs={b: 100.0 for b in canonical_q.bands},
+            line_snr=line_snr,
         )
         obs = next(iter(inp.grism_obs.values()))
         var = float(np.asarray(obs.variance))
@@ -883,7 +892,12 @@ def test_shear_information_increases_with_line_snr():
 
     def galaxy_frame_shear_sigmas(line_snr):
         inp = build_fit_inputs(
-            truth, 7, spec, config, broadband_snr=100.0, line_snr=line_snr
+            truth,
+            7,
+            spec,
+            config,
+            band_snrs={b: 100.0 for b in config.bands},
+            line_snr=line_snr,
         )
         s = inp.source
         chans = [

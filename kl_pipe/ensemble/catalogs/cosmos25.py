@@ -72,6 +72,24 @@ F150W_RED_EDGE_A = 1.668e4
 # SE++ model fluxes are in microJansky; f_nu[erg/cm2/s/Hz] = 1e-29 * uJy
 UJY_TO_CGS = 1e-29
 
+
+def _powerlaw_fnu(
+    f_blue: np.ndarray,
+    lam_blue: float,
+    f_red: np.ndarray,
+    lam_red: float,
+    lam: np.ndarray,
+) -> np.ndarray:
+    """f_nu at lam from a power law through two pivot measurements.
+
+    Log-log interpolation, the same local power-law continuity assumption as
+    the continuum-at-lambda_obs gap interpolation. Inputs must be positive
+    (the caller cuts non-positive photometry first).
+    """
+    alpha = np.log(f_red / f_blue) / np.log(lam_red / lam_blue)
+    return f_blue * (np.asarray(lam, dtype=np.float64) / lam_blue) ** alpha
+
+
 # joined-parquet schema (scripts/build_cosmos25_catalog.py); loads are
 # validated against this exact column set
 COSMOS25_COLUMNS = (
@@ -128,18 +146,33 @@ COSMOS25_COLUMNS = (
 # (measured 2026-07-29, 2e6 Monte Carlo draws). A rare draw outside support
 # fails the truth-in-support check loudly, which is the intended behavior.
 #
-# continuum support [internal flux units per nm]: the selected sample spans
-# 0.21-8.4 (0.1/99.9 percentiles 0.21/8.2); bounds set well clear on both
-# sides, mirroring the Flagship2 margin style.
+# continuum amplitude [1e-17 erg/s/cm2 per nm]: log10 median and log10
+# scatter of f_line / EW_obs on the full cosmos25_ab selection (n = 301,
+# seed 20260728, measured 2026-07-31; the selection membership is unchanged
+# by the photometry-positivity kill, verified id-for-id against the previous
+# chain). Support: the selected sample spans 0.087-23; bounds set well clear
+# on both sides, mirroring the Flagship2 margin style. (The pre-physical-
+# units constants, fitted at the scene-constant line flux of 100, were
+# mu -0.183 / sigma 0.299 on the same convention -- the shift is the
+# per-galaxy line flux, not a selection change.)
+#
+# line_flux support [1e-17 erg/s/cm2]: selection spans 34.8-407 (same n=301
+# sample); band_flux support [uJy]: 0.39-131 across F106/F129/F158. Both
+# bounds only guard TruncatedNormal support for measurement priors whose
+# sigma is ~2-4% of the center, so the margins are deliberately lavish.
 COSMOS25_PRIOR_CONSTANTS = CatalogPriorConstants(
     rscale_log10_mu=-0.774,
     rscale_log10_sigma=0.161,
     rscale_low=0.005,
     rscale_high=3.0,
-    cont_flux_log10_mu=-0.183,
-    cont_flux_log10_sigma=0.299,
-    cont_flux_low=0.01,
-    cont_flux_high=100.0,
+    cont_flux_log10_mu=-0.344,
+    cont_flux_log10_sigma=0.338,
+    cont_flux_low=0.005,
+    cont_flux_high=500.0,
+    line_flux_low=5.0,
+    line_flux_high=5000.0,
+    band_flux_low=0.05,
+    band_flux_high=2000.0,
 )
 
 
@@ -242,30 +275,67 @@ class Cosmos25Adapter(CatalogAdapter):
                 f"upstream -- use 'as_delivered'"
             )
 
-        # continuum f_nu at lambda_obs from SE++ model photometry: band
-        # average inside F115W/F150W coverage, power-law pivot interpolation
-        # across the F150W-F277W gap (module constants)
+        # the Roman band fluxes and the gap continuum both take logs of the
+        # SE++ model photometry, so every row must carry positive, finite
+        # fluxes in all three bands
         f115 = out['flux_model_f115w'].to_numpy(dtype=np.float64)
         f150 = out['flux_model_f150w'].to_numpy(dtype=np.float64)
         f277 = out['flux_model_f277w'].to_numpy(dtype=np.float64)
+        phot_ok = (
+            np.isfinite(f115)
+            & (f115 > 0.0)
+            & np.isfinite(f150)
+            & (f150 > 0.0)
+            & np.isfinite(f277)
+            & (f277 > 0.0)
+        )
+        out = out.assign(_z=z, _lambda=lambda_obs_a, _f_line=f_line)
+        out = cut(phot_ok, 'photometry_nonpositive', out)
+        z = out['_z'].to_numpy()
+        lambda_obs_a = out['_lambda'].to_numpy()
+        f115 = out['flux_model_f115w'].to_numpy(dtype=np.float64)
+        f150 = out['flux_model_f150w'].to_numpy(dtype=np.float64)
+        f277 = out['flux_model_f277w'].to_numpy(dtype=np.float64)
+
+        # continuum f_nu at lambda_obs from SE++ model photometry: band
+        # average inside F115W/F150W coverage, power-law pivot interpolation
+        # across the F150W-F277W gap (module constants)
         in_gap = lambda_obs_a >= F150W_RED_EDGE_A
-        gap_ok = ~in_gap | ((f150 > 0.0) & (f277 > 0.0))
-        with np.errstate(divide='ignore', invalid='ignore'):
-            alpha = np.log(f277 / f150) / np.log(F277W_PIVOT_A / F150W_PIVOT_A)
-            f_nu_gap = f150 * (lambda_obs_a / F150W_PIVOT_A) ** alpha
+        f_nu_gap = _powerlaw_fnu(f150, F150W_PIVOT_A, f277, F277W_PIVOT_A, lambda_obs_a)
         f_nu_ujy = np.where(
             lambda_obs_a < F115W_F150W_EDGE_A,
             f115,
             np.where(in_gap, f_nu_gap, f150),
         )
-        cont_ok = gap_ok & np.isfinite(f_nu_ujy) & (f_nu_ujy > 0.0)
-        out = out.assign(_z=z, _lambda=lambda_obs_a, _f_line=f_line, _f_nu=f_nu_ujy)
+        cont_ok = np.isfinite(f_nu_ujy) & (f_nu_ujy > 0.0)
+        out = out.assign(_f_nu=f_nu_ujy)
         out = cut(cont_ok, 'continuum_nonpositive', out)
+        f115 = out['flux_model_f115w'].to_numpy(dtype=np.float64)
+        f150 = out['flux_model_f150w'].to_numpy(dtype=np.float64)
+        f277 = out['flux_model_f277w'].to_numpy(dtype=np.float64)
 
         z = out.pop('_z').to_numpy()
         lambda_obs_a = out.pop('_lambda').to_numpy()
         f_line = out.pop('_f_line').to_numpy()
         f_nu_cgs = out.pop('_f_nu').to_numpy() * UJY_TO_CGS
+
+        # Roman imaging fluxes [uJy], line-inclusive by construction (SE++
+        # model photometry contains the emission line): power-law
+        # interpolation of the JWST pivots to the Roman effective
+        # wavelengths. F106 and F129 use the F115W-F150W pair (F106 sits
+        # slightly blueward of the F115W pivot, a mild extrapolation of the
+        # local slope); F158 uses the F150W-F277W pair across the NIRCam
+        # gap, the same convention as the gap continuum above.
+        from kl_pipe.ensemble.population import BAND_EFFECTIVE_LAMBDA_A
+
+        band_flux_ujy = {}
+        for band, (fb, lb, fr, lr) in {
+            'F106': (f115, F115W_PIVOT_A, f150, F150W_PIVOT_A),
+            'F129': (f115, F115W_PIVOT_A, f150, F150W_PIVOT_A),
+            'F158': (f150, F150W_PIVOT_A, f277, F277W_PIVOT_A),
+        }.items():
+            lam = np.full_like(f115, BAND_EFFECTIVE_LAMBDA_A[band])
+            band_flux_ujy[band] = _powerlaw_fnu(fb, lb, fr, lr, lam)
 
         f_lambda_obs = f_nu_cgs * C_A_PER_S / lambda_obs_a**2  # erg/cm2/s/A
         ew_rest_a = f_line / f_lambda_obs / (1.0 + z)  # A
@@ -280,12 +350,15 @@ class Cosmos25Adapter(CatalogAdapter):
         out['ew_rest_a'] = ew_rest_a
         out['disk_r50'] = disk_r50
         out['rscale_arcsec'] = disk_r50 / R50_OVER_RSCALE
+        for band, values in band_flux_ujy.items():
+            out[f'flux_{band.lower()}_ujy'] = values
 
         derived = {
             'f_line_cgs': f_line,
             'f_lambda_cont_cgs': f_lambda_obs,
             'ew_rest_a': ew_rest_a,
             'rscale_arcsec': out['rscale_arcsec'].to_numpy(),
+            **{f'flux_{b.lower()}_ujy': v for b, v in band_flux_ujy.items()},
         }
         bad_counts = {}
         for col, values in derived.items():

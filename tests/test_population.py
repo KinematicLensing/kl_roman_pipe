@@ -183,10 +183,11 @@ def catalog_spec_dict(data_dir: Path, **population_overrides) -> dict:
             'priors': {'logm_obs_scatter_dex': 0.25},
         },
         'observation': {
-            'config': 'canonical_P',
-            # no snr.line: catalog mode takes per-galaxy line SNR from the
-            # population table (a scalar here is rejected)
-            'snr': {'broadband': 300},
+            # no snr block: catalog mode takes both channels' per-galaxy SNRs
+            # from the population table (a scalar block here is rejected);
+            # hlwas_medium carries the F129+F158 pair the physical band
+            # fluxes exist for
+            'config': 'hlwas_medium',
         },
         'fit': {'pin_z_to_truth': True},
         'dispatch': {'backend': 'local'},
@@ -1014,6 +1015,60 @@ class TestPublishedConstants:
         # the resulting reference compactness, which divides every galaxy's
         # C and therefore sets the overall yield normalization
         assert population.fiducial_compactness() == pytest.approx(0.4148, abs=5e-5)
+
+    def test_imaging_depths_match_rotac(self):
+        # ROTAC Final Report Table 1 (arXiv:2505.10574): HLWAS medium
+        # 5-sigma point-source coadded depths, F106 26.5 / F129 26.4 /
+        # F158 26.4 AB ("26.4 (JH)" grouped in the table itself)
+        assert population.IMAGING_DEPTH_AB == {
+            'F106': 26.5,
+            'F129': 26.4,
+            'F158': 26.4,
+        }
+        assert population.IMAGING_DEPTH_NSIGMA == 5.0
+        # AB <-> uJy pivot; f_lim(F129) = 10**((23.9 - 26.4)/2.5) = 0.1 uJy
+        assert population.AB_MAG_UJY_PIVOT == 23.9
+        assert population.band_flux_limit_ujy('F129') == pytest.approx(0.1)
+
+    def test_band_effective_wavelengths_match_galsim(self):
+        # pinned literals vs galsim.roman getBandpasses effective_wavelength
+        # (nm), the source recorded on BAND_EFFECTIVE_LAMBDA_A
+        galsim_roman = pytest.importorskip('galsim.roman')
+        bps = galsim_roman.getBandpasses()
+        legacy = {'F106': 'Y106', 'F129': 'J129', 'F158': 'H158'}
+        for band, lam_a in population.BAND_EFFECTIVE_LAMBDA_A.items():
+            expected_a = bps[legacy[band]].effective_wavelength * 10.0
+            assert lam_a == pytest.approx(expected_a, rel=5e-4), band
+
+    def test_extended_source_offset_reproduces_rotac_footnote(self):
+        # ROTAC Table 1 caption: "r1/2 = 0.3 arcsec extended source
+        # thresholds are typically ~1.1 mag brighter" than the point-source
+        # depths. The Gaussian matched-filter proxy must reproduce that
+        # statement; tolerance 0.3 mag covers the proxy-vs-ETC difference
+        # (measured 2026-07-31: F129 1.27, F158 1.08 mag)
+        for band in ('F129', 'F158'):
+            c = population.imaging_compactness(np.array([0.3]), np.array([1.0]), band)[
+                0
+            ]
+            offset_mag = -2.5 * np.log10(c)
+            assert abs(offset_mag - 1.1) < 0.3, (band, offset_mag)
+
+    def test_band_snr_and_sigma_are_consistent(self):
+        # sigma_f = f / SNR by construction (the flux cancels): the two
+        # helpers must agree exactly, and the flux-independence must hold
+        reff = np.array([0.15, 0.3])
+        cosi = np.array([0.4, 0.9])
+        f = np.array([5.0, 50.0])
+        snr = population.compute_band_snr(f, reff, cosi, 'F158')
+        sigma = population.band_flux_sigma_ujy(reff, cosi, 'F158')
+        np.testing.assert_allclose(f / snr, sigma, rtol=1e-12)
+
+    def test_line_flux_sigma_is_coadd_referenced(self):
+        # sigma_f = (F_LIM_COADD / 5) * C_ref / C: at the reference
+        # compactness the sigma is exactly the published coadded limit / 5
+        c_ref = population.fiducial_compactness()
+        sigma = population.line_flux_sigma_cgs(np.array([c_ref]))[0]
+        assert sigma == pytest.approx(population.F_LIM_COADD_CGS / 5.0, rel=1e-12)
 
 
 class TestPaintConstants:

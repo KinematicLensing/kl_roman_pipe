@@ -69,8 +69,6 @@ observation:
   # census specs still reference the Gaussian canonical_P; the Roman PSF
   # configuration remains subject to the pre-production review)
   config: hlwas_medium_roman
-  snr:
-    broadband: 300
 
 fit:
   # baseline sampler config inherited from the flagship dev spec (see its

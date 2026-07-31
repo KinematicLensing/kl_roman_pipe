@@ -668,9 +668,17 @@ def plot_sigma_eps_slide(
 
 def _fit_title(fit_id: str, row: pd.Series) -> str:
     """Per-fit plot title: id, truth cosi, per-channel SNRs, quality."""
+    snr_cols = [('line_snr', 'lSNR'), ('broadband_snr', 'bbSNR')]
+    # catalog manifests carry per-band published-depth SNRs instead of the
+    # sampled-mode shared scalar
+    snr_cols += [
+        (c, f"bbSNR[{c.removeprefix('broadband_snr_')}]")
+        for c in row.index
+        if c.startswith('broadband_snr_')
+    ]
     snr_bits = ''.join(
         f"  {label}={float(row[col]):.0f}"
-        for col, label in [('line_snr', 'lSNR'), ('broadband_snr', 'bbSNR')]
+        for col, label in snr_cols
         if col in row.index and pd.notna(row[col])
     )
     return (

@@ -146,7 +146,7 @@ All raise `ValueError` on unknown names.
 | Position angle | radians | From +x (Cartesian), [0, 2pi) |
 | Inclination | `cosi = cos(i)` | 0=edge-on, 1=face-on |
 | Shear | dimensionless | `g1`, `g2`; \|g\| < 1 |
-| Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)` |
+| Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)`; ensemble catalog mode: bands in uJy, line in 1e-17 erg/s/cm² (see docs/units_and_conventions.md) |
 | Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 | `folding_threshold` | dimensionless | fraction of flux allowed to alias (default 5e-3) |
 | Render output | flux/pixel | `render_image`, `render_grism`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |

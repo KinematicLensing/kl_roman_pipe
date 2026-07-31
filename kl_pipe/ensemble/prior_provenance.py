@@ -309,19 +309,23 @@ def catalog_registry(
 
     # --- amplitudes ----------------------------------------------------------
     flux_note = (
-        'Physical flux enters only through the matched-filter S/N. The '
-        'prior center equals the constant truth for every galaxy; to be '
-        'replaced by a mock-measurement prior once fluxes are physical.'
+        'Simulated photometric measurement: the prior center is the truth '
+        'plus one seeded noise draw at the expected measurement error, and '
+        'the width is that same error, both derived from the published '
+        'depth anchor (matched-filter, compactness-corrected). The center '
+        'is deliberately NOT the truth.'
     )
     add(
         PriorProvenance(
             'Halpha.flux',
             'integrated Halpha line flux',
-            'scene units',
-            'scene constant',
-            'TN(constant, 20%)',
-            'interim',
+            '1e-17 erg/s/cm2',
+            'painted catalog line flux',
+            f'TN(measured, f_lim_coadd/5 * C_ref/C; '
+            f'[{pc.line_flux_low}, {pc.line_flux_high}])',
+            'mock measurement',
             flux_note,
+            cat_keys,
         )
     )
     for band in config.bands:
@@ -330,18 +334,20 @@ def catalog_registry(
             PriorProvenance(
                 flux_key,
                 f'{band} total broadband flux',
-                'scene units',
-                'scene constant',
-                'TN(constant, 20%)',
-                'interim',
+                'uJy',
+                'catalog photometry interpolated to the Roman band ' '(line-inclusive)',
+                f'TN(measured, f_lim_ps/5 / C; '
+                f'[{pc.band_flux_low}, {pc.band_flux_high}])',
+                'mock measurement',
                 flux_note,
+                cat_keys,
             )
         )
     add(
         PriorProvenance(
             'Halpha.cont.flux_per_nm',
             'continuum flux density under the line',
-            'scene units/nm',
+            '1e-17 erg/s/cm2 per nm',
             'line flux / observed EW (catalog rest EW)',
             f'TLN({cont_med:.2f}, {pc.cont_flux_log10_sigma}; '
             f'[{pc.cont_flux_low}, {pc.cont_flux_high}])',

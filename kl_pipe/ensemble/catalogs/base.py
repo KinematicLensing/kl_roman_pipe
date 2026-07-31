@@ -56,6 +56,12 @@ REQUIRED_CONTRACT_COLUMNS = (
     'ew_rest_a',
     'rscale_arcsec',
     'disk_r50',
+    # per-band Roman imaging fluxes [uJy], line-inclusive (what a broadband
+    # image of the source actually contains), interpolated from the catalog's
+    # own photometry to the Roman effective wavelengths
+    'flux_f106_ujy',
+    'flux_f129_ujy',
+    'flux_f158_ujy',
 )
 
 # contract columns present only when the adapter declares bulge support
@@ -79,11 +85,19 @@ class CatalogPriorConstants:
     rscale_log10_sigma: float
     rscale_low: float
     rscale_high: float
-    # continuum amplitude [internal flux units per nm]
+    # continuum amplitude [1e-17 erg/s/cm2 per nm]
     cont_flux_log10_mu: float
     cont_flux_log10_sigma: float
     cont_flux_low: float
     cont_flux_high: float
+    # measurement-prior support bounds: line flux [1e-17 erg/s/cm2] and
+    # band flux [uJy], generous margins around the selected sample's reach
+    # (the priors are simulated measurements at SNR >~ 20, so the bounds
+    # only guard support, never shape the posterior)
+    line_flux_low: float
+    line_flux_high: float
+    band_flux_low: float
+    band_flux_high: float
     # bulge fraction + bulge half-light-radius support (None = no bulge)
     bulge_frac_loc: Optional[float] = None
     bulge_frac_scale: Optional[float] = None

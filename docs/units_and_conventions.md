@@ -16,6 +16,29 @@ grism pipeline rules.
 | Shear | dimensionless | `g1`, `g2`; reduced shear, |g| < 1 |
 | Flux | integrated | `I0 = flux / (2 * pi * r_scale^2)` for canonical normalization |
 | Surface brightness (SB) | flux / arcsec² | Per-point intensity from `__call__`, `evaluate_in_disk_plane` |
+
+## Ensemble catalog-mode flux units
+
+The model layer is agnostic to the absolute flux unit (each channel's noise
+normalization makes any global rescaling a posterior no-op), so `kl_pipe`
+core stays in generic "flux". The ensemble's catalog mode assigns physical
+per-galaxy truths, with one declared unit per channel:
+
+| Scene parameter | Unit | Source |
+|---|---|---|
+| `{band}.flux` / `{band}.total_flux` | uJy (f_nu; AB = 23.9 - 2.5 log10 f) | catalog photometry, power-law interpolated to the Roman band effective wavelength; line-inclusive (what the image contains) |
+| `Halpha.flux` | 1e-17 erg/s/cm² (`population.CGS_TO_F17`) | painted catalog line flux |
+| `Halpha.cont.flux_per_nm` | 1e-17 erg/s/cm² per nm | line flux / EW_obs |
+
+The two channels carry different physical units; that is fine because no
+flux is ever compared across channels — each channel's data, model, and
+variance share one unit. Per-galaxy SNR is a *derived* quantity: the
+matched-filter SNR of the truth template against the noise level implied by
+the published survey depths (ROTAC HLWAS Medium: point-source imaging
+depths, extended-source grism line limit — each channel anchored to its own
+published convention; see `population.IMAGING_DEPTH_AB` /
+`F_LIM_COADD_CGS`). Sampled (non-catalog) mode keeps the legacy scene-
+constant fluxes and spec-scalar SNRs.
 | Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 
 ## Render method contract

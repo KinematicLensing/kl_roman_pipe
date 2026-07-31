@@ -1,12 +1,14 @@
 """
 Per-fit on-the-fly mock observation construction.
 
-The mock is a deterministic function of (truth, observation config, spec SNR
-knobs, noise_seed): the model renders its own truth datavector (guaranteeing
-fit == truth self-consistency) and Gaussian noise is added at the
-matched-filter variance ``||I||^2 / SNR^2``. Broadband channels use the whole
-image (``noise.add_intensity_noise`` convention); grism channels normalize on
-the emission LINE only (``noise.grism_line_noise``: ``var =
+The mock is a deterministic function of (truth, observation config, per-fit
+SNR labels, noise_seed): the model renders its own truth datavector
+(guaranteeing fit == truth self-consistency) and Gaussian noise is added at
+the matched-filter variance ``||I||^2 / SNR^2``. Broadband channels use the
+whole image (``noise.add_intensity_noise`` convention) with one SNR label
+per band (catalog mode: the galaxy's own published-depth matched-filter SNR;
+sampled mode: the spec scalar shared by all bands); grism channels normalize
+on the emission LINE only (``noise.grism_line_noise``: ``var =
 ||I_line||^2 / line_snr^2``), so the labeled ``line_snr`` is the line SNR, not
 the continuum-dominated whole-stamp SNR. Construction mirrors the flagship
 builders (tests/test_flagship.py, experiments/sweverett/vista_kit/tasks_vista.py).
@@ -433,7 +435,7 @@ def build_fit_inputs(
     spec: 'EnsembleSpec',
     config: 'ObservationConfig',
     *,
-    broadband_snr: float,
+    band_snrs: Dict[str, float],
     line_snr: float,
     row: Optional[Dict] = None,
 ) -> FitInputs:
@@ -450,12 +452,15 @@ def build_fit_inputs(
         Population distributions (for the fit priors).
     config : ObservationConfig
         Structural instrument setup.
-    broadband_snr, line_snr : float
-        Per-fit SNR values from the manifest row (the manifest, not the
-        spec, is the source of truth -- line_snr varies per row on a
-        config-sweep axis and per galaxy in catalog mode). ``line_snr`` is
-        the emission-line matched-filter SNR (see
-        kl_pipe.noise.grism_line_noise).
+    band_snrs : dict
+        Per-band matched-filter SNR from the manifest row (the manifest,
+        not the spec, is the source of truth: one shared scalar per fit in
+        sampled mode, per-galaxy published-depth values in catalog mode).
+        Must cover exactly the config's bands.
+    line_snr : float
+        Per-fit emission-line matched-filter SNR (see
+        kl_pipe.noise.grism_line_noise); varies per row on a config-sweep
+        axis and per galaxy in catalog mode.
     row : dict or pd.Series, optional
         The manifest row; required for catalog populations (their vcirc
         prior reads the row's pop.prior_vcirc_* columns).
@@ -465,9 +470,16 @@ def build_fit_inputs(
     FitInputs
         (source, priors, image_obs, grism_obs, truth).
     """
-    if broadband_snr <= 0 or line_snr <= 0:
+    if set(band_snrs) != set(config.bands):
         raise ValueError(
-            f"SNR values must be positive, got ({broadband_snr}, {line_snr})"
+            f"band_snrs keys {sorted(band_snrs)} must match the config's "
+            f"bands {sorted(config.bands)}"
+        )
+    bad_snrs = {k: v for k, v in band_snrs.items() if v <= 0}
+    if bad_snrs or line_snr <= 0:
+        raise ValueError(
+            f"SNR values must be positive, got bands {bad_snrs or 'ok'}, "
+            f"line {line_snr}"
         )
     # catalog mode with the bulge paint on: broadband bands are BulgeDiskModel
     # with this galaxy's fixed Sersic index; sampled mode and the disk-only
@@ -512,7 +524,7 @@ def build_fit_inputs(
             _build_band_psf(band_spec, band, z),
             image_pars,
             band,
-            broadband_snr,
+            band_snrs[band],
             seeds[i],
             spec.render_oversample,
         )

@@ -333,12 +333,20 @@ def _run_fit_attempt(
         inputs = reuse.inputs
         task = reuse.task
     else:
+        # catalog manifests carry per-band published-depth SNR columns;
+        # sampled manifests carry one shared scalar for all bands
+        if f'broadband_snr_{config.bands[0]}' in row:
+            band_snrs = {
+                band: float(row[f'broadband_snr_{band}']) for band in config.bands
+            }
+        else:
+            band_snrs = {band: float(row['broadband_snr']) for band in config.bands}
         inputs = build_fit_inputs(
             truth,
             noise_seed,
             spec,
             config,
-            broadband_snr=float(row['broadband_snr']),
+            band_snrs=band_snrs,
             line_snr=float(row['line_snr']),
             # catalog-mode priors read the row's pop.* columns
             row=row,

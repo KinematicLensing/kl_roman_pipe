@@ -133,6 +133,44 @@ SNR_LINE_REFERENCE = 'extended_fiducial'
 F_LIM_REF_R50_ARCSEC = 0.25
 F_LIM_REF_LAMBDA_A = 1.5e4
 
+# ROTAC Final Report Table 1 (arXiv:2505.10574, report p. 2; verified against
+# the STScI HLWAS survey-definition page, both read 2026-07-31): HLWAS
+# medium-tier imaging, 5-sigma POINT-SOURCE coadded depths [AB mag] (two
+# passes x three dithers x 107.25 s = 643.5 s per filter; the table rounds
+# the exposure to 107 s, the embedded Definition Committee report Sect. 4.4.3
+# gives 107.25 s). The imaging depths are point-source numbers -- the table
+# caption states "r1/2 = 0.3 arcsec extended source thresholds are typically
+# ~1.1 mag brighter" -- so the imaging SNR is referenced to a point source
+# (C_ref = 1) and extended sources are penalized through their own
+# compactness; a test reproduces the ~1.1 mag statement from this machinery.
+# The grism limit in the same table is an extended-source number; each
+# channel anchors to its own published convention (see SNR_LINE_REFERENCE).
+IMAGING_DEPTH_AB = {'F106': 26.5, 'F129': 26.4, 'F158': 26.4}
+
+# the imaging bands the catalog contract carries physical fluxes for; any
+# observation config's bands must be a subset
+ROMAN_IMAGING_BANDS = tuple(sorted(IMAGING_DEPTH_AB))
+
+# the SNR the imaging depths correspond to (ROTAC Table 1: "5sigma point
+# source detection thresholds in AB magnitudes")
+IMAGING_DEPTH_NSIGMA = 5.0
+
+# AB magnitude <-> microjansky: m_AB = 23.9 - 2.5 log10(f_nu / uJy)
+AB_MAG_UJY_PIVOT = 23.9
+
+# integrated line flux unit for scene parameters: Halpha.flux is carried in
+# 1e-17 erg/s/cm2 so catalog truths land O(10-1000) (the selected-sample
+# median is ~1e-15 cgs); the continuum flux_per_nm inherits the same unit
+# per nm through the EW division
+CGS_TO_F17 = 1e17
+
+# Roman WFI imaging-band effective wavelengths [Angstrom], from
+# galsim.roman.getBandpasses() effective_wavelength (Roman_effarea_20210614
+# throughput tables; galsim uses the legacy names Y106/J129/H158): 1059.5,
+# 1293.6, 1579.1 nm. Keys are the official F-names the ensemble uses; a test
+# pins these against the galsim values.
+BAND_EFFECTIVE_LAMBDA_A = {'F106': 1.0595e4, 'F129': 1.2936e4, 'F158': 1.5791e4}
+
 # Roman primary-mirror diameter [m]; diffraction PSF proxy
 # FWHM = 1.22 lambda / D
 ROMAN_APERTURE_M = 2.36
@@ -157,6 +195,7 @@ _POP_SHEAR = 13
 _POP_PRIOR = 14
 _POP_BULGE = 15
 _POP_STRUCTURE = 16
+_POP_FLUXOBS = 17
 
 # Component scales relative to the catalog disk scale length. The catalog
 # gives one size per galaxy; the rotation curve and the line-emitting gas do
@@ -299,20 +338,121 @@ def matched_filter_compactness(
     np.ndarray
         Compactness C in (0, 1]; C -> 1 for unresolved sources.
     """
+    z = np.asarray(z, dtype=np.float64)
+    lambda_obs_a = HALPHA_REST_A * (1.0 + z)
+    return _compactness_at_lambda(reff_arcsec, cosi, lambda_obs_a)
+
+
+def _compactness_at_lambda(
+    reff_arcsec: np.ndarray, cosi: np.ndarray, lambda_obs_a: np.ndarray
+) -> np.ndarray:
+    """Gaussian matched-filter compactness at an arbitrary wavelength.
+
+    Shared core of ``matched_filter_compactness`` (grism, at the observed
+    Halpha wavelength) and ``imaging_compactness`` (broadband, at the band's
+    effective wavelength); see the former for the formula and conventions.
+    """
     reff_arcsec = np.asarray(reff_arcsec, dtype=np.float64)
     cosi = np.asarray(cosi, dtype=np.float64)
-    z = np.asarray(z, dtype=np.float64)
+    lambda_obs_a = np.asarray(lambda_obs_a, dtype=np.float64)
     if np.any(reff_arcsec <= 0):
-        raise ValueError("matched_filter_compactness: reff_arcsec must be positive")
+        raise ValueError("compactness: reff_arcsec must be positive")
 
     # diffraction PSF proxy: FWHM = 1.22 lambda/D [rad] -> arcsec -> sigma
-    sigma_psf = psf_fwhm_arcsec(z) / FWHM_TO_SIGMA
+    lambda_m = lambda_obs_a * 1e-10
+    fwhm = 1.22 * lambda_m / ROMAN_APERTURE_M * ARCSEC_PER_RAD
+    sigma_psf = fwhm / FWHM_TO_SIGMA
 
     sig_maj = reff_arcsec / R50_TO_SIGMA
     sig_min = cosi * sig_maj
     s1 = np.sqrt(sigma_psf**2 + sig_maj**2)
     s2 = np.sqrt(sigma_psf**2 + sig_min**2)
     return sigma_psf / np.sqrt(s1 * s2)
+
+
+def imaging_compactness(
+    reff_arcsec: np.ndarray, cosi: np.ndarray, band: str
+) -> np.ndarray:
+    """Matched-filter compactness C in an imaging band.
+
+    Same Gaussian matched-filter amplitude ratio as
+    ``matched_filter_compactness``, evaluated at the band's effective
+    wavelength (``BAND_EFFECTIVE_LAMBDA_A``) instead of the observed Halpha
+    wavelength. C -> 1 for unresolved sources, which is the reference the
+    point-source imaging depths are quoted for.
+    """
+    if band not in BAND_EFFECTIVE_LAMBDA_A:
+        raise KeyError(
+            f"band '{band}' has no effective wavelength; known bands: "
+            f"{sorted(BAND_EFFECTIVE_LAMBDA_A)}"
+        )
+    lam = np.full_like(
+        np.asarray(reff_arcsec, dtype=np.float64), BAND_EFFECTIVE_LAMBDA_A[band]
+    )
+    return _compactness_at_lambda(reff_arcsec, cosi, lam)
+
+
+def band_flux_limit_ujy(band: str) -> float:
+    """The published imaging depth as a point-source flux [uJy].
+
+    f_lim = 10 ** ((23.9 - depth_AB) / 2.5); a point source at this flux has
+    matched-filter SNR = IMAGING_DEPTH_NSIGMA in the tier coadd.
+    """
+    if band not in IMAGING_DEPTH_AB:
+        raise KeyError(
+            f"band '{band}' has no published HLWAS medium imaging depth; "
+            f"known bands: {sorted(IMAGING_DEPTH_AB)}"
+        )
+    return float(10.0 ** ((AB_MAG_UJY_PIVOT - IMAGING_DEPTH_AB[band]) / 2.5))
+
+
+def compute_band_snr(
+    f_ujy: np.ndarray, reff_arcsec: np.ndarray, cosi: np.ndarray, band: str
+) -> np.ndarray:
+    """Coadded matched-filter imaging SNR referenced to the published depth.
+
+    SNR = IMAGING_DEPTH_NSIGMA * (f / f_lim) * C, with C_ref = 1 because the
+    imaging depths are point-source numbers (see IMAGING_DEPTH_AB). This is
+    the depth the fit sees in one band over the full tier coadd, and the
+    quantity that normalizes the band mock's noise.
+    """
+    return (
+        IMAGING_DEPTH_NSIGMA
+        * np.asarray(f_ujy, dtype=np.float64)
+        / band_flux_limit_ujy(band)
+        * imaging_compactness(reff_arcsec, cosi, band)
+    )
+
+
+def band_flux_sigma_ujy(
+    reff_arcsec: np.ndarray, cosi: np.ndarray, band: str
+) -> np.ndarray:
+    """Expected photometric flux error [uJy] for a galaxy in a band.
+
+    sigma_f = f / SNR = f_lim / (IMAGING_DEPTH_NSIGMA * C): the flux cancels,
+    so the measurement error depends only on the source's shape through its
+    compactness -- the background-dominated regime the published depths
+    describe. Sets the simulated-photometry prior width and the seeded
+    measurement draw.
+    """
+    return band_flux_limit_ujy(band) / (
+        IMAGING_DEPTH_NSIGMA * imaging_compactness(reff_arcsec, cosi, band)
+    )
+
+
+def line_flux_sigma_cgs(compactness: np.ndarray) -> np.ndarray:
+    """Expected line-flux measurement error [erg/s/cm2], full-tier coadd.
+
+    sigma_f = f / SNR_total = (F_LIM_COADD_CGS / F_LIM_NSIGMA) * C_ref / C;
+    the flux cancels as in ``band_flux_sigma_ujy``. Referenced to the coadded
+    limit because a line-flux measurement uses all passes jointly.
+    """
+    return (
+        F_LIM_COADD_CGS
+        / F_LIM_NSIGMA
+        * fiducial_compactness()
+        / np.asarray(compactness, dtype=np.float64)
+    )
 
 
 def fiducial_compactness() -> float:
@@ -531,6 +671,39 @@ def _draw_mass_prior(
     return logm_obs, prior_mu, prior_sigma_dex
 
 
+def _draw_flux_measurements(
+    seed: int,
+    ids: np.ndarray,
+    f_line_cgs: np.ndarray,
+    sigma_line_cgs: np.ndarray,
+    band_fluxes_ujy: Dict[str, np.ndarray],
+    band_sigmas_ujy: Dict[str, np.ndarray],
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    """Seeded simulated flux measurements (the flux-prior centers).
+
+    One FLUXOBS-stream generator per galaxy; draw order (line first, then
+    the bands in sorted name order) is part of the determinism contract.
+    Mirrors the logm_obs pattern: the fit prior is centered on a noisy
+    simulated measurement rather than on truth. A draw can be non-positive
+    at low SNR -- real photometry reports negative fluxes there -- and the
+    TruncatedNormal prior support handles an out-of-bounds center as a
+    proper one-sided distribution, so draws are not clipped. Production
+    selections (SNR >~ 20) never produce one.
+    """
+    n = len(ids)
+    band_names = sorted(band_fluxes_ujy)
+    f_line_obs = np.empty(n, dtype=np.float64)
+    band_obs = {b: np.empty(n, dtype=np.float64) for b in band_names}
+    for i in range(n):
+        rng = _galaxy_rng(seed, _POP_FLUXOBS, ids[i])
+        f_line_obs[i] = f_line_cgs[i] + rng.normal(0.0, sigma_line_cgs[i])
+        for b in band_names:
+            band_obs[b][i] = band_fluxes_ujy[b][i] + rng.normal(
+                0.0, band_sigmas_ujy[b][i]
+            )
+    return f_line_obs, band_obs
+
+
 def _truncated_normal(
     rng: np.random.Generator, mu: float, sd: float, low: float, high: float
 ) -> float:
@@ -719,6 +892,29 @@ def build_population(
     g1, g2 = _draw_shear(spec.seed, ids, cp)
     vel_ratio, line_ratio, v0_kms = _paint_structure(spec.seed, ids)
     logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(spec.seed, ids, logm, cp)
+
+    # per-band imaging SNR against the published point-source depths, plus
+    # the simulated flux measurements (line + bands) that center the fit's
+    # flux priors; the measurement errors depend only on shape (compactness),
+    # not on the flux itself
+    reff = sample['disk_r50'].to_numpy(dtype=np.float64)
+    cosi_sample = sample['cosi'].to_numpy(dtype=np.float64)
+    f_line_sample = sample['f_line_cgs'].to_numpy(dtype=np.float64)
+    sigma_line = line_flux_sigma_cgs(sample['compactness'].to_numpy(dtype=np.float64))
+    band_fluxes = {
+        b: sample[f'flux_{b.lower()}_ujy'].to_numpy(dtype=np.float64)
+        for b in ROMAN_IMAGING_BANDS
+    }
+    band_sigmas = {
+        b: band_flux_sigma_ujy(reff, cosi_sample, b) for b in ROMAN_IMAGING_BANDS
+    }
+    band_snrs = {
+        b: compute_band_snr(band_fluxes[b], reff, cosi_sample, b)
+        for b in ROMAN_IMAGING_BANDS
+    }
+    f_line_obs, band_obs = _draw_flux_measurements(
+        spec.seed, ids, f_line_sample, sigma_line, band_fluxes, band_sigmas
+    )
     columns: Dict[str, np.ndarray] = {
         'pop_index': np.arange(cp.n_galaxies, dtype=np.int64),
     }
@@ -778,8 +974,16 @@ def build_population(
             'logm_obs': logm_obs,
             'prior_vcirc_mu_kms': prior_mu,
             'prior_vcirc_sigma_dex': prior_sigma_dex,
+            'f_line_obs_cgs': f_line_obs,
+            'f_line_sigma_cgs': sigma_line,
         }
     )
+    for b in ROMAN_IMAGING_BANDS:
+        lb = b.lower()
+        columns[f'flux_{lb}_ujy'] = band_fluxes[b]
+        columns[f'flux_obs_{lb}_ujy'] = band_obs[b]
+        columns[f'flux_sigma_{lb}_ujy'] = band_sigmas[b]
+        columns[f'snr_bb_{lb}'] = band_snrs[b]
     # catalog values carried through purely for validation/diagnostics
     for out_name, src in adapter.validation_columns.items():
         columns[out_name] = sample[src].to_numpy(dtype=np.float64)
@@ -805,6 +1009,12 @@ def build_population(
         'n_grism_passes': N_GRISM_PASSES,
         'snr_line_reference': SNR_LINE_REFERENCE,
         'fiducial_compactness': fiducial_compactness(),
+        'imaging_depth_ab': dict(IMAGING_DEPTH_AB),
+        'imaging_depth_provenance': (
+            f'ROTAC Final Report Table 1 (arXiv:2505.10574): HLWAS medium '
+            f'{IMAGING_DEPTH_NSIGMA:g}-sigma point-source coadded depths; '
+            f'band SNR = nsigma * f/f_lim * C with C_ref = 1 (point source)'
+        ),
         'f_lim_provenance': (
             f'ROTAC Final Report 2025-04-24 v3 Sect. 3.1: HLWAS medium-tier '
             f'{F_LIM_COADD_CGS:.1e} erg/s/cm2, {F_LIM_NSIGMA:g}-sigma line '
