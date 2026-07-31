@@ -284,8 +284,9 @@ columns (`max_rhat`, `min_ess`, `ess_g1/g2`, `n_divergences`,
 post hoc in analysis -- nothing is filtered at write time.
 
 Join truth with recovery via `kl_pipe.ensemble.collate.analysis_table(run_dir)`
-(manifest ⨝ results on `fit_id`), then feed `kl_pipe/calibration.py`:
-`rotate_to_galaxy_frame`, `measure_shear_bias`, `compute_shape_noise`.
+(manifest joined with results on `fit_id`), then feed `kl_pipe/ensemble/calibration.py`
+(`measure_shear_bias`, `compute_shape_noise`) and
+`kl_pipe.coordinates.rotate_to_galaxy_frame`.
 
 ## Catalog-mode runs
 

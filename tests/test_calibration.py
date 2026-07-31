@@ -1,5 +1,6 @@
 """
-Unit tests for kl_pipe/calibration.py.
+Unit tests for kl_pipe/ensemble/calibration.py and the galaxy-frame shear
+rotation helpers in kl_pipe/coordinates.py.
 
 Analytic and synthetic checks for shear frame rotation, linear shear-bias
 fits, and effective shape-noise aggregation.
@@ -8,14 +9,16 @@ fits, and effective shape-noise aggregation.
 import numpy as np
 import pytest
 
-from kl_pipe.calibration import (
-    rotate_to_galaxy_frame,
+from kl_pipe.coordinates import rotate_to_galaxy_frame
+from kl_pipe.ensemble.calibration import (
     measure_shear_bias,
     measure_shear_bias_shrinkage_corrected,
     per_galaxy_sigma_eps,
     compute_shape_noise,
     shrinkage_factor,
 )
+
+pytestmark = pytest.mark.roman_ensemble
 
 
 # ==============================================================================

@@ -3,13 +3,13 @@ Euclid Flagship2 catalog adapter.
 
 Structural and flux truths (disk sizes, Halpha flux, continuum, bulge
 fraction, redshift) come from Flagship2 rows downloaded from CosmoHub;
-``preprocess`` derives the physical contract columns (little-h mass
+``preprocess`` derives the standardized physical columns (little-h mass
 correction, flux-variant selection, NISP-band continuum and rest-frame
 equivalent width at the observed Halpha wavelength).
 
 Flagship2 ``galaxy_id`` is a within-halo index (NOT globally unique); the
 ``(halo_id, galaxy_id)`` pair is the unique catalog key, so both ids enter
-every per-galaxy seed key, in that order (determinism contract).
+every per-galaxy seed key, in that order (the order must never change).
 """
 
 from __future__ import annotations
@@ -166,7 +166,7 @@ class Flagship2Adapter(CatalogAdapter):
     def preprocess(
         self, df: pd.DataFrame, spec: 'CatalogPopulationSpec'
     ) -> pd.DataFrame:
-        """Derive physical contract columns from raw Flagship2 rows.
+        """Derive the standardized physical columns from raw Flagship2 rows.
 
         Drops one-component rows (``disk_r50 <= 0``: bulge-only galaxies
         with no disk), corrects the stellar mass for little-h, converts the
@@ -246,8 +246,8 @@ class Flagship2Adapter(CatalogAdapter):
             raise ValueError(
                 f"flux_variant '{spec.flux_variant}': the catalog carries "
                 f"line-inclusive band photometry (euclid_nisp_*_el_model3_ext) "
-                f"only for model3_ext, so the Roman band fluxes the contract "
-                f"requires cannot be built consistently for this variant"
+                f"only for model3_ext, so the required Roman band-flux "
+                f"columns cannot be built consistently for this variant"
             )
         f_y = out['euclid_nisp_y_el_model3_ext'].to_numpy(dtype=np.float64)
         f_j = out['euclid_nisp_j_el_model3_ext'].to_numpy(dtype=np.float64)
@@ -285,6 +285,6 @@ class Flagship2Adapter(CatalogAdapter):
                 f"{bad_counts} (of {len(out)} rows)"
             )
 
-        out = out[list(self.contract_columns())]
+        out = out[list(self.required_columns())]
         out.attrs['kills'] = {'one_component': n_dropped}
         return out

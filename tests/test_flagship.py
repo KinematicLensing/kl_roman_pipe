@@ -112,7 +112,7 @@ from kl_pipe.velocity import CenteredVelocityModel
 from kl_pipe.render import RenderConfig
 
 
-pytestmark = pytest.mark.slow
+pytestmark = [pytest.mark.slow, pytest.mark.roman_ensemble]
 
 
 # Roman-like configuration (module-scope constants -- referenced in plot titles)

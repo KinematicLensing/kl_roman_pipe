@@ -42,6 +42,8 @@ from test_population import (
     write_fake_catalog,
 )
 
+pytestmark = pytest.mark.roman_ensemble
+
 
 def _row_band_snrs(row, config):
     """Per-band SNR dict from a catalog manifest row."""

@@ -453,9 +453,9 @@ def build_fit_inputs(
     config : ObservationConfig
         Structural instrument setup.
     band_snrs : dict
-        Per-band matched-filter SNR from the manifest row (the manifest,
-        not the spec, is the source of truth: one shared scalar per fit in
-        sampled mode, per-galaxy published-depth values in catalog mode).
+        Per-band matched-filter SNR from the manifest row (always read from
+        the manifest, never the spec: one shared scalar per fit in sampled
+        mode, per-galaxy published-depth values in catalog mode).
         Must cover exactly the config's bands.
     line_snr : float
         Per-fit emission-line matched-filter SNR (see

@@ -93,8 +93,9 @@ This installs the package in editable mode with all dependencies via `conda-lock
 ## Makefile Targets
 
 ### Testing
-- `make test` - Run all tests (downloads TNG50 data if needed, ~340 MB)
+- `make test` - Run the generic-pipeline tests (downloads TNG50 data if needed, ~340 MB; excludes the Roman ensemble tier)
 - `make test-basic` - Run only basic tests (no download required)
+- `make test-roman-ensemble` - Run the Roman ensemble-campaign tests (ensemble machinery, catalog adapters, prior provenance, Roman PSF, shear calibration)
 - `make test-tng` - Run only TNG50-specific tests
 - `make test-sampling` - Run MCMC sampling tests (excludes nautilus)
 - `make test-fast` - Stop on first failure

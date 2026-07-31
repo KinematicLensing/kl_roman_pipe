@@ -313,7 +313,7 @@ def catalog_registry(
         'plus one seeded noise draw at the expected measurement error, and '
         'the width is that same error, both derived from the published '
         'depth anchor (matched-filter, compactness-corrected). The center '
-        'is deliberately NOT the truth.'
+        'is deliberately offset from the truth.'
     )
     add(
         PriorProvenance(

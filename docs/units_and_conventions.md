@@ -1,6 +1,6 @@
 # Units and rendering conventions
 
-Single source of truth for physical units and the input/output contracts of
+The reference for physical units and the input/output conventions of
 the render methods in `kl_pipe`. CLAUDE.md's Physical Units table is the
 short reference; this document expands on it and adds the cube / dispersion /
 grism pipeline rules.
@@ -16,11 +16,12 @@ grism pipeline rules.
 | Shear | dimensionless | `g1`, `g2`; reduced shear, |g| < 1 |
 | Flux | integrated | `I0 = flux / (2 * pi * r_scale^2)` for canonical normalization |
 | Surface brightness (SB) | flux / arcsec² | Per-point intensity from `__call__`, `evaluate_in_disk_plane` |
+| Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 
 ## Ensemble catalog-mode flux units
 
 The model layer is agnostic to the absolute flux unit (each channel's noise
-normalization makes any global rescaling a posterior no-op), so `kl_pipe`
+normalization means a global rescaling leaves the posterior unchanged), so `kl_pipe`
 core stays in generic "flux". The ensemble's catalog mode assigns physical
 per-galaxy truths, with one declared unit per channel:
 
@@ -39,11 +40,10 @@ depths, extended-source grism line limit — each channel anchored to its own
 published convention; see `population.IMAGING_DEPTH_AB` /
 `F_LIM_COADD_CGS`). Sampled (non-catalog) mode keeps the legacy scene-
 constant fluxes and spec-scalar SNRs.
-| Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 
-## Render method contract
+## Render method units
 
-The contract is: **every render method that returns an observable (a 2D
+The rule: **every render method that returns an observable (a 2D
 detector-pixel image) returns flux per coarse pixel.** Intermediate or
 continuous representations stay in SB.
 
@@ -150,8 +150,7 @@ on the fine k-grid uses the coarse pixel scale).
 The likelihood `(data - model)² / variance` requires `data` and `model`
 in the same units. The observed grism / image data is in detector flux
 (counts × calibration constant ≈ flux per coarse pixel). All `render_*`
-methods that feed the likelihood return flux per coarse pixel, by
-contract.
+methods that feed the likelihood return flux per coarse pixel.
 
 ## Forward-looking notes
 
@@ -164,8 +163,8 @@ contract.
   (e.g. saturation, gain maps), the conversion still goes "SB → flux per
   pixel" via `coarse_ps²` before the per-pixel response is applied. The
   `PixelResponse` abstraction supports this; only `BoxPixel` is implemented
-  today, but the `SB × coarse_ps²` step is the unit-conversion contract
-  regardless of the response shape.
+  today, but the `SB × coarse_ps²` step is the unit conversion regardless
+  of the response shape.
 
 ## See also
 

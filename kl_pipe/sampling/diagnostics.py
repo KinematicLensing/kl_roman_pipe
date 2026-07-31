@@ -302,7 +302,7 @@ def plot_corner(
     # per-sample-rotated g+/gx (interpretable KL shear; keeps degeneracies
     # readable). Only triggers when all of g1/g2/theta_int are sampled.
     if {'g1', 'g2', 'theta_int'}.issubset(params):
-        from kl_pipe.calibration import galaxy_frame_samples
+        from kl_pipe.coordinates import galaxy_frame_samples
 
         th_truth = (true_values or {}).get('theta_int', np.nan)
         gp_s, gx_s = galaxy_frame_samples(
@@ -335,7 +335,7 @@ def plot_corner(
         if 'vcirc*cosi' in params:
             map_values['vcirc*cosi'] = map_values['vcirc'] * map_values['cosi']
         if 'g_plus' in params:
-            from kl_pipe.calibration import rotate_to_galaxy_frame
+            from kl_pipe.coordinates import rotate_to_galaxy_frame
 
             gpm, gxm = rotate_to_galaxy_frame(
                 map_values['g1'], map_values['g2'], map_values['theta_int']
@@ -346,7 +346,7 @@ def plot_corner(
     # Setup true values if provided
     truths = None
     if true_values is not None:
-        from kl_pipe.calibration import rotate_to_galaxy_frame
+        from kl_pipe.coordinates import rotate_to_galaxy_frame
 
         has_shear_truth = {'g1', 'g2', 'theta_int'}.issubset(true_values)
         gp_t, gx_t = (
@@ -1596,7 +1596,7 @@ def plot_recovery(
     # below: g+/gx is an orthogonal rotation of g1/g2, so the joint Mahalanobis
     # distance is unchanged, and recovered_values keeps g1/g2 for that step.
     if {'g1', 'g2', 'theta_int'}.issubset(params):
-        from kl_pipe.calibration import galaxy_frame_samples, rotate_to_galaxy_frame
+        from kl_pipe.coordinates import galaxy_frame_samples, rotate_to_galaxy_frame
 
         th_truth = true_values['theta_int']
         gp_c, gx_c = galaxy_frame_samples(

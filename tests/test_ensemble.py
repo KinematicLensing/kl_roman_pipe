@@ -35,6 +35,8 @@ from kl_pipe.ensemble.spec import (
 )
 from kl_pipe.priors import LogNormal, Uniform
 
+pytestmark = pytest.mark.roman_ensemble
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
@@ -1167,7 +1169,7 @@ class TestDiagnostics:
             assert r['axis_value'] == pytest.approx(kept['truth.cosi'].mean())
 
     def test_dual_convention_galaxy_frame_columns(self, run_dir):
-        from kl_pipe.calibration import rotate_to_galaxy_frame
+        from kl_pipe.coordinates import rotate_to_galaxy_frame
         from kl_pipe.ensemble.collate import analysis_table, collate_results
         from kl_pipe.ensemble.diagnostics import augment_galaxy_frame
 

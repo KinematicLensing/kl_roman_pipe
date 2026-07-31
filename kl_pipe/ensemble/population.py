@@ -12,8 +12,8 @@ assignments are unusable -- see BULGE_* constants) are painted on with
 seeded scatter; orientation is an isotropic redraw (the catalog inclination
 is kept for validation only); shear is drawn per ring pair.
 
-Determinism contract
---------------------
+Determinism
+-----------
 - Every per-galaxy draw uses a numpy SeedSequence keyed on
   ``[spec.seed, STREAM_TAG, *ids]`` where ``ids`` are the row's values of
   the adapter's ``id_columns``, in the adapter's declared order (for
@@ -42,7 +42,7 @@ from kl_pipe.ensemble.catalogs import (
     catalog_provenance,
     get_catalog_adapter,
     load_catalog,
-    validate_contract,
+    validate_columns,
 )
 from kl_pipe.ensemble.spec import CatalogPopulationSpec, EnsembleSpec
 
@@ -147,7 +147,7 @@ F_LIM_REF_LAMBDA_A = 1.5e4
 # channel anchors to its own published convention (see SNR_LINE_REFERENCE).
 IMAGING_DEPTH_AB = {'F106': 26.5, 'F129': 26.4, 'F158': 26.4}
 
-# the imaging bands the catalog contract carries physical fluxes for; any
+# the imaging bands every catalog adapter carries physical fluxes for; any
 # observation config's bands must be a subset
 ROMAN_IMAGING_BANDS = tuple(sorted(IMAGING_DEPTH_AB))
 
@@ -327,7 +327,7 @@ def matched_filter_compactness(
     Parameters
     ----------
     reff_arcsec : np.ndarray
-        Disk half-light radius [arcsec] (the contract disk_r50 column).
+        Disk half-light radius [arcsec] (the adapter's disk_r50 column).
     cosi : np.ndarray
         Cosine of inclination (minor/major axis ratio of the thin disk).
     z : np.ndarray
@@ -524,8 +524,8 @@ def _galaxy_rng(seed: int, tag: int, ids: np.ndarray) -> np.random.Generator:
     """Per-galaxy generator keyed on the row's unique id-column values.
 
     ``ids`` is one row of the (n, k) id array (the adapter's ``id_columns``
-    values, in declared order); the key composition is part of the
-    determinism contract.
+    values, in declared order); the key composition must never change --
+    it defines every seeded draw.
     """
     ss = np.random.SeedSequence([seed, tag, *(int(v) for v in ids)])
     return np.random.default_rng(ss)
@@ -568,8 +568,8 @@ def _paint_kinematics(
         sigma0 = intercept + slope * z + N(0, scatter), resampled while
         below min_kms.
 
-    One PAINT-stream generator per galaxy; draw order (TFR normal first,
-    then sigma0 normals) is part of the determinism contract.
+    One PAINT-stream generator per galaxy; the draw order (TFR normal
+    first, then sigma0 normals) must never change.
     """
     n = len(ids)
     vcirc = np.empty(n, dtype=np.float64)
@@ -598,7 +598,7 @@ def _paint_structure(
 
     Returns the kinematic and Halpha scale lengths as ratios to the catalog
     disk scale length, plus v0 in km/s. One generator per galaxy; the draw
-    order is part of the determinism contract.
+    order must never change.
     """
     n = len(ids)
     vel_ratio = np.empty(n, dtype=np.float64)
@@ -681,9 +681,8 @@ def _draw_flux_measurements(
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     """Seeded simulated flux measurements (the flux-prior centers).
 
-    One FLUXOBS-stream generator per galaxy; draw order (line first, then
-    the bands in sorted name order) is part of the determinism contract.
-    Mirrors the logm_obs pattern: the fit prior is centered on a noisy
+    One FLUXOBS-stream generator per galaxy; the draw order (line first,
+    then the bands in sorted name order) must never change. Mirrors the logm_obs pattern: the fit prior is centered on a noisy
     simulated measurement rather than on truth. A draw can be non-positive
     at low SNR -- real photometry reports negative fluxes there -- and the
     TruncatedNormal prior support handles an out-of-bounds center as a
@@ -707,8 +706,8 @@ def _draw_flux_measurements(
 def _truncated_normal(
     rng: np.random.Generator, mu: float, sd: float, low: float, high: float
 ) -> float:
-    """Rejection-sampled truncated normal (draw count is part of the
-    per-galaxy stream determinism contract)."""
+    """Rejection-sampled truncated normal (the draw count advances the
+    per-galaxy stream, so the rejection scheme must never change)."""
     while True:
         value = rng.normal(mu, sd)
         if low <= value <= high:
@@ -722,9 +721,9 @@ def _paint_bulge(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Paint bulge Sersic index and size (see BULGE_* constants).
 
-    One BULGE-stream generator per galaxy; draw order (class uniform, then
-    the n rejection draws, then the size-ratio rejection draws) is part of
-    the determinism contract.
+    One BULGE-stream generator per galaxy; the draw order (class uniform,
+    then the n rejection draws, then the size-ratio rejection draws) must
+    never change.
     """
     n = len(ids)
     nsersic = np.empty(n, dtype=np.float64)
@@ -756,7 +755,7 @@ def build_population(
     """Build the catalog-backed population table for a campaign spec.
 
     Chain: load + verify catalog (via the spec's catalog adapter) ->
-    adapter preprocess to contract columns -> selection cuts that do not
+    adapter preprocess to the standardized columns -> selection cuts that do not
     depend on orientation (z_range, bulge cuts) -> per-galaxy isotropic
     orientation redraw -> matched-filter line SNR with the REDRAWN cosi ->
     SNR cut -> seeded subsample of n_galaxies (without replacement) ->
@@ -790,7 +789,7 @@ def build_population(
     raw = load_catalog(adapter, cp.catalog_download, data_dir)
     n_raw = len(raw)
     pre = adapter.preprocess(raw, cp)
-    validate_contract(adapter, pre)
+    validate_columns(adapter, pre)
     n_disk = len(pre)
     kills: Dict[str, int] = {k: int(v) for k, v in pre.attrs['kills'].items()}
 

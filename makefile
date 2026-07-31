@@ -162,8 +162,8 @@ test-data: $(UNIT_TEST_FILES)
 
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
-	@echo "Running fast tests (excluding slow samplers and TNG diagnostics)..."
-	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation and not cosmohub"
+	@echo "Running fast tests (excluding slow samplers, TNG diagnostics, and the Roman ensemble tier)..."
+	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation and not cosmohub and not roman_ensemble"
 
 .PHONY: test-extended
 test-extended: $(CYVERSE_DATA_MARKER)
@@ -199,6 +199,16 @@ test-cosmohub:
 	@echo "Running real-catalog (cosmohub) tests..."
 	@conda run -n klpipe pytest tests/ -v -m cosmohub
 
+# Roman ensemble-campaign tier: ensemble machinery, catalog adapters,
+# population paint, prior provenance, Roman PSF, shear calibration. Excluded
+# from `make test`/`test-basic`; still included in test-extended/test-all.
+# The slow and cosmohub-gated members keep their own targets
+# (test-flagship*, test-cosmohub).
+.PHONY: test-roman-ensemble
+test-roman-ensemble:
+	@echo "Running Roman ensemble-campaign tests..."
+	@conda run -n klpipe pytest tests/ -v -m "roman_ensemble and not slow and not cosmohub"
+
 .PHONY: test-sampling
 test-sampling:
 	@echo "Running MCMC sampling tests (excluding nautilus)..."
@@ -231,8 +241,8 @@ test-flagship-production-long:
 
 .PHONY: test-basic
 test-basic:
-	@echo "Running fast tests (excluding TNG50 and slow, no download required)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow and not cosmohub"
+	@echo "Running fast tests (excluding TNG50, slow, and the Roman ensemble tier; no download required)..."
+	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow and not cosmohub and not roman_ensemble"
 
 .PHONY: test-coverage
 test-coverage: $(CYVERSE_DATA_MARKER)

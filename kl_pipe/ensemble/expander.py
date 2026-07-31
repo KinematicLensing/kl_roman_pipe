@@ -1,12 +1,12 @@
 """
 Deterministic ensemble expansion: spec -> manifest.parquet + provenance.
 
-The manifest is the dispatch source of truth: one row per fit, fully-resolved
+The manifest is what dispatch runs from: one row per fit, fully-resolved
 truth values, immutable once written (status is derived from the filesystem
 ledger, never stored in the manifest).
 
-Determinism contract
---------------------
+Determinism
+-----------
 - fit_id hashes the integer index tuple (run_name, version, cosi_bin,
   galaxy_id, ring_member, noise_rep, shear_step) -- never float truth values,
   whose repr is unstable across numpy versions.
@@ -359,7 +359,7 @@ def _catalog_rows(
             )
         population = population.loc[sorted(cp.galaxy_ids)]
     # catalog mode carries physical per-band fluxes only for the Roman
-    # imaging bands the contract covers
+    # imaging bands every adapter provides
     unsupported = [b for b in config.bands if b not in ROMAN_IMAGING_BANDS]
     if unsupported:
         raise ValueError(

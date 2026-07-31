@@ -157,7 +157,7 @@ All raise `ValueError` on unknown names.
 
 **Always perform dimensional sanity checks** on numerical quantities before finalizing code.
 
-**Full render-method contract:** see `docs/units_and_conventions.md` for the tracked source-of-truth covering every `render_*` method's units, intermediate representations, and the SB↔flux/pixel conversion shorthand.
+**Full render-method units:** see `docs/units_and_conventions.md` for the tracked reference covering every `render_*` method's units, intermediate representations, and the SB↔flux/pixel conversion shorthand.
 
 ---
 
@@ -245,6 +245,7 @@ return 0.0  # could silently corrupt a likelihood calculation
 | `slow` | Significant runtime | `pytest -m slow` |
 | `diagnostic_plots` | Diagnostic-figure tests (also marked `slow`) | `pytest -m diagnostic_plots` |
 | `grism_validation` | Cross-code grism validation (requires reference data) | `make test-grism-validation` |
+| `roman_ensemble` | Roman ensemble-campaign tests (ensemble machinery, catalog adapters, prior provenance, Roman PSF, shear calibration); excluded from `make test` | `make test-roman-ensemble` |
 
 ### Key Test Patterns
 
@@ -347,9 +348,10 @@ make tutorials            # convert tutorial md → ipynb
 make test-tutorials       # convert + execute all tutorials
 
 # Testing
-make test                 # fast tests (excludes slow, tng_diagnostics, grism_validation)
-make test-basic           # no TNG data required
-make test-extended        # excludes tng_diagnostics + grism_validation only
+make test                 # fast generic tests (excludes slow, tng_diagnostics, grism_validation, roman_ensemble)
+make test-basic           # no TNG data required (also excludes roman_ensemble)
+make test-roman-ensemble  # Roman ensemble-campaign tier (fast, no-download subset)
+make test-extended        # excludes tng_diagnostics + grism_validation only (includes roman_ensemble)
 make test-all             # full suite including TNG diagnostics
 make test-fast            # fast tests, stop on first failure (-x)
 make test-verbose         # verbose with stdout (-v -s)

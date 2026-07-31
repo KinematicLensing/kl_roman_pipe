@@ -76,7 +76,7 @@ Gotchas that have bitten before:
 - sbatch does not inherit the idev shell's exports; the emitted script works
   because emission bakes `KLPIPE_PYTHON` in (script preflights the import
   and fails loud otherwise).
-- Never run `$KLPIPE_PYTHON` on a login node (apptainer no-ops there).
+- Never run `$KLPIPE_PYTHON` on a login node (apptainer silently does nothing there).
 - gh-dev QOS rejects job arrays while an idev session is running
   (`QOSMaxSubmitJobPerUserLimit`) -- statistics runs use `queue: gh`;
   gh-dev is for idev shakedowns only.
@@ -90,7 +90,7 @@ Gotchas that have bitten before:
 spec.py         EnsembleSpec + ObservationConfig registry (strict YAML validation)
 scene.py        canonical galaxy scene: truth defaults + fit prior rules
 catalogs/       per-catalog adapters: raw schema, unique row key, preprocess
-                to contract columns, catalog-fitted prior constants; selected
+                to standardized columns, catalog-fitted prior constants; selected
                 by population.catalog.kind (default flagship2; cosmos25 =
                 COSMOS-Web + painted Halpha, see data/cosmos2025/README.md)
 population.py   catalog-backed population: adapter rows + selection +
@@ -108,6 +108,8 @@ ledger.py       lock-free filesystem status (atomic-mkdir claims,
                 done/failed markers, stale detection)
 dispatch.py     local N-worker backend + submit.slurm emission
 collate.py      per-fit results -> results.parquet + manifest join + tally
+calibration.py  shear-bias fits (m, c) + shape-noise aggregation (numpy-only
+                post-processing; frame rotation lives in kl_pipe.coordinates)
 diagnostics.py  quality gates, recovery pulls, sigma_eps tables + plots
 __main__.py     CLI: expand | run | worker | status | collate | slurm | reclaim
 ```

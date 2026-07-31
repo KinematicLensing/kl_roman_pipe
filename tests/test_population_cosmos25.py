@@ -19,7 +19,7 @@ import yaml
 from kl_pipe.ensemble.catalogs import (
     get_catalog_adapter,
     load_catalog,
-    validate_contract,
+    validate_columns,
 )
 from kl_pipe.ensemble.catalogs.cosmos25 import (
     COSMOS25_COLUMNS,
@@ -32,6 +32,8 @@ from kl_pipe.ensemble.catalogs.cosmos25 import (
 )
 from kl_pipe.ensemble.population import C_A_PER_S, HALPHA_REST_A, build_population
 from kl_pipe.ensemble.spec import EnsembleSpec
+
+pytestmark = pytest.mark.roman_ensemble
 
 COSMOS25 = get_catalog_adapter('cosmos25')
 
@@ -246,7 +248,7 @@ def raw(fake_data_dir) -> pd.DataFrame:
 
 
 # ==============================================================================
-# Adapter identity + contract
+# Adapter identity + column set
 # ==============================================================================
 
 
@@ -263,9 +265,9 @@ class TestAdapter:
         assert COSMOS25.flux_variants == ('as_delivered',)
 
     @pytest.mark.parametrize('variant', COSMOS25.flux_variants)
-    def test_preprocess_output_matches_contract(self, raw, variant):
+    def test_preprocess_output_matches_columns(self, raw, variant):
         pre = COSMOS25.preprocess(raw, preprocess_spec(variant))
-        validate_contract(COSMOS25, pre)
+        validate_columns(COSMOS25, pre)
         assert len(pre) > 0
         for stage in (
             'not_galaxy',

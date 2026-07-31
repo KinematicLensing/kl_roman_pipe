@@ -36,6 +36,8 @@ from kl_pipe.ensemble.population import (
 )
 from kl_pipe.ensemble.spec import CatalogPopulationSpec, EnsembleSpec
 
+pytestmark = pytest.mark.roman_ensemble
+
 # the flagship2 adapter under test (loader + preprocess live on it now)
 FLAGSHIP2 = get_catalog_adapter('flagship2')
 
@@ -296,19 +298,19 @@ class TestCatalogAdapter:
         with pytest.raises(ValueError, match='unknown catalog kind'):
             spec_from_dict(tmp_path, d)
 
-    def test_preprocess_output_matches_contract(self):
-        from kl_pipe.ensemble.catalogs import validate_contract
+    def test_preprocess_output_matches_columns(self):
+        from kl_pipe.ensemble.catalogs import validate_columns
 
         pre = FLAGSHIP2.preprocess(fake_flagship2_rows(n=50, seed=11), _cp())
-        validate_contract(FLAGSHIP2, pre)  # exact column-set equality
-        assert set(pre.columns) == set(FLAGSHIP2.contract_columns())
+        validate_columns(FLAGSHIP2, pre)  # exact column-set equality
+        assert set(pre.columns) == set(FLAGSHIP2.required_columns())
 
-    def test_contract_violation_raises(self):
-        from kl_pipe.ensemble.catalogs import validate_contract
+    def test_wrong_column_set_raises(self):
+        from kl_pipe.ensemble.catalogs import validate_columns
 
         pre = FLAGSHIP2.preprocess(fake_flagship2_rows(n=50, seed=11), _cp())
-        with pytest.raises(ValueError, match='violates the contract'):
-            validate_contract(FLAGSHIP2, pre.drop(columns=['ew_rest_a']))
+        with pytest.raises(ValueError, match='wrong column set'):
+            validate_columns(FLAGSHIP2, pre.drop(columns=['ew_rest_a']))
 
 
 # ==============================================================================

@@ -37,6 +37,8 @@ from kl_pipe.parameters import ImagePars
 from kl_pipe.psf import precompute_psf_fft
 from kl_pipe.render import RenderConfig
 
+pytestmark = pytest.mark.roman_ensemble
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'

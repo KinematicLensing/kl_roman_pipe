@@ -83,9 +83,10 @@ def _powerlaw_fnu(
     """f_nu at lam from a power law through two pivot measurements.
 
     Log-log interpolation, the same local power-law continuity assumption as
-    the continuum-at-lambda_obs gap interpolation. Inputs must be positive
-    (the caller cuts non-positive photometry first).
+    the continuum-at-lambda_obs gap interpolation.
     """
+    if np.any(f_blue <= 0) or np.any(f_red <= 0):
+        raise ValueError("power-law flux interpolation requires positive photometry")
     alpha = np.log(f_red / f_blue) / np.log(lam_red / lam_blue)
     return f_blue * (np.asarray(lam, dtype=np.float64) / lam_blue) ** alpha
 
@@ -159,7 +160,7 @@ COSMOS25_COLUMNS = (
 # line_flux support [1e-17 erg/s/cm2]: selection spans 34.8-407 (same n=301
 # sample); band_flux support [uJy]: 0.39-131 across F106/F129/F158. Both
 # bounds only guard TruncatedNormal support for measurement priors whose
-# sigma is ~2-4% of the center, so the margins are deliberately lavish.
+# sigma is ~2-4% of the center, so the margins are deliberately wide.
 COSMOS25_PRIOR_CONSTANTS = CatalogPriorConstants(
     rscale_log10_mu=-0.774,
     rscale_log10_sigma=0.161,
@@ -200,7 +201,7 @@ class Cosmos25Adapter(CatalogAdapter):
     def preprocess(
         self, df: pd.DataFrame, spec: 'CatalogPopulationSpec'
     ) -> pd.DataFrame:
-        """Map raw joined rows to the contract columns.
+        """Map raw joined rows to the standardized columns.
 
         Kill chain (each stage counted in ``attrs['kills']``):
         LePhare non-galaxies (``type != 0``), photometry warn flags,
@@ -371,6 +372,6 @@ class Cosmos25Adapter(CatalogAdapter):
                 f"{bad_counts} (of {len(out)} rows)"
             )
 
-        out = out[list(self.contract_columns())]
+        out = out[list(self.required_columns())]
         out.attrs['kills'] = kills
         return out

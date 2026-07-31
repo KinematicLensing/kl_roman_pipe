@@ -483,7 +483,7 @@ def _summary_row(
     # posterior samples per the configured angle convention (default: each
     # sample by its own theta_int) so g+/gx replace g1/g2 in all diagnostics.
     if all(n in sampled_names for n in ('g1', 'g2', 'theta_int')):
-        from kl_pipe.calibration import galaxy_frame_samples
+        from kl_pipe.coordinates import galaxy_frame_samples
 
         samples = np.asarray(result.samples)
         ig1, ig2, ith = (sampled_names.index(n) for n in ('g1', 'g2', 'theta_int'))

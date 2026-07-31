@@ -4,7 +4,9 @@ Celestial / detector frame coordinate utilities.
 Slim JAX-friendly helpers for handling per-observation celestial-to-detector
 rotations driven by an astropy WCS. Used by SourceModel to rotate celestial-
 frame sampled parameters (theta_int, g1, g2) into the detector frame for each
-observation at render time.
+observation at render time. Also hosts the numpy galaxy-frame shear rotation
+helpers (``rotate_to_galaxy_frame``, ``galaxy_frame_samples``) used by
+diagnostics and post-processing.
 
 The math is the same as the kl-tools OrientedAngle class (we use the term
 "celestial" instead of "sky" but the conversions are identical). astropy
@@ -148,3 +150,79 @@ def rotate_position(x, y, phi) -> Tuple:
     c = jnp.cos(phi)
     s = jnp.sin(phi)
     return x * c + y * s, -x * s + y * c
+
+
+def rotate_to_galaxy_frame(
+    g1: np.ndarray, g2: np.ndarray, theta_int: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Rotate sky-frame shear components into the galaxy frame.
+
+    Shear is a spin-2 quantity, so the frame rotation uses twice the position
+    angle:
+
+        g+ =  g1 * cos(2*theta) + g2 * sin(2*theta)
+        gx = -g1 * sin(2*theta) + g2 * cos(2*theta)
+
+    The numpy counterpart of ``rotate_shear`` (same spin-2 formula), for
+    post-processing code that stays JAX-free.
+
+    Parameters
+    ----------
+    g1, g2 : np.ndarray
+        Sky-frame shear components (dimensionless).
+    theta_int : np.ndarray
+        Galaxy position angle in radians from +x.
+
+    Returns
+    -------
+    g_plus, g_cross : np.ndarray
+        Galaxy-frame tangential and cross shear components.
+    """
+    g1 = np.asarray(g1, dtype=float)
+    g2 = np.asarray(g2, dtype=float)
+    theta_int = np.asarray(theta_int, dtype=float)
+
+    cos2t = np.cos(2.0 * theta_int)
+    sin2t = np.sin(2.0 * theta_int)
+    g_plus = g1 * cos2t + g2 * sin2t
+    g_cross = -g1 * sin2t + g2 * cos2t
+    return g_plus, g_cross
+
+
+def galaxy_frame_samples(
+    g1_samples: np.ndarray,
+    g2_samples: np.ndarray,
+    theta_int_samples: np.ndarray,
+    theta_int_truth: float,
+    angle: str = 'measured',
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Rotate posterior shear samples into the galaxy frame.
+
+    Parameters
+    ----------
+    g1_samples, g2_samples, theta_int_samples : np.ndarray
+        Per-sample sky-frame shear and position angle from a posterior chain.
+    theta_int_truth : float
+        Truth position angle, used only when ``angle='truth'``.
+    angle : {'measured', 'truth'}
+        Rotation-angle convention. 'measured' rotates each sample by its own
+        ``theta_int_samples`` (the only estimator available on real data;
+        propagates position-angle uncertainty into g+/gx); 'truth' rotates
+        by the fixed ``theta_int_truth`` (assumes the angle is known -- the
+        convention-free recovery check on simulations).
+
+    Returns
+    -------
+    g_plus, g_cross : np.ndarray
+        Galaxy-frame shear samples.
+    """
+    g1_samples = np.asarray(g1_samples, dtype=float)
+    if angle == 'measured':
+        theta = theta_int_samples
+    elif angle == 'truth':
+        theta = np.full_like(g1_samples, float(theta_int_truth))
+    else:
+        raise ValueError(f"angle must be 'measured' or 'truth', got {angle!r}")
+    return rotate_to_galaxy_frame(g1_samples, g2_samples, theta)

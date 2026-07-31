@@ -32,13 +32,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from kl_pipe.calibration import (
-    GALAXY_FRAME_ANGLE,
+from kl_pipe.coordinates import galaxy_frame_samples, rotate_to_galaxy_frame
+from kl_pipe.ensemble.calibration import (
     compute_shape_noise,
-    galaxy_frame_samples,
     measure_shear_bias,
     measure_shear_bias_shrinkage_corrected,
-    rotate_to_galaxy_frame,
 )
 from kl_pipe.ensemble.collate import analysis_table
 from kl_pipe.ensemble.expander import load_run
@@ -169,13 +167,13 @@ def quality_table(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def augment_galaxy_frame(
-    run_dir: Path, table: pd.DataFrame, angle: Optional[str] = None
+    run_dir: Path, table: pd.DataFrame, angle: str = 'measured'
 ) -> pd.DataFrame:
     """Add galaxy-frame shear columns (g+, gx) to a collated table.
 
     Adds ``truth.g_plus``/``truth.g_cross`` (truth shear rotated by truth PA)
     and posterior ``post.g_plus.mean``/``.std`` + ``post.g_cross.mean``/``.std``
-    under ``angle`` (default the module toggle ``GALAXY_FRAME_ANGLE``), plus a
+    under ``angle`` (default 'measured'), plus a
     second, always-truth-PA set ``post.g_plus_truth_pa.*`` /
     ``post.g_cross_truth_pa.*`` (with ``truth.g_plus_truth_pa`` etc. aliasing
     the same truth values) so recovery/pull reports show both conventions:
@@ -191,7 +189,6 @@ def augment_galaxy_frame(
     exist and marginal otherwise. The sky-frame g1/g2 columns are left intact
     but are no longer the reported shear.
     """
-    angle = angle or GALAXY_FRAME_ANGLE
     t = table.copy()
     gp_t, gx_t = rotate_to_galaxy_frame(
         t['truth.g1'].to_numpy(),
