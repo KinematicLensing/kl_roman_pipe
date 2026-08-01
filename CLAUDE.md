@@ -32,7 +32,10 @@ kl_pipe/
 ├── pixel.py           # Pixel response: PixelResponse ABC, BoxPixel (sinc FT)
 ├── render.py          # RenderConfig: k-space grid sizing (oversample, pad_factor, maxk/stepk)
 ├── synthetic.py       # Independent synthetic data generators (NOT using model.py)
-├── noise.py           # SNR-based noise: add_intensity_noise, add_velocity_noise
+├── noise.py           # SNR-based noise + matched-filter compactness (detection math)
+├── photometry.py      # Unit conversions: AB mag<->uJy, f_nu->f_lambda, depth->flux limit, power-law SED interpolation
+├── surveys/           # Published survey parameters, one module per survey
+│   └── roman.py       # HLWAS medium depths, line limits, band wavelengths, depth-referenced SNR helpers
 ├── utils.py           # Grid builders, path getters
 ├── plotting.py        # Velocity/intensity map visualization
 ├── diagnostics/       # Diagnostic plotting subpackage

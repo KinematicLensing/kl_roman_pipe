@@ -20,6 +20,13 @@ import numpy as np
 import pandas as pd
 
 from kl_pipe.ensemble.catalogs.base import CatalogAdapter, CatalogPriorConstants
+from kl_pipe.photometry import (
+    C_A_PER_S,
+    CGS_FNU_TO_UJY,
+    HALPHA_REST_A,
+    powerlaw_fnu,
+)
+from kl_pipe.surveys.roman import BAND_EFFECTIVE_LAMBDA_A
 
 if TYPE_CHECKING:
     from kl_pipe.ensemble.spec import CatalogPopulationSpec
@@ -36,9 +43,6 @@ NISP_JH_EDGE_A = 15450.0
 NISP_Y_PIVOT_A = 1.0809e4
 NISP_J_PIVOT_A = 1.3673e4
 NISP_H_PIVOT_A = 1.7714e4
-
-# NISP fluxes are f_nu in erg/cm2/s/Hz; uJy = f_nu / 1e-29
-CGS_FNU_TO_UJY = 1e29
 
 # full Flagship2 query-spec schema (data/cosmohub/flagship2_dev.yaml);
 # downloads are validated against this exact column set
@@ -183,11 +187,6 @@ class Flagship2Adapter(CatalogAdapter):
         - EW_obs = f_line / f_lambda -> [erg/s/cm2] / [erg/cm2/s/A] = [A]
         - EW_rest = EW_obs / (1 + z) [A]
         """
-        # local import: population owns the generic line-physics constants
-        # and imports the spec module, so a module-level import here would
-        # widen the import graph for no gain
-        from kl_pipe.ensemble.population import C_A_PER_S, HALPHA_REST_A
-
         n_raw = len(df)
         disk_mask = df['disk_r50'].to_numpy() > 0.0
         out = df.loc[disk_mask].reset_index(drop=True).copy()
@@ -240,8 +239,6 @@ class Flagship2Adapter(CatalogAdapter):
         # F158 uses J-H. Only the model3_ext line-inclusive photometry exists
         # in the schema, so other flux variants have no consistent band
         # photometry and are rejected.
-        from kl_pipe.ensemble.population import BAND_EFFECTIVE_LAMBDA_A
-
         if spec.flux_variant != 'model3_ext':
             raise ValueError(
                 f"flux_variant '{spec.flux_variant}': the catalog carries "
@@ -252,8 +249,6 @@ class Flagship2Adapter(CatalogAdapter):
         f_y = out['euclid_nisp_y_el_model3_ext'].to_numpy(dtype=np.float64)
         f_j = out['euclid_nisp_j_el_model3_ext'].to_numpy(dtype=np.float64)
         f_h = out['euclid_nisp_h_el_model3_ext'].to_numpy(dtype=np.float64)
-        from kl_pipe.ensemble.catalogs.cosmos25 import _powerlaw_fnu
-
         band_flux_ujy = {}
         for band, (fb, lb, fr, lr) in {
             'F106': (f_y, NISP_Y_PIVOT_A, f_j, NISP_J_PIVOT_A),
@@ -261,7 +256,7 @@ class Flagship2Adapter(CatalogAdapter):
             'F158': (f_j, NISP_J_PIVOT_A, f_h, NISP_H_PIVOT_A),
         }.items():
             lam = np.full_like(f_y, BAND_EFFECTIVE_LAMBDA_A[band])
-            band_flux_ujy[band] = _powerlaw_fnu(fb, lb, fr, lr, lam) * CGS_FNU_TO_UJY
+            band_flux_ujy[band] = powerlaw_fnu(fb, lb, fr, lr, lam) * CGS_FNU_TO_UJY
             out[f'flux_{band.lower()}_ujy'] = band_flux_ujy[band]
 
         derived = {

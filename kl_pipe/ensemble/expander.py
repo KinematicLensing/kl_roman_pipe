@@ -38,13 +38,12 @@ import pandas as pd
 from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
     CENTROID_SCATTER_ARCSEC,
-    CGS_TO_F17,
     CONT_CENTROID_OFFSET_ARCSEC,
-    N_GRISM_PASSES,
-    ROMAN_IMAGING_BANDS,
     build_population,
     write_population,
 )
+from kl_pipe.photometry import CGS_TO_F17
+from kl_pipe.surveys.roman import N_GRISM_PASSES, ROMAN_IMAGING_BANDS
 from kl_pipe.ensemble.scene import scene_truth_defaults
 from kl_pipe.ensemble.spec import DrawSpec, EnsembleSpec, ObservationConfig
 

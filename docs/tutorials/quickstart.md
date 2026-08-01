@@ -453,6 +453,9 @@ jpsf = galsim.Gaussian(fwhm=0.12)
 jrc = RenderConfig(oversample=3)
 
 # Velocity data (no PSF) + broadband data (PSF-convolved).
+# Fluxes here are in arbitrary units; to work in physical units (e.g. a
+# catalog AB magnitude or a published survey depth), convert with the
+# helpers in kl_pipe.photometry (ab_mag_to_ujy, fnu_to_flambda, ...).
 vobs_clean = build_velocity_obs(jgrid)
 v_true = np.asarray(joint_source.render_velocity(jt, vobs_clean))
 v_noisy, v_var = add_velocity_noise(v_true, target_snr=100, seed=10)

@@ -31,13 +31,13 @@ from kl_pipe.ensemble.population import (
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MEDIAN,
     CENTROID_SCATTER_ARCSEC,
-    CGS_TO_F17,
     CONT_CENTROID_OFFSET_ARCSEC,
     HALPHA_RSCALE_RATIO_DEX,
     HALPHA_RSCALE_RATIO_MEDIAN,
     VEL_RSCALE_RATIO_DEX,
     VEL_RSCALE_RATIO_MEDIAN,
 )
+from kl_pipe.photometry import CGS_TO_F17
 from kl_pipe.priors import (
     ConditionalLogNormal,
     Gaussian,

@@ -43,6 +43,14 @@ import numpy as np
 import pandas as pd
 
 from kl_pipe.ensemble.catalogs.base import CatalogAdapter, CatalogPriorConstants
+from kl_pipe.photometry import (
+    C_A_PER_S,
+    EXP_R50_OVER_RSCALE,
+    HALPHA_REST_A,
+    UJY_TO_CGS,
+    powerlaw_fnu,
+)
+from kl_pipe.surveys.roman import BAND_EFFECTIVE_LAMBDA_A
 
 if TYPE_CHECKING:
     from kl_pipe.ensemble.spec import CatalogPopulationSpec
@@ -53,10 +61,8 @@ if TYPE_CHECKING:
 # lines are only coherent with the v1 sections.
 COSMOS25_SOURCE_VERSION = 'v1'
 
-# exponential-disk half-light-to-scale-length ratio, r50 = 1.678 * rscale;
-# the SE++ single-Sersic effective radius is read as the disk r50 under the
-# ensemble's disk-only convention
-R50_OVER_RSCALE = 1.678
+# the SE++ single-Sersic effective radius is read as the disk r50 under
+# the ensemble's disk-only convention; r50 = EXP_R50_OVER_RSCALE * rscale
 
 # JWST NIRCam pivot wavelengths [Angstrom] and the band-assignment edges
 # for the continuum at the observed Halpha wavelength: F115W covers up to
@@ -68,28 +74,6 @@ F150W_PIVOT_A = 1.501e4
 F277W_PIVOT_A = 2.776e4
 F115W_F150W_EDGE_A = 1.30e4
 F150W_RED_EDGE_A = 1.668e4
-
-# SE++ model fluxes are in microJansky; f_nu[erg/cm2/s/Hz] = 1e-29 * uJy
-UJY_TO_CGS = 1e-29
-
-
-def _powerlaw_fnu(
-    f_blue: np.ndarray,
-    lam_blue: float,
-    f_red: np.ndarray,
-    lam_red: float,
-    lam: np.ndarray,
-) -> np.ndarray:
-    """f_nu at lam from a power law through two pivot measurements.
-
-    Log-log interpolation, the same local power-law continuity assumption as
-    the continuum-at-lambda_obs gap interpolation.
-    """
-    if np.any(f_blue <= 0) or np.any(f_red <= 0):
-        raise ValueError("power-law flux interpolation requires positive photometry")
-    alpha = np.log(f_red / f_blue) / np.log(lam_red / lam_blue)
-    return f_blue * (np.asarray(lam, dtype=np.float64) / lam_blue) ** alpha
-
 
 # joined-parquet schema (scripts/build_cosmos25_catalog.py); loads are
 # validated against this exact column set
@@ -224,10 +208,6 @@ class Cosmos25Adapter(CatalogAdapter):
         continuum is biased high by roughly EW_obs / bandwidth (~10% for
         typical selected EWs); accepted at population-prior level.
         """
-        # local import: population owns the generic line-physics constants
-        # (same layering as the flagship2 adapter)
-        from kl_pipe.ensemble.population import C_A_PER_S, HALPHA_REST_A
-
         kills = {}
 
         def cut(mask: np.ndarray, stage: str, frame: pd.DataFrame) -> pd.DataFrame:
@@ -302,7 +282,7 @@ class Cosmos25Adapter(CatalogAdapter):
         # average inside F115W/F150W coverage, power-law pivot interpolation
         # across the F150W-F277W gap (module constants)
         in_gap = lambda_obs_a >= F150W_RED_EDGE_A
-        f_nu_gap = _powerlaw_fnu(f150, F150W_PIVOT_A, f277, F277W_PIVOT_A, lambda_obs_a)
+        f_nu_gap = powerlaw_fnu(f150, F150W_PIVOT_A, f277, F277W_PIVOT_A, lambda_obs_a)
         f_nu_ujy = np.where(
             lambda_obs_a < F115W_F150W_EDGE_A,
             f115,
@@ -327,8 +307,6 @@ class Cosmos25Adapter(CatalogAdapter):
         # slightly blueward of the F115W pivot, a mild extrapolation of the
         # local slope); F158 uses the F150W-F277W pair across the NIRCam
         # gap, the same convention as the gap continuum above.
-        from kl_pipe.ensemble.population import BAND_EFFECTIVE_LAMBDA_A
-
         band_flux_ujy = {}
         for band, (fb, lb, fr, lr) in {
             'F106': (f115, F115W_PIVOT_A, f150, F150W_PIVOT_A),
@@ -336,7 +314,7 @@ class Cosmos25Adapter(CatalogAdapter):
             'F158': (f150, F150W_PIVOT_A, f277, F277W_PIVOT_A),
         }.items():
             lam = np.full_like(f115, BAND_EFFECTIVE_LAMBDA_A[band])
-            band_flux_ujy[band] = _powerlaw_fnu(fb, lb, fr, lr, lam)
+            band_flux_ujy[band] = powerlaw_fnu(fb, lb, fr, lr, lam)
 
         f_lambda_obs = f_nu_cgs * C_A_PER_S / lambda_obs_a**2  # erg/cm2/s/A
         ew_rest_a = f_line / f_lambda_obs / (1.0 + z)  # A
@@ -350,7 +328,7 @@ class Cosmos25Adapter(CatalogAdapter):
         out['f_lambda_cont_cgs'] = f_lambda_obs
         out['ew_rest_a'] = ew_rest_a
         out['disk_r50'] = disk_r50
-        out['rscale_arcsec'] = disk_r50 / R50_OVER_RSCALE
+        out['rscale_arcsec'] = disk_r50 / EXP_R50_OVER_RSCALE
         for band, values in band_flux_ujy.items():
             out[f'flux_{band.lower()}_ujy'] = values
 

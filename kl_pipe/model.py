@@ -457,6 +457,9 @@ class IntensityModel(Model):
     # Simple profiles use 'flux'; composites override to 'total_flux'.
     # Rendering factors this out to cache a unit-amplitude spatial eval, so
     # it must name the linear amplitude, not a shape parameter.
+    # 'flux' is the spatial integral of the rendered image in whatever unit
+    # the observation declares (see ImageObs.flux_unit); the model itself is
+    # unit-agnostic.
     amplitude_param = 'flux'
 
     def __call__(

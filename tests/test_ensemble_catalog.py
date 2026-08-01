@@ -177,7 +177,7 @@ class TestCatalogExpand:
                 expected = float(pop.loc[row['galaxy_id'], f'snr_bb_{band.lower()}'])
                 assert row[f'broadband_snr_{band}'] == expected
         # ...and the population value is the depth-anchor formula, recomputed
-        from kl_pipe.ensemble.population import compute_band_snr
+        from kl_pipe.surveys.roman import compute_band_snr
 
         band = config.bands[0]
         g = pop.iloc[0]
@@ -195,7 +195,7 @@ class TestCatalogExpand:
         # band truth = the catalog's interpolated Roman flux [uJy]; line
         # truth = the painted flux in 1e-17 erg/s/cm2 (CGS_TO_F17)
         _, config, manifest, population = run_parts
-        from kl_pipe.ensemble.population import CGS_TO_F17
+        from kl_pipe.photometry import CGS_TO_F17
 
         pop = population.set_index('pop_index')
         flux_key = (
@@ -217,7 +217,7 @@ class TestCatalogExpand:
         # support (covered separately by the truth-in-support test)
         spec, config, manifest, _ = run_parts
         from kl_pipe.ensemble.expander import truth_from_row
-        from kl_pipe.ensemble.population import CGS_TO_F17
+        from kl_pipe.photometry import CGS_TO_F17
 
         row = manifest.iloc[0]
         truth = truth_from_row(row)

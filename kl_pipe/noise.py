@@ -68,6 +68,8 @@ special-case shape.
 import numpy as np
 from typing import Optional, Tuple
 
+from kl_pipe.photometry import EXP_R50_OVER_RSCALE
+
 
 def add_intensity_noise(
     intensity: np.ndarray,
@@ -267,3 +269,53 @@ def grism_line_noise(
     rng = np.random.default_rng(seed)
     noisy = full + rng.normal(0.0, np.sqrt(var), size=full.shape)
     return noisy, var
+
+
+# Gaussian FWHM -> sigma divisor, 2*sqrt(2 ln 2) ~= 2.355
+FWHM_TO_SIGMA = 2.355
+
+
+def gaussian_matched_filter_compactness(
+    r50_arcsec: np.ndarray, cosi: np.ndarray, psf_fwhm_arcsec: np.ndarray
+) -> np.ndarray:
+    """Matched-filter SNR of an extended source relative to a point source.
+
+    The compactness ratio C in (0, 1]: the matched-filter SNR of a source at
+    a given flux divided by that of an unresolved source at the same flux.
+    Pure detection math -- it needs no noise estimate, only the source and
+    PSF shapes:
+
+        C = sigma_psf / sqrt(s1 * s2),  s_i = sqrt(sigma_psf^2 + sig_i^2)
+
+    with the galaxy approximated as an elliptical Gaussian of
+    sigma_major = r50 / 1.678 (the exponential scalelength) and
+    sigma_minor = cosi * sigma_major, and the PSF as a Gaussian of the given
+    FWHM divided by 2.355. This is the correct matched-filter amplitude
+    ratio for Gaussians (NOT the peak-pixel square of an earlier prototype,
+    which was a bug).
+
+    Parameters
+    ----------
+    r50_arcsec : np.ndarray
+        Source half-light radius [arcsec]; must be positive.
+    cosi : np.ndarray
+        Cosine of inclination (minor/major axis ratio of the thin disk).
+    psf_fwhm_arcsec : np.ndarray
+        PSF full width at half maximum [arcsec].
+
+    Returns
+    -------
+    np.ndarray
+        Compactness C in (0, 1]; C -> 1 for unresolved sources.
+    """
+    r50_arcsec = np.asarray(r50_arcsec, dtype=np.float64)
+    cosi = np.asarray(cosi, dtype=np.float64)
+    if np.any(r50_arcsec <= 0):
+        raise ValueError("compactness: r50_arcsec must be positive")
+
+    sigma_psf = np.asarray(psf_fwhm_arcsec, dtype=np.float64) / FWHM_TO_SIGMA
+    sig_maj = r50_arcsec / EXP_R50_OVER_RSCALE
+    sig_min = cosi * sig_maj
+    s1 = np.sqrt(sigma_psf**2 + sig_maj**2)
+    s2 = np.sqrt(sigma_psf**2 + sig_min**2)
+    return sigma_psf / np.sqrt(s1 * s2)

@@ -28,7 +28,7 @@ per-galaxy truths, with one declared unit per channel:
 | Scene parameter | Unit | Source |
 |---|---|---|
 | `{band}.flux` / `{band}.total_flux` | uJy (f_nu; AB = 23.9 - 2.5 log10 f) | catalog photometry, power-law interpolated to the Roman band effective wavelength; line-inclusive (what the image contains) |
-| `Halpha.flux` | 1e-17 erg/s/cm² (`population.CGS_TO_F17`) | painted catalog line flux |
+| `Halpha.flux` | 1e-17 erg/s/cm² (`photometry.CGS_TO_F17`) | painted catalog line flux |
 | `Halpha.cont.flux_per_nm` | 1e-17 erg/s/cm² per nm | line flux / EW_obs |
 
 The two channels carry different physical units; that is fine because no
@@ -37,9 +37,21 @@ variance share one unit. Per-galaxy SNR is a *derived* quantity: the
 matched-filter SNR of the truth template against the noise level implied by
 the published survey depths (ROTAC HLWAS Medium: point-source imaging
 depths, extended-source grism line limit — each channel anchored to its own
-published convention; see `population.IMAGING_DEPTH_AB` /
+published convention; see `kl_pipe.surveys.roman.IMAGING_DEPTH_AB` /
 `F_LIM_COADD_CGS`). Sampled (non-catalog) mode keeps the legacy scene-
 constant fluxes and spec-scalar SNRs.
+
+Naming rule: a parameter named `flux` is the spatial integral of its
+channel's image, in whatever unit that channel declares; `flux_per_nm`
+marks the one parameter that is a spectral density inside the model math
+(the cube assembly treats it differently — see below). The names encode
+the parameter's role in the model and follow standard catalog convention
+(broadband fluxes are quoted in f_nu units like uJy, line fluxes in
+erg/s/cm²); the physical unit itself is a per-channel declaration — the
+table above, mirrored machine-readably by the `flux_unit` metadata field
+on `ImageObs`/`GrismObs`, which the ensemble sets in catalog mode. Unit
+conversion helpers (AB mag ↔ uJy, f_nu → f_lambda, depth → flux limit,
+power-law band interpolation) live in `kl_pipe.photometry`.
 
 ## Render method units
 

@@ -27,10 +27,14 @@ from kl_pipe.ensemble.catalogs.cosmos25 import (
     F150W_PIVOT_A,
     F150W_RED_EDGE_A,
     F277W_PIVOT_A,
-    R50_OVER_RSCALE,
+)
+from kl_pipe.ensemble.population import build_population
+from kl_pipe.photometry import (
+    C_A_PER_S,
+    EXP_R50_OVER_RSCALE,
+    HALPHA_REST_A,
     UJY_TO_CGS,
 )
-from kl_pipe.ensemble.population import C_A_PER_S, HALPHA_REST_A, build_population
 from kl_pipe.ensemble.spec import EnsembleSpec
 
 pytestmark = pytest.mark.roman_ensemble
@@ -124,7 +128,7 @@ def test_band_flux_powerlaw_interpolation():
         F150W_PIVOT_A,
         F277W_PIVOT_A,
     )
-    from kl_pipe.ensemble.population import BAND_EFFECTIVE_LAMBDA_A
+    from kl_pipe.surveys.roman import BAND_EFFECTIVE_LAMBDA_A
 
     df = fake_cosmos25_rows(n=200, seed=99)
     out = COSMOS25.preprocess(df, preprocess_spec('as_delivered'))
@@ -395,7 +399,7 @@ class TestContinuum:
         pre = COSMOS25.preprocess(raw, preprocess_spec())
         np.testing.assert_allclose(
             pre['rscale_arcsec'],
-            pre['disk_r50'].to_numpy() / R50_OVER_RSCALE,
+            pre['disk_r50'].to_numpy() / EXP_R50_OVER_RSCALE,
             rtol=1e-12,
         )
 

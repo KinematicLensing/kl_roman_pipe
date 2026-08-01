@@ -327,7 +327,16 @@ def _wcs_with_pc(shape, pixel_scale: float, rotation_radians: float):
 
 
 def _make_band_obs(
-    source, truth, psf_mock, psf_fit, image_pars, band, snr, seed, oversample
+    source,
+    truth,
+    psf_mock,
+    psf_fit,
+    image_pars,
+    band,
+    snr,
+    seed,
+    oversample,
+    flux_unit=None,
 ):
     int_model = source.broadband_models[band]
     # truth data through the mock-fidelity kernel; the fit obs carries the
@@ -349,6 +358,7 @@ def _make_band_obs(
         variance=var,
         int_model=int_model,
         broadband_key=band,
+        flux_unit=flux_unit,
     )
 
 
@@ -392,6 +402,7 @@ def _make_roll_obs(
     oversample,
     kernel_size_mock,
     kernel_size_fit,
+    flux_unit=None,
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
@@ -426,6 +437,7 @@ def _make_roll_obs(
         data=jnp.asarray(data_noisy),
         variance=var,
         psf_kernel_size=kernel_size_fit,
+        flux_unit=flux_unit,
     )
 
 
@@ -527,6 +539,7 @@ def build_fit_inputs(
             band_snrs[band],
             seeds[i],
             spec.render_oversample,
+            flux_unit='uJy (band-averaged f_nu)' if is_catalog else None,
         )
 
     grism_psf_mock = _build_grism_psf(config.grism_psf, z, mock=True)
@@ -550,6 +563,9 @@ def build_fit_inputs(
             spec.render_oversample,
             kernel_size_mock,
             kernel_size_fit,
+            flux_unit=(
+                '1e-17 erg/s/cm2 (integrated line flux)' if is_catalog else None
+            ),
         )
 
     return FitInputs(

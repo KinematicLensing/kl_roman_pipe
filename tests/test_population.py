@@ -27,13 +27,10 @@ from kl_pipe.ensemble.population import (
     BULGE_SIZE_RATIO_LN_SCATTER,
     BULGE_SIZE_RATIO_MAX,
     BULGE_SIZE_RATIO_MEDIAN,
-    R50_TO_SIGMA,
     build_population,
-    compute_line_snr_per_pass,
-    compute_line_snr_total,
-    matched_filter_compactness,
     write_population,
 )
+from kl_pipe.photometry import EXP_R50_OVER_RSCALE
 from kl_pipe.ensemble.spec import CatalogPopulationSpec, EnsembleSpec
 
 pytestmark = pytest.mark.roman_ensemble
@@ -425,49 +422,6 @@ class TestPreprocess:
 
 
 # ==============================================================================
-# Matched-filter compactness + line SNR
-# ==============================================================================
-
-
-class TestCompactness:
-    def test_monotonic_decreasing_in_reff(self):
-        reff = np.linspace(0.05, 2.0, 50)
-        c = matched_filter_compactness(reff, np.full(50, 0.5), np.full(50, 1.0))
-        assert (np.diff(c) < 0).all()
-
-    def test_bounds(self):
-        rng = np.random.default_rng(11)
-        c = matched_filter_compactness(
-            rng.uniform(0.01, 3.0, 500),
-            rng.uniform(0.05, 0.95, 500),
-            rng.uniform(0.55, 1.9, 500),
-        )
-        assert (c > 0).all() and (c <= 1.0).all()
-
-    def test_unresolved_limit(self):
-        # reff << PSF -> C -> 1
-        c = matched_filter_compactness(
-            np.array([1e-4]), np.array([0.5]), np.array([1.0])
-        )
-        assert c[0] > 0.999
-
-    def test_snr_reference_source_anchor(self):
-        # the source the limit is referenced to, at exactly the per-pass
-        # limit, has SNR = F_LIM_NSIGMA -- true under either reference
-        snr = compute_line_snr_per_pass(
-            np.array([population.F_LIM_PER_PASS_CGS]),
-            np.array([population.fiducial_compactness()]),
-        )
-        np.testing.assert_allclose(snr, [population.F_LIM_NSIGMA], rtol=1e-12)
-
-    def test_nonpositive_reff_raises(self):
-        with pytest.raises(ValueError, match='positive'):
-            matched_filter_compactness(
-                np.array([0.0]), np.array([0.5]), np.array([1.0])
-            )
-
-
-# ==============================================================================
 # build_population
 # ==============================================================================
 
@@ -632,7 +586,7 @@ class TestBulgePaint:
         lo = min(BULGE_PSEUDO_N[2], BULGE_CLASSICAL_N[2])
         hi = max(BULGE_PSEUDO_N[3], BULGE_CLASSICAL_N[3])
         assert np.all((n >= lo) & (n <= hi))
-        disk_r50 = R50_TO_SIGMA * df['rscale_arcsec'].to_numpy()
+        disk_r50 = EXP_R50_OVER_RSCALE * df['rscale_arcsec'].to_numpy()
         ratio = df['bulge_r50_arcsec'].to_numpy() / disk_r50
         # cap is strict in the paint; 1e-5 covers the fake catalog's float32
         # scalelength round-trip
@@ -649,7 +603,7 @@ class TestBulgePaint:
         assert abs(pseudo_frac - BULGE_PSEUDO_WEIGHT) < 0.11
         # lognormal ratio median: asymptotic sd of the sample ln-median is
         # 1.2533 * 0.4 / sqrt(300) = 0.029; 4 sigma -> |ln(med/0.3)| < 0.116
-        disk_r50 = R50_TO_SIGMA * df['rscale_arcsec'].to_numpy()
+        disk_r50 = EXP_R50_OVER_RSCALE * df['rscale_arcsec'].to_numpy()
         ratio = df['bulge_r50_arcsec'].to_numpy() / disk_r50
         assert abs(np.log(np.median(ratio) / BULGE_SIZE_RATIO_MEDIAN)) < 0.116
 
@@ -673,7 +627,7 @@ class TestBulgePaint:
         # a sub-PSF disk has no velocity gradient to fit, and the
         # extended-fiducial flux reference rewards compact sources, so the cut
         # is what keeps the selection above the resolution limit
-        from kl_pipe.ensemble.population import psf_fwhm_arcsec
+        from kl_pipe.surveys.roman import psf_fwhm_arcsec
 
         # the fake catalog draws disk_r50 from U(0.1, 0.6) arcsec against a
         # PSF FWHM of ~0.15 arcsec, so r50 / FWHM spans ~0.65-4; a floor of
@@ -683,7 +637,11 @@ class TestBulgePaint:
         d['population']['sample']['n_galaxies'] = 50
         d['population']['selection']['min_r50_over_psf_fwhm'] = floor
         df, meta = build_population(spec_from_dict(tmp_path, d))
-        ratio = df['rscale_arcsec'].to_numpy() * R50_TO_SIGMA / psf_fwhm_arcsec(df['z'])
+        ratio = (
+            df['rscale_arcsec'].to_numpy()
+            * EXP_R50_OVER_RSCALE
+            / psf_fwhm_arcsec(df['z'])
+        )
         assert (ratio >= floor).all()
         assert meta['kills']['resolvability'] > 0
 
@@ -881,202 +839,11 @@ class TestCLI:
         assert (out_dir / 'population_meta.json').exists()
 
 
-class TestLineSnrReference:
-    """The source F_LIM is referenced to (population.SNR_LINE_REFERENCE).
-
-    Getting this wrong double-counts (or omits) the extended-source penalty.
-    Wang et al. 2022 Sect. 5 derive the published Roman line-flux limits for
-    a galaxy of half-light radius 0.25 arcsec at 1.5 micron, not for a point
-    source; 'extended_fiducial' encodes that convention.
-    """
-
-    @pytest.fixture(autouse=True)
-    def restore_reference(self):
-        original = population.SNR_LINE_REFERENCE
-        yield
-        population.SNR_LINE_REFERENCE = original
-
-    def test_default_is_extended_fiducial(self):
-        # the ROTAC limit is an extended-source limit: the committee asked
-        # the HLSS PIT for "line flux limits for a realistic extended source"
-        # (Appendix B.2 item 1a) while asking separately for point-source and
-        # extended imaging depths (B.1 item 1a), Sect. 3.1 labels only the
-        # imaging depth "5 sigma point source", and Sect. 4.2.1 refers to
-        # Wang et al. 2022, whose limits are for r50 = 0.25 arcsec. A
-        # point-source reading would also put our yield 12x below the 14.2M
-        # Halpha over 2400 deg2 that ROTAC forecasts in Sect. 4.4.3.
-        assert population.SNR_LINE_REFERENCE == 'extended_fiducial'
-        assert 0.0 < population.fiducial_compactness() < 1.0
-
-    def test_point_source_reference_is_identity(self):
-        # a point source (C = 1) at exactly the per-pass limit has
-        # SNR = F_LIM_NSIGMA when the limit is referenced to a point source
-        population.SNR_LINE_REFERENCE = 'point_source'
-        assert population.fiducial_compactness() == 1.0
-        snr = compute_line_snr_per_pass(
-            np.array([population.F_LIM_PER_PASS_CGS]), np.array([1.0])
-        )
-        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
-
-    def test_fiducial_galaxy_lands_on_nsigma(self):
-        # self-consistency: under the extended reference, the very galaxy the
-        # limit was derived for must sit exactly at F_LIM_NSIGMA when its
-        # flux equals F_LIM
-        z_ref = population.F_LIM_REF_LAMBDA_A / population.HALPHA_REST_A - 1.0
-        c_fid = matched_filter_compactness(
-            np.array([population.F_LIM_REF_R50_ARCSEC]),
-            np.array([1.0]),
-            np.array([z_ref]),
-        )
-        snr = compute_line_snr_per_pass(
-            np.array([population.F_LIM_PER_PASS_CGS]), c_fid
-        )
-        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
-
-    def test_extended_reference_rewards_compact_sources(self):
-        # a point source beats the extended fiducial by exactly 1 / C_fid
-        c_ref = population.fiducial_compactness()
-        assert 0.0 < c_ref < 1.0
-        snr = compute_line_snr_per_pass(
-            np.array([population.F_LIM_PER_PASS_CGS]), np.array([1.0])
-        )
-        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA / c_ref, rel=1e-12)
-
-    def test_reference_choice_is_a_pure_rescaling(self):
-        # switching reference must not change the RANKING of galaxies, only
-        # the overall normalization -- the physics of C is untouched
-        f = np.array([1e-16, 3e-16, 5e-16])
-        c = np.array([0.2, 0.5, 0.9])
-        c_fid = population.fiducial_compactness()
-        extended = compute_line_snr_per_pass(f, c)
-        population.SNR_LINE_REFERENCE = 'point_source'
-        point = compute_line_snr_per_pass(f, c)
-        ratio = extended / point
-        assert np.allclose(ratio, ratio[0], rtol=1e-12)
-        assert ratio[0] == pytest.approx(1.0 / c_fid)
-
-    def test_unknown_reference_raises(self):
-        population.SNR_LINE_REFERENCE = 'not_a_reference'
-        with pytest.raises(ValueError, match='SNR_LINE_REFERENCE'):
-            population.fiducial_compactness()
-
-
-class TestLineSnrCoadd:
-    """Per-pass vs coadded line SNR.
-
-    The published limit is the coadd over N_GRISM_PASSES passes; a single
-    pass is sqrt(N) shallower. Selection cuts belong on the total (the depth
-    the joint multi-roll fit sees), while each roll's mock noise is
-    normalized to one pass.
-    """
-
-    def test_total_is_sqrt_n_times_per_pass(self):
-        f = np.array([1e-16, 4e-16])
-        c = np.array([0.3, 0.8])
-        ratio = compute_line_snr_total(f, c) / compute_line_snr_per_pass(f, c)
-        expected = np.sqrt(population.N_GRISM_PASSES)
-        np.testing.assert_allclose(ratio, expected, rtol=1e-12)
-
-    def test_per_pass_limit_is_sqrt_n_shallower_than_coadd(self):
-        assert population.F_LIM_PER_PASS_CGS == pytest.approx(
-            population.F_LIM_COADD_CGS * np.sqrt(population.N_GRISM_PASSES), rel=1e-12
-        )
-
-    def test_reference_source_at_coadd_limit_hits_nsigma(self):
-        # the source the published coadded limit was derived for, at exactly
-        # that flux, sits at F_LIM_NSIGMA in the coadd
-        snr = compute_line_snr_total(
-            np.array([population.F_LIM_COADD_CGS]),
-            np.array([population.fiducial_compactness()]),
-        )
-        assert snr[0] == pytest.approx(population.F_LIM_NSIGMA, rel=1e-12)
-
-
-class TestPublishedConstants:
-    """The survey numbers the whole selection chain hangs on.
-
-    Every other test in this module references these symbolically, so
-    without a literal pin an edit to any of them would rescale the selected
-    number density with nothing failing. Each value is quoted from its
-    source below; changing one means the source changed.
-    """
-
-    def test_flux_limit_matches_rotac(self):
-        # ROTAC Final Report 2025-04-24 v3, Sect. 3.1: HLWAS medium tier
-        # "1.5 x 10^-16 erg/cm2/sec (5 sigma line flux limit, texp ~ 1500
-        # sec)", the coadd over the 4 grism passes of Sect. 4.4.3
-        assert population.F_LIM_COADD_CGS == 1.5e-16
-        assert population.F_LIM_NSIGMA == 5.0
-        assert population.N_GRISM_PASSES == 4
-
-    def test_extended_fiducial_matches_wang22(self):
-        # Wang et al. 2022 (arXiv:2110.01829) Sect. 5.1: limits derived
-        # "for galaxies with radius 0.25 arcsec at 1.5 micron"
-        assert population.F_LIM_REF_R50_ARCSEC == 0.25
-        assert population.F_LIM_REF_LAMBDA_A == 1.5e4
-        # the resulting reference compactness, which divides every galaxy's
-        # C and therefore sets the overall yield normalization
-        assert population.fiducial_compactness() == pytest.approx(0.4148, abs=5e-5)
-
-    def test_imaging_depths_match_rotac(self):
-        # ROTAC Final Report Table 1 (arXiv:2505.10574): HLWAS medium
-        # 5-sigma point-source coadded depths, F106 26.5 / F129 26.4 /
-        # F158 26.4 AB ("26.4 (JH)" grouped in the table itself)
-        assert population.IMAGING_DEPTH_AB == {
-            'F106': 26.5,
-            'F129': 26.4,
-            'F158': 26.4,
-        }
-        assert population.IMAGING_DEPTH_NSIGMA == 5.0
-        # AB <-> uJy pivot; f_lim(F129) = 10**((23.9 - 26.4)/2.5) = 0.1 uJy
-        assert population.AB_MAG_UJY_PIVOT == 23.9
-        assert population.band_flux_limit_ujy('F129') == pytest.approx(0.1)
-
-    def test_band_effective_wavelengths_match_galsim(self):
-        # pinned literals vs galsim.roman getBandpasses effective_wavelength
-        # (nm), the source recorded on BAND_EFFECTIVE_LAMBDA_A
-        galsim_roman = pytest.importorskip('galsim.roman')
-        bps = galsim_roman.getBandpasses()
-        legacy = {'F106': 'Y106', 'F129': 'J129', 'F158': 'H158'}
-        for band, lam_a in population.BAND_EFFECTIVE_LAMBDA_A.items():
-            expected_a = bps[legacy[band]].effective_wavelength * 10.0
-            assert lam_a == pytest.approx(expected_a, rel=5e-4), band
-
-    def test_extended_source_offset_reproduces_rotac_footnote(self):
-        # ROTAC Table 1 caption: "r1/2 = 0.3 arcsec extended source
-        # thresholds are typically ~1.1 mag brighter" than the point-source
-        # depths. The Gaussian matched-filter proxy must reproduce that
-        # statement; tolerance 0.3 mag covers the proxy-vs-ETC difference
-        # (measured 2026-07-31: F129 1.27, F158 1.08 mag)
-        for band in ('F129', 'F158'):
-            c = population.imaging_compactness(np.array([0.3]), np.array([1.0]), band)[
-                0
-            ]
-            offset_mag = -2.5 * np.log10(c)
-            assert abs(offset_mag - 1.1) < 0.3, (band, offset_mag)
-
-    def test_band_snr_and_sigma_are_consistent(self):
-        # sigma_f = f / SNR by construction (the flux cancels): the two
-        # helpers must agree exactly, and the flux-independence must hold
-        reff = np.array([0.15, 0.3])
-        cosi = np.array([0.4, 0.9])
-        f = np.array([5.0, 50.0])
-        snr = population.compute_band_snr(f, reff, cosi, 'F158')
-        sigma = population.band_flux_sigma_ujy(reff, cosi, 'F158')
-        np.testing.assert_allclose(f / snr, sigma, rtol=1e-12)
-
-    def test_line_flux_sigma_is_coadd_referenced(self):
-        # sigma_f = (F_LIM_COADD / 5) * C_ref / C: at the reference
-        # compactness the sigma is exactly the published coadded limit / 5
-        c_ref = population.fiducial_compactness()
-        sigma = population.line_flux_sigma_cgs(np.array([c_ref]))[0]
-        assert sigma == pytest.approx(population.F_LIM_COADD_CGS / 5.0, rel=1e-12)
-
-
 class TestPaintConstants:
     """Literal pins for the literature paint constants.
 
-    Same rationale as TestPublishedConstants: every truth the expander
+    Same rationale as TestPublishedConstants (tests/test_surveys_roman.py):
+    every truth the expander
     paints hangs on these numbers, the prior-provenance registry quotes
     them, and nothing else fails if one is silently edited. Each value's
     full provenance lives in the comment block above its definition in
