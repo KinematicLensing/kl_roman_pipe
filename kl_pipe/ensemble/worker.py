@@ -371,6 +371,10 @@ def _run_fit_attempt(
         init_inverse_mass_matrix=init_inverse_mass,
         n_map_starts=spec.n_map_starts,
         seed=sampler_seed,
+        # the numpyro progress bar is a host callback inside the sampling
+        # loop; ensemble workers write to log files where it is pure
+        # overhead
+        progress=False,
     )
 
     preconditioner = reuse.preconditioner if reuse is not None else None
