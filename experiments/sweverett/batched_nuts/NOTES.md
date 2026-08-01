@@ -97,3 +97,28 @@ Robustness flags for the infra version (not exercised as failures here):
   (pre-submission math check-in first).
 - XLA "algebraic simplifier circular loop" warnings reappear on these
   compiles (known from 07-29, watch compile times).
+
+## Experiment 3: shared posterior + grads + batched-NUTS smoke (2026-08-01) — ALL PASS
+
+Script: `proto_v3_batched_posterior.py` (4 fits, CPU). Priors travel as data:
+all numeric attrs of each Prior's `__dict__` (incl. derived caches) traced,
+template shallow-copied inside the trace; conditional log-normal parent
+resolution mirrored from `PriorDict.log_prior` (static structure asserted
+identical across galaxies).
+
+- H4 PASS: shared posterior vs `task.get_log_posterior_and_grad_fn()` value,
+  max rel 3.24e-15.
+- H5 PASS: grads max rel 8.96e-14; ONE shared compile across fits (the +1
+  per fit in the compile log is each reference task's own grad compile).
+- H6 PASS (machinery only): `jit(vmap(warmup+scan))` blackjax NUTS, dense
+  window adaptation per lane, `max_num_doublings=5`, 2 lanes x (10+5) steps,
+  82 s CPU incl. compile; finite states, per-lane step sizes distinct.
+  NOTE: blackjax `window_adaptation(...).run` returns extra kernel kwargs in
+  its params dict — do not pass `max_num_doublings` again at kernel build.
+- CPU lockstep NUTS at production depth is hours-slow (first attempt at
+  4 lanes x 30 steps uncapped blew a 10-min budget) — real sampling
+  measurements belong on vista, as ruled.
+
+Next: vista gh-dev demo (pre-submission check-in first): 16 fits x 4 chains
+= 64 lanes batched NUTS, parity gates vs the existing bb32gr32 solo results
+already on vista disk.
