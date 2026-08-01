@@ -63,6 +63,31 @@ recombined via `dataclasses.replace` inside the traced function, with loud
 equality asserts at batch-build time for every aux field that must be
 galaxy-independent. Avoids touching ImagePars equality semantics repo-wide.
 
+## Experiment 2: shared program across the run (2026-08-01) — ALL PASS
+
+Script: `proto_v2_shared_program.py`, all 16 fits of the bb32gr32 expansion
+(z 0.95-1.69). Static template (fit 0's obs) closed over; dynamic pytree arg
+carries per-fit {image data/variance, grism data/variance/psf_data/lambda_ref,
+fixed_pars}; halfwidth pinned to run max (23-31 -> 31); continuum kernel
+precomputed once (galaxy-independence ASSERTED against a second galaxy's
+kernel, exact match).
+
+- H1 PASS: max rel diff vs per-galaxy closure baselines 1.57e-15.
+- H2 PASS: 1 compile total, 0 recompiles across the other 15 fits
+  (2.5 s once + 30 ms/call CPU; closure path = 16 full compiles, 40 s).
+- H3 PASS: vmap over all 16 stacked fits, max rel diff 8.5e-16, one 3.4 s
+  compile.
+
+Robustness flags for the infra version (not exercised as failures here):
+1. Broadband PSF leaves were NOT in the dynamic pytree (template's PSF used
+   for all fits) and H1 still passed at ulp level -- so the z<=1.2 vs >1.2
+   folding-threshold tier did not change kernel values for this bank. Do
+   NOT rely on that: include broadband psf_data/kspace_psf_fft in the
+   dynamic leaves (cheap, always correct), and assert leaf-shape equality
+   at batch build with a loud error naming the offending fit.
+2. The kernel monkeypatch is prototype-only; infra hoists the continuum
+   kernel to likelihood construction (grism_group_operators precedent).
+
 ## Next
 
 - v2: implement split/merge + traced lambda_ref + halfwidth pin; H1/H2 on
