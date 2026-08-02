@@ -42,8 +42,16 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from proto_v2_shared_program import build_inputs, pin_halfwidth
-from proto_v3_batched_posterior import extract_dyn, make_shared_posterior
+from proto_v2_shared_program import (
+    build_inputs,
+    pin_halfwidth,
+    precompute_continuum_kernel,
+)
+from proto_v3_batched_posterior import (
+    assert_prior_structure,
+    extract_dyn,
+    make_shared_posterior,
+)
 
 from kl_pipe.ensemble.expander import load_run
 from kl_pipe.sampling.transforms import UnconstrainingTransform
@@ -82,29 +90,17 @@ def main():
     )
     built = [(inp, img, pin_halfwidth(grm, hw_max)) for inp, img, grm in built]
 
-    # continuum kernel: galaxy-independent under flat throughput (asserted
-    # in experiment 2); precompute once and pin
+    # continuum kernel: precompute once and pin, with galaxy-independence
+    # asserted across every fit and roll in the bank
     import kl_pipe.dispersion as kdisp
 
     tmpl_inp, tmpl_img, tmpl_grm = built[0]
-    roll0 = next(iter(tmpl_grm.values()))
-    gp0 = roll0.grism_pars
-    half_nm = (gp0.image_pars.Ncol + 2) * gp0.dispersion
-    kern0, m_lo0 = kdisp.continuum_trace_kernel(
-        gp0,
-        roll0.cube_pars.lambda_grid,
-        roll0.oversample,
-        integration_window=(gp0.lambda_ref - half_nm, gp0.lambda_ref + half_nm),
-    )
-    gp_last = next(iter(built[-1][2].values())).grism_pars
-    kern_l, m_lo_l = kdisp.continuum_trace_kernel(
-        gp_last,
-        next(iter(built[-1][2].values())).cube_pars.lambda_grid,
-        next(iter(built[-1][2].values())).oversample,
-        integration_window=(gp_last.lambda_ref - half_nm, gp_last.lambda_ref + half_nm),
-    )
-    assert m_lo0 == m_lo_l and np.array_equal(kern0, kern_l)
+    kern0, m_lo0 = precompute_continuum_kernel(built)
     kdisp.continuum_trace_kernel = lambda *a, **kw: (kern0, m_lo0)
+
+    # prior structure (types, attr sets, parent wiring) must match the
+    # template exactly -- only numeric prior attributes travel per galaxy
+    assert_prior_structure(built, names)
 
     shared = make_shared_posterior(
         tmpl_inp.source, names, tmpl_img, tmpl_grm, tmpl_inp.priors
@@ -132,6 +128,30 @@ def main():
         dyn['tf_lows'] = jnp.asarray(tf.lows)
         dyn['tf_highs'] = jnp.asarray(tf.highs)
         dyns.append(dyn)
+    # every fit's dynamic pytree must mirror the template's structure and
+    # leaf shapes; name the offending fit and leaf instead of letting
+    # jnp.stack fail cryptically (PSFData shape metadata lives in aux, so a
+    # kernel-shape mismatch surfaces here as a treedef difference)
+    tmpl_paths = {
+        jax.tree_util.keystr(p): jnp.shape(leaf)
+        for p, leaf in jax.tree_util.tree_flatten_with_path(dyns[0])[0]
+    }
+    tmpl_treedef = jax.tree_util.tree_structure(dyns[0])
+    for i, dyn in enumerate(dyns):
+        treedef = jax.tree_util.tree_structure(dyn)
+        if treedef != tmpl_treedef:
+            raise AssertionError(
+                f'fit {fit_ids[i]}: dyn pytree structure differs from template '
+                f'(e.g. PSF kernel shape or missing leaf)'
+            )
+        for p, leaf in jax.tree_util.tree_flatten_with_path(dyn)[0]:
+            key = jax.tree_util.keystr(p)
+            if jnp.shape(leaf) != tmpl_paths[key]:
+                raise AssertionError(
+                    f'fit {fit_ids[i]}: leaf {key} shape {jnp.shape(leaf)} '
+                    f'!= template {tmpl_paths[key]}'
+                )
+
     lane_dyns = [dyns[i] for i in range(len(built)) for _ in range(N_CHAINS)]
     dyn_batch = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *lane_dyns)
 
@@ -156,7 +176,14 @@ def main():
         for c in range(N_CHAINS):
             key, sub = jax.random.split(key)
             th0 = np.asarray(truth + 0.01 * stds * jax.random.normal(sub, truth.shape))
-            eta0, _ = tf.forward_clipped(th0, u_margin=1e-6)
+            eta0, clipped = tf.forward_clipped(th0, u_margin=1e-6)
+            n_clip = int(np.sum(np.asarray(clipped)))
+            if n_clip:
+                clip_names = [names[j] for j in np.flatnonzero(np.asarray(clipped))]
+                print(
+                    f'WARNING: fit {fit_ids[i]} chain {c}: init clipped to '
+                    f'prior support for {clip_names}'
+                )
             lane_inits.append(jnp.asarray(eta0))
     theta0 = jnp.stack(lane_inits)
 

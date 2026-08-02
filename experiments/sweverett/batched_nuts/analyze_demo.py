@@ -22,25 +22,15 @@ import numpy as np
 import pandas as pd
 
 
-def rhat(x):
-    # x: (n_chains, n_draws) split-R-hat
-    n_c, n_d = x.shape
-    half = n_d // 2
-    parts = x[:, :half], x[:, half : 2 * half]
-    chains = np.concatenate(parts, axis=0)
-    m, n = chains.shape
-    cm = chains.mean(axis=1)
-    b = n * cm.var(ddof=1)
-    w = chains.var(axis=1, ddof=1).mean()
-    return float(np.sqrt(((n - 1) / n * w + b / n) / w))
+def rhat_and_ess(x):
+    # x: (n_chains, n_draws); production's own estimators (numpyro summary
+    # split_gelman_rubin + n_eff) so gate results are directly comparable
+    # to the ensemble worker's -- arviz bulk-ESS differs enough to flip
+    # hair's-breadth fits
+    from numpyro.diagnostics import summary
 
-
-def ess(x):
-    # x: (n_chains, n_draws)
-    import arviz as az
-
-    ds = az.convert_to_dataset(x[:, :, None])
-    return float(np.asarray(az.ess(ds).x.values).ravel()[0])
+    s = summary({'x': x})['x']
+    return float(s['r_hat']), float(s['n_eff'])
 
 
 def main():
@@ -85,8 +75,7 @@ def main():
         for j, name in enumerate(names):
             x = chains[:, :, j]
             mb, sb = float(x.mean()), float(x.std(ddof=1))
-            r = rhat(x)
-            e = ess(x)
+            r, e = rhat_and_ess(x)
             row = {
                 'fit_id': fid,
                 'param': name,
@@ -115,6 +104,23 @@ def main():
         f"\nbatched quality: max R-hat {df['rhat_b'].max():.3f}, "
         f"min ESS {df['ess_b'].min():.0f}"
     )
+
+    # per-fit gate table: production escalation gate (rhat_max 1.05,
+    # ess_min 50, worst param per fit)
+    RHAT_MAX, ESS_MIN = 1.05, 50.0
+    gate = (
+        df.groupby('fit_id')
+        .agg(max_rhat=('rhat_b', 'max'), min_ess=('ess_b', 'min'))
+        .reset_index()
+    )
+    gate['pass'] = (gate['max_rhat'] <= RHAT_MAX) & (gate['min_ess'] >= ESS_MIN)
+    print(f'\nper-fit gates (rhat<={RHAT_MAX}, ess>={ESS_MIN:.0f}):')
+    for _, g in gate.iterrows():
+        print(
+            f"  {g['fit_id']}  max_rhat {g['max_rhat']:.3f}  "
+            f"min_ess {g['min_ess']:6.1f}  {'PASS' if g['pass'] else 'FAIL'}"
+        )
+    print(f"gate summary: {int(gate['pass'].sum())}/{len(gate)} pass")
     if len(have):
         print(
             f"parity vs solo ({have['fit_id'].nunique()} fits matched): "

@@ -82,10 +82,52 @@ def pin_halfwidth(grism_obs, hw):
     return out
 
 
+def precompute_continuum_kernel(built):
+    """Continuum trace kernel for the bank, asserting galaxy-independence.
+
+    With flat throughput the window lambda_ref +/- (Ncol+2)*dispersion makes
+    lambda_ref cancel in the kernel's s-range, so one kernel can serve every
+    fit -- but only while Ncol/dispersion/oversample also match. Compute the
+    kernel for EVERY fit and roll and require exact equality, naming the
+    offender (the earlier fit-0-vs-last spot check would miss a middle fit).
+    """
+    import kl_pipe.dispersion as kdisp
+
+    kern0 = m_lo0 = None
+    for i, (_, _, grm) in enumerate(built):
+        for roll_key, roll in grm.items():
+            gp = roll.grism_pars
+            assert gp.throughput is None, 'kernel precompute assumes flat T'
+            half_nm = (gp.image_pars.Ncol + 2) * gp.dispersion
+            kern, m_lo = kdisp.continuum_trace_kernel(
+                gp,
+                roll.cube_pars.lambda_grid,
+                roll.oversample,
+                integration_window=(gp.lambda_ref - half_nm, gp.lambda_ref + half_nm),
+            )
+            if kern0 is None:
+                kern0, m_lo0 = kern, m_lo
+            elif m_lo != m_lo0 or not np.array_equal(kern, kern0):
+                raise AssertionError(
+                    f'continuum kernel differs at fit {i} roll {roll_key}: '
+                    'the shared-program kernel pin would be silently wrong'
+                )
+    return kern0, m_lo0
+
+
 def extract_dyn(image_obs, grism_obs, fixed_pars):
     return {
         'image': {
-            k: {'data': o.data, 'variance': o.variance} for k, o in image_obs.items()
+            k: {
+                'data': o.data,
+                'variance': o.variance,
+                # broadband PSF is z-dependent (folding-tier split at z=1.2);
+                # serving it from the template would be silently wrong for a
+                # bank that crosses the tier, so it rides as traced leaves
+                'psf_data': o.psf_data,
+                'kspace_psf_fft': o.kspace_psf_fft,
+            }
+            for k, o in image_obs.items()
         },
         'grism': {
             k: {
@@ -109,6 +151,8 @@ def make_shared_fn(source, sampled_names, tmpl_image, tmpl_grism):
                 tmpl_image[k],
                 data=dyn['image'][k]['data'],
                 variance=dyn['image'][k]['variance'],
+                psf_data=dyn['image'][k]['psf_data'],
+                kspace_psf_fft=dyn['image'][k]['kspace_psf_fft'],
             )
             for k in tmpl_image
         }
@@ -165,38 +209,15 @@ def main():
     print(f'line_window_halfwidth: per-fit range {min(hws)}-{max(hws)}, pin {hw_max}')
     built = [(inp, img, pin_halfwidth(grm, hw_max)) for inp, img, grm in built]
 
-    # precompute the continuum trace kernel from the template (flat
-    # throughput -> lambda_ref-independent; assert that assumption)
+    # precompute the continuum trace kernel, asserting galaxy-independence
+    # across the whole bank (flat throughput -> lambda_ref cancels)
     import kl_pipe.dispersion as kdisp
 
     tmpl_inp, tmpl_img, tmpl_grm = built[0]
-    tmpl_roll = next(iter(tmpl_grm.values()))
-    assert tmpl_roll.grism_pars.throughput is None, 'kernel precompute assumes flat T'
-    gp0 = tmpl_roll.grism_pars
-    half_nm = (gp0.image_pars.Ncol + 2) * gp0.dispersion
-    window0 = (gp0.lambda_ref - half_nm, gp0.lambda_ref + half_nm)
-    kern0, m_lo0 = kdisp.continuum_trace_kernel(
-        gp0,
-        tmpl_roll.cube_pars.lambda_grid,
-        tmpl_roll.oversample,
-        integration_window=window0,
-    )
-    # cross-check lambda_ref independence against another galaxy's kernel
-    other_roll = next(iter(built[-1][2].values()))
-    gpo = other_roll.grism_pars
-    window_o = (gpo.lambda_ref - half_nm, gpo.lambda_ref + half_nm)
-    kern_o, m_lo_o = kdisp.continuum_trace_kernel(
-        gpo,
-        other_roll.cube_pars.lambda_grid,
-        other_roll.oversample,
-        integration_window=window_o,
-    )
-    assert m_lo0 == m_lo_o and np.array_equal(
-        kern0, kern_o
-    ), 'continuum kernel is NOT galaxy-independent; stop and investigate'
+    kern0, m_lo0 = precompute_continuum_kernel(built)
     print(
         f'continuum kernel precomputed: {kern0.shape[0]} taps, m_lo {m_lo0}, '
-        'galaxy-independence verified'
+        f'galaxy-independence verified across all {len(built)} fits'
     )
 
     # ---- per-galaxy closure baselines (reference values) --------------------

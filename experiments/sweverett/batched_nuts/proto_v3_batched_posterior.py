@@ -38,7 +38,11 @@ from kl_pipe.ensemble.expander import load_run
 from kl_pipe.likelihood import _log_likelihood_total_source
 from kl_pipe.sampling import InferenceTask
 
-from proto_v2_shared_program import build_inputs, pin_halfwidth
+from proto_v2_shared_program import (
+    build_inputs,
+    pin_halfwidth,
+    precompute_continuum_kernel,
+)
 
 RUN_DIR = Path(os.environ.get('KLPIPE_RUN_DIR', 'runs/cosmos25_ab_bb32gr32'))
 
@@ -53,10 +57,44 @@ def numeric_attrs(prior):
     return out
 
 
+def assert_prior_structure(built, names):
+    """Require identical prior STRUCTURE across the bank.
+
+    The shared posterior takes prior types, attribute sets, non-numeric
+    attribute values (e.g. a conditional prior's ``parent`` name), and the
+    PriorDict conditional-parent index from the template; only numeric
+    attributes travel per galaxy. Anything structural that differs would be
+    silently overridden by the template, so check all of it here.
+    """
+    tmpl_priors = built[0][0].priors
+    tmpl_index = dict(tmpl_priors._parent_index)
+    for i, (inp, _, _) in enumerate(built):
+        assert (
+            dict(inp.priors._parent_index) == tmpl_index
+        ), f'fit {i}: conditional parent index differs from template'
+        for n in names:
+            pa, pb = tmpl_priors.get_prior(n), inp.priors.get_prior(n)
+            assert type(pa) is type(pb), f'fit {i} {n}: {type(pa)} vs {type(pb)}'
+            assert set(vars(pa)) == set(vars(pb)), f'fit {i} {n}: attr sets differ'
+            for attr, va in vars(pa).items():
+                if isinstance(va, (bool, str)) or va is None:
+                    vb = vars(pb)[attr]
+                    assert va == vb, f'fit {i} {n}.{attr}: {va!r} vs {vb!r}'
+
+
 def extract_dyn(image_obs, grism_obs, fixed_pars, priors, sampled_names):
     dyn = {
         'image': {
-            k: {'data': o.data, 'variance': o.variance} for k, o in image_obs.items()
+            k: {
+                'data': o.data,
+                'variance': o.variance,
+                # broadband PSF is z-dependent (folding-tier split at z=1.2);
+                # traced leaves so a tier-crossing bank cannot silently reuse
+                # the template's kernels
+                'psf_data': o.psf_data,
+                'kspace_psf_fft': o.kspace_psf_fft,
+            }
+            for k, o in image_obs.items()
         },
         'grism': {
             k: {
@@ -99,6 +137,8 @@ def make_shared_posterior(source, sampled_names, tmpl_image, tmpl_grism, tmpl_pr
                 tmpl_image[k],
                 data=dyn['image'][k]['data'],
                 variance=dyn['image'][k]['variance'],
+                psf_data=dyn['image'][k]['psf_data'],
+                kspace_psf_fft=dyn['image'][k]['kspace_psf_fft'],
             )
             for k in tmpl_image
         }
@@ -148,26 +188,14 @@ def main():
     )
     built = [(inp, img, pin_halfwidth(grm, hw_max)) for inp, img, grm in built]
 
-    # prior structure must be identical across galaxies (types + attr sets)
-    for inp, _, _ in built:
-        for n in names:
-            pa, pb = built[0][0].priors.get_prior(n), inp.priors.get_prior(n)
-            assert type(pa) is type(pb), f'{n}: {type(pa)} vs {type(pb)}'
-            assert set(numeric_attrs(pa)) == set(numeric_attrs(pb)), n
+    # prior structure must be identical across galaxies
+    assert_prior_structure(built, names)
 
-    # continuum kernel precompute + monkeypatch (experiment 2 conclusion)
+    # continuum kernel precompute (asserted galaxy-independent) + monkeypatch
     import kl_pipe.dispersion as kdisp
 
     tmpl_inp, tmpl_img, tmpl_grm = built[0]
-    roll0 = next(iter(tmpl_grm.values()))
-    gp0 = roll0.grism_pars
-    half_nm = (gp0.image_pars.Ncol + 2) * gp0.dispersion
-    kern0, m_lo0 = kdisp.continuum_trace_kernel(
-        gp0,
-        roll0.cube_pars.lambda_grid,
-        roll0.oversample,
-        integration_window=(gp0.lambda_ref - half_nm, gp0.lambda_ref + half_nm),
-    )
+    kern0, m_lo0 = precompute_continuum_kernel(built)
     real_kernel = kdisp.continuum_trace_kernel
     kdisp.continuum_trace_kernel = lambda *a, **kw: (kern0, m_lo0)
 

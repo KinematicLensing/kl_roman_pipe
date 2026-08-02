@@ -1,0 +1,7 @@
+cap_regime,scheme,leapfrog_steps,vs_ideal_ratio,reclaimed_frac
+cap-127 (actual),64-lane (actual),4876800.0,1.5540217578341586,0.0
+cap-127 (actual),2x32-lane hard/easy split,4073824.0,1.2981486084290894,0.4618467520217184
+cap-127 (actual),ideal per-fit (4-lane),3138180.0,1.0,1.0
+"cap-63 (approx, clipped)",64-lane (actual),2419200.0,1.0779269155570448,0.0
+"cap-63 (approx, clipped)",2x32-lane hard/easy split,2419200.0,1.0779269155570448,0.0
+"cap-63 (approx, clipped)",ideal per-fit (4-lane),2244308.0,1.0,1.0

@@ -192,3 +192,85 @@ production-parity quality. Headroom not yet banked: batched retry pass
 (the escalation analog, handles the 4/16), Laplace-metric warmup init,
 B=32-64 fits/batch (amortization plateau is at B>=64 LANES; we ran 64
 lanes but only 16 distinct fits), depth-cap tuning, fp32.
+
+## Local audit + robustness wave (2026-08-02, CPU only)
+
+Independent re-analysis of the v1-v3 draws (from-scratch split-Rhat/ESS,
+scripts in the session scratchpad; committed artifacts below): every v3
+headline number reproduces exactly (12/16 with the same four fits, ESS
+scaling x2.0, shear pull rms 1.10/0.58, zero wrong modes by both a pull
+screen and a chain-disagreement screen, straggler x2.25). New findings:
+
+1. The straggler tax is CONCENTRATED, not diffuse: fit 01302235 hits the
+   depth-7 cap on 71% of its iterations, three more fits sit at 31-36%,
+   nine of sixteen below 10%. A handful of hot fits cause essentially the
+   whole x2.25.
+2. Capped iterations are the HEALTHIEST (acceptance 0.91 vs 0.83,
+   divergence ~0% vs 4.1%): the cap truncates productive trajectories,
+   not waste. A cap-6 would additionally truncate <1% of naturally
+   terminating trajectories; cap-5 ~49%. So cap-6 is a gentle cut, cap-5
+   an aggressive one -- and "cap frees wasted compute" is the wrong
+   framing. Only a real cap-6 run settles ESS-per-leapfrog.
+3. Difficulty is NOT predictable from catalog columns: ring pairs with
+   identical cosi/z/SNR/shear differ in cap-hit fraction by up to 0.62
+   (orientation + noise realization drive it); no property survives
+   multiple-comparison correction at N=16. REFUTES pre-run stratified
+   packing. BUT the first 50 sampling iterations predict the remaining
+   550 at spearman 0.990 -> probe-then-repack is the viable design. The
+   observed hard/easy 2x32 split reclaims 46% of the actual-vs-ideal
+   leapfrog gap (16.5% of total steps). analyze_packing.py + CSVs.
+4. The hard galaxy (z=1.37/cosi=0.238 pair) mixes slowly with AGREEING
+   chains (between-chain share of the variance estimate only 12-30%):
+   metric quality, not multimodality -- supports the Laplace-metric
+   warmup lever as the targeted fix.
+5. Halfwidth pin measured directly (measure_halfwidth_pin.py; fit 12,
+   native 23 vs pin 31 fine px): delta logL at truth exactly 0; at the
+   sizing formula's own designed worst case ~1e-5; only a beyond-design
+   double-tail theta (v0 AND vcirc at 6-sigma simultaneously) reaches
+   6e-5 of line flux. The pin is safe for production; the earlier
+   "exact" claim is corrected to "erfc-negligible, now measured".
+6. BUG in generic code found along the way (kl_pipe/render.py
+   _prior_upper/_prior_abs_max): any prior with high=None falls into the
+   linear-Gaussian branch, so LogNormal returns log-space mu+6sigma
+   (~6.2 "km/s" for vel.vcirc) instead of exp(mu+6sigma) ~497 km/s.
+   Masked today because vel.v0's +/-1200 km/s dominates v_max, but a
+   spec with a tight v0 and wide vcirc LogNormal could undersize the
+   line window silently. Present on the main line too. Needs a main-line
+   fix + ruling (changes window sizes for LogNormal banks); NOT fixed on
+   this branch.
+
+Robustness wave (this commit):
+- broadband PSF (psf_data + kspace_psf_fft) now traced leaves in both
+  extract_dyn variants and shared fns -- closes the folding-tier
+  silent-wrongness channel (a z=1.2-crossing bank would have reused the
+  template's kernels with no error).
+- continuum-kernel galaxy-independence asserted across EVERY fit and
+  roll (precompute_continuum_kernel), replacing the fit-0-vs-last spot
+  check.
+- prior STRUCTURE assert including non-numeric attributes (conditional
+  parent names) and the PriorDict parent index (assert_prior_structure);
+  the old check covered types + numeric attr sets only.
+- per-fit dyn treedef/leaf-shape check that names the offending fit
+  before jnp.stack can fail cryptically; init clip mask surfaced as a
+  warning instead of discarded.
+Parity re-verified after the wave: proto_v3 CPU 2-fit run H4 2.24e-15 /
+H5 3.75e-14 PASS; demo driver CPU smoke (2 fits x 2 chains) end-to-end
+PASS with all asserts active.
+
+analyze_demo.py now scores with production's own estimators (numpyro
+summary split_gelman_rubin + n_eff, replacing hand-rolled rhat + arviz
+bulk ESS) and prints the per-fit gate table itself. v3 re-scored: STILL
+12/16, same four fits (the hard pair's min ESS drops to ~9-18 under
+n_eff; no gate flips) -- the headline is robust to the estimator.
+
+Literature status checks: MAMS ships in blackjax stable as
+adjusted_mclmc (1.6.2), so the probe is config-only, no PR wait. BPD
+(arXiv:2604.22048) actually varies its depth cap 2-7 by phase (not a
+fixed 5) and never states fp32; it reports the same lockstep straggler
+effect. The nested-Rhat literature (arXiv:2110.13017) supports
+many-short-chains diagnostics, not fewer-longer chains, and nothing
+endorses 2-chain rhat gating (floor is 4) -> keep 4 chains/fit.
+
+Still open: the solo-baseline parity gate -- runs/cosmos25_ab_bb32gr32
+has population+manifest expanded but chains/ and results/ are EMPTY; the
+~4 fresh current-code solo fits remain the blocking vista item.
