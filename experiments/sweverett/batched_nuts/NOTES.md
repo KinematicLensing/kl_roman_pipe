@@ -154,3 +154,23 @@ Demo v2 punch list:
 3. After reparam, re-measure straggler/tree stats (walls gone -> shorter
    trees expected) and revisit depth cap.
 Data pulled to runs/vista_demo_v1/ (worktree, untracked).
+
+## Vista demo v2 (2026-08-01) — reparam cure CONFIRMED; residual = draw count, not pathology
+
+Same cost as v1 (4.1 min/fit, 14.5 fits/node-hr). Reparam effect:
+divergences 22.8% -> 3.6%, max R-hat 1.82 -> 1.33, edge-on pair cured
+(75% -> 2-6%). Recovery clean: shear pulls g1 +0.13 rms 1.15 / g2 +0.03
+rms 0.60, no wrong modes.
+
+Production gates (rhat<1.05, ESS>=50): 7/16 pass. ALL failures are
+marginal (rhat 1.08-1.33, ESS 11-47) at 4x300 draws vs production's
+~1000-draw chains -- an ESS-budget miss, not a sampler failure. Trees:
+lane-mean 57 steps/iter but lockstep-max saturates the depth-7 cap on
+100% of iterations (straggler x2.25) -- the cap is binding; depth vs ESS
+tradeoff unresolved.
+
+Next step ruled cheapest-first: KLPIPE_NUTS_SAMPLES=600 (zero code, ~1.6 h,
+fits gh-dev): ESS doubles -> expect most marginals to pass. Then, in order
+of expected value: Laplace-metric warmup init (shared-program host MAP
+~6 s/galaxy), batched retry pass for residual failures (the production
+escalation pattern), depth-cap A/B.
