@@ -83,15 +83,20 @@ def assert_prior_structure(built, names):
 
 
 def extract_dyn(image_obs, grism_obs, fixed_pars, priors, sampled_names):
+    # broadband PSF rides as the traced k-space kernel (same grid across the
+    # bank; per-galaxy values); psf_data's padded shape is z-tier-dependent
+    # and unreachable behind the k-space path, so require that path loudly
+    for k, o in image_obs.items():
+        if o.kspace_psf_fft is None:
+            raise AssertionError(
+                f'image obs {k}: kspace_psf_fft is None; the shared program '
+                'requires the k-space PSF path'
+            )
     dyn = {
         'image': {
             k: {
                 'data': o.data,
                 'variance': o.variance,
-                # broadband PSF is z-dependent (folding-tier split at z=1.2);
-                # traced leaves so a tier-crossing bank cannot silently reuse
-                # the template's kernels
-                'psf_data': o.psf_data,
                 'kspace_psf_fft': o.kspace_psf_fft,
             }
             for k, o in image_obs.items()
@@ -133,11 +138,13 @@ def make_shared_posterior(source, sampled_names, tmpl_image, tmpl_grism, tmpl_pr
 
     def fn(theta, dyn):
         image_obs = {
+            # psf_data=None: unreachable behind the asserted k-space path;
+            # keeps the template's z-tier fallback kernel out of the trace
             k: dataclasses.replace(
                 tmpl_image[k],
                 data=dyn['image'][k]['data'],
                 variance=dyn['image'][k]['variance'],
-                psf_data=dyn['image'][k]['psf_data'],
+                psf_data=None,
                 kspace_psf_fft=dyn['image'][k]['kspace_psf_fft'],
             )
             for k in tmpl_image

@@ -116,15 +116,23 @@ def precompute_continuum_kernel(built):
 
 
 def extract_dyn(image_obs, grism_obs, fixed_pars):
+    # broadband PSF rides as the traced k-space kernel (same grid across the
+    # bank; per-galaxy values). psf_data is the real-space fallback whose
+    # PADDED SHAPE is z-tier-dependent and cannot stack -- it is unreachable
+    # when kspace_psf_fft is set (render_image takes the k-space branch), so
+    # require that loudly instead of tracing it.
+    for k, o in image_obs.items():
+        if o.kspace_psf_fft is None:
+            raise AssertionError(
+                f'image obs {k}: kspace_psf_fft is None; the shared program '
+                'requires the k-space PSF path (real-space psf_data kernels '
+                'have per-galaxy shapes and cannot be traced)'
+            )
     return {
         'image': {
             k: {
                 'data': o.data,
                 'variance': o.variance,
-                # broadband PSF is z-dependent (folding-tier split at z=1.2);
-                # serving it from the template would be silently wrong for a
-                # bank that crosses the tier, so it rides as traced leaves
-                'psf_data': o.psf_data,
                 'kspace_psf_fft': o.kspace_psf_fft,
             }
             for k, o in image_obs.items()
@@ -147,11 +155,15 @@ def make_shared_fn(source, sampled_names, tmpl_image, tmpl_grism):
 
     def fn(theta, dyn):
         image_obs = {
+            # psf_data=None: the k-space branch is guaranteed by the
+            # extract_dyn assert, so the fallback kernel is unreachable;
+            # None keeps the template's z-tier kernel out of the trace
+            # entirely rather than baking in a silently-wrong default
             k: dataclasses.replace(
                 tmpl_image[k],
                 data=dyn['image'][k]['data'],
                 variance=dyn['image'][k]['variance'],
-                psf_data=dyn['image'][k]['psf_data'],
+                psf_data=None,
                 kspace_psf_fft=dyn['image'][k]['kspace_psf_fft'],
             )
             for k in tmpl_image

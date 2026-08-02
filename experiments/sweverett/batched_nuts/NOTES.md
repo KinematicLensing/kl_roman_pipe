@@ -306,3 +306,24 @@ path end-to-end PASS -- MAP converged, metric conditions 5e3/1e4 (floor
 cap 1e4), per-lane DA step sizes distinct, finite draws, npz carries the
 map block. Solo-vs-batched estimator parity already handled (numpyro
 summary in analyze_demo).
+
+## T1 first launch: shape assert fired — image PSF tracing corrected (2026-08-02)
+
+The new per-fit dyn shape assert stopped T1 at fit 4a7b8f69 (galaxy 6,
+z=0.946 — the bank's only sub-1.2 pair): its image psf_data PADDED shapes
+(270/308) differ from the template's (440/512; z-tier grid sizing). v1-v3
+silently served the template's kernels here — benign for values (v2 H1
+1e-15) but exactly the reuse channel the assert exists to catch.
+
+Resolution measured, not assumed: in this config the image render always
+takes the k-space branch (render_image uses kspace_psf_fft and never
+touches psf_data when it is set), and kspace_psf_fft is the SAME 192x192
+grid for every fit with per-galaxy values. So the dynamic pytree now
+carries kspace_psf_fft only; psf_data is excluded and set to None inside
+the trace, with a loud extract_dyn assert that every image obs has
+kspace_psf_fft (the real-space fallback cannot silently engage).
+
+Validation: mixed-tier parity (template z=1.42 + fit z=0.946, 3 prior
+thetas each, production InferenceTask reference): values <= 4.7e-14,
+grads <= 3.6e-13, PASS. Demo-driver CPU smoke on exactly that pair via
+KLPIPE_FIT_IDS (map_laplace, 2x2 lanes): end-to-end PASS.
