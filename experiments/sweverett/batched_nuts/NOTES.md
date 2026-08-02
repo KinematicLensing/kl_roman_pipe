@@ -122,3 +122,35 @@ identical across galaxies).
 Next: vista gh-dev demo (pre-submission check-in first): 16 fits x 4 chains
 = 64 lanes batched NUTS, parity gates vs the existing bb32gr32 solo results
 already on vista disk.
+
+## Vista demo v1 (2026-08-01, gh-dev, 16 fits x 4 chains = 64 lanes) — throughput PASS, quality FAIL for a known reason
+
+Wall: build 36 s, warmup 2242 s, sampling 1716 s -> 4.1 min/fit-equivalent =
+14.6 fits/node-hr (vs ~6 effective today, ~4x the 16-18 min solo).
+Per-lockstep leapfrog at 64 lanes: 45 ms = 0.70 ms/lane vs solo 3.4-5.6
+ms/step — consistent with the x5.7 batching gate. Straggler overhead x2.04
+(lane-mean 62 steps/iter vs lockstep-max 127; 127 = depth-7 saturation).
+
+Quality as-run: 22.8% divergences, max R-hat 1.82, min ESS 7. Cause: the
+demo sampled in CONSTRAINED space — the production cure for exactly this
+(unconstrained bijection reparam + mass adaptation, 44%->0.33% divergences,
+memory project_reparam_wall_fix_status) was not ported into the batched
+path. Evidence it is the same pathology: divergences concentrate at the
+near-edge-on pair (cosi 0.085: 72-75%) and half the fits are <10%;
+recovery is NOT broken — mean|pull| vs truth 0.5-1.2 per fit (|pull| ~0.8
+expected for unit-scale), shear pulls g1 +0.13 rms 1.06 / g2 +0.11 rms
+0.57, no wrong modes visible.
+
+Also: the old vista A/B run dir failed spec validation under current code
+(observation.snr rejected post-flux-units) — those solo results are
+OLD-noise-convention fits and are NOT valid parity baselines. Parity needs
+a small current-code solo baseline run.
+
+Demo v2 punch list:
+1. Port the unconstrained transform (kl_pipe/sampling/transforms.py) into
+   the shared posterior; per-galaxy bound params join the dynamic pytree.
+2. Current-code solo baselines: ~4 production-path fits on the fresh
+   manifest (one gh-dev session) for the parity gate.
+3. After reparam, re-measure straggler/tree stats (walls gone -> shorter
+   trees expected) and revisit depth cap.
+Data pulled to runs/vista_demo_v1/ (worktree, untracked).
