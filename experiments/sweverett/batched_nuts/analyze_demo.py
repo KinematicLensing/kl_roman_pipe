@@ -45,10 +45,13 @@ def main():
     div = d['divergent']
 
     wall = meta['wall_s']
-    total = wall['warmup'] + wall['sampling']
+    # map phase absent from pre-map-init runs (and zero in truth mode)
+    t_map = wall.get('map', 0.0)
+    total = t_map + wall['warmup'] + wall['sampling']
     print(
-        f"wall: build {wall['build']:.0f} s, warmup {wall['warmup']:.0f} s, "
-        f"sampling {wall['sampling']:.0f} s"
+        f"wall: build {wall['build']:.0f} s, map {t_map:.0f} s, "
+        f"warmup {wall['warmup']:.0f} s, sampling {wall['sampling']:.0f} s "
+        f"(init mode {meta.get('init_mode', 'truth')})"
     )
     print(
         f"fit-equivalent: {total / n_fits / 60:.2f} min/fit "

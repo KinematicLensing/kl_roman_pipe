@@ -1,31 +1,20 @@
-# Batched-NUTS vista demo — self-serve runbook
+# Batched-NUTS vista runbook — production-honest campaign (v4)
 
-You (user) submit and run; the agent reads results afterward. Budget: one
-gh-dev node, <= 2 h (<= 2 SU). Everything is idempotent; nothing touches the
-se/ensemble checkout.
+You (user) submit and run; the agent prepares everything and reads results
+afterward. Two idev sessions, one gh-dev node each, <= 2 h apiece
+(<= ~4 SU total, pessimistic). Nothing touches the se/ensemble checkout.
 
-## 0. Local: push the branch (agent does this)
+The v1-v3 demos initialized at truth with no MAP phase — their timing is
+NOT production-achievable. Everything below uses the production recipe:
+truth-free multi-start MAP through the one shared compiled program, fixed
+Laplace metric, step-size-only warmup (`KLPIPE_INIT=map_laplace`).
 
-`cc/batched-nuts` on origin carries the demo. Already pushed if you are
-reading this on vista.
-
-## 1. Vista login node: separate worktree (one-time)
-
-```bash
-cd $STOCKYARD/repos/kl_roman_pipe
-git fetch origin
-git worktree add $STOCKYARD/repos/kl_batched_nuts origin/cc/batched-nuts
-cd $STOCKYARD/repos/kl_batched_nuts
-ln -s $STOCKYARD/repos/kl_roman_pipe/data/cosmos2025/private data/cosmos2025/private
-```
-
-## 2. Expand the run dir (login node, ~1 min, deterministic seed)
+## 0. One-time setup (login node)
 
 ```bash
-cd $STOCKYARD/repos/kl_batched_nuts
+cd $STOCKYARD/repos/kl_batched_nuts   # worktree from the v1-v3 sessions
+git fetch origin && git reset --hard origin/cc/batched-nuts
 source experiments/sweverett/vista_kit/env_vista.sh
-# env_vista.sh bakes PYTHONPATH to the MAIN checkout inside the container;
-# override so the container imports THIS worktree's kl_pipe + experiments:
 export KLPIPE_PYTHON="apptainer exec --nv \
   -B $STOCKYARD/repos/kl_batched_nuts -B $STOCKYARD/repos/kl_roman_pipe \
   -B $WORK/klpipe_pipdeps -B $SCRATCH \
@@ -35,63 +24,113 @@ export KLPIPE_PYTHON="apptainer exec --nv \
   $WORK/containers/jax_26.06-py3.sif python"
 ```
 
-Expansion runs on a compute node (apptainer exec works only there) or, if
-the login node allows it, directly. Inside the idev session below, FIRST:
+NOTE: the LogNormal window-sizing fix (7f40616) grows line windows
+(halfwidth 23->29 / 31->37), so per-eval cost rises somewhat vs v3 —
+expected, not a regression. `runs/cosmos25_ab_bb32gr32` (16 fits) already
+exists from the v3 session and is REUSED as-is: its mocks/manifest predate
+nothing (expansion does not depend on the window fix; windows are sized at
+fit time).
 
-```bash
-$KLPIPE_PYTHON -c "import blackjax, arviz; print('deps ok')"   # preflight
-$KLPIPE_PYTHON -m kl_pipe.ensemble expand configs/ensembles/cosmos25_ab_bb32gr32.yaml
-# -> runs/cosmos25_ab_bb32gr32 (same fit_ids as the A/B arm: same spec seed)
-ls runs/cosmos25_ab_bb32gr32/manifest.parquet
-```
-
-## 3. idev demo (GPU node)
+## SESSION A (idev gh-dev, 2 h): honest B=16 + first solo parity fits
 
 ```bash
 idev -p gh-dev -N 1 -n 1 -t 02:00:00
 cd $STOCKYARD/repos/kl_batched_nuts
-# (re-export KLPIPE_PYTHON as in step 2 if this is a fresh shell)
-mkdir -p runs/batched_nuts_demo
-$KLPIPE_PYTHON -u experiments/sweverett/batched_nuts/batched_nuts_demo.py \
-  2>&1 | tee runs/batched_nuts_demo/demo.log
+# re-export KLPIPE_PYTHON (fresh shell), then preflight:
+$KLPIPE_PYTHON -c "import blackjax, arviz; print('deps ok')"
 ```
 
-Defaults: 16 fits x 4 chains = 64 lanes, warmup 400 + samples 300, dense
-per-lane window adaptation, max_num_doublings 7, fp64. Expected wall from
-the pessimistic estimate: ~90 min + ~15 min compile. If the warmup stage is
-still running past ~75 min, ctrl-C and rerun with
-`KLPIPE_NUTS_WARMUP=200 KLPIPE_NUTS_SAMPLES=200` (still enough draws for
-the parity gate at min_ess ~50 scale).
+### T1 — batched B=16, production init (target ~75-90 min)
 
-Outputs land in `runs/batched_nuts_demo/`:
-`demo_results.npz` (positions, acceptance, per-iter integration steps,
-divergences, step sizes) + `demo_meta.json` (timings, config) + `demo.log`.
+```bash
+mkdir -p runs/demo_v4_maplaplace
+KLPIPE_INIT=map_laplace KLPIPE_NUTS_WARMUP=100 KLPIPE_NUTS_SAMPLES=600 \
+KLPIPE_DEMO_OUT=runs/demo_v4_maplaplace \
+  $KLPIPE_PYTHON -u experiments/sweverett/batched_nuts/batched_nuts_demo.py \
+  2>&1 | tee runs/demo_v4_maplaplace/demo.log
+```
 
-## 4. Analysis (login node or agent-side; needs solo baselines)
+Phases + pessimistic walls: build ~1 min; MAP+Laplace ~10-20 min for 16
+fits (multi-start L-BFGS-B, ~4-6 ms/eval solo through the shared program;
+printed per fit — if the first fit takes > 2 min, something is wrong,
+ctrl-C and ping the agent); warmup ~2-6 min (100 steps, fixed metric,
+step-size-only; v3 paid 37 min here); sampling ~55-70 min (600 draws,
+target accept 0.9). Abort criterion: any phase at 2x its pessimistic wall.
+
+Quick look while it runs / after:
 
 ```bash
 $KLPIPE_PYTHON experiments/sweverett/batched_nuts/analyze_demo.py \
-  runs/batched_nuts_demo \
-  $STOCKYARD/repos/kl_roman_pipe/runs/vista_stamp_ab/cosmos25_ab_bb32gr32/results
+  runs/demo_v4_maplaplace runs/no_solo_yet
 ```
 
-Prints: min/fit-equivalent + fits/node-hr, straggler overhead
-(lockstep max/mean integration steps), divergence rate, per-fit R-hat/ESS,
-and parity z-scores + width ratios vs the solo results; writes `parity.csv`.
+### T3a — solo production baselines, first 2 fits (fills the remainder)
 
-The agent pulls `runs/batched_nuts_demo/` (npz ~ a few MB) over ssh for the
-full writeup once your multiplexed session is up.
+```bash
+$KLPIPE_PYTHON -m kl_pipe.ensemble worker \
+  --run-dir runs/cosmos25_ab_bb32gr32 --label solo_a --max-fits 2 \
+  2>&1 | tee runs/cosmos25_ab_bb32gr32/solo_a.log
+```
 
-## Interpretation guide (agreed gates)
+Production numpyro path exactly as shipped (MAP+Laplace, warmup 200,
+300 draws x 4 chains, escalation 800/1000). Pessimistic ~20-25 min/fit
+including compile; 2 fits ~45 min. If < 40 min remain in the session,
+run with `--max-fits 1`.
 
-- parity: |z| mostly < 2-3 (MC-error scale), width ratios ~1 within ~20-30%.
-  Systematic width inflation or mean shifts = investigate before any adopt
-  decision. Note the demo inits at truth+1% jitter (solo used MAP+1%) and
-  adapts dense mass per lane via blackjax window adaptation (solo used
-  Laplace + adapt-mass numpyro) -- same target, different samplers, so
-  parity within MC error is the correct expectation, not equality.
-- cost: fits/node-hr vs the ~6 effective today (16-18 min solo, 1.7x
-  aggregate at 4-wide packing). The stack beyond this demo: larger B, fp32,
-  warmup shortening (Laplace-metric init), retry re-sizing.
-- straggler: if lockstep overhead >> 1.5x, the tree-depth cap and/or
-  MAMS-style fixed-length trajectories move up the priority list.
+## SESSION B (idev gh-dev, 2 h): B=32 scaling + retry + remaining solos
+
+### Expand the 32-fit run dir (once, in the idev shell)
+
+```bash
+$KLPIPE_PYTHON -m kl_pipe.ensemble expand configs/ensembles/cosmos25_batched_b32.yaml
+ls runs/cosmos25_batched_b32/manifest.parquet
+```
+
+### T2 — batched B=32 (128 lanes), production-matched first-pass draws
+
+```bash
+mkdir -p runs/demo_v5_b32
+KLPIPE_RUN_DIR=runs/cosmos25_batched_b32 KLPIPE_N_FITS=32 \
+KLPIPE_INIT=map_laplace KLPIPE_NUTS_WARMUP=100 KLPIPE_NUTS_SAMPLES=300 \
+KLPIPE_DEMO_OUT=runs/demo_v5_b32 \
+  $KLPIPE_PYTHON -u experiments/sweverett/batched_nuts/batched_nuts_demo.py \
+  2>&1 | tee runs/demo_v5_b32/demo.log
+```
+
+Pessimistic walls: build ~2 min; MAP ~20-40 min (32 fits, sequential);
+warmup ~3-8 min; sampling ~30-70 min (300 draws, 128 lanes — the scaling
+number this trial exists to measure). HBM watch: if it OOMs at 128 lanes,
+rerun with `KLPIPE_N_FITS=24`; that is itself a useful ceiling measurement.
+
+### T2r — retry pass for sub-gate fits (production escalation analog)
+
+```bash
+$KLPIPE_PYTHON experiments/sweverett/batched_nuts/analyze_demo.py \
+  runs/demo_v5_b32 runs/no_solo_yet          # read the per-fit gate table
+mkdir -p runs/demo_v5_b32_retry
+KLPIPE_RUN_DIR=runs/cosmos25_batched_b32 \
+KLPIPE_FIT_IDS=<comma-list of FAIL fit_ids from the gate table> \
+KLPIPE_INIT=map_laplace KLPIPE_NUTS_WARMUP=100 KLPIPE_NUTS_SAMPLES=1000 \
+KLPIPE_DEMO_SEED=20260803 KLPIPE_DEMO_OUT=runs/demo_v5_b32_retry \
+  $KLPIPE_PYTHON -u experiments/sweverett/batched_nuts/batched_nuts_demo.py \
+  2>&1 | tee runs/demo_v5_b32_retry/demo.log
+```
+
+### T3b — remaining solo baselines (if time; also fine on a later session)
+
+```bash
+$KLPIPE_PYTHON -m kl_pipe.ensemble worker \
+  --run-dir runs/cosmos25_ab_bb32gr32 --label solo_b --max-fits 2 \
+  2>&1 | tee runs/cosmos25_ab_bb32gr32/solo_b.log
+```
+
+## Afterward
+
+Agent pulls `runs/demo_v4_maplaplace/`, `runs/demo_v5_b32*/` (npz, a few
+MB each) and `runs/cosmos25_ab_bb32gr32/{results,chains,status}` over your
+multiplexed ssh and writes up parity + honest-throughput numbers.
+
+Parity gate (T1/T2 vs T3 solos): per-fit per-param |z| mostly < 2-3 at
+MC-error scale, width ratios ~1 within ~20-30%. Systematic width inflation
+or mean shifts = STOP before any adopt decision. Cost gate: fits/node-hr
+at matched ESS (not matched draws), MAP phase included on both sides.

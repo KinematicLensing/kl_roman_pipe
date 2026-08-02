@@ -274,3 +274,35 @@ endorses 2-chain rhat gating (floor is 4) -> keep 4 chains/fit.
 Still open: the solo-baseline parity gate -- runs/cosmos25_ab_bb32gr32
 has population+manifest expanded but chains/ and results/ are EMPTY; the
 ~4 fresh current-code solo fits remain the blocking vista item.
+
+## Production-honest init (2026-08-02, local) — map_laplace mode + campaign v4
+
+User ruling: v1-v3 truth-init timing is not production-achievable (no MAP
+phase, no MAP init, 600 draws vs production's 300+escalation, target 0.8
+vs 0.9) and must not be quoted as such. Changes:
+
+- map_init.py: per-galaxy MAP + Laplace metric mirroring
+  InferenceTask.laplace_preconditioner exactly (multi-start scaled
+  L-BFGS-B from prior draws, best-of-finite, fd Hessian, scale-aware
+  eig_floor 1e-4) but evaluated through the ONE shared compiled program
+  (per-fit value_and_grad with the galaxy's dyn as data) -- truth-free, no
+  per-fit compilation.
+- batched_nuts_demo.py: KLPIPE_INIT = map_laplace (default; fixed Laplace
+  metric in eta space via transform_inverse_mass, production 1%-of-
+  posterior-scale chain jitter, step-size-only dual-averaging warmup) |
+  map_window (MAP init + dense window adaptation) | truth (v1-v3
+  behavior). KLPIPE_TARGET_ACCEPT default 0.9 (production spec value;
+  v1-v3 ran 0.8). KLPIPE_FIT_IDS = explicit fit subset for retry passes.
+  MAP wall + metric condition numbers + eta MAPs saved to npz/meta; the
+  fit-equivalent print now includes the MAP phase.
+- configs/ensembles/cosmos25_batched_b32.yaml: 16 galaxies x 2 ring
+  members = 32 fits (128 lanes), same seed/selection as the A/B arm.
+- RUNBOOK_DEMO.md rewritten as the two-session v4 campaign (T1 honest
+  B=16 / T3 solo parity fits via the production worker / T2 B=32 at
+  production-matched 300 draws / T2r retry via KLPIPE_FIT_IDS).
+
+CPU smoke (2 fits x 2 chains, MAP starts 2 maxiter 60): full map_laplace
+path end-to-end PASS -- MAP converged, metric conditions 5e3/1e4 (floor
+cap 1e4), per-lane DA step sizes distinct, finite draws, npz carries the
+map block. Solo-vs-batched estimator parity already handled (numpyro
+summary in analyze_demo).

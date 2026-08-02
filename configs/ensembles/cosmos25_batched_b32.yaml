@@ -1,0 +1,93 @@
+# Batched-NUTS throughput arm: cosmos25_ab_bb32gr32 with n_galaxies 16
+# (32 fits = 128 lanes at 4 chains), same seed and selection settings.
+# Sized to put the vmap amortization plateau (B >= 64 lanes) to work on
+# distinct fits rather than chain padding.
+run:
+  name: cosmos25_batched_b32
+  version: 1
+  description: "Batched-NUTS throughput arm: 32 fits (16 galaxies x 2 ring members)"
+  seed: 20260728
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    kind: cosmos25
+    download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
+    data_dir: data/cosmos2025/private
+  preprocess:
+    # regenerated painting used verbatim; the dust/IMF correction variants
+    # were retired when the fixes moved upstream into the notebook (see the
+    # adapter module docstring)
+    flux_variant: as_delivered
+    h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
+  selection:
+    z_range: [0.55, 1.9]
+    # coadded 4-pass matched-filter line SNR (same rationale as flagship)
+    snr_line_total_min: 20.0
+    bulge_fraction_max: null       # no bulge columns in this catalog
+    bulge_nsersic_range: null
+    # same resolvability floor as the flagship census specs: the disk
+    # half-light radius must reach the diffraction PSF FWHM at observed
+    # Halpha for a measurable velocity gradient
+    min_r50_over_psf_fwhm: 1.0
+  sample:
+    n_galaxies: 16
+    replace: false
+  paint:
+    bulge: false                   # disk-only twin (catalog has no bulge)
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]       # isotropic redraw; catalog axis ratio kept for validation
+    ring: {members: 2}             # theta and theta + pi/2 partner
+  shear:
+    sigma: 0.03                    # per-component iid Gaussian, shared within pair
+    gmax: 0.1                      # redraw until |g| < gmax
+  priors:
+    logm_obs_scatter_dex: 0.25     # simulated photometric-mass error
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  # HLWAS Medium band pair with the realistic Roman WFI PSF (the flagship
+  # census specs still reference the Gaussian canonical_P; the Roman PSF
+  # configuration remains subject to the pre-production review)
+  config: hlwas_medium_roman
+
+fit:
+  # baseline sampler config inherited from the flagship dev spec (see its
+  # comments for the measurements behind these numbers)
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  target_accept: 0.9
+  pin_z_to_truth: true
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+
+dispatch:
+  backend: local
+  mode: dynamic
+  workers_per_node: 1
+  target_task_walltime_min: 30
+  queue: gh-dev
+  account: JPL-PUB
+  max_fit_walltime_min: 30
+
+output:
+  save_chains: all
+  save_mocks: all
