@@ -1,4 +1,10 @@
-"""Vista demo: batched NUTS over 16 production fits x 4 chains = 64 lanes.
+"""Vista demo v2: batched NUTS over 16 production fits x 4 chains = 64 lanes.
+
+v2 (after demo v1's 22.8% divergences): sampling runs in UNCONSTRAINED
+coordinates via the production UnconstrainingTransform -- the exact
+component that cured the constrained-space prior-wall divergences in the
+solo pipeline (44% -> 0.33%). Transform kinds are static (identical across
+galaxies, asserted); the per-galaxy bounds ride in the dynamic pytree.
 
 One compiled program (experiments 1-3 chain of evidence, see NOTES.md):
 shared posterior with per-fit data/PSF/lambda_ref/fixed/prior parameters as
@@ -23,6 +29,7 @@ Usage (worktree root, GPU node):
   python experiments/sweverett/batched_nuts/batched_nuts_demo.py
 """
 
+import dataclasses
 import json
 import os
 import sys
@@ -39,6 +46,7 @@ from proto_v2_shared_program import build_inputs, pin_halfwidth
 from proto_v3_batched_posterior import extract_dyn, make_shared_posterior
 
 from kl_pipe.ensemble.expander import load_run
+from kl_pipe.sampling.transforms import UnconstrainingTransform
 
 RUN_DIR = Path(os.environ.get('KLPIPE_RUN_DIR', 'runs/cosmos25_ab_bb32gr32'))
 OUT_DIR = Path(os.environ.get('KLPIPE_DEMO_OUT', 'runs/batched_nuts_demo'))
@@ -102,11 +110,28 @@ def main():
         tmpl_inp.source, names, tmpl_img, tmpl_grm, tmpl_inp.priors
     )
 
-    # lanes: fit-major ordering, chains contiguous per fit
-    dyns = [
-        extract_dyn(img, grm, dict(inp.priors.fixed_values), inp.priors, names)
-        for inp, img, grm in built
+    # production unconstrained reparam: same bijection kinds everywhere
+    # (spec-level prior structure), per-galaxy bounds as data
+    transforms = [
+        UnconstrainingTransform.from_priors(inp.priors) for inp, _, _ in built
     ]
+    tmpl_tf = transforms[0]
+    for t in transforms:
+        assert np.array_equal(t.kinds, tmpl_tf.kinds), 'transform kinds differ'
+    print(f'unconstrained kinds: {tmpl_tf.kind_names}')
+
+    def logdensity_eta(eta, dyn):
+        tf = dataclasses.replace(tmpl_tf, lows=dyn['tf_lows'], highs=dyn['tf_highs'])
+        theta = tf.inverse(eta)
+        return shared(theta, dyn) + tf.log_jacobian(eta)
+
+    # lanes: fit-major ordering, chains contiguous per fit
+    dyns = []
+    for (inp, img, grm), tf in zip(built, transforms):
+        dyn = extract_dyn(img, grm, dict(inp.priors.fixed_values), inp.priors, names)
+        dyn['tf_lows'] = jnp.asarray(tf.lows)
+        dyn['tf_highs'] = jnp.asarray(tf.highs)
+        dyns.append(dyn)
     lane_dyns = [dyns[i] for i in range(len(built)) for _ in range(N_CHAINS)]
     dyn_batch = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *lane_dyns)
 
@@ -127,13 +152,16 @@ def main():
             ),
             dtype=jnp.float64,
         )
+        tf = transforms[i]
         for c in range(N_CHAINS):
             key, sub = jax.random.split(key)
-            lane_inits.append(truth + 0.01 * stds * jax.random.normal(sub, truth.shape))
+            th0 = np.asarray(truth + 0.01 * stds * jax.random.normal(sub, truth.shape))
+            eta0, _ = tf.forward_clipped(th0, u_margin=1e-6)
+            lane_inits.append(jnp.asarray(eta0))
     theta0 = jnp.stack(lane_inits)
 
     def warmup_one(k, theta_init, dyn):
-        logdensity = lambda th: shared(th, dyn)
+        logdensity = lambda et: logdensity_eta(et, dyn)
         warm = blackjax.window_adaptation(
             blackjax.nuts,
             logdensity,
@@ -149,7 +177,7 @@ def main():
         )
 
     def sample_one(k, position, step_size, inverse_mass_matrix, dyn):
-        logdensity = lambda th: shared(th, dyn)
+        logdensity = lambda et: logdensity_eta(et, dyn)
         kernel = blackjax.nuts(
             logdensity,
             step_size=step_size,
@@ -195,9 +223,21 @@ def main():
     t_sample = time.time() - t0
     print(f'sampling wall {t_sample:.0f} s', flush=True)
 
+    # positions are eta; store physical theta for analysis (eta kept too)
+    def _inv(eta_lane, lows, highs):
+        tf = dataclasses.replace(tmpl_tf, lows=lows, highs=highs)
+        return tf.inverse(eta_lane)
+
+    positions_eta = positions
+    positions = jax.jit(jax.vmap(_inv))(
+        positions_eta, dyn_batch['tf_lows'], dyn_batch['tf_highs']
+    )
+    jax.block_until_ready(positions)
+
     np.savez_compressed(
         OUT_DIR / 'demo_results.npz',
         positions=np.asarray(positions),
+        positions_eta=np.asarray(positions_eta),
         acceptance=np.asarray(acc),
         num_integration_steps=np.asarray(n_steps),
         divergent=np.asarray(divergent),
