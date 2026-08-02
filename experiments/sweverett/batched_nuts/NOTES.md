@@ -174,3 +174,21 @@ fits gh-dev): ESS doubles -> expect most marginals to pass. Then, in order
 of expected value: Laplace-metric warmup init (shared-program host MAP
 ~6 s/galaxy), batched retry pass for residual failures (the production
 escalation pattern), depth-cap A/B.
+
+## Vista demo v3 (2026-08-01, samples 600) — production-parity first-pass quality CONFIRMED
+
+ESS scaled exactly as predicted (median x2.10 vs predicted ~x2; the
+draw-budget hypothesis is SUPPORTED). Pass rate 12/16 at production gates
+(rhat<1.05, ESS>=50) at 5.8 min/fit = 10.4 fits/node-hr -- statistically
+consistent with production's ~70% solo first-pass escalation rate. The 4
+failures: two hair's-breadth (rhat 1.057), one genuinely hard GALAXY (both
+ring members of z=1.37/cosi=0.238: rhat 1.15-1.20, ESS 16-20, sublinear
+ESS scaling x1.4-1.5 -- a window-adaptation-resistant posterior; production
+would likely escalate it too), one marginal (fit 15 rhat 1.057).
+
+Bottom line vs solo baseline: ~3x per-fit (5.8 vs 16-18 min) and ~1.7x
+node throughput vs today's effective ~6 fits/node-hr, at B=16 with
+production-parity quality. Headroom not yet banked: batched retry pass
+(the escalation analog, handles the 4/16), Laplace-metric warmup init,
+B=32-64 fits/batch (amortization plateau is at B>=64 LANES; we ran 64
+lanes but only 16 distinct fits), depth-cap tuning, fp32.
