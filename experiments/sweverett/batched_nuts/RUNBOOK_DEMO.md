@@ -11,17 +11,15 @@ Laplace metric, step-size-only warmup (`KLPIPE_INIT=map_laplace`).
 
 ## 0. One-time setup (login node)
 
+The vista checkout $STOCKYARD/repos/kl_roman_pipe is already ON
+cc/batched-nuts; everything runs from there. env_vista.sh binds that
+checkout and $WORK/klpipe_pipdeps (blackjax/arviz) -- no PYTHONPATH
+override needed; the demo script adds its own experiments dir to sys.path.
+
 ```bash
-cd $STOCKYARD/repos/kl_batched_nuts   # worktree from the v1-v3 sessions
+cd $STOCKYARD/repos/kl_roman_pipe
 git fetch origin && git reset --hard origin/cc/batched-nuts
 source experiments/sweverett/vista_kit/env_vista.sh
-export KLPIPE_PYTHON="apptainer exec --nv \
-  -B $STOCKYARD/repos/kl_batched_nuts -B $STOCKYARD/repos/kl_roman_pipe \
-  -B $WORK/klpipe_pipdeps -B $SCRATCH \
-  --env PYTHONPATH=$STOCKYARD/repos/kl_batched_nuts:$STOCKYARD/repos/kl_batched_nuts/experiments/sweverett/batched_nuts:$WORK/klpipe_pipdeps \
-  --env LD_PRELOAD=$WORK/klpipe_pipdeps/galsim/libfftw3.so.3 \
-  --env JAX_COMPILATION_CACHE_DIR=$SCRATCH/jax_cache \
-  $WORK/containers/jax_26.06-py3.sif python"
 ```
 
 NOTE: the LogNormal window-sizing fix (7f40616) grows line windows
@@ -35,8 +33,8 @@ fit time).
 
 ```bash
 idev -p gh-dev -N 1 -n 1 -t 02:00:00
-cd $STOCKYARD/repos/kl_batched_nuts
-# re-export KLPIPE_PYTHON (fresh shell), then preflight:
+cd $STOCKYARD/repos/kl_roman_pipe
+source experiments/sweverett/vista_kit/env_vista.sh
 $KLPIPE_PYTHON -c "import blackjax, arviz; print('deps ok')"
 ```
 
