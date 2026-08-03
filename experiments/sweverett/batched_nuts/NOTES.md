@@ -327,3 +327,37 @@ Validation: mixed-tier parity (template z=1.42 + fit z=0.946, 3 prior
 thetas each, production InferenceTask reference): values <= 4.7e-14,
 grads <= 3.6e-13, PASS. Demo-driver CPU smoke on exactly that pair via
 KLPIPE_FIT_IDS (map_laplace, 2x2 lanes): end-to-end PASS.
+
+## T1 (demo v4, 2026-08-02 vista): fixed-Laplace metric REFUTED at batch scale; parity + honest cost excellent
+
+Numbers (16 fits, map_laplace, warmup 100 DA-only, 600 draws, accept 0.9):
+map 103 s (6.4 s/fit, 4/4 starts converged every fit), warmup 819 s,
+sampling 4505 s -> 5.65 min/fit HONEST (10.6 fits/node-hr). Solo
+baselines (production worker, same bank): 9.5 min/fit, 2/2 first-pass.
+Parity vs those solos: |z| median 0.28 max 1.78, width ratio 0.99
+(0.85-1.07) -- batched posteriors match production.
+
+BUT gates 3/16 (v3: 12/16). Per-chain forensics: acceptance healthy
+(0.7-0.96), divergences ~2%, yet failing fits all sit at step size
+0.01-0.02 vs 0.1-0.2 for passing ones -> the FIXED Laplace metric
+mis-measures soft directions; DA compensates with tiny steps; chains
+crawl (ESS ~2, rhat up to 3.4). Fits that were EASY under v3's window
+adaptation are among the casualties (0aab15fc, c3911e44). This is the
+same reason production dropped fixed-Laplace over degeneracies and runs
+precondition + adapt_mass: true (spec). Fixed-metric map_laplace is
+REFUTED for this posterior class; not a bug, a finding.
+
+Silver linings: v3's window-adaptation-resistant galaxy (8cea733e) now
+PASSES (rhat 1.035, ESS 79) and its ring partner improved 1.20->1.11 --
+MAP init + Laplace-scale information helps exactly where window
+adaptation failed. The two components are complementary.
+
+Also: warmup XLA compile pathological on first build (17 min on one
+fusion op, session 1) but persistent-cache hit on rerun; straggler
+overhead x1.57 at accept 0.9 (lane-mean 81 vs cap 127).
+
+NEXT (T1b): KLPIPE_INIT=map_window KLPIPE_NUTS_WARMUP=200 -- MAP init +
+200-step dense window adaptation, the closest blackjax analog of
+production's Laplace-init + adapt-mass w200. Hypothesis: >= v3's 12/16
+at roughly v3's sampling cost, with the honest MAP phase included and
+warmup halved vs v3 (400 -> 200 thanks to MAP-adjacent starts).
