@@ -145,9 +145,8 @@ def catalog_registry(
                 'pair-shared',
                 f'N(0, {spec.shear_fit_prior_sigma})',
                 'paint',
-                'Wide so posterior widths reflect the data constraint; left '
-                'unbounded because a truncation would reintroduce a prior '
-                'edge.',
+                'Wide so the posterior width comes from the data; unbounded '
+                'to avoid a prior edge.',
             )
         )
     add(
@@ -158,10 +157,9 @@ def catalog_registry(
             f'U{cp.cosi_range}, isotropic redraw',
             f'U{cp.cosi_range}',
             'paint',
-            'The catalog inclination encodes the morphological selection of '
-            'its training sample and is measured uncorrelated with every '
-            'retained column, so the redraw is lossless; the catalog value '
-            'is kept for validation.',
+            'The catalog inclination encodes its training-sample selection '
+            'and correlates with no retained column, so the redraw is '
+            'lossless; the catalog value is kept for validation.',
         )
     )
     add(
@@ -184,12 +182,11 @@ def catalog_registry(
             'pinned',
             'pinned',
             (
-                'Pinned to the grism spectroscopic value (v1); the systemic '
-                'velocity absorbs the residual.'
+                'Pinned to the grism spectroscopic value (v1); v0 absorbs '
+                'the residual.'
                 if adapter.has_observed_redshift
-                else 'Pinned to the catalog photometric redshift, which the '
-                'painted observables treat as truth; the systemic velocity '
-                'absorbs the residual.'
+                else 'The painted observables treat the catalog photo-z as '
+                'truth; v0 absorbs the residual.'
             ),
             cat_keys,
         )
@@ -205,11 +202,10 @@ def catalog_registry(
             f'/{cp.tfr_slope} + N(0, {cp.tfr_scatter_dex})',
             'LN at TFR(logm_obs); width = TFR scatter plus mass error',
             'mock measurement',
-            'Centered on the Tully-Fisher relation at a noisy mock '
-            f'photometric mass, logm_obs = logM + '
-            f'N(0, {cp.logm_obs_scatter_dex}), so the center is offset from '
-            'truth by construction. The KL inclination constraint enters '
-            'through this prior.',
+            'Centered on the TFR at a noisy mock photometric mass, '
+            f'logm_obs = logM + N(0, {cp.logm_obs_scatter_dex}), so the '
+            'center is off-truth by construction. The KL inclination '
+            'constraint enters through this prior.',
             ('Ubler2017',),
         )
     )
@@ -222,11 +218,10 @@ def catalog_registry(
             f'CLN(R_d x {VEL_RSCALE_RATIO_MEDIAN}, {VEL_RSCALE_RATIO_DEX}; '
             f'[{r_lo}, {r_hi}])',
             'ratio to parent',
-            'Derived from the public PROBES-I per-galaxy fits: 753 '
-            'late-type galaxies, tanh and Courteau-97 fits refit to the '
-            'arctan form. Miller+11 (z ~ 1, "typical 0.4") and Catinella+06 '
-            '(0.24-0.57) are consistent. The anchor is z ~ 0; the redshift '
-            'extrapolation is the stated systematic.',
+            'From the public PROBES-I per-galaxy fits (753 late types, '
+            'tanh and Courteau-97 refit to arctan); Miller+11 (~0.4 at '
+            'z ~ 1) and Catinella+06 (0.24-0.57) agree. The anchor is '
+            'z ~ 0; the redshift extrapolation is the stated systematic.',
             ('Stone2022', 'Miller2011', 'Catinella2006'),
         )
     )
@@ -238,9 +233,8 @@ def catalog_registry(
             f'N(0, {V0_SCATTER_KMS})',
             f'N(0, {scene._V0_PRIOR_SIGMA_KMS})',
             'instrument scale',
-            'One grism dispersion pixel, 8x the paint scatter; the line '
-            'centroid is measured to 14-40 km/s across the sample, so the '
-            'data dominate.',
+            'One dispersion pixel, 8x the paint scatter; the line centroid '
+            'is measured to 14-40 km/s, so the data dominate.',
         )
     )
     add(
@@ -252,8 +246,7 @@ def catalog_registry(
             f'{cp.sigma0_scatter_kms}), floor {cp.sigma0_min_kms}',
             f'TN(same sigma_0(z); [{cp.sigma0_min_kms}, 150])',
             'paint',
-            'Same sigma_0(z) relation and scatter as the paint; affine '
-            'redshift evolution.',
+            'Prior equals paint: the same affine sigma_0(z) relation and ' 'scatter.',
             ('Ubler2019',),
         )
     )
@@ -261,9 +254,8 @@ def catalog_registry(
     # --- sizes ---------------------------------------------------------------
     size_note = (
         'Population fit to the selected sample. Component sizes are sampled '
-        'independently because the correct chromatic tie coefficient is '
-        'per-galaxy and unpainted; independence can widen the posterior but '
-        'not bias it.'
+        'independently: the right chromatic tie is per-galaxy and unpainted, '
+        'and independence widens but cannot bias.'
     )
     band_size_key = '{band}.disk_rscale' if bulge else '{band}.rscale'
     for band in config.bands:
@@ -288,9 +280,9 @@ def catalog_registry(
             f'CLN(R_d x {HALPHA_RSCALE_RATIO_MEDIAN}, '
             f'{HALPHA_RSCALE_RATIO_DEX}; [{r_lo}, {r_hi}])',
             'ratio to parent',
-            'Line emission is more extended than the continuum (inside-out '
-            'growth); median and rms from a single sample. Matharu+22 '
-            'confirm the median but publish no width.',
+            'Line emission extends beyond the continuum (inside-out '
+            'growth); median and rms from one sample. Matharu+22 confirm '
+            'the median but give no width.',
             ('Nelson2012', 'Matharu2022'),
         )
     )
@@ -309,11 +301,10 @@ def catalog_registry(
 
     # --- amplitudes ----------------------------------------------------------
     flux_note = (
-        'Simulated photometric measurement: the prior center is the truth '
-        'plus one seeded noise draw at the expected measurement error, and '
-        'the width is that same error, both derived from the published '
-        'depth anchor (matched-filter, compactness-corrected). The center '
-        'is deliberately offset from the truth.'
+        'Mock photometric measurement: center = truth + one seeded noise '
+        'draw at the expected error, width = that same error, both from '
+        'the published depth anchor (matched-filter, '
+        'compactness-corrected). Deliberately off-truth.'
     )
     add(
         PriorProvenance(
@@ -352,9 +343,8 @@ def catalog_registry(
             f'TLN({cont_med:.2f}, {pc.cont_flux_log10_sigma}; '
             f'[{pc.cont_flux_low}, {pc.cont_flux_high}])',
             'catalog fit',
-            'Population of the selected catalog equivalent widths; contains '
-            'no per-galaxy truth and is tighter than the truth-centered '
-            'prior it replaced.',
+            'Population of the selected catalog EWs; no per-galaxy truth, '
+            'and tighter than the truth-centered prior it replaced.',
             cat_keys + ('Khostovan2024',),
         )
     )
@@ -384,21 +374,19 @@ def catalog_registry(
                 f'TN(0, {sig_cont:.3f}; '
                 f'[{scene._CENTROID_BOUNDS[0]}, {scene._CENTROID_BOUNDS[1]}])',
                 'paint',
-                'Physical offset of clumpy star formation from the older '
-                'stellar disk, half a pixel (about 0.45 kpc). The prior '
-                'width is the two paint scatters in quadrature, marginal '
-                'rather than conditional, so the line-continuum offset is '
-                'measured rather than imposed.',
+                'Clumpy star formation offset from the older stellar disk, '
+                'half a pixel (~0.45 kpc). Prior width is the two paint '
+                'scatters in quadrature, marginal not conditional, so the '
+                'offset is measured rather than imposed.',
                 ('Nelson2012',),
             )
         )
 
     # --- vertical structure (pinned) -----------------------------------------
     thick = (
-        'Image-simulation standard. The measured z < 1 disk thickness '
-        '(intrinsic vertical-to-major axis ratio C/A of about 0.24) implies '
-        'about 0.42, which would cost 14% of the apparent-shape lever (38% '
-        'edge-on); carried as an open systematic.'
+        'Image-simulation standard. The measured z < 1 thickness '
+        '(intrinsic C/A ~ 0.24) implies ~0.42; that value would cost 14% '
+        'of the apparent-shape lever (38% edge-on). Open systematic.'
     )
     for comp in ('Halpha', 'Halpha.cont'):
         add(
@@ -437,11 +425,10 @@ def catalog_registry(
                     f'{scene._BULGE_H_OVER_HLR}',
                     'pinned',
                     'pinned',
-                    'Nearest measurements of the intrinsic bulge axis ratio '
-                    'C/A: 0.65 (Bertola+91) and 0.55 (CALIFA, Costantin+18). '
-                    'The conversion to a scale-height ratio is approximate, '
-                    'and a B/T <= 0.3 bulge carries little inclination '
-                    'signal.',
+                    'Nearest measured intrinsic bulge C/A: 0.65 (Bertola+91) '
+                    'and 0.55 (CALIFA, Costantin+18). The scale-height '
+                    'conversion is approximate; a B/T <= 0.3 bulge carries '
+                    'little inclination signal.',
                     ('Bertola1991', 'Costantin2018'),
                 )
             )
@@ -458,9 +445,9 @@ def catalog_registry(
                     f'TN({pc.bulge_frac_loc}, {pc.bulge_frac_scale}; '
                     f'[0, {cp.bulge_fraction_max}])',
                     'catalog fit',
-                    'Moments of the selected population. An informative '
-                    'prior adds curvature where an unresolved bulge leaves '
-                    'the likelihood flat, without centering on truth.',
+                    'Moments of the selected population; adds curvature '
+                    'where an unresolved bulge leaves the likelihood flat, '
+                    'without centering on truth.',
                     cat_keys + ('Dimauro2018',),
                 )
             )
@@ -478,9 +465,9 @@ def catalog_registry(
                     f'[{pc.bulge_hlr_low}, {pc.bulge_hlr_high}])',
                     'ratio to parent',
                     'The catalog bulge size is an uncorrelated random draw '
-                    '(a documented catalog limitation) and is repainted. The '
-                    'paint caps the ratio below 1; the cap removes only the '
-                    '3-sigma tail of the prior.',
+                    '(documented catalog limitation), so it is repainted. '
+                    'The paint caps the ratio below 1, cutting only the '
+                    '3-sigma tail.',
                     ('Lang2014', 'Gadotti2009'),
                 )
             )
@@ -489,7 +476,7 @@ def catalog_registry(
                 f'{1.0 - BULGE_PSEUDO_WEIGHT:.1f} TN{BULGE_CLASSICAL_N}'
             )
             n_note = (
-                'The catalog index is an uncorrelated random draw and is '
+                'The catalog index is an uncorrelated random draw, '
                 'repainted as the pseudo/classical mixture split at n = 2.'
             )
             if spec.sample_bulge_nsersic:
@@ -501,9 +488,8 @@ def catalog_registry(
                         n_painted,
                         'same mixture',
                         'paint',
-                        n_note + ' Prior equals paint, so the '
-                        'marginalization is exact; an unresolved bulge '
-                        'returns its prior.',
+                        n_note + ' Prior equals paint, so marginalization '
+                        'is exact; an unresolved bulge returns its prior.',
                         ('FisherDrory2008', 'Gadotti2009', 'MendezAbreu2010'),
                     )
                 )
