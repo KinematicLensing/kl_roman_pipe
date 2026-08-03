@@ -1,8 +1,43 @@
 # Batched-NUTS vista runbook — production-honest campaign (v4)
 
 You (user) submit and run; the agent prepares everything and reads results
-afterward. Two idev sessions, one gh-dev node each, <= 2 h apiece
-(<= ~4 SU total, pessimistic). Nothing touches the se/ensemble checkout.
+afterward. Nothing touches the se/ensemble checkout.
+
+## v4b (2026-08-03): batch queue replaces idev
+
+Three idev sessions were lost or clipped by the 2 h gh-dev wall (the demo
+saves one npz at the very end). Everything now goes through `sbatch` on
+the `gh` partition: SLURM charges actual runtime, not the requested wall,
+so generous walltimes cost nothing extra and the wall cannot kill a run
+mid-sampling. All jobs set JAX_LOG_COMPILES=1 so cold/warm cache state is
+readable from the logs (the $SCRATCH/jax_cache persistent cache spans
+sessions; per-compile walls let timing numbers be decomposed honestly).
+
+```bash
+cd $STOCKYARD/repos/kl_roman_pipe
+git fetch origin && git reset --hard origin/cc/batched-nuts
+sbatch experiments/sweverett/batched_nuts/run_t1b_mapwindow.slurm
+sbatch experiments/sweverett/batched_nuts/run_t2_b32.slurm
+sbatch experiments/sweverett/batched_nuts/run_t3b_solos.slurm
+squeue --me
+```
+
+- `run_t1b_mapwindow.slurm` (3 h wall): T1b, B=16 map_window w200 s600 —
+  decision input 1. Auto-runs the gate/parity analysis at the end.
+- `run_t2_b32.slurm` (6 h wall): expand (if needed) + T2 B=32 at 300
+  draws, then an in-job retry of sub-gate fits at 1000 draws (skipped if
+  more than half the bank fails) — decision input 2 plus the escalation
+  analog, no second queue round-trip. NOTE: runs `map_window`, not the
+  originally specced `map_laplace` — T1 refuted the fixed-Laplace metric
+  (3/16), so scaling is measured on the live candidate recipe.
+- `run_t3b_solos.slurm` (2 h wall): remaining 2 solo production baselines;
+  the compile log settles whether solo 9.5 min/fit rode a warm cache.
+
+Pessimistic charged cost: T1b ~2 + T2 ~4 + T3b ~1 = ~7 node-hr worst
+case; ~4-5 expected. The idev instructions below are kept for provenance;
+do not use them for these trials.
+
+## Superseded idev campaign (v4, 2026-08-02)
 
 The v1-v3 demos initialized at truth with no MAP phase — their timing is
 NOT production-achievable. Everything below uses the production recipe:
