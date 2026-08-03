@@ -17,8 +17,8 @@ scale (``ConditionalLogNormal``); U(low, high) uniform.
 Classes
 -------
 catalog fit
-    Truth is a Flagship2 catalog column; the prior is a distribution fit to
-    the selected sample of that column.
+    Truth is a catalog column; the prior is a distribution fit to the
+    selected sample of that column.
 paint
     Truth is drawn from an assumed population distribution (the catalog does
     not carry it); the fit prior is that same generating distribution.
@@ -35,13 +35,14 @@ pinned
     Fixed at the same value in mock and fit: a stated model assumption, not a
     recovered parameter.
 interim
-    Deliberate v1 simplification awaiting replacement (e.g. scene-constant
-    fluxes pending physical units).
+    Deliberate placeholder flagged for replacement (e.g. the bulge Sersic
+    index pinned at truth outside production configs).
 """
 
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Tuple, TYPE_CHECKING
 
@@ -170,7 +171,8 @@ def catalog_registry(
             'U(0, pi); ring partner at +pi/2',
             'U(0, pi)',
             'paint',
-            'Ring pairing cancels intrinsic-shape noise at leading order.',
+            'Ring partner at +pi/2 averages orientation-dependent residuals '
+            'out of the ensemble shear.',
         )
     )
     add(
@@ -338,7 +340,7 @@ def catalog_registry(
         PriorProvenance(
             'Halpha.cont.flux_per_nm',
             'continuum flux density under the line',
-            '1e-17 erg/s/cm2 per nm',
+            '1e-17 erg/s/cm2/nm',
             'line flux / observed EW (catalog rest EW)',
             f'TLN({cont_med:.2f}, {pc.cont_flux_log10_sigma}; '
             f'[{pc.cont_flux_low}, {pc.cont_flux_high}])',
@@ -650,6 +652,84 @@ def registry_to_latex(
     return '\n'.join(lines)
 
 
+def registry_to_compact_latex(
+    registry: Dict[str, PriorProvenance],
+    bands: Tuple[str, ...],
+    mode: str = 'standalone',
+    cite_urls: Dict[str, str] = None,
+) -> str:
+    """
+    Compact rendering: per-band and x/y rows merged, no notes column.
+
+    Prototype for the in-paper table; the full `registry_to_latex` table is
+    the internal reference. Rows merge when unit, painted truth, fit prior,
+    class, and citations all match once the band token is generalized.
+    """
+    if mode not in ('standalone', 'paper'):
+        raise ValueError(f"unknown mode '{mode}'")
+    urls = cite_urls or {}
+
+    def one_cite(key: str) -> str:
+        label = _tex_escape(_CITE_LABELS.get(key, key))
+        url = urls.get(key)
+        if url is None:
+            return label
+        return r'\href{' + url + '}{' + label + '}'
+
+    def cite(keys: Tuple[str, ...]) -> str:
+        if not keys:
+            return '--'
+        if mode == 'paper':
+            return r'\citet{' + ','.join(keys) + '}'
+        return '; '.join(one_cite(k) for k in keys)
+
+    def canon(text: str) -> str:
+        for b in bands:
+            text = text.replace(b, 'band')
+        return text
+
+    groups: Dict[tuple, dict] = {}
+    for e in registry.values():
+        param = re.sub(r'\.(x0|y0)$', '.x0/y0', canon(e.param))
+        meaning = re.sub(r' offset [xy]$', ' offset', canon(e.meaning))
+        meaning = re.sub(r' component \d$', ' components', meaning)
+        key = (e.unit, canon(e.painted), canon(e.fit_prior), e.category, e.bibkeys)
+        g = groups.setdefault(key, {'params': [], 'meaning': meaning, 'first': e})
+        if param not in g['params']:
+            g['params'].append(param)
+
+    lines = [
+        r'\begin{longtable}{p{5.6cm} p{3.6cm} l p{5.6cm} p{5.8cm} l p{4.6cm}}',
+        r'\toprule',
+        r'Parameter & Meaning & Unit & Painted truth & Fit prior & Class & '
+        r'Reference \\',
+        r'\midrule',
+        r'\endhead',
+    ]
+    order = {name: i for i, name in enumerate(_BLOCK_ORDER)}
+    by_block: Dict[str, list] = {}
+    for g in groups.values():
+        by_block.setdefault(_block_of(g['first'].param), []).append(g)
+    for block in sorted(by_block, key=order.__getitem__):
+        lines.append(r'\midrule\multicolumn{7}{l}{\textbf{' + block + r'}}\\\midrule')
+        for g in sorted(by_block[block], key=lambda g: g['params'][0]):
+            e = g['first']
+            row = ' & '.join(
+                (
+                    r'\texttt{' + _tex_escape(', '.join(g['params'])) + '}',
+                    _tex_escape(g['meaning']),
+                    _tex_escape(e.unit),
+                    _tex_escape(canon(e.painted)),
+                    _tex_escape(canon(e.fit_prior)),
+                    _tex_escape(e.category),
+                    cite(e.bibkeys),
+                )
+            )
+            lines.append(row + r' \\')
+    lines += [r'\bottomrule', r'\end{longtable}']
+    return '\n'.join(lines)
+
+
 _STANDALONE_PREAMBLE = r"""\documentclass[9pt]{extarticle}
 \usepackage[paperwidth=62cm,paperheight=54cm,margin=1.2cm]{geometry}
 \usepackage{longtable,booktabs}
@@ -660,7 +740,7 @@ _STANDALONE_PREAMBLE = r"""\documentclass[9pt]{extarticle}
 \renewcommand{\arraystretch}{1.3}
 \pagestyle{empty}
 \begin{document}
-\section*{Catalog-mode ensemble: paint and prior provenance}
+\section*{Model parameters and priors}
 Generated from \texttt{kl\_pipe.ensemble.prior\_provenance}; every numeric is
 imported from the pipeline constants.
 
@@ -671,16 +751,12 @@ LN(median, scatter) = log-normal, scatter in dex unless marked `ln';
 TLN = truncated log-normal;
 CLN = log-normal on the ratio to the sampled parent scale;
 U(low, high) = uniform.
-
-\smallskip
-\noindent\textbf{Notation.} $R_d$ is the exponential disk scale length: the
-catalog value in the painted truth, and the galaxy's sampled reference-band
-disk scale in the fit priors (so a CLN prior conditions on a parameter that
-is marginalized with the rest, not on a measurement).
+$R_d$ is the exponential disk scale length; in ratio priors it means the
+galaxy's fitted disk scale.
 
 \smallskip
 \noindent\textbf{Classes.}
-\emph{catalog fit}: truth is a Flagship2 column, prior fit to the selected
+\emph{catalog fit}: truth is a catalog column, prior fit to the selected
 sample;
 \emph{paint}: truth drawn from an assumed population distribution, prior
 equal to it;
@@ -690,7 +766,7 @@ conditions on the sampled scale;
 measurement;
 \emph{instrument scale}: prior width set by a pixel or dispersion scale;
 \emph{pinned}: same fixed value in mock and fit;
-\emph{interim}: placeholder awaiting the physical-units upgrade.
+\emph{interim}: deliberate placeholder flagged for replacement.
 """
 
 
@@ -701,5 +777,40 @@ def standalone_document(
     return (
         _STANDALONE_PREAMBLE
         + registry_to_latex(registry, mode='standalone', cite_urls=cite_urls)
+        + '\n\\end{document}\n'
+    )
+
+
+_COMPACT_PREAMBLE = r"""\documentclass[10pt]{article}
+\usepackage[paperwidth=36cm,paperheight=22cm,margin=1.2cm]{geometry}
+\usepackage{longtable,booktabs}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[colorlinks=true,urlcolor=blue]{hyperref}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.25}
+\footnotesize
+\pagestyle{empty}
+\begin{document}
+\section*{Model parameters and priors}
+N(mean, sigma) = Gaussian; TN = truncated Gaussian, support in brackets;
+LN(median, scatter) = log-normal, scatter in dex unless marked `ln';
+TLN = truncated log-normal; CLN = log-normal on the ratio to the sampled
+parent scale; U(low, high) = uniform. $R_d$ is the exponential disk scale
+length; in ratio priors it means the galaxy's fitted disk scale.
+"""
+
+
+def standalone_compact_document(
+    registry: Dict[str, PriorProvenance],
+    bands: Tuple[str, ...],
+    cite_urls: Dict[str, str] = None,
+) -> str:
+    """Compact standalone LaTeX document (merged rows, no notes)."""
+    return (
+        _COMPACT_PREAMBLE
+        + registry_to_compact_latex(
+            registry, bands, mode='standalone', cite_urls=cite_urls
+        )
         + '\n\\end{document}\n'
     )
