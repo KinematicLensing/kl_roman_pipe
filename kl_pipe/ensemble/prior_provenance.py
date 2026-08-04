@@ -691,7 +691,12 @@ def registry_to_latex(
             return r'\citet{' + ','.join(keys) + '}'
         return '; '.join(one_cite(k) for k in keys)
 
-    lines = [
+    lines = []
+    if mode == 'paper':
+        # aastex longtables must be preceded by \startlongtable, else the
+        # class's table counter throws "Extra \or" errors
+        lines.append(r'\startlongtable')
+    lines += [
         r'\begin{longtable}{lll ll l l p{12.5cm}}',
         r'\toprule',
         r'Parameter & Meaning & Unit & Painted truth & Fit prior & Class & '
@@ -786,7 +791,10 @@ def registry_to_compact_latex(
         if param not in g['params']:
             g['params'].append(param)
 
-    lines = [
+    lines = []
+    if mode == 'paper':
+        lines.append(r'\startlongtable')
+    lines += [
         r'\begin{longtable}{l l l l l l l l}',
         r'\toprule',
         r'Parameter & Meaning & Unit & Painted truth & Fit prior & Class & '
