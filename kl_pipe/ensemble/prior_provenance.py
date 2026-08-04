@@ -386,9 +386,9 @@ def catalog_registry(
 
     # --- vertical structure (pinned) -----------------------------------------
     thick = (
-        'Image-simulation standard. The measured z < 1 thickness '
-        '(intrinsic C/A ~ 0.24) implies ~0.42; that value would cost 14% '
-        'of the apparent-shape lever (38% edge-on). Open systematic.'
+        'Direct sech^2 z0/Rd measurements span 0.2-0.38 in this convention; '
+        'C/A ellipsoid inversions are upper bounds. A dedicated subset run '
+        'samples the thickness to isolate its effect.'
     )
     for comp in ('Halpha', 'Halpha.cont'):
         add(
@@ -400,7 +400,7 @@ def catalog_registry(
                 'pinned',
                 'pinned',
                 thick,
-                ('Hoffmann2022',),
+                ('Kregel2002', 'Yu2026', 'vanAsselt2026', 'Hoffmann2022'),
             )
         )
     disk_h_key = '{band}.disk_h_over_r' if bulge else '{band}.h_over_r'
@@ -414,7 +414,7 @@ def catalog_registry(
                 'pinned',
                 'pinned',
                 thick,
-                ('Hoffmann2022',),
+                ('Kregel2002', 'Yu2026', 'vanAsselt2026', 'Hoffmann2022'),
             )
         )
     if bulge:
@@ -528,6 +528,9 @@ _CITE_LABELS = {
     'Matharu2022': 'Matharu+22',
     'vanderWel2014': 'van der Wel+14',
     'Hoffmann2022': 'Hoffmann+22',
+    'Kregel2002': 'Kregel+02',
+    'Yu2026': 'Yu+26',
+    'vanAsselt2026': 'van Asselt+26',
     'Bertola1991': 'Bertola+91',
     'Costantin2018': 'Costantin+18',
     'Lang2014': 'Lang+14',
@@ -577,6 +580,7 @@ def _tex_escape(s: str) -> str:
         .replace('<', r'$<$')
         .replace('>', r'$>$')
         .replace('sigma_0', r'$\sigma_0$')
+        .replace('sech^2', r'sech$^2$')
         .replace('~', r'$\sim$')
     )
 

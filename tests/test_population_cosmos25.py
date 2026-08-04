@@ -477,7 +477,7 @@ class TestPriorProvenance:
         assert 'Castander2025' not in used
         assert 'Shuntov2025' in used
         # the redshift note reflects a photo-z truth, not grism spectroscopy
-        assert 'photometric redshift' in reg['z'].notes
+        assert 'photo-z' in reg['z'].notes
         # catalog-fit entries carry the measured cosmos25 constants
         # (n=294 census-selected sample of the regenerated catalog,
         # 2026-07-29: rscale log10 mu -0.774 -> median 0.17, sigma 0.161)

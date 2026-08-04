@@ -74,12 +74,13 @@ _BAND_FLUX_PRIOR = {
 
 # Vertical structure, pinned on both sides (painted and fit at the same
 # value), so it is a stated model assumption rather than a recovered
-# quantity. The disk value is the GalSim InclinedExponential default.
-# Hoffmann et al. 2022 measure C/A = 0.24 for disc-dominated galaxies below
-# z = 1, which maps to h_over_r 0.42-0.53 through the renderer; adopting that
-# would cost about 14% of the apparent-shape lever overall and 38% in the
-# lowest-inclination bin, so it is carried as an open systematic.
-_DISK_H_OVER_R = 0.1
+# quantity. 0.25 sits in the 0.2-0.38 range of direct sech^2 z0/Rd
+# measurements (Kregel+02; Yu+26; van Asselt+26), which match this
+# parameter's convention with no conversion (h_over_r multiplies rscale to
+# give the sech^2 argument scale). C/A ellipsoid inversions (Hoffmann+22
+# 0.24-0.33; van der Wel+14) are upper bounds. A dedicated subset run
+# samples the thickness to isolate its effect on the shear ensemble.
+_DISK_H_OVER_R = 0.25
 
 # Centroid support, wide enough that no painted offset approaches it.
 _CENTROID_BOUNDS = (-0.5, 0.5)
