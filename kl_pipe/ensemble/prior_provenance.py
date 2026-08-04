@@ -70,7 +70,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class PriorProvenance:
-    """Provenance record for one fit parameter."""
+    """Provenance record for one fit parameter.
+
+    The compact_* fields override their counterparts in the compact table
+    only; empty means fall back to the full-table cell. compact_note is a
+    short qualifier column replacing the full notes.
+    """
 
     param: str
     meaning: str
@@ -80,6 +85,10 @@ class PriorProvenance:
     category: str
     notes: str
     bibkeys: Tuple[str, ...] = field(default_factory=tuple)
+    compact_meaning: str = ''
+    compact_painted: str = ''
+    compact_prior: str = ''
+    compact_note: str = ''
 
 
 _CATEGORIES = (
@@ -148,6 +157,9 @@ def catalog_registry(
                 'paint',
                 'Wide so the posterior width comes from the data; unbounded '
                 'to avoid a prior edge.',
+                compact_meaning='shear',
+                compact_painted=f'N(0, {cp.shear_sigma})',
+                compact_note=f'pair-shared; |g| < {cp.shear_gmax}',
             )
         )
     add(
@@ -161,6 +173,9 @@ def catalog_registry(
             'The catalog inclination encodes its training-sample selection '
             'and correlates with no retained column, so the redraw is '
             'lossless; the catalog value is kept for validation.',
+            compact_meaning='inclination',
+            compact_painted=f'U{cp.cosi_range}',
+            compact_note='isotropic redraw',
         )
     )
     add(
@@ -173,6 +188,9 @@ def catalog_registry(
             'paint',
             'Ring partner at +pi/2 averages orientation-dependent residuals '
             'out of the ensemble shear.',
+            compact_meaning='intrinsic PA',
+            compact_painted='U(0, pi)',
+            compact_note='ring partner at +pi/2',
         )
     )
     add(
@@ -191,6 +209,7 @@ def catalog_registry(
                 'truth; v0 absorbs the residual.'
             ),
             cat_keys,
+            compact_note='v0 absorbs the redshift error',
         )
     )
 
@@ -209,6 +228,10 @@ def catalog_registry(
             'center is off-truth by construction. The KL inclination '
             'constraint enters through this prior.',
             ('Ubler2017',),
+            compact_meaning='circular velocity',
+            compact_painted=f'TFR(logM) + N(0, {cp.tfr_scatter_dex})',
+            compact_prior='LN at TFR(logm_obs)',
+            compact_note=f'mass error {cp.logm_obs_scatter_dex} dex',
         )
     )
     add(
@@ -225,6 +248,9 @@ def catalog_registry(
             'z ~ 1) and Catinella+06 (0.24-0.57) agree. The anchor is '
             'z ~ 0; the redshift extrapolation is the stated systematic.',
             ('Stone2022', 'Miller2011', 'Catinella2006'),
+            compact_meaning='turnover radius',
+            compact_prior='CLN(same)',
+            compact_note='z ~ 0 anchor',
         )
     )
     add(
@@ -237,6 +263,8 @@ def catalog_registry(
             'instrument scale',
             'One dispersion pixel, 8x the paint scatter; the line centroid '
             'is measured to 14-40 km/s, so the data dominate.',
+            compact_meaning='systemic velocity',
+            compact_note='one dispersion pixel',
         )
     )
     add(
@@ -250,6 +278,11 @@ def catalog_registry(
             'paint',
             'Prior equals paint: the same affine sigma_0(z) relation and ' 'scatter.',
             ('Ubler2019',),
+            compact_meaning='velocity dispersion',
+            compact_painted=f'N({cp.sigma0_intercept_kms} + '
+            f'{cp.sigma0_slope_kms} z, {cp.sigma0_scatter_kms})',
+            compact_prior='TN(same)',
+            compact_note=f'floor {cp.sigma0_min_kms} km/s',
         )
     )
 
@@ -271,6 +304,10 @@ def catalog_registry(
                 'catalog fit',
                 size_note,
                 cat_keys,
+                compact_meaning='disk scale length',
+                compact_painted='catalog',
+                compact_prior=f'TLN({size_med:.2f}, {pc.rscale_log10_sigma})',
+                compact_note='shared with the continuum',
             )
         )
     add(
@@ -286,6 +323,9 @@ def catalog_registry(
             'growth); median and rms from one sample. Matharu+22 confirm '
             'the median but give no width.',
             ('Nelson2012', 'Matharu2022'),
+            compact_meaning='line scale length',
+            compact_prior='CLN(same)',
+            compact_note='line extends beyond continuum',
         )
     )
     add(
@@ -298,6 +338,10 @@ def catalog_registry(
             'catalog fit',
             size_note,
             cat_keys + ('vanderWel2014',),
+            compact_meaning='continuum scale length',
+            compact_painted='catalog',
+            compact_prior=f'TLN({size_med:.2f}, {pc.rscale_log10_sigma})',
+            compact_note='same stellar disk as the bands',
         )
     )
 
@@ -319,6 +363,10 @@ def catalog_registry(
             'mock measurement',
             flux_note,
             cat_keys,
+            compact_meaning='line flux',
+            compact_painted='catalog',
+            compact_prior='TN(measured, expected error)',
+            compact_note='center offset by one noise draw',
         )
     )
     for band in config.bands:
@@ -334,6 +382,10 @@ def catalog_registry(
                 'mock measurement',
                 flux_note,
                 cat_keys,
+                compact_meaning='broadband flux',
+                compact_painted='catalog photometry',
+                compact_prior='TN(measured, expected error)',
+                compact_note='center offset by one noise draw',
             )
         )
     add(
@@ -348,6 +400,10 @@ def catalog_registry(
             'Population of the selected catalog EWs; no per-galaxy truth, '
             'and tighter than the truth-centered prior it replaced.',
             cat_keys + ('Khostovan2024',),
+            compact_meaning='continuum flux density',
+            compact_painted='line flux / catalog EW',
+            compact_prior=f'TLN({cont_med:.2f}, {pc.cont_flux_log10_sigma})',
+            compact_note='population of catalog EWs',
         )
     )
 
@@ -364,6 +420,9 @@ def catalog_registry(
                     f'[{scene._CENTROID_BOUNDS[0]}, {scene._CENTROID_BOUNDS[1]}])',
                     'instrument scale',
                     'Per-component astrometric offset, about one Roman pixel.',
+                    compact_meaning='centroid offset',
+                    compact_prior=f'TN(0, {CENTROID_SCATTER_ARCSEC})',
+                    compact_note='about one pixel',
                 )
             )
     for ax in ('x0', 'y0'):
@@ -381,6 +440,10 @@ def catalog_registry(
                 'scatters in quadrature, marginal not conditional, so the '
                 'offset is measured rather than imposed.',
                 ('Nelson2012',),
+                compact_meaning='continuum centroid offset',
+                compact_painted=f'line + N(0, {CONT_CENTROID_OFFSET_ARCSEC})',
+                compact_prior=f'TN(0, {sig_cont:.3f})',
+                compact_note='clumpy star formation offset',
             )
         )
 
@@ -401,6 +464,8 @@ def catalog_registry(
                 'pinned',
                 thick,
                 ('Kregel2002', 'Yu2026', 'vanAsselt2026', 'Hoffmann2022'),
+                compact_meaning='disk thickness',
+                compact_note='sampled in a dedicated subset run',
             )
         )
     disk_h_key = '{band}.disk_h_over_r' if bulge else '{band}.h_over_r'
@@ -415,6 +480,8 @@ def catalog_registry(
                 'pinned',
                 thick,
                 ('Kregel2002', 'Yu2026', 'vanAsselt2026', 'Hoffmann2022'),
+                compact_meaning='disk thickness',
+                compact_note='sampled in a dedicated subset run',
             )
         )
     if bulge:
@@ -663,18 +730,21 @@ def registry_to_compact_latex(
     cite_urls: Dict[str, str] = None,
 ) -> str:
     """
-    Compact rendering: per-band and x/y rows merged, no notes column.
+    Compact rendering: per-band and x/y rows merged, one line per row, with
+    a short qualifier column in place of the full notes.
 
     Prototype for the in-paper table; the full `registry_to_latex` table is
-    the internal reference. Rows merge when unit, painted truth, fit prior,
-    class, and citations all match once the band token is generalized.
+    the internal reference. Entries' compact_* fields override the full
+    cells; rows merge when every rendered cell but the parameter name
+    matches once the band token is generalized.
     """
     if mode not in ('standalone', 'paper'):
         raise ValueError(f"unknown mode '{mode}'")
     urls = cite_urls or {}
 
     def one_cite(key: str) -> str:
-        label = _tex_escape(_CITE_LABELS.get(key, key))
+        label = re.sub(r'\s*\(.*\)$', '', _CITE_LABELS.get(key, key))
+        label = _tex_escape(label)
         url = urls.get(key)
         if url is None:
             return label
@@ -695,18 +765,32 @@ def registry_to_compact_latex(
     groups: Dict[tuple, dict] = {}
     for e in registry.values():
         param = re.sub(r'\.(x0|y0)$', '.x0/y0', canon(e.param))
-        meaning = re.sub(r' offset [xy]$', ' offset', canon(e.meaning))
-        meaning = re.sub(r' component \d$', ' components', meaning)
-        key = (e.unit, canon(e.painted), canon(e.fit_prior), e.category, e.bibkeys)
-        g = groups.setdefault(key, {'params': [], 'meaning': meaning, 'first': e})
+        meaning = e.compact_meaning or re.sub(
+            r' offset [xy]$', ' offset', canon(e.meaning)
+        )
+        painted = canon(e.compact_painted or e.painted)
+        prior = canon(e.compact_prior or e.fit_prior)
+        note = e.compact_note or '--'
+        key = (e.unit, painted, prior, e.category, e.bibkeys, note)
+        g = groups.setdefault(
+            key,
+            {
+                'params': [],
+                'meaning': meaning,
+                'painted': painted,
+                'prior': prior,
+                'note': note,
+                'first': e,
+            },
+        )
         if param not in g['params']:
             g['params'].append(param)
 
     lines = [
-        r'\begin{longtable}{p{5.6cm} p{3.6cm} l p{5.6cm} p{5.8cm} l p{4.6cm}}',
+        r'\begin{longtable}{l l l l l l l l}',
         r'\toprule',
         r'Parameter & Meaning & Unit & Painted truth & Fit prior & Class & '
-        r'Reference \\',
+        r'Reference & Notes \\',
         r'\midrule',
         r'\endhead',
     ]
@@ -715,18 +799,26 @@ def registry_to_compact_latex(
     for g in groups.values():
         by_block.setdefault(_block_of(g['first'].param), []).append(g)
     for block in sorted(by_block, key=order.__getitem__):
-        lines.append(r'\midrule\multicolumn{7}{l}{\textbf{' + block + r'}}\\\midrule')
+        lines.append(r'\midrule\multicolumn{8}{l}{\textbf{' + block + r'}}\\\midrule')
         for g in sorted(by_block[block], key=lambda g: g['params'][0]):
             e = g['first']
+            suffix = g['params'][0].split('.')[-1]
+            if len(g['params']) >= 3 and all(
+                p.split('.')[-1] == suffix for p in g['params']
+            ):
+                param_cell = r'\texttt{' + _tex_escape(suffix) + '} (all components)'
+            else:
+                param_cell = r'\texttt{' + _tex_escape(', '.join(g['params'])) + '}'
             row = ' & '.join(
                 (
-                    r'\texttt{' + _tex_escape(', '.join(g['params'])) + '}',
+                    param_cell,
                     _tex_escape(g['meaning']),
                     _tex_escape(e.unit),
-                    _tex_escape(canon(e.painted)),
-                    _tex_escape(canon(e.fit_prior)),
+                    _tex_escape(g['painted']),
+                    _tex_escape(g['prior']),
                     _tex_escape(e.category),
                     cite(e.bibkeys),
+                    _tex_escape(g['note']),
                 )
             )
             lines.append(row + r' \\')
@@ -751,7 +843,7 @@ imported from the pipeline constants.
 \medskip
 \noindent\textbf{Distributions.} N(mean, sigma) = Gaussian;
 TN = truncated Gaussian, support in brackets;
-LN(median, scatter) = log-normal, scatter in dex unless marked `ln';
+LN(median, scatter) = log-normal, scatter in dex;
 TLN = truncated log-normal;
 CLN = log-normal on the ratio to the sampled parent scale;
 U(low, high) = uniform.
@@ -786,7 +878,7 @@ def standalone_document(
 
 
 _COMPACT_PREAMBLE = r"""\documentclass[10pt]{article}
-\usepackage[paperwidth=36cm,paperheight=22cm,margin=1.2cm]{geometry}
+\usepackage[paperwidth=42cm,paperheight=20cm,margin=1.2cm]{geometry}
 \usepackage{longtable,booktabs}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -797,11 +889,9 @@ _COMPACT_PREAMBLE = r"""\documentclass[10pt]{article}
 \pagestyle{empty}
 \begin{document}
 \section*{Model parameters and priors}
-N(mean, sigma) = Gaussian; TN = truncated Gaussian, support in brackets;
-LN(median, scatter) = log-normal, scatter in dex unless marked `ln';
-TLN = truncated log-normal; CLN = log-normal on the ratio to the sampled
-parent scale; U(low, high) = uniform. $R_d$ is the exponential disk scale
-length; in ratio priors it means the galaxy's fitted disk scale.
+N(mean, sigma) = Gaussian; TN = truncated Gaussian; LN(median, scatter in
+dex) = log-normal; TLN = truncated log-normal; CLN = log-normal on the
+ratio to the fitted disk scale $R_d$; U(low, high) = uniform.
 """
 
 
