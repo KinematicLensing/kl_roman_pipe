@@ -321,3 +321,31 @@ class TestMapVarianceArtifacts:
         table = pd.DataFrame([{**dict(row), 'max_rhat': 1.0, 'divergence_rate': 0.0}])
         out = plot_datavector_fit(tmp_path, table, fit_id, tmp_path)
         assert out is not None and out.exists()
+
+
+class TestProductionSigmaBgPins:
+    """Quotable background anchors for the production Roman-PSF config.
+
+    Derived 2026-08-05 at the layer's landing commit from
+    hlwas_medium_roman.yaml (roman_wfi PSF, 0.11 arcsec pixels) and the
+    published point-source depths: sigma_bg = f_lim * ||K||_2 / 5. Pinned so
+    an upstream change (galsim PSF model, depth constants, the derivation
+    itself) moves these numbers loudly instead of silently re-anchoring the
+    production noise. In electrons (x ELECTRONS_PER_UJY) these are ~41/41 e-
+    rms per pixel, plausibly above a first-principles zodi+read estimate --
+    expected, since published depths carry real-survey margins (see the
+    background block in kl_pipe/surveys/roman.py).
+    """
+
+    SIGMA_BG_NJY = {'F129': 5.9396, 'F158': 5.7246}
+
+    def test_pins(self):
+        from kl_pipe.ensemble.mocks import _build_band_psf
+
+        config = ObservationConfig.from_yaml(REGISTRY / 'hlwas_medium_roman.yaml')
+        for band, pinned in self.SIGMA_BG_NJY.items():
+            psf = _build_band_psf(config.band_psf[band], band, None, mock=True)
+            sigma = roman.band_sigma_bg_ujy(
+                band, _psf_l2_norm(psf, config.pixel_scale_arcsec)
+            )
+            assert sigma * 1e3 == pytest.approx(pinned, rel=1e-3), band
