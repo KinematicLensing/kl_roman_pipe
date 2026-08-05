@@ -398,7 +398,7 @@ class TestNoiseModelComparisonFigure:
         )
         return inputs, band_snrs, line_snr
 
-    def test_figure(self, poisson_run, fake_data_dir, tmp_path_factory):
+    def test_figure(self, fake_data_dir, tmp_path_factory):
         import matplotlib
 
         matplotlib.use('Agg')
@@ -407,16 +407,30 @@ class TestNoiseModelComparisonFigure:
         from kl_pipe.ensemble.mocks import _channel_seeds
         from kl_pipe.noise import add_map_noise
 
-        spec_p, config_p, manifest = load_run(poisson_run)
+        # both arms on the PRODUCTION Roman WFI PSF configs: the published
+        # depths refer to the real instrument, so anchoring them through a
+        # stand-in Gaussian PSF makes the label-vs-realized comparison
+        # uninterpretable (the wiring tests above keep the fast Gaussian
+        # config; this figure pays the getPSF cost for a readable diagnostic)
+        tmp_p = tmp_path_factory.mktemp('poisson_roman')
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 4
+        d['observation']['config'] = 'hlwas_medium_roman_poisson'
+        spec_path = tmp_p / 'spec.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        spec_p, config_p, manifest = load_run(
+            expand(spec_path, REGISTRY, tmp_p / 'runs')
+        )
         row = manifest.iloc[0]
         inputs_p, band_snrs, line_snr = self._scaled_inputs(
             spec_p, config_p, row, self.K_BB, self.K_LINE
         )
 
-        # matched_filter twin: same bank, seeds, and scalings, default config
+        # matched_filter twin: same bank, seeds, and scalings
         tmp = tmp_path_factory.mktemp('mf_twin')
         d = catalog_spec_dict(fake_data_dir)
         d['population']['sample']['n_galaxies'] = 4
+        d['observation']['config'] = 'hlwas_medium_roman'
         spec_path = tmp / 'spec.yaml'
         spec_path.write_text(yaml.safe_dump(d))
         spec_m, config_m, manifest_m = load_run(
@@ -506,21 +520,29 @@ class TestNoiseModelComparisonFigure:
                 ax.set_yticks([])
                 fig.colorbar(im, ax=ax, fraction=0.046)
 
-        fig.suptitle('noise_model comparison (shared noise deviates)', fontsize=13)
+        fig.suptitle(
+            'noise_model comparison (Roman WFI PSF, shared noise deviates)',
+            fontsize=15,
+            y=0.995,
+        )
         fig.text(
             0.5,
-            0.955,
-            'bg-only: flat background solved from the published survey depth, no '
-            'source term  |  matched_filter: flat variance chosen so the labeled '
-            'SNR is exact (the default)  |  poisson: that same published-depth '
-            'background plus the source\'s own shot noise',
+            0.978,
+            'bg-only: flat noise level solved from the published survey depth; '
+            'no dependence on the target SNR or this galaxy\n'
+            'matched_filter (the default): flat noise level chosen so the '
+            'realized SNR equals the target exactly; no dependence on the '
+            'published depths\n'
+            'poisson: the bg-only level plus this galaxy\'s own photon noise; '
+            'always noisier than bg-only, and brightest pixels noisiest',
             ha='center',
-            fontsize=9,
+            va='top',
+            fontsize=12,
         )
         out_dir = Path('tests/out/noise_model_comparison')
         out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / 'noise_model_comparison.png'
-        fig.tight_layout(rect=(0, 0, 1, 0.94))
+        fig.tight_layout(rect=(0, 0, 1, 0.925))
         fig.savefig(out, dpi=130)
         plt.close(fig)
         assert out.exists()
