@@ -352,76 +352,148 @@ class TestProductionSigmaBgPins:
 
 
 @pytest.mark.diagnostic_plots
-@pytest.mark.slow
 class TestNoiseModelComparisonFigure:
-    """Side-by-side datavector figure: truth, background-only,
-    matched_filter, poisson, and the poisson variance map, per channel.
+    """Side-by-side datavector figure across the three noise pathways.
 
-    Same noise seed in every arm, so the underlying unit deviates are
-    shared and the panels differ only by the noise amplitude/structure.
-    Saved to tests/out/noise_model_comparison/.
+    One bright-ish galaxy (fluxes scaled up from the fake-catalog bank so
+    the structure is visible over the noise): per channel (two bands + two
+    grism rolls), the noiseless truth, a background-only draw, the
+    matched_filter mock, the poisson mock, and all three variance maps on
+    one shared color scale. Same noise deviates in every arm, so the
+    panels differ only by the noise amplitude and structure; each noisy
+    panel's title carries its realized matched-filter SNR next to the
+    labeled target. Saved to tests/out/noise_model_comparison/.
     """
 
-    def test_figure(self, poisson_inputs, fake_data_dir, tmp_path_factory):
+    # flux scalings applied to the bank galaxy: bright broadband, medium
+    # grism (per-pass line label ~11 at the bank's ~2.2)
+    K_BB = 4.0
+    K_LINE = 5.0
+
+    @staticmethod
+    def _scaled_inputs(spec, config, row, k_bb, k_line):
+        truth = truth_from_row(row)
+        for band in config.bands:
+            key = (
+                f'{band}.total_flux'
+                if f'{band}.total_flux' in truth
+                else f'{band}.flux'
+            )
+            truth[key] *= k_bb
+        truth['Halpha.flux'] *= k_line
+        truth['Halpha.cont.flux_per_nm'] *= k_line  # preserve the EW
+        band_snrs = {b: k_bb * v for b, v in _row_band_snrs(row, config).items()}
+        line_snr = k_line * float(row['line_snr'])
+        inputs = build_fit_inputs(
+            truth,
+            int(row['noise_seed']),
+            spec,
+            config,
+            band_snrs=band_snrs,
+            line_snr=line_snr,
+            row=row,
+        )
+        return inputs, band_snrs, line_snr
+
+    def test_figure(self, poisson_run, fake_data_dir, tmp_path_factory):
         import matplotlib
 
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
+        from kl_pipe.ensemble.mocks import _channel_seeds
         from kl_pipe.noise import add_map_noise
 
-        spec_p, config_p, row, inputs_p = poisson_inputs
+        spec_p, config_p, manifest = load_run(poisson_run)
+        row = manifest.iloc[0]
+        inputs_p, band_snrs, line_snr = self._scaled_inputs(
+            spec_p, config_p, row, self.K_BB, self.K_LINE
+        )
 
-        # matched_filter twin: same galaxy bank and seeds, default config
+        # matched_filter twin: same bank, seeds, and scalings, default config
         tmp = tmp_path_factory.mktemp('mf_twin')
         d = catalog_spec_dict(fake_data_dir)
         d['population']['sample']['n_galaxies'] = 4
         spec_path = tmp / 'spec.yaml'
         spec_path.write_text(yaml.safe_dump(d))
-        run_dir = expand(spec_path, REGISTRY, tmp / 'runs')
-        spec_m, config_m, manifest_m = load_run(run_dir)
+        spec_m, config_m, manifest_m = load_run(
+            expand(spec_path, REGISTRY, tmp / 'runs')
+        )
         row_m = manifest_m.iloc[0]
         assert str(row_m['fit_id']) == str(row['fit_id'])
-        inputs_m = build_fit_inputs(
-            truth_from_row(row_m),
-            int(row_m['noise_seed']),
-            spec_m,
-            config_m,
-            band_snrs=_row_band_snrs(row_m, config_m),
-            line_snr=float(row_m['line_snr']),
-            row=row_m,
+        inputs_m, _, _ = self._scaled_inputs(
+            spec_m, config_m, row_m, self.K_BB, self.K_LINE
         )
 
-        channels = [('image', b) for b in config_p.bands] + [('grism', 'roll0')]
-        fig, axes = plt.subplots(
-            len(channels), 5, figsize=(16, 3.1 * len(channels)), squeeze=False
+        seeds = _channel_seeds(
+            int(row['noise_seed']), len(config_p.bands) + len(config_p.grism_rolls_deg)
         )
-        for i, (kind, key) in enumerate(channels):
+        channels = [('image', b, i) for i, b in enumerate(config_p.bands)] + [
+            ('grism', 'roll0', len(config_p.bands)),
+            ('grism', 'roll1', len(config_p.bands) + 1),
+        ]
+        fig, axes = plt.subplots(len(channels), 7, figsize=(22, 3.1 * len(channels)))
+        for i, (kind, key, seed_idx) in enumerate(channels):
             if kind == 'image':
-                obs_p = inputs_p.image_obs[key]
-                obs_m = inputs_m.image_obs[key]
+                obs_p, obs_m = inputs_p.image_obs[key], inputs_m.image_obs[key]
                 truth_img = np.asarray(
                     inputs_p.source.render_broadband(inputs_p.truth, obs_p, key)
                 )
+                template = truth_img
+                target = band_snrs[key]
+                eff_key = key
             else:
-                obs_p = inputs_p.grism_obs[key]
-                obs_m = inputs_m.grism_obs[key]
+                obs_p, obs_m = inputs_p.grism_obs[key], inputs_m.grism_obs[key]
                 truth_img = np.asarray(
                     inputs_p.source.render_grism(inputs_p.truth, obs_p)
                 )
+                # the SNR convention normalizes on the line template alone
+                line_truth = {
+                    k: (0.0 if k.endswith('.cont.flux_per_nm') else v)
+                    for k, v in inputs_p.truth.items()
+                }
+                template = np.asarray(inputs_p.source.render_grism(line_truth, obs_p))
+                target = line_snr
+                eff_key = f'line_{key}'
+
             var_p = np.asarray(obs_p.variance)
+            var_m = np.full_like(var_p, float(np.asarray(obs_m.variance)))
             sigma_bg = float(np.sqrt(var_p.min()))
-            bg_only = add_map_noise(
-                truth_img, np.full_like(truth_img, sigma_bg**2), seed=i
-            )
-            label_p = inputs_p.snr_effective[key if kind == 'image' else 'line_roll0']
-            label_m = inputs_m.snr_effective[key if kind == 'image' else 'line_roll0']
+            var_bg = np.full_like(var_p, sigma_bg**2)
+            bg_only = add_map_noise(truth_img, var_bg, seed=int(seeds[seed_idx]))
+            eff_bg = matched_filter_snr(template, var_bg)
+            eff_m = inputs_m.snr_effective[eff_key]
+            eff_p = inputs_p.snr_effective[eff_key]
+
+            noisy = [bg_only, np.asarray(obs_m.data), np.asarray(obs_p.data)]
+            dlo = min(a.min() for a in noisy)
+            dhi = max(a.max() for a in noisy)
+            vlo = min(var_bg.min(), var_m.min(), var_p.min())
+            vhi = max(var_bg.max(), var_m.max(), var_p.max())
             panels = [
-                (truth_img, 'truth', {}),
-                (bg_only, f'bg only (sigma={sigma_bg:.3g})', {}),
-                (np.asarray(obs_m.data), f'matched_filter (snr_eff={label_m:.1f})', {}),
-                (np.asarray(obs_p.data), f'poisson (snr_eff={label_p:.1f})', {}),
-                (var_p, 'poisson variance map', {'cmap': 'viridis'}),
+                (truth_img, f'truth (target snr={target:.0f})', {}),
+                (
+                    bg_only,
+                    f'bg-only data (snr_eff={eff_bg:.1f})',
+                    {'vmin': dlo, 'vmax': dhi},
+                ),
+                (
+                    noisy[1],
+                    f'matched_filter data (snr_eff={eff_m:.1f})',
+                    {'vmin': dlo, 'vmax': dhi},
+                ),
+                (
+                    noisy[2],
+                    f'poisson data (snr_eff={eff_p:.1f})',
+                    {'vmin': dlo, 'vmax': dhi},
+                ),
+                (var_bg, 'var: bg-only', {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'}),
+                (
+                    var_m,
+                    'var: matched_filter',
+                    {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'},
+                ),
+                (var_p, 'var: poisson', {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'}),
             ]
             for j, (img, title, kwargs) in enumerate(panels):
                 ax = axes[i, j]
@@ -431,14 +503,21 @@ class TestNoiseModelComparisonFigure:
                 ax.set_yticks([])
                 fig.colorbar(im, ax=ax, fraction=0.046)
 
+        fig.suptitle('noise_model comparison (shared noise deviates)', fontsize=13)
+        fig.text(
+            0.5,
+            0.955,
+            'bg-only: flat background solved from the published survey depth, no '
+            'source term  |  matched_filter: flat variance chosen so the labeled '
+            'SNR is exact (the default)  |  poisson: that same published-depth '
+            'background plus the source\'s own shot noise',
+            ha='center',
+            fontsize=9,
+        )
         out_dir = Path('tests/out/noise_model_comparison')
         out_dir.mkdir(parents=True, exist_ok=True)
-        out = out_dir / f"comparison_{row['fit_id']}.png"
-        fig.suptitle(
-            f"fit {row['fit_id']}: noise_model comparison (shared deviate seed)",
-            fontsize=11,
-        )
-        fig.tight_layout()
+        out = out_dir / 'noise_model_comparison.png'
+        fig.tight_layout(rect=(0, 0, 1, 0.94))
         fig.savefig(out, dpi=130)
         plt.close(fig)
         assert out.exists()

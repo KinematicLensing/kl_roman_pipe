@@ -185,3 +185,137 @@ def test_velocity_obs_chi2(scene):
 
     chi2 = _chi2_per_point(make_task(noisy), make_task(clean), clean.size)
     _assert_calibrated(chi2, clean.size, 'velocity obs')
+
+
+def _shot_noise_variance_map(clean):
+    """Physical-style variance map with both terms mattering: background at
+    the bg-only matched-filter SNR ~50 level, shot noise scaled so the peak
+    pixel's Poisson variance roughly matches the background variance."""
+    from kl_pipe.noise import physical_variance_map
+
+    sigma_bg = float(np.sqrt((clean**2).sum())) / 50.0
+    electrons_per_flux = float(clean.max()) / sigma_bg**2
+    return physical_variance_map(clean, sigma_bg, electrons_per_flux)
+
+
+def test_image_obs_chi2_variance_map(scene):
+    # per-pixel (background + shot) variance through the full likelihood:
+    # data drawn from the same map must give chi2/point ~ 1, exactly as the
+    # uniform-variance cases above
+    from kl_pipe.noise import add_map_noise
+
+    image_pars, psf, source = scene
+    obs0 = build_image_obs(
+        image_pars,
+        psf=psf,
+        int_model=source.broadband_models['F087'],
+        broadband_key='F087',
+    )
+    clean = np.asarray(source.render_broadband(_PARS, obs0, 'F087'))
+    var_map = _shot_noise_variance_map(clean)
+    noisy = add_map_noise(clean, var_map, seed=_SEED)
+
+    def make_task(data):
+        obs = build_image_obs(
+            image_pars,
+            psf=psf,
+            data=jnp.asarray(data),
+            variance=jnp.asarray(var_map),
+            int_model=source.broadband_models['F087'],
+            broadband_key='F087',
+        )
+        return InferenceTask.from_obs(source, _priors(), image_obs={'F087': obs})
+
+    chi2 = _chi2_per_point(make_task(noisy), make_task(clean), clean.size)
+    _assert_calibrated(chi2, clean.size, 'image obs, variance map')
+
+
+def test_grism_obs_chi2_variance_map(scene):
+    from kl_pipe.noise import add_map_noise
+
+    image_pars, psf, source = scene
+    grism_pars = build_grism_pars_for_line(
+        LINE_LAMBDAS['Halpha'], redshift=_Z, image_pars=image_pars, dispersion=1.1
+    )
+    rc = RenderConfig(
+        oversample=5, dispersal_method='analytic', line_window_halfwidth=25
+    )
+    obs0 = build_grism_obs(grism_pars, z=_Z, psf=psf, render_config=rc)
+    clean = np.asarray(source.render_grism(_PARS, obs0))
+    var_map = _shot_noise_variance_map(clean)
+    noisy = add_map_noise(clean, var_map, seed=_SEED)
+
+    def make_task(data):
+        obs = build_grism_obs(
+            grism_pars,
+            z=_Z,
+            psf=psf,
+            render_config=rc,
+            data=jnp.asarray(data),
+            variance=jnp.asarray(var_map),
+        )
+        return InferenceTask.from_obs(source, _priors(), grism_obs={'roll0': obs})
+
+    chi2 = _chi2_per_point(make_task(noisy), make_task(clean), clean.size)
+    _assert_calibrated(chi2, clean.size, 'grism obs, variance map')
+
+
+def test_optimizer_recovers_truth_under_variance_map(scene):
+    # gradient-descent wiring under a per-pixel variance map: on NOISE-FREE
+    # data the likelihood optimum is the truth by construction (the map only
+    # reweights pixels), so the optimizer must return it to within optimizer
+    # tolerance; any gradient or weighting bug under map variance moves the
+    # recovered point far outside these bounds
+    from scipy.optimize import minimize
+
+    from kl_pipe.priors import Uniform as U
+
+    image_pars, psf, source = scene
+    obs0 = build_image_obs(
+        image_pars,
+        psf=psf,
+        int_model=source.broadband_models['F087'],
+        broadband_key='F087',
+    )
+    clean = np.asarray(source.render_broadband(_PARS, obs0, 'F087'))
+    var_map = _shot_noise_variance_map(clean)
+
+    priors = {k: v for k, v in _PARS.items()}
+    priors['F087.flux'] = U(50.0, 200.0)
+    priors['F087.rscale'] = U(0.1, 0.6)
+    priors['cosi'] = U(0.2, 0.95)
+    prior_dict = PriorDict(priors)
+
+    obs = build_image_obs(
+        image_pars,
+        psf=psf,
+        data=jnp.asarray(clean),
+        variance=jnp.asarray(var_map),
+        int_model=source.broadband_models['F087'],
+        broadband_key='F087',
+    )
+    task = InferenceTask.from_obs(source, prior_dict, image_obs={'F087': obs})
+    grad_fn = task.get_log_posterior_and_grad_fn()
+
+    def neg_logpost(th):
+        val, grad = grad_fn(jnp.asarray(th))
+        return -float(val), -np.asarray(grad, dtype=np.float64)
+
+    truth_theta = np.asarray([_PARS[n] for n in prior_dict.sampled_names])
+    start = truth_theta * np.array([1.1, 0.9, 1.05])
+    # bounds keep the line search inside the uniform prior support; an
+    # unbounded first step lands at log-prior -inf and stalls the optimizer
+    result = minimize(
+        neg_logpost,
+        start,
+        jac=True,
+        method='L-BFGS-B',
+        bounds=task.get_bounds(),
+        options={'maxiter': 200},
+    )
+    assert result.success, result.message
+    for name, got, want in zip(prior_dict.sampled_names, result.x, truth_theta):
+        assert got == pytest.approx(want, rel=1e-4), (
+            f'{name}: optimizer returned {got}, truth {want} (noise-free '
+            f'optimum must be the truth)'
+        )

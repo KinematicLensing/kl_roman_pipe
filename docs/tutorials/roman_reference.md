@@ -255,3 +255,74 @@ minutes to tens of minutes at these settings, longer at production sizes):
 
 Swap the synthetic renders for real coadded broadband images, per-roll grism
 frames, and their variance maps, and the same `task` runs unchanged.
+
+## Physical flux units and Roman noise
+
+Everything above is unit-agnostic: the fluxes are arbitrary numbers and the
+noise level is *chosen* by you as a target SNR. For Roman work you can
+instead carry physical units and let the noise come from the mission itself.
+The convention (see `docs/units_and_conventions.md`): broadband fluxes in
+microjansky, so a rendered image is in uJy/pixel, and published survey
+depths plus mission throughput tables (`kl_pipe.surveys.roman`) supply
+everything the noise needs.
+
+```{code-cell} python
+from kl_pipe.surveys import roman
+from kl_pipe.photometry import ab_mag_to_ujy
+from kl_pipe.noise import physical_variance_map, add_map_noise, matched_filter_snr
+
+# A disk with a real brightness: m_AB = 23 in F129 (~2.3 uJy).
+disk = InclinedExponentialModel()
+pars = {'flux': float(ab_mag_to_ujy(23.0)), 'rscale': 0.25, 'h_over_r': 0.1,
+        'cosi': 0.55, 'theta_int': 0.6, 'g1': 0.0, 'g2': 0.0, 'x0': 0.0, 'y0': 0.0}
+theta = jnp.array([pars[n] for n in disk.PARAMETER_NAMES])
+
+ip = ImagePars(shape=SHAPE, pixel_scale=PIXEL_SCALE, indexing='ij')
+obs_render = build_image_obs(ip, psf=psf, int_model=disk)
+clean_ujy = np.asarray(disk.render_image(theta, obs=obs_render))  # uJy/pixel
+```
+
+**Path (a): physical background + shot noise.** The background level is
+solved from the published HLWAS F129 depth (26.4 AB, 5-sigma point source):
+a point source at that flux, drawn through the same PSF, must come out at
+exactly 5-sigma. The source's own photons add Poisson variance on top,
+converted through the mission zeropoint (`ELECTRONS_PER_UJY`, zeropoint x
+exposure time; the detector e-/ADU gain never enters). You do not choose an
+SNR here; you *measure* it afterwards.
+
+```{code-cell} python
+# ||K||_2 of the unit-flux point source at the survey pixel scale
+kernel = psf.drawImage(scale=PIXEL_SCALE).array
+sigma_bg = roman.band_sigma_bg_ujy('F129', float(np.sqrt((kernel**2).sum())))
+
+var_map = physical_variance_map(clean_ujy, sigma_bg, roman.ELECTRONS_PER_UJY['F129'])
+noisy = add_map_noise(clean_ujy, var_map, seed=7)
+obs_physical = build_image_obs(ip, psf=psf, int_model=disk,
+                               data=jnp.asarray(noisy), variance=jnp.asarray(var_map),
+                               flux_unit='uJy (band-averaged f_nu)')
+snr_realized = matched_filter_snr(clean_ujy, var_map)
+snr_bg_only = matched_filter_snr(clean_ujy, sigma_bg**2)
+print(f'realized SNR = {snr_realized:.1f} (background alone: {snr_bg_only:.1f}; '
+      f'the difference is this galaxy\'s shot noise)')
+```
+
+**Path (b): the matched-filter target (what the rest of this tutorial
+uses).** Here the logic runs the other way: you declare the SNR and the
+uniform noise level is derived from the rendered template,
+`var = ||T||^2 / SNR^2`. That target SNR is exact by construction, needs no
+physical units, and is the right tool when you want controlled experiments
+at a chosen depth; path (a) is the right tool when the question is what
+*Roman* would actually deliver for this galaxy.
+
+```{code-cell} python
+noisy_mf, var_mf = add_intensity_noise(clean_ujy, target_snr=snr_realized, seed=7)
+print(f'matched-filter path at target {snr_realized:.1f}: uniform sigma = '
+      f'{np.sqrt(var_mf.flat[0]):.4g} uJy/pix vs background {sigma_bg:.4g}')
+```
+
+Both observations run through `InferenceTask` identically -- per-pixel
+variance maps are already supported everywhere. In the ensemble machinery
+these two paths are the `noise_model: matched_filter | poisson` knob on the
+observation config, which also anchors the grism channel (its published
+limit refers to an extended reference source) and records the realized
+`snr_effective` per channel for every fit.
