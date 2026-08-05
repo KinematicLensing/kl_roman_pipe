@@ -488,7 +488,10 @@ class TestNoiseModelComparisonFigure:
             vlo = min(var_bg.min(), var_m.min(), var_p.min())
             vhi = max(var_bg.max(), var_m.max(), var_p.max())
             panels = [
-                (truth_img, f'truth (target snr={target:.0f})', {}),
+                # same decimal precision as the snr_eff titles, so the exact
+                # matched_filter equality is visible rather than looking like
+                # a rounding mismatch
+                (truth_img, f'truth (target snr={target:.1f})', {}),
                 (
                     bg_only,
                     f'bg-only data (snr_eff={eff_bg:.1f})',
@@ -522,27 +525,23 @@ class TestNoiseModelComparisonFigure:
 
         fig.suptitle(
             'noise_model comparison (Roman WFI PSF, shared noise deviates)',
-            fontsize=15,
+            fontsize=14,
             y=0.995,
         )
         fig.text(
             0.5,
-            0.978,
-            'bg-only: flat noise level solved from the published survey depth; '
-            'no dependence on the target SNR or this galaxy\n'
-            'matched_filter (the default): flat noise level chosen so the '
-            'realized SNR equals the target exactly; no dependence on the '
-            'published depths\n'
-            'poisson: the bg-only level plus this galaxy\'s own photon noise; '
-            'always noisier than bg-only, and brightest pixels noisiest',
+            0.962,
+            'bg-only: flat noise from the published survey depth (no source '
+            'term)  |  matched_filter: flat noise chosen so the realized SNR '
+            'equals the target exactly (the default)  |  poisson: the bg-only '
+            'level plus the source\'s own shot noise',
             ha='center',
-            va='top',
-            fontsize=12,
+            fontsize=11,
         )
         out_dir = Path('tests/out/noise_model_comparison')
         out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / 'noise_model_comparison.png'
-        fig.tight_layout(rect=(0, 0, 1, 0.925))
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
         fig.savefig(out, dpi=130)
         plt.close(fig)
         assert out.exists()
