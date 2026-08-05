@@ -53,23 +53,44 @@ on `ImageObs`/`GrismObs`, which the ensemble sets in catalog mode. Unit
 conversion helpers (AB mag ↔ uJy, f_nu → f_lambda, depth → flux limit,
 power-law band interpolation) live in `kl_pipe.photometry`.
 
-### Noise models (`observation config noise_model`)
+### Ensemble mock noise models (`noise_model` on the observation config)
 
-- `matched_filter` (default): uniform per-channel Gaussian variance
-  normalized so the labeled SNR is exact, `var = ||T||² / SNR²` (broadband:
-  whole image; grism: line template only). Unit-free — only the labels
-  matter.
-- `poisson` (catalog mode only): per-pixel variance in the channel's own
-  squared flux units, `var = sigma_bg² + max(I_truth, 0) / g`. `sigma_bg`
-  is solved from the published depth through a rendered reference template
-  (imaging: point source through the config's PSF; grism: the extended
-  reference source of `kl_pipe/surveys/roman.py`, per roll at the per-pass
-  limit). `g` is detected electrons per flux unit
-  (`surveys.roman.ELECTRONS_PER_UJY`, `grism_electrons_per_f17_per_pass` —
-  ZP × t_exp physics, never the detector e-/ADU gain). Labels keep their
-  meaning as the published-depth selection/plot axis; the realized depth
-  including shot noise is reported per channel in the `snr_effective_*`
-  results columns (`noise.matched_filter_snr`: `sqrt(sum(T²/var))`).
+Scope: this knob belongs to the **ensemble mock machinery**
+(`kl_pipe/ensemble/`), not to core rendering — a manually built
+observation never sees it. The pieces it is assembled from are general,
+though: `noise.physical_variance_map` / `add_map_noise` /
+`matched_filter_snr` work on any image in any flux unit, and the Roman
+depth anchors and electron conversions live in `kl_pipe.surveys.roman`.
+Any script can therefore apply physical noise to its own render (in
+physical flux units) and pass the resulting map as `variance=` to
+`build_image_obs` / `build_grism_obs`; the ensemble knob just automates
+that assembly per fit.
+
+- `matched_filter` (default): one uniform variance per channel, chosen so
+  the labeled SNR is exact: `var = ||T||² / SNR²` (broadband: T = whole
+  truth image; grism: T = line-only template). Unit-free.
+- `poisson` (ensemble catalog mode only — it needs the catalog's physical
+  fluxes): per-pixel variance with two terms, in the channel's own squared
+  flux units:
+
+      var = sigma_bg² + max(I_truth, 0) / g
+
+  1. `sigma_bg`, a flat background level. Anchored to the published survey
+     depth: render the source the published limit refers to (imaging: a
+     point source through the config's PSF; grism: the 0.25″ reference disk
+     in `surveys/roman.py`), and set `sigma_bg` so that source is recovered
+     at exactly 5σ. One value per band; one per grism roll.
+  2. The source's own shot noise: pixel flux converted to detected
+     electrons via `g` (`ELECTRONS_PER_UJY`,
+     `grism_electrons_per_f17_per_pass` — zeropoint × exposure-time
+     physics, never the detector e-/ADU gain), Poisson counting, converted
+     back. High-count Gaussian draw; the fit likelihood carries the same
+     map, so the inference is exact for the mock.
+
+  The labeled SNR is *not* used to set the noise in this mode — it stays
+  the selection/plot axis, and the realized depth is reported per channel
+  in the `snr_effective_*` results columns
+  (`noise.matched_filter_snr(T, var) = sqrt(sum(T²/var))`).
 
 ## Render method units
 

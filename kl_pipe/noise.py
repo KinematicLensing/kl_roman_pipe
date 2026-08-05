@@ -53,7 +53,7 @@ a uniform per-pixel Gaussian variance set by the line matched filter. This
 assumes the background-dominated regime (faint slitless-grism sources), where
 the per-pixel noise floor is independent of the source; for the Roman grism
 that floor is mostly read noise (~96% of the background variance at 1.1
-nm/pix, measured 2026-07-25), not sky. The continuum is still rendered and
+nm/pix), not sky. The continuum is still rendered and
 marginalized as a nuisance but does not enter the SNR normalization. This
 matches the emission-line SNR used in the Roman KL literature (Xu et al., in
 the background-dominated limit).

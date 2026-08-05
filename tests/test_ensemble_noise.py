@@ -349,3 +349,96 @@ class TestProductionSigmaBgPins:
                 band, _psf_l2_norm(psf, config.pixel_scale_arcsec)
             )
             assert sigma * 1e3 == pytest.approx(pinned, rel=1e-3), band
+
+
+@pytest.mark.diagnostic_plots
+@pytest.mark.slow
+class TestNoiseModelComparisonFigure:
+    """Side-by-side datavector figure: truth, background-only,
+    matched_filter, poisson, and the poisson variance map, per channel.
+
+    Same noise seed in every arm, so the underlying unit deviates are
+    shared and the panels differ only by the noise amplitude/structure.
+    Saved to tests/out/noise_model_comparison/.
+    """
+
+    def test_figure(self, poisson_inputs, fake_data_dir, tmp_path_factory):
+        import matplotlib
+
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        from kl_pipe.noise import add_map_noise
+
+        spec_p, config_p, row, inputs_p = poisson_inputs
+
+        # matched_filter twin: same galaxy bank and seeds, default config
+        tmp = tmp_path_factory.mktemp('mf_twin')
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 4
+        spec_path = tmp / 'spec.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        run_dir = expand(spec_path, REGISTRY, tmp / 'runs')
+        spec_m, config_m, manifest_m = load_run(run_dir)
+        row_m = manifest_m.iloc[0]
+        assert str(row_m['fit_id']) == str(row['fit_id'])
+        inputs_m = build_fit_inputs(
+            truth_from_row(row_m),
+            int(row_m['noise_seed']),
+            spec_m,
+            config_m,
+            band_snrs=_row_band_snrs(row_m, config_m),
+            line_snr=float(row_m['line_snr']),
+            row=row_m,
+        )
+
+        channels = [('image', b) for b in config_p.bands] + [('grism', 'roll0')]
+        fig, axes = plt.subplots(
+            len(channels), 5, figsize=(16, 3.1 * len(channels)), squeeze=False
+        )
+        for i, (kind, key) in enumerate(channels):
+            if kind == 'image':
+                obs_p = inputs_p.image_obs[key]
+                obs_m = inputs_m.image_obs[key]
+                truth_img = np.asarray(
+                    inputs_p.source.render_broadband(inputs_p.truth, obs_p, key)
+                )
+            else:
+                obs_p = inputs_p.grism_obs[key]
+                obs_m = inputs_m.grism_obs[key]
+                truth_img = np.asarray(
+                    inputs_p.source.render_grism(inputs_p.truth, obs_p)
+                )
+            var_p = np.asarray(obs_p.variance)
+            sigma_bg = float(np.sqrt(var_p.min()))
+            bg_only = add_map_noise(
+                truth_img, np.full_like(truth_img, sigma_bg**2), seed=i
+            )
+            label_p = inputs_p.snr_effective[key if kind == 'image' else 'line_roll0']
+            label_m = inputs_m.snr_effective[key if kind == 'image' else 'line_roll0']
+            panels = [
+                (truth_img, 'truth', {}),
+                (bg_only, f'bg only (sigma={sigma_bg:.3g})', {}),
+                (np.asarray(obs_m.data), f'matched_filter (snr_eff={label_m:.1f})', {}),
+                (np.asarray(obs_p.data), f'poisson (snr_eff={label_p:.1f})', {}),
+                (var_p, 'poisson variance map', {'cmap': 'viridis'}),
+            ]
+            for j, (img, title, kwargs) in enumerate(panels):
+                ax = axes[i, j]
+                im = ax.imshow(img, origin='lower', **kwargs)
+                ax.set_title(f'{key}: {title}', fontsize=8)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                fig.colorbar(im, ax=ax, fraction=0.046)
+
+        out_dir = Path('tests/out/noise_model_comparison')
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"comparison_{row['fit_id']}.png"
+        fig.suptitle(
+            f"fit {row['fit_id']}: noise_model comparison (shared deviate seed)",
+            fontsize=11,
+        )
+        fig.tight_layout()
+        fig.savefig(out, dpi=130)
+        plt.close(fig)
+        assert out.exists()

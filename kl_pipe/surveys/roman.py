@@ -219,10 +219,10 @@ def grism_electrons_per_f17_per_pass(lambda_obs_a: ArrayLike) -> ArrayLike:
 # point source (the depth's own convention), grism: the extended reference
 # below. Anchoring to published depths rather than first-principles sky +
 # read noise is deliberate: the first-principles chain is a known ~2-4x
-# DEEPER than the published limits (margins, losses, chip gaps -- measured
-# 2026-07-26), and the published numbers are the mission's own statement of
-# realized depth. A first-principles comparison is therefore expected to
-# disagree by ~2x and that is not an error.
+# DEEPER than the published limits (margins, losses, chip gaps), and the
+# published numbers are the mission's own statement of realized depth. A
+# first-principles comparison is therefore expected to disagree by ~2x and
+# that is not an error.
 
 # The grism reference source, pinned as the dumbest defensible reading of
 # the Wang et al. 2022 convention ("galaxies with radius 0.25 arcsec at
