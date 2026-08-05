@@ -862,13 +862,14 @@ class TestPaintConstants:
         assert population.HALPHA_RSCALE_RATIO_DEX == 0.2
 
     def test_centroid_scatters(self):
-        # about one Roman pixel per component; gas-vs-stars offset half a
-        # pixel (clump-driven, ~11% of the median Halpha half-light radius)
-        assert population.CENTROID_SCATTER_ARCSEC == 0.1
+        # one Roman WFI pixel (0.11") per component; gas-vs-stars offset
+        # half a pixel (clump-driven, ~11% of the median Halpha half-light
+        # radius)
+        assert population.CENTROID_SCATTER_ARCSEC == 0.11
         assert population.CONT_CENTROID_OFFSET_ARCSEC == 0.055
 
     def test_systemic_velocity_scatter(self):
-        # painted v0 offset, well inside the ~200 km/s per-grism-pixel scale
+        # painted v0 offset, well inside the grism centroid-measurement floor
         assert population.V0_SCATTER_KMS == 25.0
 
     def test_bulge_sersic_mixture(self):

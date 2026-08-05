@@ -277,11 +277,17 @@ def scene_truth_defaults(
 # ``kl_pipe.ensemble.catalogs`` for the values and their provenance.
 # ``scene_priors`` reads them off the spec's adapter in catalog mode.
 
-# Systemic velocity prior width. One grism pixel at 1.1 nm is about 200 km/s
-# at the observed Halpha wavelength; the line centroid is measured to roughly
-# 14 km/s at line SNR 20 and 40 km/s at SNR 7, so this leaves v0 data-
-# dominated across the sample rather than encoding knowledge we do not have.
-_V0_PRIOR_SIGMA_KMS = 200.0
+# Systemic velocity prior width. The line centroid (itself set by the
+# grism's dispersion and spectral resolution at the achieved S/N) is
+# measured to roughly 14 km/s at line SNR 20 and 40 km/s at SNR 7, the
+# survey's own selection floor. Setting sigma to 3.5x that worst case caps
+# the shrinkage s = sigma_post / prior width at <= 0.3 even for the
+# noisiest selected galaxy (at s <= 0.3 the prior contributes under 10% of
+# the posterior variance), leaving v0 data-dominated without
+# carrying an unphysically wide tail into the grism deposit window sizing
+# (line_window_halfwidth_for_priors). Previously pinned to one dispersion
+# pixel (~200 km/s), a coarser and SNR-blind proxy for the same scale.
+_V0_PRIOR_SIGMA_KMS = 140.0
 
 # informative population priors for the bulge decomposition. A flat
 # bulge_frac (Uniform) + flat bulge_hlr (LogUniform) add no curvature along

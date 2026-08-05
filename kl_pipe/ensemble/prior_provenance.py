@@ -261,10 +261,11 @@ def catalog_registry(
             f'N(0, {V0_SCATTER_KMS})',
             f'N(0, {scene._V0_PRIOR_SIGMA_KMS})',
             'instrument scale',
-            'One dispersion pixel, 8x the paint scatter; the line centroid '
-            'is measured to 14-40 km/s, so the data dominate.',
+            '3.5x the worst-case (S/N 7) line-centroid precision of 40 '
+            'km/s, capping prior-driven shrinkage at <= 30% even for the '
+            'noisiest selected galaxy while leaving v0 data-dominated.',
             compact_meaning='systemic velocity',
-            compact_note='one dispersion pixel',
+            compact_note='3.5x worst-case centroid precision',
         )
     )
     add(
@@ -443,7 +444,8 @@ def catalog_registry(
                 compact_meaning='continuum centroid offset',
                 compact_painted=f'line + N(0, {CONT_CENTROID_OFFSET_ARCSEC})',
                 compact_prior=f'TN(0, {sig_cont:.3f})',
-                compact_note='clumpy star formation offset',
+                compact_note='clumpy offset; width = quadrature of the '
+                'astrometric floor and this offset, not independently set',
             )
         )
 
@@ -620,9 +622,9 @@ _BLOCK_ORDER = (
 
 
 def _block_of(param: str) -> str:
-    if param in ('g1', 'g2', 'cosi', 'theta_int', 'z'):
+    if param in ('g1', 'g2', 'cosi', 'theta_int'):
         return 'Geometry and shear'
-    if param in ('vel.vcirc', 'vel.rscale', 'vel.v0', 'Halpha.dispersion'):
+    if param in ('vel.vcirc', 'vel.rscale', 'vel.v0', 'Halpha.dispersion', 'z'):
         return 'Kinematics'
     if param.endswith(('x0', 'y0')):
         return 'Centroids'
@@ -764,7 +766,7 @@ def registry_to_compact_latex(
 
     def canon(text: str) -> str:
         for b in bands:
-            text = text.replace(b, 'band')
+            text = text.replace(b, r'\{band\}')
         return text
 
     groups: Dict[tuple, dict] = {}
@@ -909,8 +911,19 @@ def standalone_compact_document(
     cite_urls: Dict[str, str] = None,
 ) -> str:
     """Compact standalone LaTeX document (merged rows, no notes)."""
+    url = (cite_urls or {}).get('Shuntov2025')
+    cosmos25_cite = (
+        r'\href{' + url + '}{Shuntov et al. 2025}' if url else 'Shuntov et al. 2025'
+    )
+    catalog_note = (
+        '\n\\par\\noindent Catalog columns (redshift, mass, size, photometry) are '
+        f'COSMOS25 ({cosmos25_cite}); '
+        r"H$\alpha$ line flux and EW are painted per Jiachuan's recipe."
+        '\n\n'
+    )
     return (
         _COMPACT_PREAMBLE
+        + catalog_note
         + registry_to_compact_latex(
             registry, bands, mode='standalone', cite_urls=cite_urls
         )

@@ -125,8 +125,9 @@ HALPHA_RSCALE_RATIO_MEDIAN = 1.3
 HALPHA_RSCALE_RATIO_DEX = 0.2
 
 # Per-component astrometric centroid offset. Each component's offset is drawn
-# separately rather than shared; about one Roman pixel.
-CENTROID_SCATTER_ARCSEC = 0.1
+# separately rather than shared; one Roman WFI pixel (0.11", the same
+# pixel_scale_arcsec used throughout configs/observation/).
+CENTROID_SCATTER_ARCSEC = 0.11
 
 # Offset between the ionized-gas and stellar-continuum centroids of the same
 # galaxy. Star formation is clumpy and need not be centered on the older
