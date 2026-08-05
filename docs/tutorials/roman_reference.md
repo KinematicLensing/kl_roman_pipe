@@ -266,6 +266,21 @@ microjansky, so a rendered image is in uJy/pixel, and published survey
 depths plus mission throughput tables (`kl_pipe.surveys.roman`) supply
 everything the noise needs.
 
+There are three noise pathways, and the names below match the ensemble's
+`noise_model` knob and its comparison diagnostic
+(`tests/test_ensemble_noise.py::TestNoiseModelComparisonFigure`):
+
+- **bg-only** -- a flat per-pixel background solved from the published survey
+  depth; no source term. The realized SNR is whatever the survey delivers
+  for your galaxy: you measure it, you do not choose it.
+- **poisson** -- the bg-only level plus the source's own shot noise
+  (per-pixel variance map). The most physical of the three.
+- **matched_filter** -- you declare the SNR and a flat noise level is derived
+  from the rendered template so the declared SNR is realized *exactly*. No
+  physical units needed. This is the pipeline default.
+
+All three use only the public pieces imported above -- no ensemble code.
+
 ```{code-cell} python
 from kl_pipe.surveys import roman
 from kl_pipe.photometry import ab_mag_to_ujy
@@ -282,37 +297,52 @@ obs_render = build_image_obs(ip, psf=psf, int_model=disk)
 clean_ujy = np.asarray(disk.render_image(theta, obs=obs_render))  # uJy/pixel
 ```
 
-**Path (a): physical background + shot noise.** The background level is
-solved from the published HLWAS F129 depth (26.4 AB, 5-sigma point source):
-a point source at that flux, drawn through the same PSF, must come out at
-exactly 5-sigma. The source's own photons add Poisson variance on top,
-converted through the mission zeropoint (`ELECTRONS_PER_UJY`, zeropoint x
-exposure time; the detector e-/ADU gain never enters). You do not choose an
-SNR here; you *measure* it afterwards.
+**Pathway 1, bg-only: a flat background from the published depth.** The
+background level is solved from the published HLWAS F129 depth (26.4 AB,
+5-sigma point source): a point source at that flux, drawn through the same
+PSF, must come out at exactly 5-sigma, so `sigma_bg = f_lim * ||K||_2 / 5`
+with K the unit-flux PSF image at the survey pixel scale. The reference
+source is only the yardstick that converts a published flux limit into a
+per-pixel sigma; once solved, `sigma_bg` is a property of the survey and
+applies to any galaxy.
 
 ```{code-cell} python
 # ||K||_2 of the unit-flux point source at the survey pixel scale
 kernel = psf.drawImage(scale=PIXEL_SCALE).array
 sigma_bg = roman.band_sigma_bg_ujy('F129', float(np.sqrt((kernel**2).sum())))
 
+var_bg = np.full_like(clean_ujy, sigma_bg**2)
+noisy_bg = add_map_noise(clean_ujy, var_bg, seed=7)
+snr_bg_only = matched_filter_snr(clean_ujy, var_bg)
+print(f'bg-only realized SNR = {snr_bg_only:.1f}')
+```
+
+**Pathway 2, poisson: bg-only plus the source's own shot noise.** The
+galaxy's photons add Poisson variance on top of the flat background,
+converted through the mission zeropoint (`ELECTRONS_PER_UJY`, zeropoint x
+exposure time; the detector e-/ADU gain never enters). The draw is the
+heteroscedastic Gaussian of that variance map -- the high-count limit of
+Poisson statistics, and exactly the noise the Gaussian likelihood carrying
+the same map describes.
+
+```{code-cell} python
 var_map = physical_variance_map(clean_ujy, sigma_bg, roman.ELECTRONS_PER_UJY['F129'])
 noisy = add_map_noise(clean_ujy, var_map, seed=7)
 obs_physical = build_image_obs(ip, psf=psf, int_model=disk,
                                data=jnp.asarray(noisy), variance=jnp.asarray(var_map),
                                flux_unit='uJy (band-averaged f_nu)')
 snr_realized = matched_filter_snr(clean_ujy, var_map)
-snr_bg_only = matched_filter_snr(clean_ujy, sigma_bg**2)
 print(f'realized SNR = {snr_realized:.1f} (background alone: {snr_bg_only:.1f}; '
       f'the difference is this galaxy\'s shot noise)')
 ```
 
-**Path (b): the matched-filter target (what the rest of this tutorial
-uses).** Here the logic runs the other way: you declare the SNR and the
-uniform noise level is derived from the rendered template,
+**Pathway 3, matched_filter: the declared-SNR target (what the rest of this
+tutorial uses).** Here the logic runs the other way: you declare the SNR and
+the uniform noise level is derived from the rendered template,
 `var = ||T||^2 / SNR^2`. That target SNR is exact by construction, needs no
 physical units, and is the right tool when you want controlled experiments
-at a chosen depth; path (a) is the right tool when the question is what
-*Roman* would actually deliver for this galaxy.
+at a chosen depth; the poisson pathway is the right tool when the question
+is what *Roman* would actually deliver for this galaxy.
 
 ```{code-cell} python
 noisy_mf, var_mf = add_intensity_noise(clean_ujy, target_snr=snr_realized, seed=7)
@@ -320,9 +350,81 @@ print(f'matched-filter path at target {snr_realized:.1f}: uniform sigma = '
       f'{np.sqrt(var_mf.flat[0]):.4g} uJy/pix vs background {sigma_bg:.4g}')
 ```
 
-Both observations run through `InferenceTask` identically -- per-pixel
-variance maps are already supported everywhere. In the ensemble machinery
-these two paths are the `noise_model: matched_filter | poisson` knob on the
-observation config, which also anchors the grism channel (its published
-limit refers to an extended reference source) and records the realized
-`snr_effective` per channel for every fit.
+**The grism channel follows the same recipe with two changes.** First, the
+published grism limit refers to an *extended* reference source, not a point
+source: a round face-on exponential disk of half-light radius 0.25" with a
+30 km/s line width, Halpha observed at 1.5 um (all pinned in
+`kl_pipe.surveys.roman`). So the yardstick template is that disk's dispersed
+line render at the per-pass limit. Second, a grism SNR should normalize on
+the emission line alone: the continuum dominates the dispersed power but
+carries no kinematic signal (`kl_pipe.noise.grism_line_noise` implements
+the declared-SNR version of this convention). Line fluxes are carried in
+units of 1e-17 erg/s/cm2 (`CGS_TO_F17`), the convention of the grism
+literature and of the published limit itself.
+
+```{code-cell} python
+from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE, HALPHA_REST_A
+
+line_source = SourceModel(
+    velocity_model=CenteredVelocityModel(),
+    emission_lines={'Halpha': EmissionLine(intensity=InclinedExponentialModel(),
+                                           continuum=InclinedExponentialModel())},
+)
+
+def halpha_truth(f_line_cgs, z, **overrides):
+    """Truth for a round Halpha disk; line flux in erg/s/cm2."""
+    pars = {
+        'cosi': 1.0, 'theta_int': 0.0, 'g1': 0.0, 'g2': 0.0, 'z': z,
+        'vel.v0': 0.0, 'vel.vcirc': 0.0, 'vel.rscale': 1.0,
+        'Halpha.flux': f_line_cgs * CGS_TO_F17,      # -> 1e-17 erg/s/cm2 units
+        'Halpha.rscale': 0.25 / EXP_R50_OVER_RSCALE,  # r50 = 0.25"
+        'Halpha.h_over_r': 0.1, 'Halpha.x0': 0.0, 'Halpha.y0': 0.0,
+        'Halpha.dispersion': roman.GRISM_REF_LINE_WIDTH_KMS,
+        'Halpha.cont.flux_per_nm': 0.0, 'Halpha.cont.rscale': 0.25,
+        'Halpha.cont.h_over_r': 0.1, 'Halpha.cont.x0': 0.0, 'Halpha.cont.y0': 0.0,
+    }
+    pars.update(overrides)
+    return pars
+
+def grism_render(pars):
+    gp = build_grism_pars_for_line(LINE_LAMBDAS['Halpha'], redshift=pars['z'],
+                                   image_pars=ip, dispersion=1.1)
+    obs = build_grism_obs(gp, z=pars['z'], psf=psf)
+    return np.asarray(line_source.render_grism(pars, obs))
+
+# The yardstick: the published per-pass limit refers to exactly this source,
+# so rendering it at that limit and demanding matched-filter SNR = 5 solves
+# the per-roll background level.
+z_ref = roman.F_LIM_REF_LAMBDA_A / HALPHA_REST_A - 1.0
+L_ref = grism_render(halpha_truth(roman.F_LIM_PER_PASS_CGS, z_ref))
+sigma_bg_grism = roman.grism_sigma_bg_per_pass(float(np.sqrt((L_ref**2).sum())))
+```
+
+```{code-cell} python
+# Your galaxy: a catalog line flux at the per-pass limit, inclined, rotating,
+# with continuum. Shot noise counts line AND continuum photons; the SNR
+# convention normalizes on the line alone.
+gal = halpha_truth(3e-16, 1.0, **{
+    'cosi': 0.55, 'theta_int': 0.6, 'vel.vcirc': 200.0,
+    'Halpha.dispersion': 50.0, 'Halpha.cont.flux_per_nm': 0.75,
+})
+clean_grism = grism_render(gal)
+g_grism = float(roman.grism_electrons_per_f17_per_pass(
+    HALPHA_REST_A * (1.0 + gal['z'])))   # detected e- per flux unit, one pass
+
+var_grism = physical_variance_map(clean_grism, sigma_bg_grism, g_grism)
+noisy_grism = add_map_noise(clean_grism, var_grism, seed=8)
+
+line_only = grism_render({**gal, 'Halpha.cont.flux_per_nm': 0.0})
+snr_line = matched_filter_snr(line_only, var_grism)
+print(f'realized per-pass line SNR = {snr_line:.1f} '
+      f'(x2 over the 4-pass coadd; the reference source at this flux reads 5.0)')
+```
+
+All of these observations run through `InferenceTask` identically --
+per-pixel variance maps are supported everywhere. In the ensemble machinery
+the pathways are the `noise_model: matched_filter | poisson` knob on the
+observation config (bg-only is the poisson pathway without its shot term,
+shown in the comparison diagnostic), which automates the grism reference
+render above and records the realized `snr_effective` per channel for
+every fit.

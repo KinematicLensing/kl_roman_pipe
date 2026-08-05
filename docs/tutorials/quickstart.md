@@ -702,6 +702,24 @@ for ax in axes: ax.set_xticks([]); ax.set_yticks([])
 plt.tight_layout(); plt.show()
 ```
 
+Two notes on the noise used throughout this tutorial:
+
+- **The requested SNR is the matched-filter SNR of the whole stamp**, and it
+  is realized exactly (`var = ||T||^2 / SNR^2`). For a grism stamp a more
+  physically meaningful label normalizes on the emission line alone
+  (`kl_pipe.noise.grism_line_noise`, with a line-only render as the
+  template): the continuum dominates the dispersed power but carries no
+  kinematic signal. The whole-stamp version here keeps the example short.
+- **Choosing a pathway.** Declared-SNR noise is the right tool for
+  controlled experiments: you pick the depth, it is exact by construction,
+  and the flux units stay arbitrary. When the question is instead what
+  *Roman* would deliver for a galaxy of a given physical flux, carry
+  physical units and derive the noise from the published survey depths (a
+  flat depth-anchored background plus the source's own shot noise). That
+  pathway, and when to prefer each, is worked out in the Roman reference
+  tutorial ("Physical flux units and Roman noise" in
+  `roman_reference.md`).
+
 Wire both channels into one joint `InferenceTask`. `from_obs` takes a dict of
 broadband obs (keyed by band) and a dict of grism obs (keyed by an arbitrary
 roll label). Shear priors are set to +/- 0.25, comfortably wider than any
