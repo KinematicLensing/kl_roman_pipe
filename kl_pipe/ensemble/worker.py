@@ -405,6 +405,12 @@ def _run_fit_attempt(
     )
     summary['sampler_seed'] = sampler_seed
     summary['has_chains'] = bool(row['save_chains'])
+    # realized per-channel matched-filter SNR against the actual mock
+    # variance (equals the labels under matched_filter; includes shot noise
+    # under poisson) -- the subsample-analysis axis
+    summary['noise_model'] = str(config.noise_model)
+    for key, value in (inputs.snr_effective or {}).items():
+        summary[f'snr_effective_{key}'] = float(value)
 
     artifacts = _AttemptArtifacts(
         result=result,

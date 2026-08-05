@@ -744,7 +744,10 @@ def plot_datavector_fit(
     )
     for i, ch in enumerate(channels):
         data = npz[f'{ch}.data']
-        var = float(np.asarray(npz[f'{ch}.variance']).ravel()[0])
+        # scalar under matched_filter, a per-pixel map under poisson;
+        # broadcasting handles both (taking element [0] silently miscomputed
+        # the chi2 for any non-uniform variance)
+        var = np.asarray(npz[f'{ch}.variance'], dtype=np.float64)
         truth = npz[f'{ch}.truth_render']
         map_key = f'{ch}.map_render'
         model = npz[map_key] if map_key in npz.files else truth

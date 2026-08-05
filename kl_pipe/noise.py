@@ -13,6 +13,11 @@ Current contents
   enters at the spectral-cube layer, never on the moment.
 - ``grism_line_noise``: Gaussian on a dispersed grism stamp, normalized so the
   labeled SNR is the emission-LINE matched-filter SNR (not the whole stamp).
+- ``physical_variance_map`` / ``add_map_noise``: flat background + source
+  shot noise as a per-pixel variance map, and the heteroscedastic Gaussian
+  draw from it (the high-count limit of Poisson statistics).
+- ``matched_filter_snr``: sqrt(sum(T^2/var)) -- realized matched-filter SNR
+  of a template against a scalar or per-pixel noise model.
 
 SNR convention (current baseline: matched-filter)
 -------------------------------------------------
@@ -45,11 +50,13 @@ therefore defines the labeled SNR on the LINE component alone:
     var = ||I_line||_2^2 / line_snr^2 ,
 
 a uniform per-pixel Gaussian variance set by the line matched filter. This
-assumes the sky/background-dominated regime (faint slitless-grism sources),
-where the per-pixel noise floor is independent of the source; the continuum is
-still rendered and marginalized as a nuisance but does not enter the SNR
-normalization. This matches the emission-line SNR used in the Roman KL
-literature (Xu et al., in the sky-dominated limit).
+assumes the background-dominated regime (faint slitless-grism sources), where
+the per-pixel noise floor is independent of the source; for the Roman grism
+that floor is mostly read noise (~96% of the background variance at 1.1
+nm/pix, measured 2026-07-25), not sky. The continuum is still rendered and
+marginalized as a nuisance but does not enter the SNR normalization. This
+matches the emission-line SNR used in the Roman KL literature (Xu et al., in
+the background-dominated limit).
 
 Other conventions (e.g. range-based for velocity, L2-RMS for stamp-fixed
 test calibrations) can be added later as alternative entry points; do not
@@ -229,8 +236,9 @@ def grism_line_noise(
     "Grism line-SNR convention"). Noise is added to ``full_render`` (line +
     continuum); the continuum contributes to the observed data and is
     marginalized in the fit, but does NOT enter the SNR normalization. This is
-    the sky/background-dominated regime, where the noise floor is independent of
-    the source.
+    the background-dominated regime, where the noise floor is independent of
+    the source (for the Roman grism that background is mostly read noise, not
+    sky -- see the module docstring).
 
     Parameters
     ----------
@@ -269,6 +277,95 @@ def grism_line_noise(
     rng = np.random.default_rng(seed)
     noisy = full + rng.normal(0.0, np.sqrt(var), size=full.shape)
     return noisy, var
+
+
+def physical_variance_map(
+    truth_image: np.ndarray,
+    sigma_bg: float,
+    electrons_per_flux: float,
+) -> np.ndarray:
+    """Per-pixel variance map: flat background plus source shot noise.
+
+    var = sigma_bg**2 + max(I, 0) / electrons_per_flux, all in the squared
+    flux units of ``truth_image``. The Poisson term is the standard
+    counts -> flux propagation: counts = I * g gives var_counts = counts,
+    i.e. var_flux = I / g with g = electrons_per_flux (detected electrons
+    per flux unit of the image; NOT the detector e-/ADU gain).
+
+    Small negative pixels (FFT rendering ringing) contribute zero shot
+    noise; a strongly negative pixel means the wrong image was passed and
+    raises.
+
+    Parameters
+    ----------
+    truth_image : ndarray
+        Noiseless truth render in flux/pixel units.
+    sigma_bg : float
+        Flat per-pixel background standard deviation, same flux units.
+    electrons_per_flux : float
+        Detected electrons per unit of the image's flux.
+
+    Returns
+    -------
+    ndarray
+        Per-pixel variance, same shape as ``truth_image``.
+    """
+    if sigma_bg <= 0:
+        raise ValueError(f"sigma_bg must be positive, got {sigma_bg}")
+    if electrons_per_flux <= 0:
+        raise ValueError(
+            f"electrons_per_flux must be positive, got {electrons_per_flux}"
+        )
+    truth_image = np.asarray(truth_image, dtype=np.float64)
+    peak = float(truth_image.max())
+    if peak <= 0:
+        raise ValueError("truth_image has no positive flux; cannot set shot noise")
+    if float(truth_image.min()) < -0.05 * peak:
+        raise ValueError(
+            f"truth_image has a pixel at {truth_image.min():.3g} against peak "
+            f"{peak:.3g}; rendering ringing is at the sub-percent level, so "
+            f"this is the wrong image (residual? background-subtracted data?)"
+        )
+    return sigma_bg**2 + np.clip(truth_image, 0.0, None) / electrons_per_flux
+
+
+def add_map_noise(
+    image: np.ndarray, variance: np.ndarray, seed: Optional[int] = None
+) -> np.ndarray:
+    """Add zero-mean Gaussian noise with a per-pixel variance map.
+
+    The high-count Gaussian limit of Poisson + background noise: the draw
+    is exactly the heteroscedastic Gaussian the per-pixel ``variance``
+    describes, so a likelihood carrying the same map is exact for this
+    data by construction.
+    """
+    image = np.asarray(image, dtype=np.float64)
+    variance = np.asarray(variance, dtype=np.float64)
+    if variance.shape != image.shape:
+        raise ValueError(
+            f"variance shape {variance.shape} != image shape {image.shape}"
+        )
+    if np.any(variance <= 0):
+        raise ValueError("variance map must be strictly positive")
+    rng = np.random.default_rng(seed)
+    return image + rng.normal(0.0, np.sqrt(variance))
+
+
+def matched_filter_snr(template: np.ndarray, variance) -> float:
+    """Matched-filter amplitude SNR of a template against a noise model.
+
+    SNR = sqrt( sum(T**2 / var) ): the optimal detection SNR for a known
+    template in independent Gaussian noise. ``variance`` may be a scalar
+    (uniform noise; reduces to ||T||_2 / sigma) or a per-pixel map. This is
+    the definition behind the ensemble's ``snr_effective`` columns: the
+    realized SNR of the noiseless truth against the actual variance,
+    including any shot-noise term the map carries.
+    """
+    template = np.asarray(template, dtype=np.float64)
+    variance = np.asarray(variance, dtype=np.float64)
+    if np.any(variance <= 0):
+        raise ValueError("variance must be strictly positive")
+    return float(np.sqrt(np.sum(template**2 / variance)))
 
 
 # Gaussian FWHM -> sigma divisor, 2*sqrt(2 ln 2) ~= 2.355

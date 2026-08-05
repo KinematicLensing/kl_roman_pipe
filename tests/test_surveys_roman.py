@@ -250,3 +250,76 @@ class TestPublishedConstants:
         c_ref = roman.fiducial_compactness()
         sigma = roman.line_flux_sigma_cgs(np.array([c_ref]))[0]
         assert sigma == pytest.approx(roman.F_LIM_COADD_CGS / 5.0, rel=1e-12)
+
+
+class TestElectronConversions:
+    """Photon-count conversions for the shot-noise layer.
+
+    Confidence anchor is Roman reference material: the conversions are
+    built from the galsim.roman mission throughput tables, recomputed here
+    from those tables and pinned. The 07-25 envelope arithmetic
+    (~4058 e- at the published grism limit) is an independent same-inputs
+    sanity check, not truth.
+    """
+
+    def test_exposure_time_pins(self):
+        # ROTAC: imaging 2 passes x 3 dithers x 107.25 s; grism one pass =
+        # 2 dithers x 189.75 s (8 x 189.75 = 1518 s over 4 passes)
+        assert roman.T_EXP_IMAGING_S == 643.5
+        assert roman.T_EXP_GRISM_PER_PASS_S == 379.5
+        assert roman.T_EXP_GRISM_PER_PASS_S * roman.N_GRISM_PASSES == 1518.0
+
+    def test_electrons_per_ujy_matches_galsim(self):
+        galsim_roman = pytest.importorskip('galsim.roman')
+        bps = galsim_roman.getBandpasses(AB_zeropoint=True)
+        legacy = {'F106': 'Y106', 'F129': 'J129', 'F158': 'H158'}
+        for band, pinned in roman.ELECTRONS_PER_UJY.items():
+            zp = bps[legacy[band]].zeropoint + 2.5 * np.log10(
+                galsim_roman.collecting_area
+            )
+            recomputed = 10 ** (-0.4 * (23.9 - zp)) * roman.T_EXP_IMAGING_S
+            assert pinned == pytest.approx(recomputed, rel=1e-4), band
+
+    def test_grism_electrons_envelope(self):
+        pytest.importorskip('galsim.roman')
+        # per-pass at 1.5 um (T = 0.628): pinned against the value the
+        # module computed when the layer landed
+        per_pass = float(roman.grism_electrons_per_f17_per_pass(1.5e4))
+        assert per_pass == pytest.approx(67.64, rel=1e-3)
+        # independent envelope arithmetic (07-25 handoff): a source at the
+        # published coadded limit (15 in f17 units) collects ~4058 e- over
+        # the 4-pass coadd
+        coadd = 15.0 * roman.N_GRISM_PASSES * per_pass
+        assert coadd == pytest.approx(4058.0, rel=0.01)
+
+    def test_grism_throughput_range_raises(self):
+        pytest.importorskip('galsim.roman')
+        with pytest.raises(ValueError, match='outside'):
+            roman.grism_throughput(9000.0)  # 900 nm, below the table
+        with pytest.raises(ValueError, match='outside'):
+            roman.grism_throughput(2.1e4)
+
+
+class TestBackgroundAnchors:
+    """Depth-anchored background sigmas (formula-level; the rendered-template
+    closure lives in the roman_ensemble tier where the mock machinery is)."""
+
+    def test_band_sigma_bg_formula(self):
+        # sigma_bg = f_lim * ||K||_2 / N_sigma
+        norm = 0.4
+        sigma = roman.band_sigma_bg_ujy('F129', norm)
+        assert sigma == pytest.approx(
+            roman.band_flux_limit_ujy('F129') * norm / roman.IMAGING_DEPTH_NSIGMA,
+            rel=1e-14,
+        )
+
+    def test_grism_sigma_bg_formula(self):
+        # the reference template is rendered AT the per-pass limit, so
+        # sigma_bg = ||L_ref||_2 / N_sigma
+        assert roman.grism_sigma_bg_per_pass(10.0) == pytest.approx(2.0, rel=1e-14)
+
+    def test_nonpositive_norms_raise(self):
+        with pytest.raises(ValueError, match='psf_l2_norm'):
+            roman.band_sigma_bg_ujy('F129', 0.0)
+        with pytest.raises(ValueError, match='ref_line_l2_norm'):
+            roman.grism_sigma_bg_per_pass(-1.0)

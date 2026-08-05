@@ -401,6 +401,14 @@ class ObservationConfig:
     pixel_scale_arcsec: float
     stamp_broadband_pix: int
     stamp_grism_pix: int
+    # noise_model: how mock noise is generated.
+    #   'matched_filter' (default) -- uniform per-channel Gaussian variance
+    #       normalized so the labeled SNR is exact (current baseline).
+    #   'poisson' -- flat per-pixel background anchored to the published
+    #       survey depths plus the source's own shot noise (catalog mode
+    #       only; the labeled SNR stays the selection/plot axis and the
+    #       realized snr_effective columns report the actual depth).
+    noise_model: str = 'matched_filter'
     content_hash: str = ''  # sha256 of the source YAML file bytes
 
     def __post_init__(self):
@@ -431,6 +439,11 @@ class ObservationConfig:
         ]:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} ({value}) must be a positive int")
+        if self.noise_model not in _NOISE_MODELS:
+            raise ValueError(
+                f"noise_model must be one of {_NOISE_MODELS}, got "
+                f"{self.noise_model!r}"
+            )
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'ObservationConfig':
@@ -439,7 +452,7 @@ class ObservationConfig:
         raw = yaml.safe_load(raw_bytes)
         if not isinstance(raw, dict):
             raise ValueError(f"{path}: observation config must be a mapping")
-        allowed = (
+        required = (
             'id',
             'bands',
             'grism',
@@ -448,8 +461,10 @@ class ObservationConfig:
             'pixel_scale_arcsec',
             'stamp',
         )
-        _reject_unknown(raw, allowed, str(path))
-        _require_keys(raw, allowed, str(path))
+        # noise_model is optional: absent means the matched_filter baseline,
+        # so existing configs keep their meaning
+        _reject_unknown(raw, required + ('noise_model',), str(path))
+        _require_keys(raw, required, str(path))
 
         grism = raw['grism']
         _reject_unknown(grism, ('rolls_deg', 'dispersion_nm_per_pix'), f"{path}:grism")
@@ -478,6 +493,7 @@ class ObservationConfig:
             pixel_scale_arcsec=float(raw['pixel_scale_arcsec']),
             stamp_broadband_pix=int(stamp['broadband_pix']),
             stamp_grism_pix=int(stamp['grism_pix']),
+            noise_model=str(raw.get('noise_model', 'matched_filter')),
             content_hash=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
@@ -486,6 +502,7 @@ class ObservationConfig:
 # Ensemble spec
 # =============================================================================
 
+_NOISE_MODELS = ('matched_filter', 'poisson')
 _DRAW_DISTS = ('uniform', 'lognormal_tf')
 _POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')

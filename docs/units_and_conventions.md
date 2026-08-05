@@ -53,6 +53,24 @@ on `ImageObs`/`GrismObs`, which the ensemble sets in catalog mode. Unit
 conversion helpers (AB mag ↔ uJy, f_nu → f_lambda, depth → flux limit,
 power-law band interpolation) live in `kl_pipe.photometry`.
 
+### Noise models (`observation config noise_model`)
+
+- `matched_filter` (default): uniform per-channel Gaussian variance
+  normalized so the labeled SNR is exact, `var = ||T||² / SNR²` (broadband:
+  whole image; grism: line template only). Unit-free — only the labels
+  matter.
+- `poisson` (catalog mode only): per-pixel variance in the channel's own
+  squared flux units, `var = sigma_bg² + max(I_truth, 0) / g`. `sigma_bg`
+  is solved from the published depth through a rendered reference template
+  (imaging: point source through the config's PSF; grism: the extended
+  reference source of `kl_pipe/surveys/roman.py`, per roll at the per-pass
+  limit). `g` is detected electrons per flux unit
+  (`surveys.roman.ELECTRONS_PER_UJY`, `grism_electrons_per_f17_per_pass` —
+  ZP × t_exp physics, never the detector e-/ADU gain). Labels keep their
+  meaning as the published-depth selection/plot axis; the realized depth
+  including shot noise is reported per channel in the `snr_effective_*`
+  results columns (`noise.matched_filter_snr`: `sqrt(sum(T²/var))`).
+
 ## Render method units
 
 The rule: **every render method that returns an observable (a 2D

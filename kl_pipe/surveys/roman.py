@@ -15,7 +15,7 @@ import numpy as np
 
 from kl_pipe.constants import ARCSEC_PER_RAD
 from kl_pipe.noise import gaussian_matched_filter_compactness
-from kl_pipe.photometry import HALPHA_REST_A, ab_mag_to_ujy
+from kl_pipe.photometry import ArrayLike, HALPHA_REST_A, ab_mag_to_ujy
 
 # ROTAC (Roman Observations Time Allocation Committee) Final Report and
 # Recommendations, 2025-04-24 v3, Sect. 3.1: the HLWAS medium tier reaches a
@@ -125,6 +125,145 @@ BAND_EFFECTIVE_LAMBDA_A = {'F106': 1.0595e4, 'F129': 1.2936e4, 'F158': 1.5791e4}
 # Roman primary-mirror diameter [m]; diffraction PSF proxy
 # FWHM = 1.22 lambda / D
 ROMAN_APERTURE_M = 2.36
+
+# =============================================================================
+# Photon-count conversions (source shot noise)
+# =============================================================================
+#
+# Shot noise is Poisson in detected photoelectrons, and the electron count is
+# fixed upstream of the detector electronics: flux x collecting area x
+# exposure time x throughput (optics + filter + detector QE, all inside the
+# mission throughput tables galsim.roman carries). The detector gain in the
+# e-/ADU sense never enters -- it rescales recorded pixel values, not photon
+# statistics -- so these conversions are pure survey physics, pinnable here.
+
+# total imaging exposure per filter in the HLWAS medium tier: two passes x
+# three dithers x 107.25 s (ROTAC Table 1 rounds to 107 s; the embedded
+# Definition Committee report Sect. 4.4.3 gives 107.25 s). The published
+# imaging depths above are for this full coadd.
+T_EXP_IMAGING_S = 643.5
+
+# grism exposure of ONE of the four passes: two dithers x 189.75 s
+# (ROTAC Sect. 4.4.3: 8 x 189.75 = 1518 s over all passes). Per-pass because
+# each grism roll is mocked as its own observation.
+T_EXP_GRISM_PER_PASS_S = 379.5
+
+# detected electrons per microjansky over the full imaging coadd:
+#
+#   e-/uJy = 10 ** (-0.4 * (23.9 - zp_total)) * T_EXP_IMAGING_S,
+#   zp_total = bandpass.zeropoint + 2.5 log10(collecting_area)
+#
+# with galsim.roman getBandpasses(AB_zeropoint=True) zeropoints and
+# collecting_area = 37570 cm2 (Roman_effarea_20210614 mission throughput
+# tables; zp_total = 26.4607 / 26.4767 / 26.5113 AB). A test recomputes
+# these from galsim and pins the literals.
+ELECTRONS_PER_UJY = {'F106': 6804.7, 'F129': 6906.2, 'F158': 7129.4}
+
+# Planck constant x speed of light [erg nm]: photon energy = HC_ERG_NM / lam_nm.
+# Getting this factor wrong by 1e7 silently produces plausible-looking counts,
+# so it is spelled out here rather than composed inline.
+HC_ERG_NM = 6.62607015e-27 * 2.99792458e17
+
+
+def grism_throughput(lambda_obs_a: ArrayLike) -> ArrayLike:
+    """First-order grism effective throughput at an observed wavelength.
+
+    From the galsim.roman ``Grism_1stOrder`` bandpass (official mission
+    throughput including optics and detector QE; 985-2020 nm, peak ~0.68
+    near 1.37 um). Raises outside the tabulated range rather than
+    extrapolating.
+    """
+    from galsim import roman as _roman
+
+    lam_nm = np.asarray(lambda_obs_a, dtype=np.float64) / 10.0
+    bp = _roman.getBandpass('Grism_1stOrder')
+    if np.any(lam_nm < bp.blue_limit) or np.any(lam_nm > bp.red_limit):
+        raise ValueError(
+            f"wavelength {lambda_obs_a} A outside the grism throughput table "
+            f"({bp.blue_limit}-{bp.red_limit} nm)"
+        )
+    return bp(lam_nm)
+
+
+def grism_electrons_per_f17_per_pass(lambda_obs_a: ArrayLike) -> ArrayLike:
+    """Detected electrons per 1e-17 erg/s/cm2 of line flux, ONE grism pass.
+
+    N_e = f * A * t * T(lambda) / (hc / lambda) with f = 1e-17 erg/s/cm2,
+    A = 37570 cm2, t = T_EXP_GRISM_PER_PASS_S and the official first-order
+    throughput. At 1.5 um this gives 67.6 e- per pass (270.5 over the
+    4-pass coadd), which closes the independent envelope check: a source at
+    the published coadded limit (15 in these units) collects ~4058 e-.
+    Evaluated at the line's observed wavelength; the throughput varies by
+    <1% across a dispersed stamp (~35 nm), so one value per fit suffices.
+    """
+    from galsim import roman as _roman
+
+    lam_nm = np.asarray(lambda_obs_a, dtype=np.float64) / 10.0
+    photon_energy_erg = HC_ERG_NM / lam_nm
+    return (
+        1e-17
+        * _roman.collecting_area
+        * T_EXP_GRISM_PER_PASS_S
+        * np.asarray(grism_throughput(lambda_obs_a), dtype=np.float64)
+        / photon_energy_erg
+    )
+
+
+# =============================================================================
+# Background levels anchored to the published depths
+# =============================================================================
+#
+# The per-pixel background sigma is solved from "the survey's reference
+# source at the published limit has matched-filter SNR = the published
+# N-sigma", using the actually rendered reference template -- imaging: a
+# point source (the depth's own convention), grism: the extended reference
+# below. Anchoring to published depths rather than first-principles sky +
+# read noise is deliberate: the first-principles chain is a known ~2-4x
+# DEEPER than the published limits (margins, losses, chip gaps -- measured
+# 2026-07-26), and the published numbers are the mission's own statement of
+# realized depth. A first-principles comparison is therefore expected to
+# disagree by ~2x and that is not an error.
+
+# The grism reference source, pinned as the dumbest defensible reading of
+# the Wang et al. 2022 convention ("galaxies with radius 0.25 arcsec at
+# 1.5 micron"): a round face-on exponential disk of half-light radius
+# F_LIM_REF_R50_ARCSEC with zero rotation and a small intrinsic line width,
+# Halpha observed at F_LIM_REF_LAMBDA_A (z ~ 1.286). The publication does
+# not specify kinematics; realistic rotation would smear the line by under
+# a detector pixel against the ~2-pixel spatial spread, moving the derived
+# background at the 5-15% level -- an absolute-anchor systematic only,
+# never galaxy-to-galaxy.
+GRISM_REF_LINE_WIDTH_KMS = 30.0
+
+
+def band_sigma_bg_ujy(band: str, psf_l2_norm: float) -> float:
+    """Per-pixel background sigma [uJy/pixel] in an imaging band.
+
+    Solved from the published point-source depth: a point source at
+    f_lim has matched-filter SNR = IMAGING_DEPTH_NSIGMA, so
+    sigma_bg = f_lim * ||K||_2 / N_sigma with K the unit-flux PSF image
+    at the survey pixel scale (pixel response included). The caller
+    supplies ||K||_2 from the same PSF model the mock renders with, so
+    the anchor holds in every configuration.
+    """
+    if psf_l2_norm <= 0:
+        raise ValueError(f"psf_l2_norm must be positive, got {psf_l2_norm}")
+    return band_flux_limit_ujy(band) * float(psf_l2_norm) / IMAGING_DEPTH_NSIGMA
+
+
+def grism_sigma_bg_per_pass(ref_line_l2_norm: float) -> float:
+    """Per-pixel background sigma for one grism roll, in the mock's line
+    flux units.
+
+    Solved from the published limit: the reference source (see
+    GRISM_REF_LINE_WIDTH_KMS block) rendered at the PER-PASS limit
+    F_LIM_PER_PASS_CGS has matched-filter SNR = F_LIM_NSIGMA in a single
+    pass, so sigma_bg = ||L_ref||_2 / N_sigma with L_ref the reference's
+    dispersed line-only template rendered at that flux.
+    """
+    if ref_line_l2_norm <= 0:
+        raise ValueError(f"ref_line_l2_norm must be positive, got {ref_line_l2_norm}")
+    return float(ref_line_l2_norm) / F_LIM_NSIGMA
 
 
 def psf_fwhm_arcsec(z: np.ndarray) -> np.ndarray:
