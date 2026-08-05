@@ -448,6 +448,80 @@ class TestCatalogPriors:
 
 
 # ==============================================================================
+# Mock construction bit-identity (frozen before the shot-noise layer)
+# ==============================================================================
+
+
+class TestMockBitIdentity:
+    """Byte-level checksum of build_fit_inputs' noisy data + variance.
+
+    Frozen 2026-08-04 at 21e8b41 (macOS arm64 dev machine, JAX CPU, float64)
+    before the noise_model knob lands. The default matched_filter path must
+    keep producing byte-identical mocks: the _noisy formula differs from
+    kl_pipe.noise at the last-ulp level, so even a well-meaning consolidation
+    changes these digests. Any mismatch means the default mock path changed;
+    that is a bug unless the change was deliberate and approved. Regenerate
+    with
+
+        KLPIPE_TEST_MEASURE=1 pytest tests/test_ensemble_catalog.py \\
+            -k TestMockBitIdentity -s
+
+    and record why next to the new digests. The digests are platform-pinned
+    (bitwise FFT reproducibility across OS/arch is not guaranteed); if this
+    test ever fails on another platform with data unchanged, surface that
+    rather than loosening the comparison.
+    """
+
+    # sha256 over every channel's (name, dtype, shape, raw bytes), manifest
+    # rows 0 and 7 of the 8-fit fake-catalog run (first and last fit: two
+    # different galaxies, both ring orientations)
+    ROW_DIGESTS = {
+        0: '654325f229930004930573b59eab763c3480213eedaa0c482313ceb0a2d37dfa',
+        7: '966f75b23936992c8c24e9ced1bd2c7bcd75d38396e4cf92013bb9b3b8164d9a',
+    }
+
+    @staticmethod
+    def _digest(inputs) -> str:
+        h = hashlib.sha256()
+        for kind, channels in (
+            ('image', inputs.image_obs),
+            ('grism', inputs.grism_obs),
+        ):
+            for key in sorted(channels):
+                obs = channels[key]
+                for name, value in (('data', obs.data), ('variance', obs.variance)):
+                    arr = np.asarray(value)
+                    h.update(f'{kind}.{key}.{name}:{arr.dtype}:{arr.shape}'.encode())
+                    h.update(arr.tobytes())
+        return h.hexdigest()
+
+    @pytest.mark.parametrize('irow', [0, 7])
+    def test_mock_bytes_frozen(self, run_parts, irow):
+        import os
+
+        spec, config, manifest, _ = run_parts
+        row = manifest.iloc[irow]
+        truth = truth_from_row(row)
+        inputs = build_fit_inputs(
+            truth,
+            int(row['noise_seed']),
+            spec,
+            config,
+            band_snrs=_row_band_snrs(row, config),
+            line_snr=float(row['line_snr']),
+            row=row,
+        )
+        digest = self._digest(inputs)
+        if os.environ.get('KLPIPE_TEST_MEASURE'):
+            print(f'\nrow {irow} ({row["fit_id"]}): {digest}')
+        assert digest == self.ROW_DIGESTS[irow], (
+            f'mock bytes changed for manifest row {irow}: the default '
+            f'matched_filter mock path is no longer bit-identical to the '
+            f'frozen reference (got {digest})'
+        )
+
+
+# ==============================================================================
 # No-bulge catalog mode (paint.bulge: false -- disk-only twin)
 # ==============================================================================
 
