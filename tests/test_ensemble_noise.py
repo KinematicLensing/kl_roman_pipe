@@ -365,10 +365,13 @@ class TestNoiseModelComparisonFigure:
     labeled target. Saved to tests/out/noise_model_comparison/.
     """
 
-    # flux scalings applied to the bank galaxy: bright broadband, medium
-    # grism (per-pass line label ~11 at the bank's ~2.2)
+    # flux scalings applied to the bank galaxy: bright broadband, and a line
+    # bright enough that the dispersed structure is visible by eye in a
+    # single roll (per-pass label ~44 at the bank's ~2.2; production
+    # per-pass values run ~10-40, so this is the bright end, deliberately --
+    # the panels are for seeing the noise pathways, not a typical galaxy)
     K_BB = 4.0
-    K_LINE = 5.0
+    K_LINE = 20.0
 
     @staticmethod
     def _scaled_inputs(spec, config, row, k_bb, k_line):
