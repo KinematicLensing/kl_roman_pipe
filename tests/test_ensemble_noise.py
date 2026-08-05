@@ -5,8 +5,11 @@ The 'poisson' noise model replaces the label-normalized uniform variance
 with a physical one: a flat per-pixel background anchored to the published
 survey depths (rendered reference templates; see kl_pipe/surveys/roman.py)
 plus the source's own shot noise. The default 'matched_filter' path is
-byte-frozen by test_ensemble_catalog.TestMockBitIdentity; this module
-covers the poisson branch and the snr_effective bookkeeping shared by both.
+pinned by TestMatchedFilterLabelsExact (snr_effective == labels at rel
+1e-9); this module covers the poisson branch and the snr_effective
+bookkeeping shared by both. A byte-level digest freeze
+(TestMockBitIdentity) guarded the default path while the poisson layer
+landed and was retired once it had served that purpose.
 """
 
 import shutil
