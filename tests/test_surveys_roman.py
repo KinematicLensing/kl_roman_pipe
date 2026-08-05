@@ -194,8 +194,9 @@ class TestPublishedConstants:
         assert roman.F_LIM_REF_R50_ARCSEC == 0.25
         assert roman.F_LIM_REF_LAMBDA_A == 1.5e4
         # the resulting reference compactness, which divides every galaxy's
-        # C and therefore sets the overall yield normalization
-        assert roman.fiducial_compactness() == pytest.approx(0.4148, abs=5e-5)
+        # C and therefore sets the overall yield normalization (re-pinned
+        # from 0.4148 when EXP_R50_OVER_RSCALE unified to the exact 1.67835)
+        assert roman.fiducial_compactness() == pytest.approx(0.41486, abs=5e-5)
 
     def test_imaging_depths_match_rotac(self):
         # ROTAC Final Report Table 1 (arXiv:2505.10574): HLWAS medium

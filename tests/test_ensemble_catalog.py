@@ -475,9 +475,12 @@ class TestMockBitIdentity:
     # sha256 over every channel's (name, dtype, shape, raw bytes), manifest
     # rows 0 and 7 of the 8-fit fake-catalog run (first and last fit: two
     # different galaxies, both ring orientations)
+    # regenerated once, deliberately, when EXP_R50_OVER_RSCALE unified to the
+    # exact 1.67835 (the SNR labels moved at the 2e-4 level); the shot-noise
+    # layer itself landed against the pre-unification digests unchanged
     ROW_DIGESTS = {
-        0: '654325f229930004930573b59eab763c3480213eedaa0c482313ceb0a2d37dfa',
-        7: '966f75b23936992c8c24e9ced1bd2c7bcd75d38396e4cf92013bb9b3b8164d9a',
+        0: '4c378c3d3f4b37ab9eef8d4349e93669e16d2cfa6c1a708cc6acbdc1d3f37b92',
+        7: '221c9e31a981939cb5ce3922730de316f72e23c2c4c4390902a25545a15b1dec',
     }
 
     @staticmethod

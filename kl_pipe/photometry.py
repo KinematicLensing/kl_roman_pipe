@@ -39,8 +39,11 @@ C_A_PER_S = 2.998e18
 # kl_pipe/lines.py carries the same air value as 656.28 nm.
 HALPHA_REST_A = 6562.8
 
-# exponential-disk half-light-to-scale-length ratio, r50 = 1.678 * rscale
-EXP_R50_OVER_RSCALE = 1.678
+# exponential-disk half-light-to-scale-length ratio, r50 = EXP_R50_OVER_RSCALE
+# * rscale: the exact root of 1 - (1 + x) exp(-x) = 1/2 (enclosed-flux
+# fraction of a 2D exponential). The one project-wide definition; import it
+# rather than writing 1.678.
+EXP_R50_OVER_RSCALE = 1.6783469900166605
 
 
 def ab_mag_to_ujy(mag_ab: ArrayLike) -> ArrayLike:

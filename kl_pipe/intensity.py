@@ -7,6 +7,7 @@ from scipy.special import kve as scipy_kve
 from typing import Dict, List, Optional, Set
 
 from kl_pipe.model import IntensityModel
+from kl_pipe.photometry import EXP_R50_OVER_RSCALE
 from kl_pipe.transformation import obs2cen, cen2source, source2gal, COSI_FLOOR
 
 
@@ -1336,7 +1337,7 @@ class InclinedExponentialModel(IntensityModel):
         stepk = π / (stepk_min_hlr × hlr). For exponential, hlr ≈ 1.678 × rscale.
         """
         rscale = params['rscale']
-        hlr = 1.6783469900166605 * rscale  # ln(2) * ... exact for exponential
+        hlr = EXP_R50_OVER_RSCALE * rscale
         return np.pi / (_STEPK_MIN_HLR * hlr)
 
     def render_unconvolved(self, theta, image_pars, oversample=5):

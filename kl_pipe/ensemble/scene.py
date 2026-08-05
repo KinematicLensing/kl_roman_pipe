@@ -37,7 +37,7 @@ from kl_pipe.ensemble.population import (
     VEL_RSCALE_RATIO_DEX,
     VEL_RSCALE_RATIO_MEDIAN,
 )
-from kl_pipe.photometry import CGS_TO_F17
+from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE
 from kl_pipe.priors import (
     ConditionalLogNormal,
     Gaussian,
@@ -302,7 +302,9 @@ _V0_PRIOR_SIGMA_KMS = 200.0
 # The paint caps the ratio below 1 while the prior is uncapped; the cap
 # removes only the >3-sigma tail (ln(1/0.3)/0.4 = 3.0), a negligible
 # mismatch that keeps the prior JIT-simple and the render grid finite.
-_EXP_R50_OVER_RSCALE = 1.6783  # exponential-disk r50 / scale-length ratio
+# exponential-disk r50 / scale-length ratio; the module-private name stays
+# because the provenance registry reads it, the value is the project-wide one
+_EXP_R50_OVER_RSCALE = EXP_R50_OVER_RSCALE
 
 # bulge_n_sersic: prior == the distribution the paint draws from, so the
 # marginalization is exact, as for bulge_hlr above.

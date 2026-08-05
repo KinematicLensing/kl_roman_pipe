@@ -38,8 +38,10 @@ class TestConstants:
         assert C_A_PER_S == 2.998e18
         # Halpha air rest wavelength; kl_pipe/lines.py carries 656.28 nm
         assert HALPHA_REST_A == 6562.8
-        # exponential disk: r50 = 1.678 * scale length
-        assert EXP_R50_OVER_RSCALE == 1.678
+        # exponential disk: r50 = 1.678... * scale length, the exact root of
+        # 1 - (1 + x) exp(-x) = 1/2 (unified from the rounded 1.678 that the
+        # compactness/selection chain carried before the shot-noise branch)
+        assert EXP_R50_OVER_RSCALE == pytest.approx(1.6783469900166605, rel=1e-15)
 
     def test_lines_registry_agrees_on_halpha(self):
         from kl_pipe.lines import LINE_LAMBDAS
