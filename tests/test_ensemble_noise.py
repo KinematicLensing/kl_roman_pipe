@@ -361,7 +361,7 @@ class TestNoiseModelComparisonFigure:
 
     One bright-ish galaxy (fluxes scaled up from the fake-catalog bank so
     the structure is visible over the noise): per channel (two bands + two
-    grism rolls), the noiseless truth, a background-only draw, the
+    grism rolls), the noiseless truth, a bkg (background-only) draw, the
     matched_filter mock, the poisson mock, and all three variance maps on
     one shared color scale. Same noise deviates in every arm, so the
     panels differ only by the noise amplitude and structure; each noisy
@@ -523,7 +523,7 @@ class TestNoiseModelComparisonFigure:
                 (truth_img, f'truth (catalog-predicted snr={catalog_snr:.1f})', {}),
                 (
                     bg_only,
-                    f'bg-only data (snr_eff={eff_bg:.1f})',
+                    f'bkg data (snr_eff={eff_bg:.1f})',
                     {'vmin': dlo, 'vmax': dhi},
                 ),
                 (
@@ -536,7 +536,7 @@ class TestNoiseModelComparisonFigure:
                     f'poisson data (snr_eff={eff_p:.1f})',
                     {'vmin': dlo, 'vmax': dhi},
                 ),
-                (var_bg, 'var: bg-only', {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'}),
+                (var_bg, 'var: bkg', {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'}),
                 (
                     var_m,
                     'var: matched_filter',
@@ -560,10 +560,10 @@ class TestNoiseModelComparisonFigure:
         fig.text(
             0.5,
             0.962,
-            'bg-only: flat noise from the published survey depth (no source '
+            'bkg: flat noise from the published survey depth (no source '
             'term)  |  matched_filter: flat noise chosen so the realized SNR '
             'equals the catalog-predicted snr exactly (the default)  |  '
-            'poisson: the bg-only level plus the source\'s own shot noise',
+            'poisson: the bkg level plus the source\'s own shot noise',
             ha='center',
             fontsize=11,
         )
@@ -775,9 +775,7 @@ class TestShotNoiseStatistics:
                 lw=1.5,
                 label='poisson: sigma_bg^2 + I/g',
             )
-            ax.axhline(
-                sigma_bg**2, color='tab:orange', ls='--', lw=1.2, label='bg-only'
-            )
+            ax.axhline(sigma_bg**2, color='tab:orange', ls='--', lw=1.2, label='bkg')
             ax.axhline(
                 sigma_mf**2, color='tab:green', ls=':', lw=1.2, label='matched_filter'
             )
@@ -795,7 +793,7 @@ class TestShotNoiseStatistics:
             ax.hist(z_bg, bins=60, density=True, alpha=0.6, label='brightest decile')
             zs = np.linspace(z_bg.min(), z_bg.max(), 300)
             norm = np.exp(-0.5 * zs**2) / np.sqrt(2 * np.pi)
-            ax.plot(zs, norm, 'k--', lw=1.2, label='N(0,1) (bg-only)')
+            ax.plot(zs, norm, 'k--', lw=1.2, label='N(0,1) (bkg)')
             ax.plot(
                 zs,
                 np.exp(-0.5 * (zs / width) ** 2) / (width * np.sqrt(2 * np.pi)),

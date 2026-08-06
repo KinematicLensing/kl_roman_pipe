@@ -189,7 +189,7 @@ def test_velocity_obs_chi2(scene):
 
 def _shot_noise_variance_map(clean):
     """Physical-style variance map with both terms mattering: background at
-    the bg-only matched-filter SNR ~50 level, shot noise scaled so the peak
+    the bkg-only matched-filter SNR ~50 level, shot noise scaled so the peak
     pixel's Poisson variance roughly matches the background variance."""
     from kl_pipe.noise import physical_variance_map
 

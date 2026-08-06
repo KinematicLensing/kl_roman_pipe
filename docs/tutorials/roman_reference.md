@@ -270,10 +270,10 @@ There are three noise pathways, and the names below match the ensemble's
 `noise_model` knob and its comparison diagnostic
 (`tests/test_ensemble_noise.py::TestNoiseModelComparisonFigure`):
 
-- **bg-only** -- a flat per-pixel background solved from the published survey
+- **bkg** -- a flat per-pixel background solved from the published survey
   depth; no source term. The realized SNR is whatever the survey delivers
   for your galaxy: you measure it, you do not choose it.
-- **poisson** -- the bg-only level plus the source's own shot noise
+- **poisson** -- the bkg level plus the source's own shot noise
   (per-pixel variance map). The most physical of the three.
 - **matched_filter** -- you declare the SNR and a flat noise level is derived
   from the rendered template so the declared SNR is realized *exactly*. No
@@ -297,7 +297,7 @@ obs_render = build_image_obs(ip, psf=psf, int_model=disk)
 clean_ujy = np.asarray(disk.render_image(theta, obs=obs_render))  # uJy/pixel
 ```
 
-**Pathway 1, bg-only: a flat background from the published depth.** The
+**Pathway 1, bkg: a flat background from the published depth.** The
 background level is solved from the published HLWAS F129 depth (26.4 AB,
 5-sigma point source): a point source at that flux, drawn through the same
 PSF, must come out at exactly 5-sigma, so `sigma_bg = f_lim * ||K||_2 / 5`
@@ -313,11 +313,11 @@ sigma_bg = roman.band_sigma_bg_ujy('F129', float(np.sqrt((kernel**2).sum())))
 
 var_bg = np.full_like(clean_ujy, sigma_bg**2)
 noisy_bg = add_map_noise(clean_ujy, var_bg, seed=7)
-snr_bg_only = matched_filter_snr(clean_ujy, var_bg)
-print(f'bg-only realized SNR = {snr_bg_only:.1f}')
+snr_bkg = matched_filter_snr(clean_ujy, var_bg)
+print(f'bkg realized SNR = {snr_bkg:.1f}')
 ```
 
-**Pathway 2, poisson: bg-only plus the source's own shot noise.** The
+**Pathway 2, poisson: bkg plus the source's own shot noise.** The
 galaxy's photons add Poisson variance on top of the flat background,
 converted through the mission zeropoint (`ELECTRONS_PER_UJY`, zeropoint x
 exposure time; the detector e-/ADU gain never enters). The draw is the
@@ -332,7 +332,7 @@ obs_physical = build_image_obs(ip, psf=psf, int_model=disk,
                                data=jnp.asarray(noisy), variance=jnp.asarray(var_map),
                                flux_unit='uJy (band-averaged f_nu)')
 snr_realized = matched_filter_snr(clean_ujy, var_map)
-print(f'realized SNR = {snr_realized:.1f} (background alone: {snr_bg_only:.1f}; '
+print(f'realized SNR = {snr_realized:.1f} (background alone: {snr_bkg:.1f}; '
       f'the difference is this galaxy\'s shot noise)')
 ```
 
@@ -424,7 +424,7 @@ print(f'realized per-pass line SNR = {snr_line:.1f} '
 All of these observations run through `InferenceTask` identically --
 per-pixel variance maps are supported everywhere. In the ensemble machinery
 the pathways are the `noise_model: matched_filter | poisson` knob on the
-observation config (bg-only is the poisson pathway without its shot term,
+observation config (bkg is the poisson pathway without its shot term,
 shown in the comparison diagnostic), which automates the grism reference
 render above and records the realized `snr_effective` per channel for
 every fit.
