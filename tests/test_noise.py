@@ -165,7 +165,7 @@ class TestPhysicalVarianceMap:
 
     def test_formula_elementwise(self, intensity_map):
         var = physical_variance_map(
-            intensity_map, sigma_bg=3.0, electrons_per_flux=10.0
+            intensity_map, sigma_bkg=3.0, electrons_per_flux=10.0
         )
         np.testing.assert_allclose(var, 9.0 + intensity_map / 10.0, rtol=1e-14)
 
@@ -174,23 +174,23 @@ class TestPhysicalVarianceMap:
         # shot noise rather than negative variance
         image = intensity_map.copy()
         image[0, 0] = -1e-4 * image.max()
-        var = physical_variance_map(image, sigma_bg=3.0, electrons_per_flux=10.0)
+        var = physical_variance_map(image, sigma_bkg=3.0, electrons_per_flux=10.0)
         assert var[0, 0] == pytest.approx(9.0, rel=1e-14)
 
     def test_strongly_negative_raises(self, intensity_map):
         image = intensity_map.copy()
         image[0, 0] = -0.5 * image.max()
         with pytest.raises(ValueError, match='wrong image'):
-            physical_variance_map(image, sigma_bg=3.0, electrons_per_flux=10.0)
+            physical_variance_map(image, sigma_bkg=3.0, electrons_per_flux=10.0)
 
     def test_invalid_inputs_raise(self, intensity_map):
-        with pytest.raises(ValueError, match='sigma_bg'):
-            physical_variance_map(intensity_map, sigma_bg=0.0, electrons_per_flux=10.0)
+        with pytest.raises(ValueError, match='sigma_bkg'):
+            physical_variance_map(intensity_map, sigma_bkg=0.0, electrons_per_flux=10.0)
         with pytest.raises(ValueError, match='electrons_per_flux'):
-            physical_variance_map(intensity_map, sigma_bg=3.0, electrons_per_flux=-1.0)
+            physical_variance_map(intensity_map, sigma_bkg=3.0, electrons_per_flux=-1.0)
         with pytest.raises(ValueError, match='no positive flux'):
             physical_variance_map(
-                np.zeros((4, 4)), sigma_bg=3.0, electrons_per_flux=10.0
+                np.zeros((4, 4)), sigma_bkg=3.0, electrons_per_flux=10.0
             )
 
 

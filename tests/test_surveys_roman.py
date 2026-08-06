@@ -305,22 +305,22 @@ class TestBackgroundAnchors:
     """Depth-anchored background sigmas (formula-level; the rendered-template
     closure lives in the roman_ensemble tier where the mock machinery is)."""
 
-    def test_band_sigma_bg_formula(self):
-        # sigma_bg = f_lim * ||K||_2 / N_sigma
+    def test_band_sigma_bkg_formula(self):
+        # sigma_bkg = f_lim * ||K||_2 / N_sigma
         norm = 0.4
-        sigma = roman.band_sigma_bg_ujy('F129', norm)
+        sigma = roman.band_sigma_bkg_ujy('F129', norm)
         assert sigma == pytest.approx(
             roman.band_flux_limit_ujy('F129') * norm / roman.IMAGING_DEPTH_NSIGMA,
             rel=1e-14,
         )
 
-    def test_grism_sigma_bg_formula(self):
+    def test_grism_sigma_bkg_formula(self):
         # the reference template is rendered AT the per-pass limit, so
-        # sigma_bg = ||L_ref||_2 / N_sigma
-        assert roman.grism_sigma_bg_per_pass(10.0) == pytest.approx(2.0, rel=1e-14)
+        # sigma_bkg = ||L_ref||_2 / N_sigma
+        assert roman.grism_sigma_bkg_per_pass(10.0) == pytest.approx(2.0, rel=1e-14)
 
     def test_nonpositive_norms_raise(self):
         with pytest.raises(ValueError, match='psf_l2_norm'):
-            roman.band_sigma_bg_ujy('F129', 0.0)
+            roman.band_sigma_bkg_ujy('F129', 0.0)
         with pytest.raises(ValueError, match='ref_line_l2_norm'):
-            roman.grism_sigma_bg_per_pass(-1.0)
+            roman.grism_sigma_bkg_per_pass(-1.0)

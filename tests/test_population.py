@@ -95,7 +95,7 @@ def fake_flagship2_rows(
             'log_stellar_mass': rng.uniform(9.0, 11.2, n),
             'log_sfr': rng.uniform(-0.5, 1.5, n),
             'disk_r50': disk_r50,
-            'disk_scalelength': disk_r50 / 1.678,
+            'disk_scalelength': disk_r50 / EXP_R50_OVER_RSCALE,
             'disk_axis_ratio': rng.uniform(0.15, 0.95, n),
             'disk_angle': rng.uniform(-90.0, 90.0, n),
             'disk_ellipticity': rng.uniform(0.05, 0.8, n),
@@ -376,7 +376,7 @@ class TestPreprocess:
         #   EW_rest  = f_line / f_lambda / (1 + z) [A]
         df = fake_flagship2_rows(n=1, seed=3)
         df['disk_r50'] = np.float32(0.3)
-        df['disk_scalelength'] = np.float32(0.3 / 1.678)
+        df['disk_scalelength'] = np.float32(0.3 / EXP_R50_OVER_RSCALE)
         df['true_redshift_gal'] = np.float32(1.0)
         df['logf_halpha_model3_ext'] = np.float32(np.log10(2e-16))
         df['euclid_nisp_j'] = np.float32(1e-28)
@@ -402,7 +402,7 @@ class TestPreprocess:
         # z = 1.5 -> 16407 A (H, >= 15450)
         df = fake_flagship2_rows(n=3, seed=5)
         df['disk_r50'] = np.float32(0.3)
-        df['disk_scalelength'] = np.float32(0.3 / 1.678)
+        df['disk_scalelength'] = np.float32(0.3 / EXP_R50_OVER_RSCALE)
         df['true_redshift_gal'] = np.array([0.75, 1.0, 1.5], dtype=np.float32)
         df['euclid_nisp_y'] = np.float32(1e-28)
         df['euclid_nisp_j'] = np.float32(2e-28)

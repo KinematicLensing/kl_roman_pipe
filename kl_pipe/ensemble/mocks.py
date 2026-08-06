@@ -64,9 +64,9 @@ from kl_pipe.surveys.roman import (
     F_LIM_REF_LAMBDA_A,
     F_LIM_REF_R50_ARCSEC,
     GRISM_REF_LINE_WIDTH_KMS,
-    band_sigma_bg_ujy,
+    band_sigma_bkg_ujy,
     grism_electrons_per_f17_per_pass,
-    grism_sigma_bg_per_pass,
+    grism_sigma_bkg_per_pass,
 )
 
 if TYPE_CHECKING:
@@ -407,10 +407,10 @@ def _make_band_obs(
                 f"band '{band}' has no electrons_per_ujy conversion; "
                 f"known bands: {sorted(ELECTRONS_PER_UJY)}"
             )
-        sigma_bg = band_sigma_bg_ujy(
+        sigma_bkg = band_sigma_bkg_ujy(
             band, _psf_l2_norm(psf_mock, image_pars.pixel_scale)
         )
-        var = physical_variance_map(data_true, sigma_bg, ELECTRONS_PER_UJY[band])
+        var = physical_variance_map(data_true, sigma_bkg, ELECTRONS_PER_UJY[band])
         data_noisy = add_map_noise(data_true, var, seed)
         variance = jnp.asarray(var)
     else:
@@ -537,7 +537,7 @@ def _make_roll_obs(
     kernel_size_fit,
     flux_unit=None,
     noise_model='matched_filter',
-    sigma_bg=None,
+    sigma_bkg=None,
     electrons_per_f17=None,
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
@@ -566,10 +566,10 @@ def _make_roll_obs(
     line_true = np.asarray(source.render_grism(line_truth, obs_clean))
     if noise_model == 'poisson':
         # flat per-roll background anchored to the per-pass published limit
-        # (sigma_bg from the rendered reference source), plus shot noise from
+        # (sigma_bkg from the rendered reference source), plus shot noise from
         # the FULL dispersed truth -- the continuum contributes photons even
         # though only the line defines the labeled SNR
-        var = physical_variance_map(data_true, sigma_bg, electrons_per_f17)
+        var = physical_variance_map(data_true, sigma_bkg, electrons_per_f17)
         data_noisy = add_map_noise(data_true, var, seed)
         variance = jnp.asarray(var)
     else:
@@ -705,13 +705,13 @@ def build_fit_inputs(
     kernel_size_fit = _grism_psf_kernel_size(config, spec)
     single_roll = len(config.grism_rolls_deg) == 1
     if config.noise_model == 'poisson':
-        grism_sigma_bg = grism_sigma_bg_per_pass(
+        grism_sigma_bkg = grism_sigma_bkg_per_pass(
             _grism_reference_line_norm(config, spec.render_oversample)
         )
         lambda_obs_a = HALPHA_REST_A * (1.0 + z)
         electrons_per_f17 = float(grism_electrons_per_f17_per_pass(lambda_obs_a))
     else:
-        grism_sigma_bg = None
+        grism_sigma_bkg = None
         electrons_per_f17 = None
     grism_obs = {}
     for j, roll in enumerate(config.grism_rolls_deg):
@@ -733,7 +733,7 @@ def build_fit_inputs(
                 '1e-17 erg/s/cm2 (integrated line flux)' if is_catalog else None
             ),
             noise_model=config.noise_model,
-            sigma_bg=grism_sigma_bg,
+            sigma_bkg=grism_sigma_bkg,
             electrons_per_f17=electrons_per_f17,
         )
     # roll coadd: independent noise per roll, so the joint-fit line depth is

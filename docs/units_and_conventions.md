@@ -73,12 +73,12 @@ that assembly per fit.
   fluxes): per-pixel variance with two terms, in the channel's own squared
   flux units:
 
-      var = sigma_bg² + max(I_truth, 0) / g
+      var = sigma_bkg² + max(I_truth, 0) / g
 
-  1. `sigma_bg`, a flat background level. Anchored to the published survey
+  1. `sigma_bkg`, a flat background level. Anchored to the published survey
      depth: render the source the published limit refers to (imaging: a
      point source through the config's PSF; grism: the 0.25″ reference disk
-     in `surveys/roman.py`), and set `sigma_bg` so that source is recovered
+     in `surveys/roman.py`), and set `sigma_bkg` so that source is recovered
      at exactly 5σ. One value per band; one per grism roll.
   2. The source's own shot noise: pixel flux converted to detected
      electrons via `g` (`ELECTRONS_PER_UJY`,

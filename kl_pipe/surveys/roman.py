@@ -236,12 +236,28 @@ def grism_electrons_per_f17_per_pass(lambda_obs_a: ArrayLike) -> ArrayLike:
 GRISM_REF_LINE_WIDTH_KMS = 30.0
 
 
-def band_sigma_bg_ujy(band: str, psf_l2_norm: float) -> float:
+# Pinned background anchors for the PRODUCTION instrument model, so typical
+# users can import a number instead of rendering reference templates:
+# hlwas_medium_roman (galsim.roman.getPSF, SCA 10, pupil_bin 4; 0.11 arcsec
+# pixels; grism 32-pixel stamps at 1.1 nm/pixel, render oversample 3).
+# Derived through band_sigma_bkg_ujy / grism_sigma_bkg_per_pass below;
+# tests/test_ensemble_noise.py re-derives both and pins these literals.
+# The REFERENCE SOURCE behind each anchor is fixed by the published depth's
+# own convention (imaging: point source; grism: the 0.25" disk above) and
+# is not a knob -- only the instrument model it is rendered through varies.
+# A different PSF model or pixel scale therefore needs re-anchoring through
+# the functions, not these constants: instrument-model mismatch moves the
+# anchor at the tens-of-percent level.
+SIGMA_BKG_DEFAULT_UJY = {'F129': 5.9396e-3, 'F158': 5.7246e-3}
+GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17 = 0.641615
+
+
+def band_sigma_bkg_ujy(band: str, psf_l2_norm: float) -> float:
     """Per-pixel background sigma [uJy/pixel] in an imaging band.
 
     Solved from the published point-source depth: a point source at
     f_lim has matched-filter SNR = IMAGING_DEPTH_NSIGMA, so
-    sigma_bg = f_lim * ||K||_2 / N_sigma with K the unit-flux PSF image
+    sigma_bkg = f_lim * ||K||_2 / N_sigma with K the unit-flux PSF image
     at the survey pixel scale (pixel response included). The caller
     supplies ||K||_2 from the same PSF model the mock renders with, so
     the anchor holds in every configuration.
@@ -251,14 +267,14 @@ def band_sigma_bg_ujy(band: str, psf_l2_norm: float) -> float:
     return band_flux_limit_ujy(band) * float(psf_l2_norm) / IMAGING_DEPTH_NSIGMA
 
 
-def grism_sigma_bg_per_pass(ref_line_l2_norm: float) -> float:
+def grism_sigma_bkg_per_pass(ref_line_l2_norm: float) -> float:
     """Per-pixel background sigma for one grism roll, in the mock's line
     flux units.
 
     Solved from the published limit: the reference source (see
     GRISM_REF_LINE_WIDTH_KMS block) rendered at the PER-PASS limit
     F_LIM_PER_PASS_CGS has matched-filter SNR = F_LIM_NSIGMA in a single
-    pass, so sigma_bg = ||L_ref||_2 / N_sigma with L_ref the reference's
+    pass, so sigma_bkg = ||L_ref||_2 / N_sigma with L_ref the reference's
     dispersed line-only template rendered at that flux.
     """
     if ref_line_l2_norm <= 0:

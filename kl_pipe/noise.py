@@ -281,12 +281,12 @@ def grism_line_noise(
 
 def physical_variance_map(
     truth_image: np.ndarray,
-    sigma_bg: float,
+    sigma_bkg: float,
     electrons_per_flux: float,
 ) -> np.ndarray:
     """Per-pixel variance map: flat background plus source shot noise.
 
-    var = sigma_bg**2 + max(I, 0) / electrons_per_flux, all in the squared
+    var = sigma_bkg**2 + max(I, 0) / electrons_per_flux, all in the squared
     flux units of ``truth_image``. The Poisson term is the standard
     counts -> flux propagation: counts = I * g gives var_counts = counts,
     i.e. var_flux = I / g with g = electrons_per_flux (detected electrons
@@ -300,7 +300,7 @@ def physical_variance_map(
     ----------
     truth_image : ndarray
         Noiseless truth render in flux/pixel units.
-    sigma_bg : float
+    sigma_bkg : float
         Flat per-pixel background standard deviation, same flux units.
     electrons_per_flux : float
         Detected electrons per unit of the image's flux.
@@ -310,8 +310,8 @@ def physical_variance_map(
     ndarray
         Per-pixel variance, same shape as ``truth_image``.
     """
-    if sigma_bg <= 0:
-        raise ValueError(f"sigma_bg must be positive, got {sigma_bg}")
+    if sigma_bkg <= 0:
+        raise ValueError(f"sigma_bkg must be positive, got {sigma_bkg}")
     if electrons_per_flux <= 0:
         raise ValueError(
             f"electrons_per_flux must be positive, got {electrons_per_flux}"
@@ -326,7 +326,7 @@ def physical_variance_map(
             f"{peak:.3g}; rendering ringing is at the sub-percent level, so "
             f"this is the wrong image (residual? background-subtracted data?)"
         )
-    return sigma_bg**2 + np.clip(truth_image, 0.0, None) / electrons_per_flux
+    return sigma_bkg**2 + np.clip(truth_image, 0.0, None) / electrons_per_flux
 
 
 def add_map_noise(
@@ -363,6 +363,12 @@ def matched_filter_snr(template: np.ndarray, variance) -> float:
     """
     template = np.asarray(template, dtype=np.float64)
     variance = np.asarray(variance, dtype=np.float64)
+    if variance.ndim != 0 and variance.shape != template.shape:
+        raise ValueError(
+            f"variance must be a scalar or match the template shape "
+            f"{template.shape}, got {variance.shape}; broadcasting a "
+            f"mismatched map would silently weight the wrong pixels"
+        )
     if np.any(variance <= 0):
         raise ValueError("variance must be strictly positive")
     return float(np.sqrt(np.sum(template**2 / variance)))

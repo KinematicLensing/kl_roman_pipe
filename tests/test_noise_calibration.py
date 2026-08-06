@@ -193,9 +193,9 @@ def _shot_noise_variance_map(clean):
     pixel's Poisson variance roughly matches the background variance."""
     from kl_pipe.noise import physical_variance_map
 
-    sigma_bg = float(np.sqrt((clean**2).sum())) / 50.0
-    electrons_per_flux = float(clean.max()) / sigma_bg**2
-    return physical_variance_map(clean, sigma_bg, electrons_per_flux)
+    sigma_bkg = float(np.sqrt((clean**2).sum())) / 50.0
+    electrons_per_flux = float(clean.max()) / sigma_bkg**2
+    return physical_variance_map(clean, sigma_bkg, electrons_per_flux)
 
 
 def test_image_obs_chi2_variance_map(scene):

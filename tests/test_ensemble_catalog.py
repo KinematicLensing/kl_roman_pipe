@@ -25,6 +25,7 @@ from kl_pipe.ensemble.expander import (
 )
 from kl_pipe.ensemble.mocks import build_fit_inputs
 from kl_pipe.ensemble.population import CONT_CENTROID_OFFSET_ARCSEC
+from kl_pipe.photometry import EXP_R50_OVER_RSCALE
 from kl_pipe.ensemble.scene import scene_priors
 from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
 from kl_pipe.priors import (
@@ -183,12 +184,12 @@ class TestCatalogExpand:
         g = pop.iloc[0]
         recomputed = compute_band_snr(
             np.array([g[f'flux_{band.lower()}_ujy']]),
-            np.array([g['rscale_arcsec'] * 1.678]),
+            np.array([g['rscale_arcsec'] * EXP_R50_OVER_RSCALE]),
             np.array([g['cosi']]),
             band,
         )[0]
         # rel tolerance: the fake catalog stores float32 columns, and the
-        # rscale*1.678 reconstruction of disk_r50 rounds at that precision
+        # rscale*EXP_R50_OVER_RSCALE reconstruction of disk_r50 rounds at that precision
         assert g[f'snr_bb_{band.lower()}'] == pytest.approx(recomputed, rel=1e-5)
 
     def test_flux_truths_are_catalog_physical(self, run_parts):

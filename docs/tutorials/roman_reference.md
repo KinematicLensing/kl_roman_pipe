@@ -297,23 +297,30 @@ obs_render = build_image_obs(ip, psf=psf, int_model=disk)
 clean_ujy = np.asarray(disk.render_image(theta, obs=obs_render))  # uJy/pixel
 ```
 
-**Pathway 1, bkg: a flat background from the published depth.** The
-background level is solved from the published HLWAS F129 depth (26.4 AB,
-5-sigma point source): a point source at that flux, drawn through the same
-PSF, must come out at exactly 5-sigma, so `sigma_bg = f_lim * ||K||_2 / 5`
-with K the unit-flux PSF image at the survey pixel scale. The reference
-source is only the yardstick that converts a published flux limit into a
-per-pixel sigma; once solved, `sigma_bg` is a property of the survey and
-applies to any galaxy.
+**Pathway 1, bkg: a flat background from the published depth.** For the
+production instrument model (the real Roman WFI PSF at 0.11"/pixel) the
+background level is one import: `roman.SIGMA_BKG_DEFAULT_UJY['F129']`, a
+pinned constant. It was solved from the published HLWAS F129 depth
+(26.4 AB, 5-sigma point source): a point source at that flux, drawn through
+the instrument PSF, must come out at exactly 5-sigma, so
+`sigma_bkg = f_lim * ||K||_2 / 5` with K the unit-flux PSF image at the
+survey pixel scale. The reference source behind the anchor is fixed by the
+published depth's own convention and is not a choice you make; what varies
+is only the instrument model it is rendered through. This tutorial renders
+through a stand-in `OpticalPSF`, not the production WFI model, so we
+re-anchor through it -- the same two lines you would use for any
+non-default instrument configuration:
 
 ```{code-cell} python
 # ||K||_2 of the unit-flux point source at the survey pixel scale
 kernel = psf.drawImage(scale=PIXEL_SCALE).array
-sigma_bg = roman.band_sigma_bg_ujy('F129', float(np.sqrt((kernel**2).sum())))
+sigma_bkg = roman.band_sigma_bkg_ujy('F129', float(np.sqrt((kernel**2).sum())))
+print(f'anchor through this PSF: {sigma_bkg * 1e3:.3f} nJy/pix '
+      f'(production WFI pin: {roman.SIGMA_BKG_DEFAULT_UJY["F129"] * 1e3:.3f})')
 
-var_bg = np.full_like(clean_ujy, sigma_bg**2)
-noisy_bg = add_map_noise(clean_ujy, var_bg, seed=7)
-snr_bkg = matched_filter_snr(clean_ujy, var_bg)
+var_bkg = np.full_like(clean_ujy, sigma_bkg**2)
+noisy_bg = add_map_noise(clean_ujy, var_bkg, seed=7)
+snr_bkg = matched_filter_snr(clean_ujy, var_bkg)
 print(f'bkg realized SNR = {snr_bkg:.1f}')
 ```
 
@@ -326,7 +333,7 @@ Poisson statistics, and exactly the noise the Gaussian likelihood carrying
 the same map describes.
 
 ```{code-cell} python
-var_map = physical_variance_map(clean_ujy, sigma_bg, roman.ELECTRONS_PER_UJY['F129'])
+var_map = physical_variance_map(clean_ujy, sigma_bkg, roman.ELECTRONS_PER_UJY['F129'])
 noisy = add_map_noise(clean_ujy, var_map, seed=7)
 obs_physical = build_image_obs(ip, psf=psf, int_model=disk,
                                data=jnp.asarray(noisy), variance=jnp.asarray(var_map),
@@ -347,7 +354,7 @@ is what *Roman* would actually deliver for this galaxy.
 ```{code-cell} python
 noisy_mf, var_mf = add_intensity_noise(clean_ujy, target_snr=snr_realized, seed=7)
 print(f'matched-filter path at target {snr_realized:.1f}: uniform sigma = '
-      f'{np.sqrt(var_mf.flat[0]):.4g} uJy/pix vs background {sigma_bg:.4g}')
+      f'{np.sqrt(var_mf.flat[0]):.4g} uJy/pix vs background {sigma_bkg:.4g}')
 ```
 
 **The grism channel follows the same recipe with two changes.** First, the
@@ -394,10 +401,12 @@ def grism_render(pars):
 
 # The yardstick: the published per-pass limit refers to exactly this source,
 # so rendering it at that limit and demanding matched-filter SNR = 5 solves
-# the per-roll background level.
+# the per-roll background level. On the production grism config this too is
+# one import (roman.GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17); this tutorial's
+# stand-in PSF needs the reference rendered through it:
 z_ref = roman.F_LIM_REF_LAMBDA_A / HALPHA_REST_A - 1.0
 L_ref = grism_render(halpha_truth(roman.F_LIM_PER_PASS_CGS, z_ref))
-sigma_bg_grism = roman.grism_sigma_bg_per_pass(float(np.sqrt((L_ref**2).sum())))
+sigma_bkg_grism = roman.grism_sigma_bkg_per_pass(float(np.sqrt((L_ref**2).sum())))
 ```
 
 ```{code-cell} python
@@ -412,7 +421,7 @@ clean_grism = grism_render(gal)
 g_grism = float(roman.grism_electrons_per_f17_per_pass(
     HALPHA_REST_A * (1.0 + gal['z'])))   # detected e- per flux unit, one pass
 
-var_grism = physical_variance_map(clean_grism, sigma_bg_grism, g_grism)
+var_grism = physical_variance_map(clean_grism, sigma_bkg_grism, g_grism)
 noisy_grism = add_map_noise(clean_grism, var_grism, seed=8)
 
 line_only = grism_render({**gal, 'Halpha.cont.flux_per_nm': 0.0})
