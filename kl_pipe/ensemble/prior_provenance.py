@@ -44,7 +44,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Tuple, TYPE_CHECKING
+from typing import Dict, Tuple, TYPE_CHECKING, Optional
 
 from kl_pipe.ensemble import scene
 from kl_pipe.ensemble.catalogs import get_catalog_adapter
@@ -261,11 +261,11 @@ def catalog_registry(
             f'N(0, {V0_SCATTER_KMS})',
             f'N(0, {scene._V0_PRIOR_SIGMA_KMS})',
             'instrument scale',
-            '3.5x the worst-case (S/N 7) line-centroid precision of 40 '
-            'km/s, capping prior-driven shrinkage at <= 30% even for the '
-            'noisiest selected galaxy while leaving v0 data-dominated.',
+            '5x the assumed systemic-velocity paint scatter, wide '
+            'enough to stay clearly non-truth-centered without resting on '
+            'an SNR-dependent measurement estimate.',
             compact_meaning='systemic velocity',
-            compact_note='3.5x worst-case centroid precision',
+            compact_note='5x the paint scatter',
         )
     )
     add(
@@ -657,7 +657,7 @@ def _tex_escape(s: str) -> str:
 def registry_to_latex(
     registry: Dict[str, PriorProvenance],
     mode: str = 'standalone',
-    cite_urls: Dict[str, str] = None,
+    cite_urls: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     Render the registry as a LaTeX longtable.
@@ -734,7 +734,7 @@ def registry_to_compact_latex(
     registry: Dict[str, PriorProvenance],
     bands: Tuple[str, ...],
     mode: str = 'standalone',
-    cite_urls: Dict[str, str] = None,
+    cite_urls: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     Compact rendering: per-band and x/y rows merged, one line per row, with
@@ -778,7 +778,10 @@ def registry_to_compact_latex(
         painted = canon(e.compact_painted or e.painted)
         prior = canon(e.compact_prior or e.fit_prior)
         note = e.compact_note or '--'
-        key = (e.unit, painted, prior, e.category, e.bibkeys, note)
+        # meaning is part of the key: parameters that coincide in
+        # unit/paint/prior/category/note but mean different things must
+        # not merge into one row
+        key = (e.unit, painted, prior, e.category, e.bibkeys, note, meaning)
         g = groups.setdefault(
             key,
             {
@@ -877,7 +880,7 @@ measurement;
 
 
 def standalone_document(
-    registry: Dict[str, PriorProvenance], cite_urls: Dict[str, str] = None
+    registry: Dict[str, PriorProvenance], cite_urls: Optional[Dict[str, str]] = None
 ) -> str:
     """Full standalone LaTeX document for PDF rendering outside the paper."""
     return (
@@ -908,7 +911,7 @@ ratio to the fitted disk scale $R_d$; U(low, high) = uniform.
 def standalone_compact_document(
     registry: Dict[str, PriorProvenance],
     bands: Tuple[str, ...],
-    cite_urls: Dict[str, str] = None,
+    cite_urls: Optional[Dict[str, str]] = None,
 ) -> str:
     """Compact standalone LaTeX document (merged rows, no notes)."""
     url = (cite_urls or {}).get('Shuntov2025')
