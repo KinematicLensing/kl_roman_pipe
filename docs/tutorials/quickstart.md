@@ -1048,24 +1048,26 @@ rc_cap = RenderConfig(oversample=3)   # low for tutorial speed; auto-derive in p
 
 # Broadband obs, one per band:
 obs_bb = {}
-for band, model in (('F087', bd_F087), ('F184', bd_F184)):
+for i, (band, model) in enumerate((('F087', bd_F087), ('F184', bd_F184))):
     clean = np.asarray(cap_source.render_broadband(
         cap_truth, build_image_obs(img_pars, psf=roman_psf, render_config=rc_cap,
                                    int_model=model, broadband_key=band), band))
-    noisy, var = add_intensity_noise(clean, target_snr=100, seed=hash(band) % 1000)
+    # deterministic per-band seeds; hash() is salted per process and would
+    # make the noise realization change from run to run
+    noisy, var = add_intensity_noise(clean, target_snr=100, seed=20 + i)
     obs_bb[band] = build_image_obs(img_pars, psf=roman_psf, render_config=rc_cap,
                                    int_model=model, broadband_key=band,
                                    data=jnp.asarray(noisy), variance=var)
 
 # Grism obs, two rolls at different sky PAs:
 obs_rolls = {}
-for roll, pa in (('roll0', 20.0), ('roll90', 110.0)):
+for j, (roll, pa) in enumerate((('roll0', 20.0), ('roll90', 110.0))):
     gp_pars = ImagePars(shape=shape, wcs=make_wcs(shape, ps, pa_deg=pa))
     gpr = build_grism_pars_for_line(LINE_LAMBDAS['Halpha'], redshift=Zc,
                                     image_pars=gp_pars, dispersion=1.1)
     clean = np.asarray(cap_source.render_grism(
         cap_truth, build_grism_obs(gpr, z=Zc, psf=roman_psf, render_config=rc_cap)))
-    noisy, var = add_intensity_noise(clean, target_snr=150, seed=hash(roll) % 1000)
+    noisy, var = add_intensity_noise(clean, target_snr=150, seed=30 + j)
     obs_rolls[roll] = build_grism_obs(gpr, z=Zc, psf=roman_psf, render_config=rc_cap,
                                       data=jnp.asarray(noisy), variance=var)
 ```

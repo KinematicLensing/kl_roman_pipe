@@ -236,18 +236,15 @@ def grism_electrons_per_f17_per_pass(lambda_obs_a: ArrayLike) -> ArrayLike:
 GRISM_REF_LINE_WIDTH_KMS = 30.0
 
 
-# Pinned background anchors for the PRODUCTION instrument model, so typical
-# users can import a number instead of rendering reference templates:
-# hlwas_medium_roman (galsim.roman.getPSF, SCA 10, pupil_bin 4; 0.11 arcsec
-# pixels; grism 32-pixel stamps at 1.1 nm/pixel, render oversample 3).
-# Derived through band_sigma_bkg_ujy / grism_sigma_bkg_per_pass below;
-# tests/test_ensemble_noise.py re-derives both and pins these literals.
-# The REFERENCE SOURCE behind each anchor is fixed by the published depth's
-# own convention (imaging: point source; grism: the 0.25" disk above) and
-# is not a knob -- only the instrument model it is rendered through varies.
-# A different PSF model or pixel scale therefore needs re-anchoring through
-# the functions, not these constants: instrument-model mismatch moves the
-# anchor at the tens-of-percent level.
+# Background anchors for the production instrument model (hlwas_medium_roman:
+# galsim.roman.getPSF at SCA 10, pupil_bin 4, 0.11 arcsec pixels; grism
+# 32-pixel stamps at 1.1 nm/pixel, oversample 3), pinned so users can import
+# a number instead of rendering reference templates; a test re-derives both.
+# Each anchor's reference source is fixed by its published depth's convention
+# (point source for imaging, the 0.25" disk for the grism) -- what varies is
+# the instrument model, which moves the anchor at the tens-of-percent level,
+# so a different PSF or pixel scale means re-anchoring through the functions
+# below rather than editing these.
 SIGMA_BKG_DEFAULT_UJY = {'F129': 5.9396e-3, 'F158': 5.7246e-3}
 GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17 = 0.641615
 
