@@ -32,7 +32,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs
+    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs, FiberObs
     from kl_pipe.source import SourceModel
 
 
@@ -139,7 +139,6 @@ def _log_likelihood_grism_source(
     )
     return _gaussian_log_likelihood(obs.data, model_img, obs.variance, obs.mask)
 
-
 def _log_likelihood_grism_group_source(
     theta_sampled: jnp.ndarray,
     source: 'SourceModel',
@@ -170,6 +169,58 @@ def _log_likelihood_grism_group_source(
         )
     return log_l
 
+def _log_likelihood_fiber_source(
+    theta_sampled: jnp.ndarray,
+    source: 'SourceModel',
+    obs: 'FiberObs',
+    sampled_names: tuple,
+    fixed_pars: dict,
+    spectral_oversample: int = 15,
+) -> float:
+    pars = _build_pars_dict(theta_sampled, sampled_names, fixed_pars)
+    model_img = source.render_fiber(pars, obs, spectral_oversample=spectral_oversample)
+    return _gaussian_log_likelihood(obs.data, model_img, obs.variance, obs.mask)
+
+def _log_likelihood_fiber_group_source(
+    theta_sampled: jnp.ndarray,
+    source: 'SourceModel',
+    obs_group: dict, #list, #dict
+    sampled_names: tuple,
+    fixed_pars: dict,
+    spectral_oversample: int = 15,
+    #spectral_method: str = 'erf',
+    #psf_mode: str = 'post_dispersion',
+    #operators: dict = None,
+) -> float:
+    pars = _build_pars_dict(theta_sampled, sampled_names, fixed_pars)
+    model_spectra = source.render_fiber_group(
+        pars,
+        obs_group,
+        spectral_oversample=spectral_oversample,
+        #spectral_method=spectral_method,
+        #psf_mode=psf_mode,
+        #operators=operators,
+    )
+
+    log_l = 0.0
+    for key, obs in obs_group.items():
+        log_l = log_l + _gaussian_log_likelihood(
+            obs.data, model_spectra[key], obs.variance, obs.mask
+        )
+    return log_l
+
+    #log_l = 0.0
+    #for i in range(0, len(obs_group)):
+        #log_l = log_l + _gaussian_log_likelihood(
+            #obs_group[i], model_imgs[i], obs_group[i].variance, obs_group[i].mask
+        #)
+
+    #is this slow when jitted?
+    #for obs, img in zip(obs_group, model_imgs):
+        #log_l = log_l + _gaussian_log_likelihood(
+            #obs.data, img, obs.variance, obs.mask
+        #)
+    #return log_l
 
 def _log_likelihood_velocity_source(
     theta_sampled: jnp.ndarray,
@@ -189,6 +240,7 @@ def _log_likelihood_total_source(
     source: 'SourceModel',
     image_obs: dict,
     grism_obs: dict,
+    fiber_obs: dict,
     velocity_obs,
     sampled_names: tuple,
     fixed_pars: dict,
@@ -197,6 +249,7 @@ def _log_likelihood_total_source(
     psf_mode: str = 'post_dispersion',
     grism_groups: list = None,
     grism_group_operators: list = None,
+    fiber_groups: list = None
 ) -> float:
     """Dispatch sum over all populated channels for SourceModel inference.
 
@@ -259,6 +312,35 @@ def _log_likelihood_total_source(
                 spectral_method=spectral_method,
                 psf_mode=psf_mode,
             )
+    if fiber_groups is not None:
+        for i, group in enumerate(fiber_groups):
+            if len(group) == 1:
+                (obs,) = group.values()
+                log_l = log_l + _log_likelihood_fiber_source(
+                    theta_sampled,
+                    source,
+                    obs,
+                    sampled_names,
+                    fixed_pars,
+                    spectral_oversample=spectral_oversample)
+            else:
+                log_l = log_l + _log_likelihood_fiber_group_source(
+                    theta_sampled,
+                    source,
+                    group,
+                    sampled_names,
+                    fixed_pars,
+                    spectral_oversample=spectral_oversample)
+    elif fiber_obs:
+        for _fiber_key, obs in fiber_obs.items():
+            log_l = log_l + _log_likelihood_fiber_source(
+                theta_sampled,
+                source,
+                obs,
+                sampled_names,
+                fixed_pars,
+                spectral_oversample=spectral_oversample,
+            )
     if velocity_obs is not None:
         log_l = log_l + _log_likelihood_velocity_source(
             theta_sampled, source, velocity_obs, sampled_names, fixed_pars
@@ -273,6 +355,8 @@ def create_jitted_likelihood_from_obs(
     *,
     image_obs: dict = None,
     grism_obs: dict = None,
+    fiber_obs: dict = None,
+    #fiber_groups: list = None, 
     velocity_obs=None,
     spectral_oversample: int = 15,
     spectral_method: str = 'erf',
@@ -314,12 +398,17 @@ def create_jitted_likelihood_from_obs(
                 build_group_dispersion_operators(group) if len(group) > 1 else None
             )
 
+    #whatever I'll just make the fiber group here
+    from kl_pipe.observation import group_fiber_obs
+    fiber_groups = group_fiber_obs(fiber_obs)
+
     return jax.jit(
         partial(
             _log_likelihood_total_source,
             source=source,
             image_obs=image_obs,
             grism_obs=grism_obs,
+            fiber_obs=fiber_obs,
             velocity_obs=velocity_obs,
             sampled_names=sampled_names,
             fixed_pars=fixed_pars,
@@ -328,5 +417,6 @@ def create_jitted_likelihood_from_obs(
             psf_mode=psf_mode,
             grism_groups=grism_groups,
             grism_group_operators=grism_group_operators,
+            fiber_groups = fiber_groups
         )
     )

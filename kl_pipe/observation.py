@@ -30,7 +30,9 @@ from kl_pipe.pixel import BoxPixel, PixelResponse, _PIXEL_RESPONSE_UNSET
 from kl_pipe.psf import PSFData
 from kl_pipe.render import RenderConfig
 from kl_pipe.utils import build_map_grid_from_image_pars
+from kl_pipe.fiber import build_fiber_pars_for_line, get_fiber_mask, precompute_PSF_convolved_fiber_mask, get_resolution_matrix_fiber
 
+import galsim as gs
 
 # default oversample for builders when no explicit RenderConfig is supplied.
 # RenderConfig is the single source of truth for oversampling; this constant
@@ -420,6 +422,23 @@ class GrismObs:
             pixel_response_fft=new_pixel_response_fft,
         )
 
+@dataclass(frozen=True)
+class FiberObs:
+    fiber_pars: object  # FiberPars — avoid circular import
+    cube_pars: object  # CubePars — avoid circular import
+    psf_data: Optional[PSFData] = None
+    render_config: RenderConfig = None  # set by build_grism_obs; never None at runtime
+    fine_image_pars: Optional[ImagePars] = None
+    data: Optional[jnp.ndarray] = None
+    variance: Optional[jnp.ndarray] = None
+    mask: Optional[jnp.ndarray] = None
+    pixel_response_fft: Optional[jnp.ndarray] = None
+    psf: Optional[object] = None
+    #bp_array: Optional[jnp.ndarray] = None
+    throughput: Optional[jnp.ndarray] = None
+    ATMPSF_conv_fiber_mask: Optional[jnp.ndarray] = None
+    resolution_matrix: Optional[jnp.ndarray] = None
+    _rc_was_default: bool = field(default=False, init=False, repr=False)
 
 # ============================================================================
 # JAX pytree registration
@@ -1076,6 +1095,167 @@ def build_grism_obs(
         object.__setattr__(obs, '_rc_was_default', True)
     return obs
 
+def build_fiber_obs(
+    fiber_pars,
+    z: float,
+    *,
+    psf=None,
+    gsparams=None,
+    data=None,
+    variance=None,
+    mask=None, #need to figure out exactly what this is
+    render_config: Optional[RenderConfig] = None,
+    ATMPSF_conv_fiber_mask = None,
+    resolution_matrix = None,
+    throughput = None,
+) -> FiberObs:
+    """Build fiber spectrograph observation
+
+    Parameters
+    ----------
+    fiber_pars : FiberPars
+        Dispersion parameters.
+    z : float
+        Concrete redshift for pre-computing cube_pars.
+    psf : galsim.GSObject, optional
+        PSF profile for per-slice convolution.
+    gsparams : galsim.GSParams, optional
+        GalSim rendering parameters.
+    data : jnp.ndarray, optional
+        Observed fiber spectrum data.
+    variance : jnp.ndarray or float, optional
+        Noise variance.
+    mask : jnp.ndarray, optional
+        Boolean mask.
+    render_config : RenderConfig, optional
+        Rendering recipe (single source of truth for oversampling). When
+        omitted, defaults to ``RenderConfig(oversample=DEFAULT_OVERSAMPLE)``
+        and the obs is marked ``_rc_was_default=True``:
+        ``InferenceTask.from_obs`` will derive a priors-sized rc and
+        rebuild the obs internally. For bespoke (non-inference) rendering
+        with tight priors, pass an explicit
+        ``build_grism_render_config(source, priors, grism_pars, psf=psf)``
+        result (from ``kl_pipe.render``).
+    """
+
+    rc_was_default = render_config is None
+    if rc_was_default:
+        render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
+    oversample = render_config.oversample # canonical
+
+    cube_pars = fiber_pars.to_cube_pars(z)
+    psf_data = None
+    fine_image_pars = None
+    pixel_response_fft = None
+
+    if psf is not None:
+        from kl_pipe.psf import precompute_psf_fft
+
+        psf_data = precompute_psf_fft(
+            psf,
+            image_pars=cube_pars.image_pars,
+            oversample=oversample,
+            gsparams=gsparams,
+        )
+
+    # fine grid: create when oversample > 1, regardless of PSF
+    if oversample > 1:
+        fine_image_pars = cube_pars.image_pars.make_fine_scale(oversample)
+        # precompute BoxPixel sinc on fine k-grid for post-dispersion pixel
+        # response (consumed by KLModel.render_grism). pixel response is a
+        # coarse-detector property; sinc uses the coarse pixel_scale.
+        coarse_ps = cube_pars.image_pars.pixel_scale
+        fine_ps = fine_image_pars.pixel_scale
+        Nrow_f, Ncol_f = fine_image_pars.Nrow, fine_image_pars.Ncol
+        kx = 2.0 * jnp.pi * jnp.fft.fftfreq(Ncol_f, d=fine_ps)
+        ky = 2.0 * jnp.pi * jnp.fft.fftfreq(Nrow_f, d=fine_ps)
+        KY, KX = jnp.meshgrid(ky, kx, indexing='ij')
+        pixel_response_fft = BoxPixel(coarse_ps).ft(KX, KY)
+
+    if data is not None:
+        data = jnp.asarray(data)
+    if variance is not None:
+        variance = jnp.asarray(variance)
+    if mask is not None:
+        mask = jnp.asarray(mask, dtype=bool) #don't know how to use the mask yet
+
+    throughput_function = gs.Bandpass(
+        fiber_pars.bandpass_path,'nm',
+        blue_limit=cube_pars.lambda_grid[0],
+        red_limit=cube_pars.lambda_grid[-1],
+    )
+    throughput = jnp.asarray(throughput_function(cube_pars.lambda_grid))
+
+    #if throughput is None:
+        #if fiber_pars.throughput is None and fiber_pars.bandpass_path is not None:
+            #throughput_function = gs.Bandpass(
+                #fiber_pars.bandpass_path,'nm',
+                #blue_limit=cube_pars.lambda_grid[0],
+                #red_limit=cube_pars.lambda_grid[-1],
+            #)
+            #throughput = jnp.asarray(throughput_function(cube_pars.lambda_grid))
+        #elif fiber_pars.throughput is not None:
+            #throughput = jnp.asarray(fiber_pars.throughput) #needs to be correct length
+        #elif fiber_pars.throughput is None and fiber_pars.bandpass_path is None:
+            #throughput = jnp.ones(cube_pars.lambda_grid)
+    #else:
+        #throughput = jnp.asarray(throughput)
+
+    if ATMPSF_conv_fiber_mask is None:
+        if oversample > 1:
+            ATMPSF_conv_fiber_mask = precompute_PSF_convolved_fiber_mask(fine_image_pars, fiber_pars, psf)
+        else:
+            ATMPSF_conv_fiber_mask = precompute_PSF_convolved_fiber_mask(cube_pars.image_pars, fiber_pars, psf)
+        ATMPSF_conv_fiber_mask = jnp.asarray(ATMPSF_conv_fiber_mask)
+    if resolution_matrix is None:
+        resolution_matrix = get_resolution_matrix_fiber(fiber_pars, cube_pars)
+        resolution_matrix = jnp.asarray(resolution_matrix)
+
+    obs = FiberObs(
+        fiber_pars=fiber_pars,
+        cube_pars=cube_pars,
+        psf_data=psf_data,
+        render_config=render_config,
+        fine_image_pars=fine_image_pars,
+        data=data,
+        variance=variance,
+        mask=mask,
+        pixel_response_fft=pixel_response_fft,
+        psf=psf, #this is the galsim psf object
+        throughput = throughput,
+        ATMPSF_conv_fiber_mask=ATMPSF_conv_fiber_mask,
+        resolution_matrix=resolution_matrix,
+    )
+    # _rc_was_default is field(init=False) so it stays out of the constructor
+    # kwargs; set it here via the standard frozen-dataclass escape hatch.
+    if rc_was_default:
+        object.__setattr__(obs, '_rc_was_default', True)
+    return obs
+
+#super basic
+#need to add some guardrails or whatever
+#I should only allow for a group when they share the same cubepars, oversampling, etc.
+def group_fiber_obs(
+    fiber_obs: Dict[str, 'FiberObs'],
+) -> List[Dict[str, 'FiberObs']]:
+    groups: List[Dict[str, 'FiberObs']] = []
+    group_reps: List['FiberObs'] = []
+    for key, obs in fiber_obs.items():
+        # analytic dispersal builds no cube; always a singleton group
+        #groups.append({key: obs})
+        #group_reps.append(obs)
+        placed = False
+        for group, rep in zip(groups, group_reps):
+            #if _cube_compatible(obs,rep):
+        #for group in groups:
+            group[key] = obs
+            placed = True
+            break
+        if not placed:
+            groups.append({key: obs})
+            group_reps.append(obs)
+
+    return groups
 
 # ============================================================================
 # Shared-cube grouping: group grism obs that can share one model cube

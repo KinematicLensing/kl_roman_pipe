@@ -585,16 +585,17 @@ class NumpyroSampler(Sampler):
         init_params = self._get_init_params(init_key, self._reparam_scales)
 
         # Run MCMC
-        mcmc.run(
-            sample_key,
-            init_params=init_params,
-            extra_fields=(
-                'diverging',
-                'accept_prob',
-                'num_steps',
-                'energy',
-            ),
-        )
+        with numpyro.validation_enabled(): #added by me, temp
+            mcmc.run(
+                sample_key,
+                init_params=init_params,
+                extra_fields=(
+                    'diverging',
+                    'accept_prob',
+                    'num_steps',
+                    'energy',
+                ),
+            )
 
         # Extract samples (physical space via deterministic nodes)
         samples_dict = mcmc.get_samples(group_by_chain=False)

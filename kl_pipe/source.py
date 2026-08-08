@@ -41,11 +41,12 @@ from kl_pipe.lines import LINE_LAMBDAS, EmissionLine  # noqa: E402
 
 if TYPE_CHECKING:
     from kl_pipe.model import IntensityModel, VelocityModel
-    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs
+    from kl_pipe.observation import GrismObs, ImageObs, VelocityObs, FiberObs
     from kl_pipe.spectral import CubePars
 
 from kl_pipe.constants import C_KMS as _C_KMS  # noqa: E402
 
+import matplotlib.pyplot as plt
 
 # ===========================================================================
 # Theta routing helpers (module-level so they JIT cleanly)
@@ -392,6 +393,156 @@ class SourceModel:
             obs.oversample,
             obs.grism_pars.image_pars.pixel_scale,
         )
+
+    def render_fiber(
+        self,
+        pars: dict,
+        obs: 'FiberObs',
+        plane: str = 'obs',
+        spectral_oversample: int | None = None,
+    ) -> jnp.ndarray:
+        """
+        Render the fiber spectra.
+        Parameters
+        ----------
+        spectral_oversample : int, optional
+            Wavelength sub-bin count for cube assembly. When ``None``
+            (default), reads ``obs.spectral_oversample`` (which itself
+            reads from ``obs.render_config.spectral_oversample``,
+            default 5). Pass an explicit value only to override the
+            obs-recorded setting (e.g., convergence tests).
+        """
+        # resolve spectral_oversample: explicit kwarg wins, else read from obs
+        if spectral_oversample is None:
+            spectral_oversample = obs.render_config.spectral_oversample
+
+        from kl_pipe.spectral import CubePars
+        # build_cube spatial grid: fine when oversampling is active
+        if obs.psf_data is not None and obs.render_config.oversample > 1:
+            build_cube_pars = CubePars(
+                image_pars=obs.fine_image_pars,
+                lambda_grid=obs.cube_pars.lambda_grid,
+            )
+        else:
+            build_cube_pars = obs.cube_pars
+
+        image_rotation = image_rotation_from_wcs(obs.fiber_pars.image_pars.wcs)
+
+        cube = self.build_cube(
+            pars,
+            build_cube_pars,
+            spectral_oversample=spectral_oversample,
+            plane=plane,
+            image_rotation=image_rotation,
+        )
+
+        #plt.imshow(cube[:,:,0])
+
+        cube_pixel_scale = build_cube_pars.image_pars.pixel_scale
+        spec_1D = jnp.sum(
+                (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
+                axis=(0, 1))* cube_pixel_scale**2
+
+        spec_1D = spec_1D *  obs.throughput
+
+        # fiber PSF can result in degradation in spectral resolution
+        if obs.resolution_matrix is not None:
+            spec_1D = jnp.dot(obs.resolution_matrix, spec_1D)
+
+        return spec_1D  
+
+    #wip
+    def render_fiber_group(
+        self,
+        pars: dict,
+        obs_group: dict,
+        #fiber_obs_group: list, #take a dictionary instead?
+        plane: str = 'obs',
+        spectral_oversample: int | None = None,
+    ) -> jnp.ndarray:
+
+        #first_obs = fiber_obs_group[0]
+        first = next(iter(obs_group.values()))
+        
+        # resolve spectral_oversample: explicit kwarg wins, else read from obs
+        # all of the FiberObs in the list share the same spectral_oversample, so just use the first one
+        if spectral_oversample is None:
+            spectral_oversample = first.render_config.spectral_oversample
+
+        from kl_pipe.spectral import CubePars
+
+        if len(obs_group) == 1:
+            (key,) = obs_group
+            return {
+                key: self.render_fiber(
+                    pars,
+                    obs_group[key],
+                    plane=plane,
+                    spectral_oversample=spectral_oversample,
+                )
+            }
+
+        image_rotation = image_rotation_from_wcs(first.fiber_pars.image_pars.wcs)
+        # build_cube spatial grid: fine when oversampling is active
+        if first.psf_data is not None and first.render_config.oversample > 1:
+            build_cube_pars = CubePars(
+                image_pars=first.fine_image_pars,
+                lambda_grid=first.cube_pars.lambda_grid,
+            )
+        else:
+            build_cube_pars = first.cube_pars
+
+        cube = self.build_cube(
+            pars,
+            build_cube_pars,
+            spectral_oversample=spectral_oversample,
+            plane=plane,
+            image_rotation=image_rotation,
+        )
+
+        #plt.imshow(cube[:,:,0])
+
+        #coarse_pixel_scale = obs.fiber_pars.image_pars.pixel_scale
+        cube_pixel_scale = build_cube_pars.image_pars.pixel_scale
+
+        out = {}
+        for key, obs in obs_group.items():
+            #mask = obs.ATMPSF_conv_fiber_mask
+            #throughput = obs.throughput
+            #resolution_matrix = obs.resolution_matrix
+            spec_1D = jnp.sum(
+                            (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
+                            axis=(0, 1))* cube_pixel_scale**2
+            spec_1D = spec_1D *  obs.throughput
+            if obs.resolution_matrix is not None:
+                spec_1D = jnp.dot(obs.resolution_matrix, spec_1D)
+            out[key] = spec_1D
+
+        return out
+
+        #each fiber observation can have a different mask with a different PSF
+        #masks = jnp.stack([obs.ATMPSF_conv_fiber_mask for obs in obs_group])
+
+        #separate, but are probably the same for every fiber in the group
+        #throughputs = jnp.stack([obs.throughput for obs in obs_group])  # (n_obs, n_lambda)
+        #resolution_matrices = jnp.stack([obs.resolution_matrix for obs in obs_group])
+
+        #spectra = jnp.einsum(
+            #"oij,ijk->ok",
+            #masks,
+            #cube,
+        #) * cube_pixel_scale**2 
+
+        #spectra = spectra * throughputs
+
+        # Apply each observation's resolution matrix to its spectrum
+        #spectra = jnp.einsum(
+            #"oij,oj->oi",
+            #resolution_matrices,
+            #spectra,
+        #)
+
+        #return spectra  
 
     def _render_continuum_dispersed(
         self,

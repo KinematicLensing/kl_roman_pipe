@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from kl_pipe.model import Model
     from kl_pipe.source import SourceModel
     from kl_pipe.priors import PriorDict
-    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs
+    from kl_pipe.observation import ImageObs, VelocityObs, GrismObs, FiberObs
 
 
 def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
@@ -873,6 +873,7 @@ class InferenceTask:
         *,
         image_obs: Optional[Dict[str, 'ImageObs']] = None,
         grism_obs: Optional[Dict[str, 'GrismObs']] = None,
+        fiber_obs: Optional[Dict[str, 'FiberObs']] = None,
         velocity_obs: Optional['VelocityObs'] = None,
         meta_pars: Optional[Dict] = None,
         spectral_oversample: Optional[int] = None,
@@ -956,7 +957,7 @@ class InferenceTask:
         # ---- validate source-to-obs binding -----------------------------
 
         # at least one obs
-        if not image_obs and not grism_obs and velocity_obs is None:
+        if not image_obs and not grism_obs and not fiber_obs and velocity_obs is None:
             raise ValueError(
                 "InferenceTask.from_obs requires at least one of "
                 "image_obs, grism_obs, or velocity_obs"
@@ -995,6 +996,22 @@ class InferenceTask:
                 if obs.data is None:
                     raise ValueError(
                         f"grism_obs['{grism_key}'] has no data; cannot "
+                        f"build a likelihood"
+                    )
+                
+        # fiber_obs: non-empty requires velocity + emission line
+        if fiber_obs:
+            if source.velocity_model is None:
+                raise ValueError(
+                    "fiber_obs requires source.velocity_model to be set "
+                    "(Doppler shifts need it)"
+                )
+            if not source.emission_lines:
+                raise ValueError("grism_obs requires non-empty source.emission_lines")
+            for fiber_key, obs in fiber_obs.items():
+                if obs.data is None:
+                    raise ValueError(
+                        f"fiber_obs['{fiber_key}'] has no data; cannot "
                         f"build a likelihood"
                     )
 
@@ -1057,6 +1074,14 @@ class InferenceTask:
                 grism_key: _check_source_priors_fit_obs(source, priors, obs)
                 for grism_key, obs in grism_obs.items()
             }
+
+        #_check_source_priors_fit_obs: unrecognized obs type FiberObs
+        #if fiber_obs:
+            #fiber_obs = {
+                #fiber_key: _check_source_priors_fit_obs(source, priors, obs)
+                #for fiber_key, obs in fiber_obs.items()
+            #}
+
         if velocity_obs is not None:
             velocity_obs = _check_source_priors_fit_obs(source, priors, velocity_obs)
 
@@ -1089,6 +1114,17 @@ class InferenceTask:
                     f"pass spectral_method=... explicitly to override"
                 )
             spectral_method = unique_methods.pop()
+
+        if spectral_oversample is None and fiber_obs:
+            osfs = {k: o.spectral_oversample for k, o in fiber_obs.items()}
+            unique = set(osfs.values())
+            if len(unique) > 1:
+                raise ValueError(
+                    f"fiber_obs have mismatched spectral_oversample {osfs}; "
+                    f"pass spectral_oversample=N explicitly to override"
+                )
+            spectral_oversample = unique.pop()
+            
         elif spectral_method is None:
             spectral_method = 'erf'  # unused (no grism), but pass a concrete str
 
@@ -1124,6 +1160,7 @@ class InferenceTask:
             fixed_pars,
             image_obs=image_obs,
             grism_obs=grism_obs,
+            fiber_obs=fiber_obs,
             velocity_obs=velocity_obs,
             spectral_oversample=spectral_oversample,
             spectral_method=spectral_method,
