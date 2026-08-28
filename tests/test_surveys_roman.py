@@ -325,3 +325,41 @@ class TestBackgroundAnchors:
             roman.band_sigma_bkg_ujy('F129', 0.0)
         with pytest.raises(ValueError, match='ref_line_l2_norm'):
             roman.grism_sigma_bkg_per_pass(-1.0)
+
+    def test_anchor_above_physical_floor(self):
+        # independent check of the electron scale: the depth-derived anchor
+        # in electrons must sit modestly above the physical background floor
+        # (galsim zodi model + thermal + dark + read noise over the same
+        # 6-exposure coadd). Everything upstream of the anchor is depth-
+        # anchored and self-correcting; ELECTRONS_PER_UJY is not, and a
+        # factor-f error there moves this ratio by exactly f. Measured
+        # 1.55 / 1.40 (F129 / F158) on galsim 2.8.4 at the pinned pointing;
+        # the window allows sky-model drift at the tens-of-percent level
+        # while an electron-scale error above ~25% fails on one side or the
+        # other (below 1.0 is physically impossible: a survey cannot beat
+        # its own zodi + read noise).
+        import galsim
+        import galsim.roman as groman
+
+        n_exp = 6  # 2 passes x 3 dithers of 107.25 s (ROTAC Sect. 4.4.3)
+        # near-ecliptic pointing (COSMOS-like), the conservative high-zodi end
+        pos = galsim.CelestialCoord(ra=150.0 * galsim.degrees, dec=2.0 * galsim.degrees)
+        bandpasses = groman.getBandpasses(AB_zeropoint=True)
+        legacy = {'F129': 'J129', 'F158': 'H158'}
+        for band, sigma_ujy in roman.SIGMA_BKG_DEFAULT_UJY.items():
+            bp = bandpasses[legacy[band]]
+            # getSkyLevel returns e-/arcsec^2 for the requested exptime
+            sky_e = (
+                groman.getSkyLevel(bp, world_pos=pos, exptime=roman.T_EXP_IMAGING_S)
+                * groman.pixel_scale**2
+            )
+            thermal_e = groman.thermal_backgrounds[legacy[band]] * roman.T_EXP_IMAGING_S
+            dark_e = groman.dark_current * roman.T_EXP_IMAGING_S
+            floor_e = np.sqrt(sky_e + thermal_e + dark_e + n_exp * groman.read_noise**2)
+            anchor_e = sigma_ujy * roman.ELECTRONS_PER_UJY[band]
+            ratio = anchor_e / floor_e
+            assert 1.1 < ratio < 1.9, (
+                f"{band}: depth anchor {anchor_e:.1f} e- vs physical floor "
+                f"{floor_e:.1f} e- (ratio {ratio:.2f}); the electron scale "
+                f"or the background anchor moved"
+            )

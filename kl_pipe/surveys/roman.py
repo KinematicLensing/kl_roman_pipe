@@ -248,8 +248,12 @@ GRISM_REF_LINE_WIDTH_KMS = 30.0
 # the instrument model, which moves the anchor at the tens-of-percent level,
 # so a different PSF or pixel scale means re-anchoring through the functions
 # below rather than editing these. Rendered with galsim 2.8.4 (the PSF model
-# enters the anchor, so a galsim upgrade can move these).
-SIGMA_BKG_DEFAULT_UJY = {'F129': 5.9396e-3, 'F158': 5.7246e-3}
+# enters the anchor, so a galsim upgrade can move these). The imaging
+# point-source template is the mean over subpixel positions (a published
+# depth describes a randomly placed source); the single corner-phase draw
+# used before 2026-08-28 gave anchors 13/6 percent deeper (5.9396e-3 /
+# 5.7246e-3).
+SIGMA_BKG_DEFAULT_UJY = {'F129': 6.8460e-3, 'F158': 6.0594e-3}
 GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17 = 0.641615
 
 

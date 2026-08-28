@@ -353,15 +353,22 @@ def _wcs_with_pc(shape, pixel_scale: float, rotation_radians: float):
     return wcs
 
 
-def _psf_l2_norm(psf, pixel_scale: float) -> float:
+def _psf_l2_norm(psf, pixel_scale: float, phase_average: bool = True) -> float:
     """L2 norm of the unit-flux PSF image at the survey pixel scale.
 
     ||K||_2 of the point-source template the published imaging depths refer
     to, drawn from the same PSF object the mock renders with (pixel
-    integration included via galsim drawImage). The default stamp truncates
-    far-wing flux at the folding threshold; that costs the L2 norm almost
-    nothing (wings are tiny per pixel), but a badly truncated draw means
-    the wrong PSF object and raises.
+    integration included via galsim drawImage). A published depth describes
+    a point source at a random subpixel position, so the anchor norm is the
+    mean over a 4x4 grid of subpixel offsets (converged to ~1e-5 against
+    8x8 on the production Roman PSF; the corner-vs-mean spread is a 5-15%
+    effect on sigma_bkg). ``phase_average=False`` gives the single
+    corner-phase draw (galsim's even-stamp default, the same phase as
+    kl_pipe's own even-stamp grids), for closure tests against a
+    corner-phase render. The default stamp truncates far-wing flux at the
+    folding threshold; that costs the L2 norm almost nothing (wings are
+    tiny per pixel), but a badly truncated draw means the wrong PSF object
+    and raises.
     """
     image = psf.drawImage(scale=pixel_scale)
     total = float(image.array.sum())
@@ -370,7 +377,30 @@ def _psf_l2_norm(psf, pixel_scale: float) -> float:
             f"unit-flux PSF image sums to {total:.4f}; the point-source "
             f"template is badly truncated or unnormalized"
         )
-    return float(np.sqrt(np.sum(np.asarray(image.array, dtype=np.float64) ** 2)))
+    if not phase_average:
+        return float(np.sqrt(np.sum(np.asarray(image.array, dtype=np.float64) ** 2)))
+    # odd stamp so offset=(0,0) is pixel-centered and the 4x4 grid spans
+    # one full pixel of subpixel phases
+    n = image.array.shape[0] + 1
+    phases = (np.arange(4) + 0.5) / 4 - 0.5
+    norms = [
+        float(
+            np.sqrt(
+                np.sum(
+                    np.asarray(
+                        psf.drawImage(
+                            nx=n, ny=n, scale=pixel_scale, offset=(dx, dy)
+                        ).array,
+                        dtype=np.float64,
+                    )
+                    ** 2
+                )
+            )
+        )
+        for dx in phases
+        for dy in phases
+    ]
+    return float(np.mean(norms))
 
 
 def _make_band_obs(

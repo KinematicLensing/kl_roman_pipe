@@ -271,7 +271,13 @@ class TestPointSourceClosure:
         band = 'F129'
         pixel_scale = 0.11
         psf = galsim.Gaussian(fwhm=0.18)
-        sigma_bkg = roman.band_sigma_bkg_ujy(band, _psf_l2_norm(psf, pixel_scale))
+        # corner phase on both sides: kl_pipe's even-stamp grid puts the
+        # centered source on a pixel corner, so the anchor must use the
+        # matching single-phase norm (the production anchor's phase MEAN
+        # would close to 5 x corner/mean instead of 5)
+        sigma_bkg = roman.band_sigma_bkg_ujy(
+            band, _psf_l2_norm(psf, pixel_scale, phase_average=False)
+        )
 
         model = InclinedExponentialModel()
         pars = {
@@ -336,10 +342,10 @@ class TestProductionSigmaBgPins:
     (roman_wfi PSF, 0.11 arcsec pixels, oversample 3) so an upstream change
     (galsim PSF model, depth constants, the derivation itself) moves the
     production noise loudly instead of silently. In electrons
-    (x ELECTRONS_PER_UJY) the band anchors are ~41/41 e- rms per pixel,
+    (x ELECTRONS_PER_UJY) the band anchors are ~47/43 e- rms per pixel,
     plausibly above a first-principles zodi+read estimate -- expected,
-    since published depths carry real-survey margins (see the background
-    block in kl_pipe/surveys/roman.py).
+    since published depths carry real-survey margins; a bounded version of
+    that comparison lives in tests/test_surveys_roman.py.
     """
 
     def test_band_pins(self):
