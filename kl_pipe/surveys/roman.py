@@ -112,7 +112,10 @@ IMAGING_DEPTH_AB = {'F106': 26.5, 'F129': 26.4, 'F158': 26.4}
 ROMAN_IMAGING_BANDS = tuple(sorted(IMAGING_DEPTH_AB))
 
 # the SNR the imaging depths correspond to (ROTAC Table 1: "5sigma point
-# source detection thresholds in AB magnitudes")
+# source detection thresholds in AB magnitudes"); taken as a matched-filter
+# SNR -- if the survey's number is aperture-based instead, the true
+# background is lower than the solve infers (absolute-scale systematic at
+# the tens-of-percent level, same for every galaxy)
 IMAGING_DEPTH_NSIGMA = 5.0
 
 # Roman WFI imaging-band effective wavelengths [Angstrom], from
@@ -156,7 +159,7 @@ T_EXP_GRISM_PER_PASS_S = 379.5
 # with galsim.roman getBandpasses(AB_zeropoint=True) zeropoints and
 # collecting_area = 37570 cm2 (Roman_effarea_20210614 mission throughput
 # tables; zp_total = 26.4607 / 26.4767 / 26.5113 AB). A test recomputes
-# these from galsim and pins the literals.
+# these from galsim (2.8.4 at pin time) and pins the literals.
 ELECTRONS_PER_UJY = {'F106': 6804.7, 'F129': 6906.2, 'F158': 7129.4}
 
 # Planck constant x speed of light [erg nm]: photon energy = HC_ERG_NM / lam_nm.
@@ -244,7 +247,8 @@ GRISM_REF_LINE_WIDTH_KMS = 30.0
 # (point source for imaging, the 0.25" disk for the grism) -- what varies is
 # the instrument model, which moves the anchor at the tens-of-percent level,
 # so a different PSF or pixel scale means re-anchoring through the functions
-# below rather than editing these.
+# below rather than editing these. Rendered with galsim 2.8.4 (the PSF model
+# enters the anchor, so a galsim upgrade can move these).
 SIGMA_BKG_DEFAULT_UJY = {'F129': 5.9396e-3, 'F158': 5.7246e-3}
 GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17 = 0.641615
 
