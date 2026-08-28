@@ -1,9 +1,10 @@
-# Noise-model A/B, poisson arm: identical to cosmos25_ab_bb32gr32 (same
-# seed, so the same 8-galaxy bank, shears, and noise deviate streams)
+# Noise-model A/B, poisson arm: identical to cosmos25_noise_ab_matched
+# (same seed, so the same 8-galaxy bank, shears, and noise deviate streams)
 # except the observation config points at the noise_model: poisson twin.
-# Pairs against the existing cosmos25_ab_bb32gr32 results: posterior-width
-# ratios measure the cost of physical backgrounds + shot noise, and the
-# snr_effective_* columns give the realized depths per channel.
+# Posterior-width ratios against the matched arm measure the cost of
+# physical backgrounds + shot noise, and the snr_effective_* columns give
+# the realized depths per channel. Pairs are matched on noise_seed, never
+# on fit_id (fit_id encodes the observation config).
 run:
   name: cosmos25_noise_ab_poisson
   version: 1

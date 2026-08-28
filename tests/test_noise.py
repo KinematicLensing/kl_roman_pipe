@@ -259,3 +259,22 @@ class TestMatchedFilterSNR:
     def test_nonpositive_variance_raises(self, intensity_map):
         with pytest.raises(ValueError, match='positive'):
             matched_filter_snr(intensity_map, 0.0)
+
+
+def test_nonfinite_inputs_raise(intensity_map):
+    # NaN passes plain <=0 comparisons; each helper must reject it loudly
+    # rather than ship NaN into a variance map, a noisy draw, or a
+    # persisted snr_effective column
+    bad = intensity_map.copy()
+    bad[2, 2] = np.nan
+    var = physical_variance_map(intensity_map, 3.0, 10.0)
+    with pytest.raises(ValueError, match='finite'):
+        physical_variance_map(bad, sigma_bkg=3.0, electrons_per_flux=10.0)
+    with pytest.raises(ValueError, match='finite'):
+        physical_variance_map(intensity_map, sigma_bkg=np.nan, electrons_per_flux=10.0)
+    bad_var = var.copy()
+    bad_var[1, 1] = np.nan
+    with pytest.raises(ValueError, match='finite'):
+        add_map_noise(intensity_map, bad_var, seed=0)
+    with pytest.raises(ValueError, match='finite'):
+        matched_filter_snr(bad, var)

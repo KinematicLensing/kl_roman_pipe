@@ -3,9 +3,10 @@ Literal pins and self-consistency tests for the published Roman HLWAS
 survey parameters and the depth-referenced SNR machinery
 (kl_pipe/surveys/roman.py + kl_pipe/noise.py compactness core).
 
-Moved verbatim from tests/test_population.py when the survey constants
-left kl_pipe/ensemble/population.py; assertion bodies and provenance
-comments are unchanged apart from the module rename.
+The survey-pin classes moved from tests/test_population.py when the survey
+constants left kl_pipe/ensemble/population.py (assertion bodies unchanged
+apart from the module rename); the electron-conversion and background-anchor
+tests below them are new with the physical noise layer.
 """
 
 import numpy as np

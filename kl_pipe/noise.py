@@ -310,13 +310,16 @@ def physical_variance_map(
     ndarray
         Per-pixel variance, same shape as ``truth_image``.
     """
-    if sigma_bkg <= 0:
-        raise ValueError(f"sigma_bkg must be positive, got {sigma_bkg}")
-    if electrons_per_flux <= 0:
+    if not np.isfinite(sigma_bkg) or sigma_bkg <= 0:
+        raise ValueError(f"sigma_bkg must be positive and finite, got {sigma_bkg}")
+    if not np.isfinite(electrons_per_flux) or electrons_per_flux <= 0:
         raise ValueError(
-            f"electrons_per_flux must be positive, got {electrons_per_flux}"
+            f"electrons_per_flux must be positive and finite, got "
+            f"{electrons_per_flux}"
         )
     truth_image = np.asarray(truth_image, dtype=np.float64)
+    if not np.all(np.isfinite(truth_image)):
+        raise ValueError("truth_image contains non-finite pixels")
     peak = float(truth_image.max())
     if peak <= 0:
         raise ValueError("truth_image has no positive flux; cannot set shot noise")
@@ -345,8 +348,10 @@ def add_map_noise(
         raise ValueError(
             f"variance shape {variance.shape} != image shape {image.shape}"
         )
-    if np.any(variance <= 0):
-        raise ValueError("variance map must be strictly positive")
+    if not np.all(np.isfinite(image)):
+        raise ValueError("image contains non-finite pixels")
+    if not np.all(np.isfinite(variance)) or np.any(variance <= 0):
+        raise ValueError("variance map must be finite and strictly positive")
     rng = np.random.default_rng(seed)
     return image + rng.normal(0.0, np.sqrt(variance))
 
@@ -369,8 +374,10 @@ def matched_filter_snr(template: np.ndarray, variance) -> float:
             f"{template.shape}, got {variance.shape}; broadcasting a "
             f"mismatched map would silently weight the wrong pixels"
         )
-    if np.any(variance <= 0):
-        raise ValueError("variance must be strictly positive")
+    if not np.all(np.isfinite(template)):
+        raise ValueError("template contains non-finite pixels")
+    if not np.all(np.isfinite(variance)) or np.any(variance <= 0):
+        raise ValueError("variance must be finite and strictly positive")
     return float(np.sqrt(np.sum(template**2 / variance)))
 
 

@@ -8,8 +8,10 @@
 #SBATCH -o kl_noise_ab_%j.log
 
 # Noise-model A/B on GH200: the poisson arm (physical published-depth
-# backgrounds + source shot noise) of the same 8-galaxy COSMOS25 bank the
-# stamp A/B's bb32gr32 arm already fit with matched_filter noise. 16 fits.
+# backgrounds + source shot noise), 16 fits. Pairs against the
+# cosmos25_noise_ab_matched twin (run_noise_ab_matched.slurm); the old
+# bb32gr32 results predate the physical flux units, so their bank truths
+# differ and they cannot serve as the matched arm.
 # Self-contained and idempotent, same pattern as run_stamp_ab.slurm:
 # expands if needed, reclaims stale claims, packs 4 workers, collates,
 # prints a per-fit summary including the realized snr_effective columns.
