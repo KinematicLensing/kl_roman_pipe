@@ -562,7 +562,7 @@ def disperse_line_analytic(
     halfwidth: int,
     weight: jnp.ndarray = None,
 ) -> jnp.ndarray:
-    """Disperse one emission line in closed form, one spaxel at a time.
+    """Disperse one emission line in closed form, all spaxels and taps at once.
 
     Each source spaxel (r, j) contributes its line flux
     ``I_line[r, j] * weight[r, j]`` to the dispersed image, spread along
@@ -602,25 +602,23 @@ def disperse_line_analytic(
         raise ValueError(f"halfwidth must be >= 1, got {halfwidth}")
     amp = I_line if weight is None else I_line * weight
     n = I_line.shape[1]
-    out = jnp.zeros_like(I_line)
-    # consecutive taps share Psi evaluations: the profile at tap w is
-    # sigma * (Psi_{w+1} - 2 Psi_w + Psi_{w-1}), so a rolling second
-    # difference needs one new Psi (erf + exp) per tap instead of three
+    # all taps at once: Psi on a (row, col, tap) tensor, second difference
+    # along taps gives each spaxel's deposit at offset w, then one gather
+    # collects the deposits landing on each output column (out-of-stamp
+    # sources masked, matching the constant-mode pull semantics)
+    taps = jnp.arange(-halfwidth - 1, halfwidth + 2, dtype=I_line.dtype)
     inv_sigma = 1.0 / sigma_s
-    amp_sigma = amp * sigma_s
-    P_prev = _normal_cdf_antiderivative((-halfwidth - 1 - xi) * inv_sigma)
-    P_cur = _normal_cdf_antiderivative((-halfwidth - xi) * inv_sigma)
-    for w in range(-halfwidth, halfwidth + 1):
-        P_next = _normal_cdf_antiderivative((w + 1 - xi) * inv_sigma)
-        term = amp_sigma * (P_next - 2.0 * P_cur + P_prev)
-        if w == 0:
-            out = out + term
-        elif w > 0:
-            out = out.at[:, w:].add(term[:, : n - w])
-        else:
-            out = out.at[:, :w].add(term[:, -w:])
-        P_prev, P_cur = P_cur, P_next
-    return out
+    P = _normal_cdf_antiderivative(
+        (taps[None, None, :] - xi[..., None]) * inv_sigma[..., None]
+    )
+    profile = P[..., 2:] - 2.0 * P[..., 1:-1] + P[..., :-2]
+    deposit = (amp * sigma_s)[..., None] * profile
+    col = jnp.arange(n)
+    tap = jnp.arange(2 * halfwidth + 1)
+    src_col = col[:, None] - tap[None, :] + halfwidth
+    valid = (src_col >= 0) & (src_col < n)
+    gathered = deposit[:, jnp.clip(src_col, 0, n - 1), tap[None, :]]
+    return jnp.sum(jnp.where(valid[None], gathered, 0.0), axis=-1)
 
 
 def _tent_running_integral(t: np.ndarray) -> np.ndarray:

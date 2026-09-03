@@ -18,9 +18,11 @@ from astropy.wcs import WCS
 from scipy.integrate import quad
 
 from kl_pipe.dispersion import (
+    _normal_cdf_antiderivative,
     build_grism_pars_for_line,
     continuum_trace_kernel,
     disperse_continuum_analytic,
+    disperse_line_analytic,
     gaussian_tent_profile,
 )
 from kl_pipe.intensity import InclinedExponentialModel
@@ -110,6 +112,75 @@ class TestGaussianTentProfile:
         for frac in (0.0, 0.3, 0.77):
             total = float(gaussian_tent_profile(u - frac, jnp.asarray(1.8)).sum())
             assert abs(total - 1.0) < 1e-12
+
+
+def _disperse_line_reference(I_line, xi, sigma_s, halfwidth, weight=None):
+    """Per-tap scatter-add form of the closed-form line dispersal.
+
+    Same arithmetic as ``disperse_line_analytic`` (rolling second difference
+    of Psi, one tap at a time) so the production all-taps gather must match
+    it to floating-point roundoff.
+    """
+    amp = I_line if weight is None else I_line * weight
+    n = I_line.shape[1]
+    out = jnp.zeros_like(I_line)
+    inv_sigma = 1.0 / sigma_s
+    amp_sigma = amp * sigma_s
+    P_prev = _normal_cdf_antiderivative((-halfwidth - 1 - xi) * inv_sigma)
+    P_cur = _normal_cdf_antiderivative((-halfwidth - xi) * inv_sigma)
+    for w in range(-halfwidth, halfwidth + 1):
+        P_next = _normal_cdf_antiderivative((w + 1 - xi) * inv_sigma)
+        term = amp_sigma * (P_next - 2.0 * P_cur + P_prev)
+        if w == 0:
+            out = out + term
+        elif w > 0:
+            out = out.at[:, w:].add(term[:, : n - w])
+        else:
+            out = out.at[:, :w].add(term[:, -w:])
+        P_prev, P_cur = P_cur, P_next
+    return out
+
+
+class TestLineDispersalGather:
+    """The all-taps gather equals the per-tap scatter reference to roundoff."""
+
+    @pytest.mark.parametrize('halfwidth', [1, 5, 23, 40])
+    @pytest.mark.parametrize('use_weight', [False, True])
+    def test_matches_scatter_reference(self, halfwidth, use_weight):
+        rng = np.random.default_rng(halfwidth + int(use_weight))
+        shape = (12, 30)  # halfwidth 40 exceeds the stamp width on purpose
+        I_line = jnp.asarray(rng.uniform(0.0, 1.0, shape))
+        xi = jnp.asarray(rng.uniform(-8.0, 8.0, shape))
+        sigma_s = jnp.asarray(rng.uniform(0.6, 3.0, shape))
+        weight = jnp.asarray(rng.uniform(0.5, 1.5, shape)) if use_weight else None
+        got = disperse_line_analytic(I_line, xi, sigma_s, halfwidth, weight=weight)
+        ref = _disperse_line_reference(I_line, xi, sigma_s, halfwidth, weight=weight)
+        np.testing.assert_allclose(
+            np.asarray(got), np.asarray(ref), rtol=0, atol=1e-13 * float(jnp.max(ref))
+        )
+
+    def test_gradients_match_scatter_reference(self):
+        rng = np.random.default_rng(7)
+        shape = (10, 24)
+        I_line = jnp.asarray(rng.uniform(0.0, 1.0, shape))
+        xi = jnp.asarray(rng.uniform(-6.0, 6.0, shape))
+        sigma_s = jnp.asarray(rng.uniform(0.6, 3.0, shape))
+        target = jnp.asarray(rng.normal(size=shape))
+
+        def loss(fn, I, x, s):
+            return jnp.sum((fn(I, x, s, 12) - target) ** 2)
+
+        g_got = jax.grad(
+            lambda *a: loss(disperse_line_analytic, *a), argnums=(0, 1, 2)
+        )(I_line, xi, sigma_s)
+        g_ref = jax.grad(
+            lambda *a: loss(_disperse_line_reference, *a), argnums=(0, 1, 2)
+        )(I_line, xi, sigma_s)
+        for a, b in zip(g_got, g_ref):
+            scale = float(jnp.max(jnp.abs(b)))
+            np.testing.assert_allclose(
+                np.asarray(a), np.asarray(b), rtol=0, atol=1e-13 * scale
+            )
 
 
 class TestContinuumTraceKernel:
