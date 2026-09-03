@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from kl_pipe import profiling
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.collate import is_catastrophic
 from kl_pipe.ensemble.expander import truth_from_row
@@ -379,16 +380,18 @@ def _run_fit_attempt(
         # internally) so the MAP point and precond diagnostics reach the
         # summary row; PA-stratified extra starts guarantee the position-
         # angle basins are all visited
-        preconditioner = task.laplace_preconditioner(
-            n_starts=sampler_config.n_map_starts,
-            seed=sampler_seed,
-            hessian_method=sampler_config.hessian_method,
-            extra_starts=_pa_stratified_starts(inputs.priors, sampler_seed),
-        )
+        with profiling.trace(f'{row["fit_id"]}/precondition'):
+            preconditioner = task.laplace_preconditioner(
+                n_starts=sampler_config.n_map_starts,
+                seed=sampler_seed,
+                hessian_method=sampler_config.hessian_method,
+                extra_starts=_pa_stratified_starts(inputs.priors, sampler_seed),
+            )
     t_precond = time.time()
 
     sampler = NumpyroSampler(task, sampler_config, preconditioner=preconditioner)
-    result = sampler.run()
+    with profiling.trace(f'{row["fit_id"]}/sampler'):
+        result = sampler.run()
     t_end = time.time()
 
     sampled_names = list(inputs.priors.sampled_names)
