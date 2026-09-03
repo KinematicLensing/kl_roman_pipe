@@ -37,6 +37,7 @@ from kl_pipe.ensemble.population import (
     VEL_RSCALE_RATIO_DEX,
     VEL_RSCALE_RATIO_MEDIAN,
 )
+from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE
 from kl_pipe.priors import (
     ConditionalLogNormal,
     Gaussian,
@@ -73,12 +74,13 @@ _BAND_FLUX_PRIOR = {
 
 # Vertical structure, pinned on both sides (painted and fit at the same
 # value), so it is a stated model assumption rather than a recovered
-# quantity. The disk value is the GalSim InclinedExponential default.
-# Hoffmann et al. 2022 measure C/A = 0.24 for disc-dominated galaxies below
-# z = 1, which maps to h_over_r 0.42-0.53 through the renderer; adopting that
-# would cost about 14% of the apparent-shape lever overall and 38% in the
-# lowest-inclination bin, so it is carried as an open systematic.
-_DISK_H_OVER_R = 0.1
+# quantity. 0.25 sits in the 0.2-0.38 range of direct sech^2 z0/Rd
+# measurements (Kregel+02; Yu+26; van Asselt+26), which match this
+# parameter's convention with no conversion (h_over_r multiplies rscale to
+# give the sech^2 argument scale). C/A ellipsoid inversions (Hoffmann+22
+# 0.24-0.33; van der Wel+14) are upper bounds. A dedicated subset run
+# samples the thickness to isolate its effect on the shear ensemble.
+_DISK_H_OVER_R = 0.25
 
 # Centroid support, wide enough that no painted offset approaches it.
 _CENTROID_BOUNDS = (-0.5, 0.5)
@@ -275,11 +277,14 @@ def scene_truth_defaults(
 # ``kl_pipe.ensemble.catalogs`` for the values and their provenance.
 # ``scene_priors`` reads them off the spec's adapter in catalog mode.
 
-# Systemic velocity prior width. One grism pixel at 1.1 nm is about 200 km/s
-# at the observed Halpha wavelength; the line centroid is measured to roughly
-# 14 km/s at line SNR 20 and 40 km/s at SNR 7, so this leaves v0 data-
-# dominated across the sample rather than encoding knowledge we do not have.
-_V0_PRIOR_SIGMA_KMS = 200.0
+# Systemic velocity prior width: exactly 5x the assumed systemic-velocity
+# paint scatter (V0_SCATTER_KMS = 25.0), comfortably wide enough to keep
+# this direction clearly non-truth-centered without resting on any SNR-
+# dependent centroid-measurement estimate. Also caps the tail this
+# contributes to the grism deposit window sizing
+# (line_window_halfwidth_for_priors) well below the previous one-
+# dispersion-pixel anchor (~200 km/s).
+_V0_PRIOR_SIGMA_KMS = 125.0
 
 # informative population priors for the bulge decomposition. A flat
 # bulge_frac (Uniform) + flat bulge_hlr (LogUniform) add no curvature along
@@ -300,7 +305,9 @@ _V0_PRIOR_SIGMA_KMS = 200.0
 # The paint caps the ratio below 1 while the prior is uncapped; the cap
 # removes only the >3-sigma tail (ln(1/0.3)/0.4 = 3.0), a negligible
 # mismatch that keeps the prior JIT-simple and the render grid finite.
-_EXP_R50_OVER_RSCALE = 1.6783  # exponential-disk r50 / scale-length ratio
+# exponential-disk r50 / scale-length ratio; the module-private name stays
+# because the provenance registry reads it, the value is the project-wide one
+_EXP_R50_OVER_RSCALE = EXP_R50_OVER_RSCALE
 
 # bulge_n_sersic: prior == the distribution the paint draws from, so the
 # marginalization is exact, as for bulge_hlr above.
@@ -562,6 +569,27 @@ def scene_priors(
             pc.cont_flux_low,
             pc.cont_flux_high,
         )
+
+        # flux priors: simulated photometric measurements. The center is the
+        # population's seeded noisy measurement (truth + one draw at the
+        # depth-anchor error), the width is that same expected error, so the
+        # prior is what an external photometry pipeline would deliver rather
+        # than the truth itself. Bounds only guard support (sigma is a few
+        # percent of the center for every selected galaxy).
+        prior_spec['Halpha.flux'] = TruncatedNormal(
+            float(row['pop.f_line_obs_cgs']) * CGS_TO_F17,
+            float(row['pop.f_line_sigma_cgs']) * CGS_TO_F17,
+            pc.line_flux_low,
+            pc.line_flux_high,
+        )
+        for band in config.bands:
+            flux_key = f'{band}.total_flux' if bulge_bands else f'{band}.flux'
+            prior_spec[flux_key] = TruncatedNormal(
+                float(row[f'pop.flux_obs_{band.lower()}_ujy']),
+                float(row[f'pop.flux_sigma_{band.lower()}_ujy']),
+                pc.band_flux_low,
+                pc.band_flux_high,
+            )
 
         # systemic velocity: deliberately wider than the painted offset. The
         # grism measures the line centroid to tens of km/s, so a prior about

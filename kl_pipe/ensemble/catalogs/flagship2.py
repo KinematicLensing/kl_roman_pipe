@@ -3,13 +3,13 @@ Euclid Flagship2 catalog adapter.
 
 Structural and flux truths (disk sizes, Halpha flux, continuum, bulge
 fraction, redshift) come from Flagship2 rows downloaded from CosmoHub;
-``preprocess`` derives the physical contract columns (little-h mass
+``preprocess`` derives the standardized physical columns (little-h mass
 correction, flux-variant selection, NISP-band continuum and rest-frame
 equivalent width at the observed Halpha wavelength).
 
 Flagship2 ``galaxy_id`` is a within-halo index (NOT globally unique); the
 ``(halo_id, galaxy_id)`` pair is the unique catalog key, so both ids enter
-every per-galaxy seed key, in that order (determinism contract).
+every per-galaxy seed key, in that order (the order must never change).
 """
 
 from __future__ import annotations
@@ -20,6 +20,13 @@ import numpy as np
 import pandas as pd
 
 from kl_pipe.ensemble.catalogs.base import CatalogAdapter, CatalogPriorConstants
+from kl_pipe.photometry import (
+    C_A_PER_S,
+    CGS_FNU_TO_UJY,
+    HALPHA_REST_A,
+    powerlaw_fnu,
+)
+from kl_pipe.surveys.roman import BAND_EFFECTIVE_LAMBDA_A
 
 if TYPE_CHECKING:
     from kl_pipe.ensemble.spec import CatalogPopulationSpec
@@ -29,6 +36,13 @@ if TYPE_CHECKING:
 # H covers >= 15450 (nominal NISP passband boundaries)
 NISP_YJ_EDGE_A = 11900.0
 NISP_JH_EDGE_A = 15450.0
+
+# NISP photometric pivot wavelengths [Angstrom] (Schirmer et al. 2022, Euclid
+# NISP photometric system: 1081 / 1367 / 1771 nm), the nodes of the log-log
+# power-law interpolation to the Roman band effective wavelengths
+NISP_Y_PIVOT_A = 1.0809e4
+NISP_J_PIVOT_A = 1.3673e4
+NISP_H_PIVOT_A = 1.7714e4
 
 # full Flagship2 query-spec schema (data/cosmohub/flagship2_dev.yaml);
 # downloads are validated against this exact column set
@@ -87,11 +101,19 @@ FLAGSHIP2_COLUMNS = (
 # (oversample 3, pad 2, per-eval cost flat; PSF damping sets the k-space
 # extent, measured 2026-07-27).
 #
-# rscale / continuum-amplitude population distributions: fitted to the
-# selected Flagship2 sample (flagship2_dev at snr_line_total_min 20, n = 400,
-# measured 2026-07-25), log10 median and log10 scatter. The continuum support
-# is wide enough to contain the selected sample's continuum amplitudes,
-# which span roughly 1.3-93 in the scene's internal flux units per nm.
+# rscale population distribution: fitted to the selected Flagship2 sample
+# (flagship2_dev at snr_line_total_min 20, n = 400, measured 2026-07-25),
+# log10 median and log10 scatter.
+#
+# continuum amplitude [1e-17 erg/s/cm2 per nm]: log10 median and scatter of
+# f_line / EW_obs on the flagship2_shear_dev selection (n = 474, seed
+# 20260721, z 0.55-1.9, B/T <= 0.3, r50 >= PSF FWHM, SNR_total >= 20;
+# measured 2026-07-31), span 0.84-54.8 with bounds set well clear. line_flux
+# support [1e-17 erg/s/cm2]: same selection spans 34.6-1010. band_flux
+# support [uJy]: 3.8-364 across F106/F129/F158; the F129 percentiles
+# (13.5/26.8/64.2, p16/50/84) reproduce the independent parquet-inversion
+# magnitudes measured 2026-07-25 (13.8/27.5/64.1), validating the NISP
+# pivot interpolation.
 #
 # bulge_frac: matched to the selected population. Flagship2 dev, z 0.55-1.9,
 # two-component disks, B/T <= 0.3 (the bulge_fraction_max selection cut):
@@ -107,10 +129,14 @@ FLAGSHIP2_PRIOR_CONSTANTS = CatalogPriorConstants(
     rscale_log10_sigma=0.237,
     rscale_low=0.005,
     rscale_high=3.0,
-    cont_flux_log10_mu=0.770,
-    cont_flux_log10_sigma=0.305,
+    cont_flux_log10_mu=0.646,
+    cont_flux_log10_sigma=0.379,
     cont_flux_low=0.05,
-    cont_flux_high=400.0,
+    cont_flux_high=1000.0,
+    line_flux_low=5.0,
+    line_flux_high=10000.0,
+    band_flux_low=0.5,
+    band_flux_high=5000.0,
     bulge_frac_loc=0.08,
     bulge_frac_scale=0.08,
     bulge_hlr_low=0.005,
@@ -144,7 +170,7 @@ class Flagship2Adapter(CatalogAdapter):
     def preprocess(
         self, df: pd.DataFrame, spec: 'CatalogPopulationSpec'
     ) -> pd.DataFrame:
-        """Derive physical contract columns from raw Flagship2 rows.
+        """Derive the standardized physical columns from raw Flagship2 rows.
 
         Drops one-component rows (``disk_r50 <= 0``: bulge-only galaxies
         with no disk), corrects the stellar mass for little-h, converts the
@@ -161,11 +187,6 @@ class Flagship2Adapter(CatalogAdapter):
         - EW_obs = f_line / f_lambda -> [erg/s/cm2] / [erg/cm2/s/A] = [A]
         - EW_rest = EW_obs / (1 + z) [A]
         """
-        # local import: population owns the generic line-physics constants
-        # and imports the spec module, so a module-level import here would
-        # widen the import graph for no gain
-        from kl_pipe.ensemble.population import C_A_PER_S, HALPHA_REST_A
-
         n_raw = len(df)
         disk_mask = df['disk_r50'].to_numpy() > 0.0
         out = df.loc[disk_mask].reset_index(drop=True).copy()
@@ -210,12 +231,41 @@ class Flagship2Adapter(CatalogAdapter):
         out['ew_rest_a'] = ew_rest_a
         out['rscale_arcsec'] = out['disk_scalelength'].to_numpy(dtype=np.float64)
 
+        # Roman imaging fluxes [uJy], line-inclusive: log-log interpolation
+        # of the NISP *_el_model3_ext photometry (emission lines included,
+        # matching what a broadband image contains) from the NISP pivots to
+        # the Roman effective wavelengths. F106 sits slightly blueward of the
+        # Y pivot (mild extrapolation of the local Y-J slope); F129 uses Y-J,
+        # F158 uses J-H. Only the model3_ext line-inclusive photometry exists
+        # in the schema, so other flux variants have no consistent band
+        # photometry and are rejected.
+        if spec.flux_variant != 'model3_ext':
+            raise ValueError(
+                f"flux_variant '{spec.flux_variant}': the catalog carries "
+                f"line-inclusive band photometry (euclid_nisp_*_el_model3_ext) "
+                f"only for model3_ext, so the required Roman band-flux "
+                f"columns cannot be built consistently for this variant"
+            )
+        f_y = out['euclid_nisp_y_el_model3_ext'].to_numpy(dtype=np.float64)
+        f_j = out['euclid_nisp_j_el_model3_ext'].to_numpy(dtype=np.float64)
+        f_h = out['euclid_nisp_h_el_model3_ext'].to_numpy(dtype=np.float64)
+        band_flux_ujy = {}
+        for band, (fb, lb, fr, lr) in {
+            'F106': (f_y, NISP_Y_PIVOT_A, f_j, NISP_J_PIVOT_A),
+            'F129': (f_y, NISP_Y_PIVOT_A, f_j, NISP_J_PIVOT_A),
+            'F158': (f_j, NISP_J_PIVOT_A, f_h, NISP_H_PIVOT_A),
+        }.items():
+            lam = np.full_like(f_y, BAND_EFFECTIVE_LAMBDA_A[band])
+            band_flux_ujy[band] = powerlaw_fnu(fb, lb, fr, lr, lam) * CGS_FNU_TO_UJY
+            out[f'flux_{band.lower()}_ujy'] = band_flux_ujy[band]
+
         derived = {
             'logm': logm,
             'f_line_cgs': f_line,
             'f_lambda_cont_cgs': f_lambda_obs,
             'ew_rest_a': ew_rest_a,
             'rscale_arcsec': out['rscale_arcsec'].to_numpy(),
+            **{f'flux_{b.lower()}_ujy': v for b, v in band_flux_ujy.items()},
         }
         bad_counts = {}
         for col, values in derived.items():
@@ -230,6 +280,6 @@ class Flagship2Adapter(CatalogAdapter):
                 f"{bad_counts} (of {len(out)} rows)"
             )
 
-        out = out[list(self.contract_columns())]
+        out = out[list(self.required_columns())]
         out.attrs['kills'] = {'one_component': n_dropped}
         return out

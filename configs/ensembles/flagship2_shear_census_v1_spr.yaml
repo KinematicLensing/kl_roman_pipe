@@ -62,10 +62,10 @@ model:
 observation:
   config: canonical_P
   # line SNR is per-galaxy from the population table (matched-filter
-  # snr_line_per_pass); a per-galaxy imaging depth anchor replacing this fixed
-  # broadband SNR is a documented future step
-  snr:
-    broadband: 300
+  # snr_line_per_pass). This spec's run predates the per-galaxy physical
+  # band fluxes (its observation.snr block was removed with that change),
+  # so re-expanding cannot reproduce the original bank; the run dir's
+  # provenance snapshot records what actually ran
 
 fit:
   sampler: numpyro

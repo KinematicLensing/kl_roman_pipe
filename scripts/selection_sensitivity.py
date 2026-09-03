@@ -35,10 +35,10 @@ import numpy as np
 import yaml
 
 from kl_pipe.ensemble.catalogs import get_catalog_adapter, load_catalog
-from kl_pipe.ensemble.population import (
-    F_LIM_PER_PASS_CGS,
+from kl_pipe.ensemble.population import _draw_geometry
+from kl_pipe.surveys.roman import (
     F_LIM_NSIGMA,
-    _draw_geometry,
+    F_LIM_PER_PASS_CGS,
     compute_line_snr_per_pass,
     matched_filter_compactness,
 )

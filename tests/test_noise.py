@@ -3,7 +3,13 @@
 import numpy as np
 import pytest
 
-from kl_pipe.noise import add_intensity_noise, add_velocity_noise
+from kl_pipe.noise import (
+    add_intensity_noise,
+    add_map_noise,
+    add_velocity_noise,
+    matched_filter_snr,
+    physical_variance_map,
+)
 
 
 @pytest.fixture
@@ -152,3 +158,123 @@ class TestVelocityNoiseReturnTypes:
         velocity = rng.normal(0, 100, size=(8, 8))
         _, variance = add_velocity_noise(velocity, target_snr=50, seed=0)
         np.testing.assert_allclose(variance, variance.flat[0])
+
+
+class TestPhysicalVarianceMap:
+    """physical_variance_map: flat background + source shot noise."""
+
+    def test_formula_elementwise(self, intensity_map):
+        var = physical_variance_map(
+            intensity_map, sigma_bkg=3.0, electrons_per_flux=10.0
+        )
+        np.testing.assert_allclose(var, 9.0 + intensity_map / 10.0, rtol=1e-14)
+
+    def test_small_negative_ringing_clipped(self, intensity_map):
+        # FFT-rendering ringing at the sub-percent level contributes zero
+        # shot noise rather than negative variance
+        image = intensity_map.copy()
+        image[0, 0] = -1e-4 * image.max()
+        var = physical_variance_map(image, sigma_bkg=3.0, electrons_per_flux=10.0)
+        assert var[0, 0] == pytest.approx(9.0, rel=1e-14)
+
+    def test_strongly_negative_raises(self, intensity_map):
+        image = intensity_map.copy()
+        image[0, 0] = -0.5 * image.max()
+        with pytest.raises(ValueError, match='wrong image'):
+            physical_variance_map(image, sigma_bkg=3.0, electrons_per_flux=10.0)
+
+    def test_invalid_inputs_raise(self, intensity_map):
+        with pytest.raises(ValueError, match='sigma_bkg'):
+            physical_variance_map(intensity_map, sigma_bkg=0.0, electrons_per_flux=10.0)
+        with pytest.raises(ValueError, match='electrons_per_flux'):
+            physical_variance_map(intensity_map, sigma_bkg=3.0, electrons_per_flux=-1.0)
+        with pytest.raises(ValueError, match='no positive flux'):
+            physical_variance_map(
+                np.zeros((4, 4)), sigma_bkg=3.0, electrons_per_flux=10.0
+            )
+
+
+class TestAddMapNoise:
+    """add_map_noise: heteroscedastic Gaussian draw from a variance map."""
+
+    def test_seeded_determinism(self, intensity_map):
+        var = physical_variance_map(intensity_map, 3.0, 10.0)
+        a = add_map_noise(intensity_map, var, seed=11)
+        b = add_map_noise(intensity_map, var, seed=11)
+        c = add_map_noise(intensity_map, var, seed=12)
+        np.testing.assert_array_equal(a, b)
+        assert not np.array_equal(a, c)
+
+    def test_empirical_variance_matches_map(self, intensity_map):
+        # per-pixel sample variance over many reps must match the map:
+        # sample/true ~ chi2_(N-1)/(N-1), sd = sqrt(2/N); the bound is
+        # 5 sigma of that spread per pixel (N = 4000, sd ~ 0.0224 -> 0.112),
+        # deterministic under the pinned seed
+        n_reps = 4000
+        var = physical_variance_map(intensity_map, 3.0, 10.0)
+        rng_seeds = range(n_reps)
+        draws = np.stack(
+            [add_map_noise(intensity_map, var, seed=1_000_000 + s) for s in rng_seeds]
+        )
+        sample_var = draws.var(axis=0, ddof=1)
+        ratio = sample_var / var
+        bound = 5.0 * np.sqrt(2.0 / n_reps)
+        assert np.abs(ratio - 1.0).max() < bound, (
+            f'per-pixel variance off by up to {np.abs(ratio - 1.0).max():.3f} '
+            f'(bound {bound:.3f})'
+        )
+
+    def test_shape_mismatch_raises(self, intensity_map):
+        with pytest.raises(ValueError, match='shape'):
+            add_map_noise(intensity_map, np.ones((2, 2)), seed=0)
+
+    def test_nonpositive_variance_raises(self, intensity_map):
+        var = np.ones_like(intensity_map)
+        var[3, 3] = 0.0
+        with pytest.raises(ValueError, match='positive'):
+            add_map_noise(intensity_map, var, seed=0)
+
+
+class TestMatchedFilterSNR:
+    """matched_filter_snr: sqrt(sum(T^2/var)) for scalar or map variance."""
+
+    def test_uniform_reduces_to_l2_over_sigma(self, intensity_map):
+        sigma = 7.0
+        snr = matched_filter_snr(intensity_map, sigma**2)
+        expected = np.sqrt(np.sum(intensity_map**2)) / sigma
+        assert snr == pytest.approx(expected, rel=1e-14)
+
+    def test_scalar_and_uniform_map_agree(self, intensity_map):
+        snr_scalar = matched_filter_snr(intensity_map, 49.0)
+        snr_map = matched_filter_snr(intensity_map, np.full_like(intensity_map, 49.0))
+        assert snr_scalar == pytest.approx(snr_map, rel=1e-14)
+
+    def test_extra_variance_lowers_snr(self, intensity_map):
+        base = np.full_like(intensity_map, 49.0)
+        shot = base + intensity_map / 10.0
+        assert matched_filter_snr(intensity_map, shot) < matched_filter_snr(
+            intensity_map, base
+        )
+
+    def test_nonpositive_variance_raises(self, intensity_map):
+        with pytest.raises(ValueError, match='positive'):
+            matched_filter_snr(intensity_map, 0.0)
+
+
+def test_nonfinite_inputs_raise(intensity_map):
+    # NaN passes plain <=0 comparisons; each helper must reject it loudly
+    # rather than ship NaN into a variance map, a noisy draw, or a
+    # persisted snr_effective column
+    bad = intensity_map.copy()
+    bad[2, 2] = np.nan
+    var = physical_variance_map(intensity_map, 3.0, 10.0)
+    with pytest.raises(ValueError, match='finite'):
+        physical_variance_map(bad, sigma_bkg=3.0, electrons_per_flux=10.0)
+    with pytest.raises(ValueError, match='finite'):
+        physical_variance_map(intensity_map, sigma_bkg=np.nan, electrons_per_flux=10.0)
+    bad_var = var.copy()
+    bad_var[1, 1] = np.nan
+    with pytest.raises(ValueError, match='finite'):
+        add_map_noise(intensity_map, bad_var, seed=0)
+    with pytest.raises(ValueError, match='finite'):
+        matched_filter_snr(bad, var)

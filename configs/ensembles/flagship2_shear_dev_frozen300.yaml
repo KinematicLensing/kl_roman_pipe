@@ -59,12 +59,10 @@ model:
     oversample: 3
 
 observation:
-  config: canonical_P
-  # line SNR is per-galaxy from the population table (matched-filter
-  # snr_line_per_pass); a per-galaxy imaging depth anchor replacing this fixed
-  # broadband SNR is a documented future step
-  snr:
-    broadband: 300
+  # both channels' per-fit SNRs are per-galaxy from the population table
+  # (published-depth matched-filter anchors); hlwas_medium carries the
+  # in-tier F129+F158 pair the physical band fluxes exist for
+  config: hlwas_medium
 
 fit:
   sampler: numpyro

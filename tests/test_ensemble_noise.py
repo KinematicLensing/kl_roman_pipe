@@ -1,0 +1,833 @@
+"""
+noise_model wiring tests (kl_pipe/ensemble catalog mode).
+
+The 'poisson' noise model replaces the label-normalized uniform variance
+with a physical one: a flat per-pixel background anchored to the published
+survey depths (rendered reference templates; see kl_pipe/surveys/roman.py)
+plus the source's own shot noise. The default 'matched_filter' path is
+pinned by TestMatchedFilterLabelsExact (snr_effective == labels at rel
+1e-9); this module covers the poisson branch and the snr_effective
+bookkeeping shared by both. A byte-level digest freeze
+(TestMockBitIdentity) guarded the default path while the poisson layer
+landed and was retired once it had served that purpose.
+"""
+
+import shutil
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+import yaml
+
+from kl_pipe.ensemble.expander import expand, load_run, truth_from_row
+from kl_pipe.ensemble.mocks import _psf_l2_norm, build_fit_inputs
+from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig
+from kl_pipe.noise import matched_filter_snr
+from kl_pipe.photometry import HALPHA_REST_A
+from kl_pipe.surveys import roman
+
+from test_population import (
+    catalog_spec_dict,
+    fake_flagship2_rows,
+    spec_from_dict,
+    write_fake_catalog,
+)
+
+pytestmark = pytest.mark.roman_ensemble
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+REGISTRY = REPO_ROOT / 'configs' / 'observation'
+
+
+def _row_band_snrs(row, config):
+    return {b: float(row[f'broadband_snr_{b}']) for b in config.bands}
+
+
+@pytest.fixture(scope='module')
+def fake_data_dir(tmp_path_factory) -> Path:
+    data_dir = tmp_path_factory.mktemp('cosmohub_fake_noise')
+    write_fake_catalog(data_dir, fake_flagship2_rows(n=400, seed=1234))
+    return data_dir
+
+
+@pytest.fixture(scope='module')
+def poisson_registry(tmp_path_factory) -> Path:
+    """Config registry holding hlwas_medium plus a poisson twin of it."""
+    registry = tmp_path_factory.mktemp('noise_registry')
+    src = REGISTRY / 'hlwas_medium.yaml'
+    shutil.copy(src, registry / 'hlwas_medium.yaml')
+    raw = yaml.safe_load(src.read_bytes())
+    raw['id'] = 'hlwas_medium_poisson'
+    raw['noise_model'] = 'poisson'
+    (registry / 'hlwas_medium_poisson.yaml').write_text(yaml.safe_dump(raw))
+    return registry
+
+
+@pytest.fixture(scope='module')
+def poisson_run(fake_data_dir, poisson_registry, tmp_path_factory) -> Path:
+    tmp = tmp_path_factory.mktemp('noise_run')
+    d = catalog_spec_dict(fake_data_dir)
+    d['population']['sample']['n_galaxies'] = 4
+    d['observation']['config'] = 'hlwas_medium_poisson'
+    spec_path = tmp / 'spec.yaml'
+    spec_path.write_text(yaml.safe_dump(d))
+    return expand(spec_path, poisson_registry, tmp / 'runs')
+
+
+@pytest.fixture(scope='module')
+def poisson_inputs(poisson_run):
+    spec, config, manifest = load_run(poisson_run)
+    row = manifest.iloc[0]
+    inputs = build_fit_inputs(
+        truth_from_row(row),
+        int(row['noise_seed']),
+        spec,
+        config,
+        band_snrs=_row_band_snrs(row, config),
+        line_snr=float(row['line_snr']),
+        row=row,
+    )
+    return spec, config, row, inputs
+
+
+class TestNoiseModelKnob:
+    def test_default_is_matched_filter(self):
+        config = ObservationConfig.from_yaml(REGISTRY / 'hlwas_medium.yaml')
+        assert config.noise_model == 'matched_filter'
+
+    def test_poisson_twin_parses(self, poisson_registry):
+        config = ObservationConfig.from_yaml(
+            poisson_registry / 'hlwas_medium_poisson.yaml'
+        )
+        assert config.noise_model == 'poisson'
+
+    def test_unknown_noise_model_raises(self, tmp_path):
+        raw = yaml.safe_load((REGISTRY / 'hlwas_medium.yaml').read_bytes())
+        raw['noise_model'] = 'shot'
+        path = tmp_path / 'bad.yaml'
+        path.write_text(yaml.safe_dump(raw))
+        with pytest.raises(ValueError, match='noise_model'):
+            ObservationConfig.from_yaml(path)
+
+    def test_sampled_mode_rejects_poisson(
+        self, fake_data_dir, poisson_registry, tmp_path
+    ):
+        # sampled-mode scenes carry no physical flux units, so shot noise
+        # has no electron conversion; the build must refuse loudly
+        sampled_spec = EnsembleSpec.from_yaml(
+            REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
+        )
+        config = ObservationConfig.from_yaml(
+            poisson_registry / 'hlwas_medium_poisson.yaml'
+        )
+        with pytest.raises(ValueError, match='catalog population'):
+            build_fit_inputs(
+                {},
+                1,
+                sampled_spec,
+                config,
+                band_snrs={b: 100.0 for b in config.bands},
+                line_snr=10.0,
+            )
+
+
+class TestPoissonMocks:
+    def test_variance_is_a_map_on_every_channel(self, poisson_inputs):
+        _, config, _, inputs = poisson_inputs
+        shape_bb = (config.stamp_broadband_pix,) * 2
+        shape_gr = (config.stamp_grism_pix,) * 2
+        for band, obs in inputs.image_obs.items():
+            assert np.asarray(obs.variance).shape == shape_bb, band
+        for key, obs in inputs.grism_obs.items():
+            assert np.asarray(obs.variance).shape == shape_gr, key
+
+    def test_band_variance_floor_is_the_depth_anchor(self, poisson_inputs):
+        # the variance floor (source-free pixels) is the background solved
+        # from the published point-source depth through this config's PSF;
+        # stamp corners still hold a little galaxy flux, hence the one-sided
+        # tolerance
+        _, config, _, inputs = poisson_inputs
+        from kl_pipe.ensemble.mocks import _build_band_psf
+
+        for band, obs in inputs.image_obs.items():
+            psf = _build_band_psf(config.band_psf[band], band, None, mock=True)
+            sigma_bkg = roman.band_sigma_bkg_ujy(
+                band, _psf_l2_norm(psf, config.pixel_scale_arcsec)
+            )
+            floor = float(np.asarray(obs.variance).min())
+            assert floor >= sigma_bkg**2 * (1 - 1e-12), band
+            assert floor <= sigma_bkg**2 * 1.05, band
+
+    def test_variance_has_shot_structure(self, poisson_inputs):
+        # bright pixels must carry more variance than the background floor
+        _, _, _, inputs = poisson_inputs
+        for band, obs in inputs.image_obs.items():
+            var = np.asarray(obs.variance)
+            assert var.max() > 1.1 * var.min(), band
+
+    def test_snr_effective_keys_and_coadd(self, poisson_inputs):
+        _, config, _, inputs = poisson_inputs
+        eff = inputs.snr_effective
+        expected = set(config.bands)
+        expected |= {f'line_roll{j}' for j in range(len(config.grism_rolls_deg))}
+        expected |= {'line_total'}
+        assert set(eff) == expected
+        assert all(np.isfinite(v) and v > 0 for v in eff.values())
+        quad = np.sqrt(
+            sum(eff[f'line_roll{j}'] ** 2 for j in range(len(config.grism_rolls_deg)))
+        )
+        assert eff['line_total'] == pytest.approx(quad, rel=1e-12)
+
+    def test_deterministic_rebuild(self, poisson_inputs):
+        spec, config, row, inputs = poisson_inputs
+        rebuilt = build_fit_inputs(
+            truth_from_row(row),
+            int(row['noise_seed']),
+            spec,
+            config,
+            band_snrs=_row_band_snrs(row, config),
+            line_snr=float(row['line_snr']),
+            row=row,
+        )
+        for band in inputs.image_obs:
+            np.testing.assert_array_equal(
+                np.asarray(inputs.image_obs[band].data),
+                np.asarray(rebuilt.image_obs[band].data),
+            )
+            np.testing.assert_array_equal(
+                np.asarray(inputs.image_obs[band].variance),
+                np.asarray(rebuilt.image_obs[band].variance),
+            )
+        for key in inputs.grism_obs:
+            np.testing.assert_array_equal(
+                np.asarray(inputs.grism_obs[key].data),
+                np.asarray(rebuilt.grism_obs[key].data),
+            )
+        assert inputs.snr_effective == rebuilt.snr_effective
+
+
+class TestMatchedFilterLabelsExact:
+    """Under the default noise model, snr_effective must equal the labels
+    exactly (a free wiring check: var = ||T||^2/label^2 by construction)."""
+
+    @pytest.fixture(scope='class')
+    def default_inputs(self, fake_data_dir, tmp_path_factory):
+        tmp = tmp_path_factory.mktemp('mf_run')
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 4
+        spec_path = tmp / 'spec.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        run_dir = expand(spec_path, REGISTRY, tmp / 'runs')
+        spec, config, manifest = load_run(run_dir)
+        row = manifest.iloc[0]
+        inputs = build_fit_inputs(
+            truth_from_row(row),
+            int(row['noise_seed']),
+            spec,
+            config,
+            band_snrs=_row_band_snrs(row, config),
+            line_snr=float(row['line_snr']),
+            row=row,
+        )
+        return config, row, inputs
+
+    def test_band_labels(self, default_inputs):
+        config, row, inputs = default_inputs
+        for band in config.bands:
+            assert inputs.snr_effective[band] == pytest.approx(
+                float(row[f'broadband_snr_{band}']), rel=1e-9
+            )
+
+    def test_line_labels(self, default_inputs):
+        config, row, inputs = default_inputs
+        n_rolls = len(config.grism_rolls_deg)
+        for j in range(n_rolls):
+            assert inputs.snr_effective[f'line_roll{j}'] == pytest.approx(
+                float(row['line_snr']), rel=1e-9
+            )
+        assert inputs.snr_effective['line_total'] == pytest.approx(
+            np.sqrt(n_rolls) * float(row['line_snr']), rel=1e-9
+        )
+
+
+class TestPointSourceClosure:
+    """A point-like source at the published depth realizes MF SNR ~ 5.
+
+    Non-tautological: sigma_bkg comes from the galsim drawImage point-source
+    template while the source below is rendered through kl_pipe's own
+    k-space pipeline (profile FT x pixel FT x PSF FT), so agreement checks
+    the whole anchoring chain, not the formula against itself.
+    """
+
+    def test_closure(self):
+        import galsim
+
+        from kl_pipe.intensity import InclinedExponentialModel
+        from kl_pipe.observation import build_image_obs
+        from kl_pipe.parameters import ImagePars
+        from kl_pipe.render import RenderConfig
+
+        band = 'F129'
+        pixel_scale = 0.11
+        psf = galsim.Gaussian(fwhm=0.18)
+        # corner phase on both sides: kl_pipe's even-stamp grid puts the
+        # centered source on a pixel corner, so the anchor must use the
+        # matching single-phase norm (the production anchor's phase MEAN
+        # would close to 5 x corner/mean instead of 5)
+        sigma_bkg = roman.band_sigma_bkg_ujy(
+            band, _psf_l2_norm(psf, pixel_scale, phase_average=False)
+        )
+
+        model = InclinedExponentialModel()
+        pars = {
+            'flux': roman.band_flux_limit_ujy(band),
+            'rscale': 0.005,  # << PSF: effectively a point source
+            'h_over_r': 0.0,
+            'cosi': 1.0,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'x0': 0.0,
+            'y0': 0.0,
+        }
+        import jax.numpy as jnp
+
+        theta = jnp.array([pars[n] for n in model.PARAMETER_NAMES])
+        obs = build_image_obs(
+            ImagePars(shape=(32, 32), pixel_scale=pixel_scale, indexing='ij'),
+            psf=psf,
+            render_config=RenderConfig(oversample=5),
+            int_model=model,
+        )
+        render = np.asarray(model.render_image(theta, obs=obs))
+        snr = matched_filter_snr(render, sigma_bkg**2)
+        assert snr == pytest.approx(roman.IMAGING_DEPTH_NSIGMA, rel=0.02)
+
+
+class TestMapVarianceArtifacts:
+    def test_saved_mock_variance_is_a_map_and_plot_renders(
+        self, poisson_run, poisson_inputs, tmp_path
+    ):
+        # _save_mocks round-trips the 2-D variance, and the datavector
+        # diagnostic (whose chi2 used to read variance.ravel()[0]) renders
+        # from it
+        import matplotlib
+
+        matplotlib.use('Agg')
+        from kl_pipe.ensemble.diagnostics import plot_datavector_fit
+        from kl_pipe.ensemble.worker import _save_mocks
+
+        spec, config, row, inputs = poisson_inputs
+        fit_id = str(row['fit_id'])
+        (tmp_path / 'mocks').mkdir()
+        _save_mocks(tmp_path, fit_id, inputs, None, list(inputs.priors.sampled_names))
+        npz = np.load(tmp_path / 'mocks' / f'{fit_id}.npz')
+        for band in config.bands:
+            assert (
+                npz[f'image.{band}.variance'].shape == (config.stamp_broadband_pix,) * 2
+            )
+
+        table = pd.DataFrame([{**dict(row), 'max_rhat': 1.0, 'divergence_rate': 0.0}])
+        out = plot_datavector_fit(tmp_path, table, fit_id, tmp_path)
+        assert out is not None and out.exists()
+
+
+class TestProductionSigmaBgPins:
+    """Background anchors for the production Roman-PSF config.
+
+    The importable defaults in kl_pipe.surveys.roman
+    (SIGMA_BKG_DEFAULT_UJY, GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17) are
+    pinned literals; this test re-derives them from hlwas_medium_roman.yaml
+    (roman_wfi PSF, 0.11 arcsec pixels, oversample 3) so an upstream change
+    (galsim PSF model, depth constants, the derivation itself) moves the
+    production noise loudly instead of silently. In electrons
+    (x ELECTRONS_PER_UJY) the band anchors are ~47/43 e- rms per pixel,
+    plausibly above a first-principles zodi+read estimate -- expected,
+    since published depths carry real-survey margins; a bounded version of
+    that comparison lives in tests/test_surveys_roman.py.
+    """
+
+    def test_band_pins(self):
+        from kl_pipe.ensemble.mocks import _build_band_psf
+
+        config = ObservationConfig.from_yaml(REGISTRY / 'hlwas_medium_roman.yaml')
+        for band, pinned in roman.SIGMA_BKG_DEFAULT_UJY.items():
+            psf = _build_band_psf(config.band_psf[band], band, None, mock=True)
+            sigma = roman.band_sigma_bkg_ujy(
+                band, _psf_l2_norm(psf, config.pixel_scale_arcsec)
+            )
+            assert sigma == pytest.approx(pinned, rel=1e-3), band
+
+    def test_grism_pin(self):
+        from kl_pipe.ensemble.mocks import _grism_reference_line_norm
+
+        config = ObservationConfig.from_yaml(REGISTRY / 'hlwas_medium_roman.yaml')
+        sigma = roman.grism_sigma_bkg_per_pass(_grism_reference_line_norm(config, 3))
+        assert sigma == pytest.approx(
+            roman.GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17, rel=1e-3
+        )
+
+
+@pytest.mark.diagnostic_plots
+class TestNoiseModelComparisonFigure:
+    """Side-by-side datavector figure across the three noise pathways.
+
+    One bright-ish galaxy (fluxes scaled up from the fake-catalog bank so
+    the structure is visible over the noise): per channel (two bands + two
+    grism rolls), the noiseless truth, a bkg (background-only) draw, the
+    matched_filter mock, the poisson mock, and all three variance maps on
+    one shared color scale. Same noise deviates in every arm, so the
+    panels differ only by the noise amplitude and structure; each noisy
+    panel's title carries its realized matched-filter SNR next to the
+    catalog-predicted label. Saved to tests/out/noise_model_comparison/.
+    """
+
+    # flux scalings applied to the bank galaxy: bright broadband, and a line
+    # bright enough that the dispersed structure is visible by eye in a
+    # single roll (per-pass label ~44 at the bank's ~2.2; production
+    # per-pass values run ~10-40, so this is the bright end, deliberately --
+    # the panels are for seeing the noise pathways, not a typical galaxy).
+    # K_BB = 3 keeps the poisson snr_eff clearly separated from the catalog
+    # label on both bands (+7% F129 / -11% F158 measured at this scaling);
+    # at 4.0 the F129 shot noise happened to cancel the proxy-label offset
+    # and eff landed 1% from the label, reading as a designed equality.
+    K_BB = 3.0
+    K_LINE = 20.0
+
+    @staticmethod
+    def _scaled_inputs(spec, config, row, k_bb, k_line):
+        truth = truth_from_row(row)
+        for band in config.bands:
+            key = (
+                f'{band}.total_flux'
+                if f'{band}.total_flux' in truth
+                else f'{band}.flux'
+            )
+            truth[key] *= k_bb
+        truth['Halpha.flux'] *= k_line
+        truth['Halpha.cont.flux_per_nm'] *= k_line  # preserve the EW
+        band_snrs = {b: k_bb * v for b, v in _row_band_snrs(row, config).items()}
+        line_snr = k_line * float(row['line_snr'])
+        inputs = build_fit_inputs(
+            truth,
+            int(row['noise_seed']),
+            spec,
+            config,
+            band_snrs=band_snrs,
+            line_snr=line_snr,
+            row=row,
+        )
+        return inputs, band_snrs, line_snr
+
+    def test_figure(self, fake_data_dir, tmp_path_factory):
+        import matplotlib
+
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        from kl_pipe.ensemble.mocks import (
+            _build_band_psf,
+            _channel_seeds,
+            _grism_reference_line_norm,
+        )
+        from kl_pipe.noise import add_map_noise
+
+        # both arms on the PRODUCTION Roman WFI PSF configs: the published
+        # depths refer to the real instrument, so anchoring them through a
+        # stand-in Gaussian PSF makes the label-vs-realized comparison
+        # uninterpretable (the wiring tests above keep the fast Gaussian
+        # config; this figure pays the getPSF cost for a readable diagnostic)
+        tmp_p = tmp_path_factory.mktemp('poisson_roman')
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 4
+        d['observation']['config'] = 'hlwas_medium_roman_poisson'
+        spec_path = tmp_p / 'spec.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        spec_p, config_p, manifest = load_run(
+            expand(spec_path, REGISTRY, tmp_p / 'runs')
+        )
+        row = manifest.iloc[0]
+        inputs_p, band_snrs, line_snr = self._scaled_inputs(
+            spec_p, config_p, row, self.K_BB, self.K_LINE
+        )
+
+        # matched_filter twin: same bank, seeds, and scalings
+        tmp = tmp_path_factory.mktemp('mf_twin')
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 4
+        d['observation']['config'] = 'hlwas_medium_roman'
+        spec_path = tmp / 'spec.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        spec_m, config_m, manifest_m = load_run(
+            expand(spec_path, REGISTRY, tmp / 'runs')
+        )
+        row_m = manifest_m.iloc[0]
+        assert str(row_m['fit_id']) == str(row['fit_id'])
+        inputs_m, _, _ = self._scaled_inputs(
+            spec_m, config_m, row_m, self.K_BB, self.K_LINE
+        )
+
+        seeds = _channel_seeds(
+            int(row['noise_seed']), len(config_p.bands) + len(config_p.grism_rolls_deg)
+        )
+        channels = [('image', b, i) for i, b in enumerate(config_p.bands)] + [
+            ('grism', 'roll0', len(config_p.bands)),
+            ('grism', 'roll1', len(config_p.bands) + 1),
+        ]
+        fig, axes = plt.subplots(len(channels), 7, figsize=(22, 3.1 * len(channels)))
+        for i, (kind, key, seed_idx) in enumerate(channels):
+            if kind == 'image':
+                obs_p, obs_m = inputs_p.image_obs[key], inputs_m.image_obs[key]
+                truth_img = np.asarray(
+                    inputs_p.source.render_broadband(inputs_p.truth, obs_p, key)
+                )
+                template = truth_img
+                catalog_snr = band_snrs[key]
+                eff_key = key
+                # the flat depth anchor, recomputed exactly as mocks does
+                sigma_bkg = roman.band_sigma_bkg_ujy(
+                    key,
+                    _psf_l2_norm(
+                        _build_band_psf(
+                            config_p.band_psf[key],
+                            key,
+                            float(inputs_p.truth['z']),
+                            mock=True,
+                        ),
+                        config_p.pixel_scale_arcsec,
+                    ),
+                )
+            else:
+                obs_p, obs_m = inputs_p.grism_obs[key], inputs_m.grism_obs[key]
+                truth_img = np.asarray(
+                    inputs_p.source.render_grism(inputs_p.truth, obs_p)
+                )
+                # the SNR convention normalizes on the line template alone
+                line_truth = {
+                    k: (0.0 if k.endswith('.cont.flux_per_nm') else v)
+                    for k, v in inputs_p.truth.items()
+                }
+                template = np.asarray(inputs_p.source.render_grism(line_truth, obs_p))
+                catalog_snr = line_snr
+                eff_key = f'line_{key}'
+                sigma_bkg = roman.grism_sigma_bkg_per_pass(
+                    _grism_reference_line_norm(config_p, spec_p.render_oversample)
+                )
+
+            var_p = np.asarray(obs_p.variance)
+            var_m = np.full_like(var_p, float(np.asarray(obs_m.variance)))
+            # shot noise only ever adds to the flat anchor
+            assert float(var_p.min()) >= sigma_bkg**2 * (1 - 1e-9)
+            var_bkg = np.full_like(var_p, sigma_bkg**2)
+            bkg_only = add_map_noise(truth_img, var_bkg, seed=int(seeds[seed_idx]))
+            eff_bkg = matched_filter_snr(template, var_bkg)
+            eff_m = inputs_m.snr_effective[eff_key]
+            eff_p = inputs_p.snr_effective[eff_key]
+
+            noisy = [bkg_only, np.asarray(obs_m.data), np.asarray(obs_p.data)]
+            dlo = min(a.min() for a in noisy)
+            dhi = max(a.max() for a in noisy)
+            vlo = min(var_bkg.min(), var_m.min(), var_p.min())
+            vhi = max(var_bkg.max(), var_m.max(), var_p.max())
+            panels = [
+                # same decimal precision as the snr_eff titles, so the exact
+                # matched_filter equality is visible rather than looking like
+                # a rounding mismatch
+                (truth_img, f'truth (catalog-predicted snr={catalog_snr:.1f})', {}),
+                (
+                    bkg_only,
+                    f'bkg data (snr_eff={eff_bkg:.1f})',
+                    {'vmin': dlo, 'vmax': dhi},
+                ),
+                (
+                    noisy[1],
+                    f'matched_filter data (snr_eff={eff_m:.1f})',
+                    {'vmin': dlo, 'vmax': dhi},
+                ),
+                (
+                    noisy[2],
+                    f'poisson data (snr_eff={eff_p:.1f})',
+                    {'vmin': dlo, 'vmax': dhi},
+                ),
+                (var_bkg, 'var: bkg', {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'}),
+                (
+                    var_m,
+                    'var: matched_filter',
+                    {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'},
+                ),
+                (var_p, 'var: poisson', {'vmin': vlo, 'vmax': vhi, 'cmap': 'viridis'}),
+            ]
+            for j, (img, title, kwargs) in enumerate(panels):
+                ax = axes[i, j]
+                im = ax.imshow(img, origin='lower', **kwargs)
+                ax.set_title(f'{key}: {title}', fontsize=8)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                fig.colorbar(im, ax=ax, fraction=0.046)
+
+        fig.suptitle(
+            'noise_model comparison (Roman WFI PSF, shared noise deviates)',
+            fontsize=14,
+            y=0.995,
+        )
+        fig.text(
+            0.5,
+            0.962,
+            'bkg: flat noise from the published survey depth (no source '
+            'term)  |  matched_filter: flat noise chosen so the realized SNR '
+            'equals the catalog-predicted snr exactly (the default)  |  '
+            'poisson: the bkg level plus the source\'s own shot noise',
+            ha='center',
+            fontsize=11,
+        )
+        out_dir = Path('tests/out/noise_model_comparison')
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / 'noise_model_comparison.png'
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.savefig(out, dpi=130)
+        plt.close(fig)
+        assert out.exists()
+
+
+class TestShotNoiseStatistics:
+    """Statistical proof the poisson pathway delivers its variance map.
+
+    Two layers. Exact: on the Gaussian-PSF poisson fixture, every channel's
+    variance map must equal sigma_bkg^2 + clip(I_truth, 0)/g per pixel, with
+    sigma_bkg and g recomputed here from the survey anchors rather than read
+    back from the mock (mock and fit kernels are identical on that config,
+    so the truth render reproduces the mock's own template). Statistical:
+    on the bright Roman-PSF scene of the comparison figure, N_DRAWS fresh
+    draws from the shipped variance map -- the per-pixel sample variance
+    must track the map in the faintest and brightest truth-intensity
+    deciles, so bright pixels demonstrably carry the shot term and
+    source-free pixels the flat floor. The shipped single realization is
+    covered end-to-end by test_noise_calibration.py (chi^2 per point at
+    truth through the full likelihood).
+
+    Figure: tests/out/noise_model_comparison/shot_noise_statistics.png,
+    one row per channel (first band + first grism roll): a single-draw
+    residual map; the empirical per-pixel sigma over all draws next to the
+    model sigma map on a shared scale; per-pixel sample variance vs truth
+    intensity against the three pathway curves; and brightest-decile
+    residuals standardized by the background sigma alone, where the shot
+    excess appears as a Gaussian wider than N(0,1) by the predicted factor.
+    """
+
+    N_DRAWS = 400
+    # decile gate: each pixel's mean-square residual over N draws has
+    # relative sd sqrt(2/N); averaging the n = Npix/10 decile pixels gives
+    # sqrt(2/(N*n)) ~ 0.7%. k = 5 over the 4 bounded checks keeps the
+    # suite false-alarm contribution below 1e-5.
+    K_GATE = 5.0
+
+    def test_variance_map_is_depth_anchor_plus_shot(self, poisson_inputs):
+        spec, config, _, inputs = poisson_inputs
+        from kl_pipe.ensemble.mocks import (
+            _build_band_psf,
+            _grism_reference_line_norm,
+        )
+
+        z = float(inputs.truth['z'])
+        for band, obs in inputs.image_obs.items():
+            truth_img = np.asarray(
+                inputs.source.render_broadband(inputs.truth, obs, band)
+            )
+            sigma_bkg = roman.band_sigma_bkg_ujy(
+                band,
+                _psf_l2_norm(
+                    _build_band_psf(config.band_psf[band], band, z, mock=True),
+                    config.pixel_scale_arcsec,
+                ),
+            )
+            expected = (
+                sigma_bkg**2
+                + np.clip(truth_img, 0.0, None) / roman.ELECTRONS_PER_UJY[band]
+            )
+            np.testing.assert_allclose(np.asarray(obs.variance), expected, rtol=1e-12)
+        sigma_bkg = roman.grism_sigma_bkg_per_pass(
+            _grism_reference_line_norm(config, spec.render_oversample)
+        )
+        gain = float(roman.grism_electrons_per_f17_per_pass(HALPHA_REST_A * (1.0 + z)))
+        for key, obs in inputs.grism_obs.items():
+            truth_img = np.asarray(inputs.source.render_grism(inputs.truth, obs))
+            expected = sigma_bkg**2 + np.clip(truth_img, 0.0, None) / gain
+            np.testing.assert_allclose(np.asarray(obs.variance), expected, rtol=1e-12)
+
+    @pytest.mark.diagnostic_plots
+    def test_sample_variance_tracks_the_map(self, fake_data_dir, tmp_path_factory):
+        import matplotlib
+
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        from kl_pipe.ensemble.mocks import (
+            _build_band_psf,
+            _grism_reference_line_norm,
+        )
+        from kl_pipe.noise import add_map_noise
+
+        # the same bright Roman-PSF scene as the comparison figure, so the
+        # two diagnostics read side by side
+        tmp = tmp_path_factory.mktemp('poisson_stats')
+        d = catalog_spec_dict(fake_data_dir)
+        d['population']['sample']['n_galaxies'] = 4
+        d['observation']['config'] = 'hlwas_medium_roman_poisson'
+        spec_path = tmp / 'spec.yaml'
+        spec_path.write_text(yaml.safe_dump(d))
+        spec, config, manifest = load_run(expand(spec_path, REGISTRY, tmp / 'runs'))
+        row = manifest.iloc[0]
+        fig_cls = TestNoiseModelComparisonFigure
+        inputs, band_snrs, line_snr = fig_cls._scaled_inputs(
+            spec, config, row, fig_cls.K_BB, fig_cls.K_LINE
+        )
+        z = float(inputs.truth['z'])
+
+        band = config.bands[0]
+        obs_b = inputs.image_obs[band]
+        truth_b = np.asarray(inputs.source.render_broadband(inputs.truth, obs_b, band))
+        sigma_bkg_b = roman.band_sigma_bkg_ujy(
+            band,
+            _psf_l2_norm(
+                _build_band_psf(config.band_psf[band], band, z, mock=True),
+                config.pixel_scale_arcsec,
+            ),
+        )
+        obs_g = inputs.grism_obs['roll0']
+        truth_g = np.asarray(inputs.source.render_grism(inputs.truth, obs_g))
+        line_truth = {
+            k: (0.0 if k.endswith('.cont.flux_per_nm') else v)
+            for k, v in inputs.truth.items()
+        }
+        line_tmpl = np.asarray(inputs.source.render_grism(line_truth, obs_g))
+        sigma_bkg_g = roman.grism_sigma_bkg_per_pass(
+            _grism_reference_line_norm(config, spec.render_oversample)
+        )
+        gain_g = float(
+            roman.grism_electrons_per_f17_per_pass(HALPHA_REST_A * (1.0 + z))
+        )
+        # (key, truth, variance map, sigma_bkg, gain, label snr, MF template)
+        channels = [
+            (
+                band,
+                truth_b,
+                np.asarray(obs_b.variance),
+                sigma_bkg_b,
+                roman.ELECTRONS_PER_UJY[band],
+                band_snrs[band],
+                truth_b,
+            ),
+            (
+                'roll0',
+                truth_g,
+                np.asarray(obs_g.variance),
+                sigma_bkg_g,
+                gain_g,
+                line_snr,
+                line_tmpl,
+            ),
+        ]
+
+        fig, axes = plt.subplots(len(channels), 5, figsize=(24, 4.2 * len(channels)))
+        for i, (key, truth_img, var_p, sigma_bkg, gain, label, tmpl) in enumerate(
+            channels
+        ):
+            resid = np.stack(
+                [
+                    add_map_noise(truth_img, var_p, seed=1000 * i + k) - truth_img
+                    for k in range(self.N_DRAWS)
+                ]
+            )
+            # residuals have zero mean by construction, so the mean square
+            # is the per-pixel sample variance (chi2_N / N)
+            sample_var = (resid**2).mean(axis=0)
+
+            order = np.argsort(truth_img.ravel())
+            n = truth_img.size // 10
+            tol = self.K_GATE * np.sqrt(2.0 / (self.N_DRAWS * n))
+            for decile, idx in (('faintest', order[:n]), ('brightest', order[-n:])):
+                ratio = sample_var.ravel()[idx].mean() / var_p.ravel()[idx].mean()
+                assert abs(ratio - 1.0) < tol, (key, decile, ratio, tol)
+
+            sigma_mf = np.sqrt(float((tmpl**2).sum())) / label
+            rmax = 3.0 * float(np.sqrt(var_p.max()))
+            im = axes[i, 0].imshow(
+                resid[0], origin='lower', cmap='RdBu_r', vmin=-rmax, vmax=rmax
+            )
+            axes[i, 0].set_title(f'{key}: one poisson draw - truth', fontsize=9)
+            fig.colorbar(im, ax=axes[i, 0], fraction=0.046)
+
+            slo = float(np.sqrt(var_p.min())) * 0.95
+            shi = float(np.sqrt(var_p.max())) * 1.05
+            for j, (img, title) in enumerate(
+                [
+                    (np.sqrt(sample_var), f'empirical sigma ({self.N_DRAWS} draws)'),
+                    (np.sqrt(var_p), 'model sigma (shipped variance map)'),
+                ]
+            ):
+                im = axes[i, 1 + j].imshow(
+                    img, origin='lower', cmap='viridis', vmin=slo, vmax=shi
+                )
+                axes[i, 1 + j].set_title(f'{key}: {title}', fontsize=9)
+                fig.colorbar(im, ax=axes[i, 1 + j], fraction=0.046)
+
+            ax = axes[i, 3]
+            ax.plot(
+                truth_img.ravel(),
+                sample_var.ravel(),
+                '.',
+                ms=2,
+                alpha=0.4,
+                label=f'per-pixel sample var ({self.N_DRAWS} draws)',
+            )
+            xs = np.linspace(0.0, float(truth_img.max()), 200)
+            ax.plot(
+                xs,
+                sigma_bkg**2 + xs / gain,
+                'k-',
+                lw=1.5,
+                label='poisson: sigma_bkg^2 + I/g',
+            )
+            ax.axhline(sigma_bkg**2, color='tab:orange', ls='--', lw=1.2, label='bkg')
+            ax.axhline(
+                sigma_mf**2, color='tab:green', ls=':', lw=1.2, label='matched_filter'
+            )
+            ax.set_xlabel('truth pixel value')
+            ax.set_ylabel('variance')
+            ax.set_title(f'{key}: variance vs truth intensity', fontsize=9)
+            ax.legend(fontsize=7)
+
+            ax = axes[i, 4]
+            bright = order[-n:]
+            z_bg = resid.reshape(self.N_DRAWS, -1)[:, bright].ravel() / sigma_bkg
+            width = float(
+                np.sqrt(1.0 + truth_img.ravel()[bright].mean() / (gain * sigma_bkg**2))
+            )
+            ax.hist(z_bg, bins=60, density=True, alpha=0.6, label='brightest decile')
+            zs = np.linspace(z_bg.min(), z_bg.max(), 300)
+            norm = np.exp(-0.5 * zs**2) / np.sqrt(2 * np.pi)
+            ax.plot(zs, norm, 'k--', lw=1.2, label='N(0,1) (bkg)')
+            ax.plot(
+                zs,
+                np.exp(-0.5 * (zs / width) ** 2) / (width * np.sqrt(2 * np.pi)),
+                'r-',
+                lw=1.2,
+                label=f'predicted width {width:.2f}',
+            )
+            ax.set_xlabel('residual / sigma_bkg')
+            ax.set_title(f'{key}: shot excess in the brightest decile', fontsize=9)
+            ax.legend(fontsize=7)
+
+        fig.suptitle(
+            'poisson pathway statistics (same scene as noise_model_comparison): '
+            'per-pixel residual variance vs the shipped map',
+            fontsize=13,
+        )
+        out_dir = Path('tests/out/noise_model_comparison')
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / 'shot_noise_statistics.png'
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
+        fig.savefig(out, dpi=130)
+        plt.close(fig)
+        assert out.exists()

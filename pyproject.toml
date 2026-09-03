@@ -35,6 +35,7 @@ markers = [
     "grism_validation: cross-code grism validation against geko (requires reference data)",
     "galsim_reference: cross-check against the independent GalSim-chromatic reference render (self-contained, no external data/env)",
     "cosmohub: tests that require downloaded CosmoHub/Q1 catalog data (make download-cosmohub-dev, download-q1-data)",
+    "roman_ensemble: Roman ensemble-campaign tests (ensemble machinery, catalog adapters, population paint, prior provenance, Roman PSF, shear calibration); excluded from make test, run via make test-roman-ensemble",
 ]
 filterwarnings = [
     # Ignore ArviZ FutureWarning about upcoming refactor

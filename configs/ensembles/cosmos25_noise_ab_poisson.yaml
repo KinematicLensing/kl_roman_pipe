@@ -1,12 +1,14 @@
-# Stamp A/B, control arm: identical to cosmos25_shear_dev (same seed, so
-# the same galaxy bank, shears, and noise streams) except n_chains 4 --
-# the 2-chain vectorized NUTS kernel hits an XLA slow path on GH200
-# (per-eval 4.6x worse than solo, measured 2026-07-29 batch probe) while
-# the 4-way batch is clean. Pair with cosmos25_ab_bb48gr16.
+# Noise-model A/B, poisson arm: identical to cosmos25_noise_ab_matched
+# (same seed, so the same 8-galaxy bank, shears, and noise deviate streams)
+# except the observation config points at the noise_model: poisson twin.
+# Posterior-width ratios against the matched arm measure the cost of
+# physical backgrounds + shot noise, and the snr_effective_* columns give
+# the realized depths per channel. Pairs are matched on noise_seed, never
+# on fit_id (fit_id encodes the observation config).
 run:
-  name: cosmos25_ab_bb32gr32
+  name: cosmos25_noise_ab_poisson
   version: 1
-  description: "COSMOS25 stamp A/B control: 32x32 stamps, n_chains 4"
+  description: "COSMOS25 noise-model A/B: poisson arm (physical bg + shot noise)"
   seed: 20260728
   measurement: shear_bias
   noise_reps: 1
@@ -59,7 +61,7 @@ observation:
   # HLWAS Medium band pair with the realistic Roman WFI PSF (the flagship
   # census specs still reference the Gaussian canonical_P; the Roman PSF
   # configuration remains subject to the pre-production review)
-  config: hlwas_medium_roman
+  config: hlwas_medium_roman_poisson
 
 fit:
   # baseline sampler config inherited from the flagship dev spec (see its

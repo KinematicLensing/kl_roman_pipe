@@ -1,6 +1,6 @@
 # Units and rendering conventions
 
-Single source of truth for physical units and the input/output contracts of
+The reference for physical units and the input/output conventions of
 the render methods in `kl_pipe`. CLAUDE.md's Physical Units table is the
 short reference; this document expands on it and adds the cube / dispersion /
 grism pipeline rules.
@@ -18,9 +18,85 @@ grism pipeline rules.
 | Surface brightness (SB) | flux / arcsec² | Per-point intensity from `__call__`, `evaluate_in_disk_plane` |
 | Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 
-## Render method contract
+## Ensemble catalog-mode flux units
 
-The contract is: **every render method that returns an observable (a 2D
+The model layer is agnostic to the absolute flux unit (each channel's noise
+normalization means a global rescaling leaves the posterior unchanged), so `kl_pipe`
+core stays in generic "flux". The ensemble's catalog mode assigns physical
+per-galaxy truths, with one declared unit per channel:
+
+| Scene parameter | Unit | Source |
+|---|---|---|
+| `{band}.flux` / `{band}.total_flux` | uJy (f_nu; AB = 23.9 - 2.5 log10 f) | catalog photometry, power-law interpolated to the Roman band effective wavelength; line-inclusive (what the image contains) |
+| `Halpha.flux` | 1e-17 erg/s/cm² (`photometry.CGS_TO_F17`) | painted catalog line flux |
+| `Halpha.cont.flux_per_nm` | 1e-17 erg/s/cm² per nm | line flux / EW_obs |
+
+The two channels carry different physical units; that is fine because no
+flux is ever compared across channels — each channel's data, model, and
+variance share one unit. Per-galaxy SNR is a *derived* quantity: the
+matched-filter SNR of the truth template against the noise level implied by
+the published survey depths (ROTAC HLWAS Medium: point-source imaging
+depths, extended-source grism line limit — each channel anchored to its own
+published convention; see `kl_pipe.surveys.roman.IMAGING_DEPTH_AB` /
+`F_LIM_COADD_CGS`). Sampled (non-catalog) mode keeps the legacy scene-
+constant fluxes and spec-scalar SNRs.
+
+Naming rule: a parameter named `flux` is the spatial integral of its
+channel's image, in whatever unit that channel declares; `flux_per_nm`
+marks the one parameter that is a spectral density inside the model math
+(the cube assembly treats it differently — see below). The names encode
+the parameter's role in the model and follow standard catalog convention
+(broadband fluxes are quoted in f_nu units like uJy, line fluxes in
+erg/s/cm²); the physical unit itself is a per-channel declaration — the
+table above, mirrored machine-readably by the `flux_unit` metadata field
+on `ImageObs`/`GrismObs`, which the ensemble sets in catalog mode. Unit
+conversion helpers (AB mag ↔ uJy, f_nu → f_lambda, depth → flux limit,
+power-law band interpolation) live in `kl_pipe.photometry`.
+
+### Ensemble mock noise models (`noise_model` on the observation config)
+
+Scope: this knob belongs to the **ensemble mock machinery**
+(`kl_pipe/ensemble/`), not to core rendering — a manually built
+observation never sees it. The pieces it is assembled from are general,
+though: `noise.physical_variance_map` / `add_map_noise` /
+`matched_filter_snr` work on any image in any flux unit, and the Roman
+depth anchors and electron conversions live in `kl_pipe.surveys.roman`.
+Any script can therefore apply physical noise to its own render (in
+physical flux units) and pass the resulting map as `variance=` to
+`build_image_obs` / `build_grism_obs`; the ensemble knob just automates
+that assembly per fit.
+
+- `matched_filter` (default): one uniform variance per channel, chosen so
+  the labeled SNR is exact: `var = ||T||² / SNR²` (broadband: T = whole
+  truth image; grism: T = line-only template). Unit-free.
+- `poisson` (ensemble catalog mode only — it needs the catalog's physical
+  fluxes): per-pixel variance with two terms, in the channel's own squared
+  flux units:
+
+      var = sigma_bkg² + max(I_truth, 0) / g
+
+  1. `sigma_bkg`, a flat background level. Anchored to the published survey
+     depth: render the source the published limit refers to (imaging: a
+     point source through the config's PSF, averaged over subpixel
+     positions since a published depth describes a randomly placed source;
+     grism: the 0.25″ reference disk in `surveys/roman.py`), and set
+     `sigma_bkg` so that source is recovered at exactly 5σ. One value per
+     band; one per grism roll.
+  2. The source's own shot noise: pixel flux converted to detected
+     electrons via `g` (`ELECTRONS_PER_UJY`,
+     `grism_electrons_per_f17_per_pass` — zeropoint × exposure-time
+     physics, never the detector e-/ADU gain), Poisson counting, converted
+     back. High-count Gaussian draw; the fit likelihood carries the same
+     map, so the inference is exact for the mock.
+
+  The labeled SNR is *not* used to set the noise in this mode — it stays
+  the selection/plot axis, and the realized depth is reported per channel
+  in the `snr_effective_*` results columns
+  (`noise.matched_filter_snr(T, var) = sqrt(sum(T²/var))`).
+
+## Render method units
+
+The rule: **every render method that returns an observable (a 2D
 detector-pixel image) returns flux per coarse pixel.** Intermediate or
 continuous representations stay in SB.
 
@@ -127,8 +203,7 @@ on the fine k-grid uses the coarse pixel scale).
 The likelihood `(data - model)² / variance` requires `data` and `model`
 in the same units. The observed grism / image data is in detector flux
 (counts × calibration constant ≈ flux per coarse pixel). All `render_*`
-methods that feed the likelihood return flux per coarse pixel, by
-contract.
+methods that feed the likelihood return flux per coarse pixel.
 
 ## Forward-looking notes
 
@@ -141,8 +216,8 @@ contract.
   (e.g. saturation, gain maps), the conversion still goes "SB → flux per
   pixel" via `coarse_ps²` before the per-pixel response is applied. The
   `PixelResponse` abstraction supports this; only `BoxPixel` is implemented
-  today, but the `SB × coarse_ps²` step is the unit-conversion contract
-  regardless of the response shape.
+  today, but the `SB × coarse_ps²` step is the unit conversion regardless
+  of the response shape.
 
 ## See also
 

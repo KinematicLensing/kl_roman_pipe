@@ -35,6 +35,8 @@ from kl_pipe.ensemble.spec import (
 )
 from kl_pipe.priors import LogNormal, Uniform
 
+pytestmark = pytest.mark.roman_ensemble
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
@@ -121,6 +123,10 @@ class TestSpecValidation:
         # covered in tests/test_population.py)
         d = _spec_dict()
         d['population']['type'] = 'catalog'
+        # drop the sampled-mode snr block so the error under test (the
+        # sampled-only population keys) is the one that fires, not the
+        # catalog-mode snr-block rejection
+        del d['observation']['snr']
         with pytest.raises(ValueError, match='unknown keys'):
             EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
@@ -813,7 +819,12 @@ def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
 
     def first_grism_var(line_snr):
         inp = build_fit_inputs(
-            truth, 12345, dev_spec, canonical_q, broadband_snr=100.0, line_snr=line_snr
+            truth,
+            12345,
+            dev_spec,
+            canonical_q,
+            band_snrs={b: 100.0 for b in canonical_q.bands},
+            line_snr=line_snr,
         )
         obs = next(iter(inp.grism_obs.values()))
         var = float(np.asarray(obs.variance))
@@ -883,7 +894,12 @@ def test_shear_information_increases_with_line_snr():
 
     def galaxy_frame_shear_sigmas(line_snr):
         inp = build_fit_inputs(
-            truth, 7, spec, config, broadband_snr=100.0, line_snr=line_snr
+            truth,
+            7,
+            spec,
+            config,
+            band_snrs={b: 100.0 for b in config.bands},
+            line_snr=line_snr,
         )
         s = inp.source
         chans = [
@@ -1153,7 +1169,7 @@ class TestDiagnostics:
             assert r['axis_value'] == pytest.approx(kept['truth.cosi'].mean())
 
     def test_dual_convention_galaxy_frame_columns(self, run_dir):
-        from kl_pipe.calibration import rotate_to_galaxy_frame
+        from kl_pipe.coordinates import rotate_to_galaxy_frame
         from kl_pipe.ensemble.collate import analysis_table, collate_results
         from kl_pipe.ensemble.diagnostics import augment_galaxy_frame
 

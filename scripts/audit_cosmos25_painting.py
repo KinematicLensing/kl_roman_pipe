@@ -32,8 +32,8 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from kl_pipe.ensemble.population import (  # noqa: E402
-    C_A_PER_S,
+from kl_pipe.photometry import C_A_PER_S  # noqa: E402
+from kl_pipe.surveys.roman import (  # noqa: E402
     compute_line_snr_total,
     matched_filter_compactness,
     psf_fwhm_arcsec,

@@ -23,6 +23,8 @@ from kl_pipe.ensemble.spec import EnsembleSpec, EscalationSpec
 from kl_pipe.ensemble.worker import needs_escalation, run_single_fit
 from kl_pipe.sampling.configs import NumpyroSamplerConfig
 
+pytestmark = pytest.mark.roman_ensemble
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'

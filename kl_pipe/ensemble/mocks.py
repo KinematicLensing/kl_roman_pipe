@@ -1,12 +1,14 @@
 """
 Per-fit on-the-fly mock observation construction.
 
-The mock is a deterministic function of (truth, observation config, spec SNR
-knobs, noise_seed): the model renders its own truth datavector (guaranteeing
-fit == truth self-consistency) and Gaussian noise is added at the
-matched-filter variance ``||I||^2 / SNR^2``. Broadband channels use the whole
-image (``noise.add_intensity_noise`` convention); grism channels normalize on
-the emission LINE only (``noise.grism_line_noise``: ``var =
+The mock is a deterministic function of (truth, observation config, per-fit
+SNR labels, noise_seed): the model renders its own truth datavector
+(guaranteeing fit == truth self-consistency) and Gaussian noise is added at
+the matched-filter variance ``||I||^2 / SNR^2``. Broadband channels use the
+whole image (``noise.add_intensity_noise`` convention) with one SNR label
+per band (catalog mode: the galaxy's own published-depth matched-filter SNR;
+sampled mode: the spec scalar shared by all bands); grism channels normalize
+on the emission LINE only (``noise.grism_line_noise``: ``var =
 ||I_line||^2 / line_snr^2``), so the labeled ``line_snr`` is the line SNR, not
 the continuum-dominated whole-stamp SNR. Construction mirrors the flagship
 builders (tests/test_flagship.py, experiments/sweverett/vista_kit/tasks_vista.py).
@@ -40,12 +42,32 @@ import numpy as np
 import jax.numpy as jnp
 
 from kl_pipe.dispersion import GrismPars, build_grism_pars_for_line
-from kl_pipe.ensemble.scene import build_source_model, scene_priors
+from kl_pipe.ensemble.scene import (
+    build_source_model,
+    scene_priors,
+    scene_truth_defaults,
+)
 from kl_pipe.lines import LINE_LAMBDAS
-from kl_pipe.noise import grism_line_noise
+from kl_pipe.noise import (
+    add_map_noise,
+    grism_line_noise,
+    matched_filter_snr,
+    physical_variance_map,
+)
 from kl_pipe.observation import build_grism_obs, build_image_obs
 from kl_pipe.parameters import ImagePars
+from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE, HALPHA_REST_A
 from kl_pipe.render import RenderConfig
+from kl_pipe.surveys.roman import (
+    ELECTRONS_PER_UJY,
+    F_LIM_PER_PASS_CGS,
+    F_LIM_REF_LAMBDA_A,
+    F_LIM_REF_R50_ARCSEC,
+    GRISM_REF_LINE_WIDTH_KMS,
+    band_sigma_bkg_ujy,
+    grism_electrons_per_f17_per_pass,
+    grism_sigma_bkg_per_pass,
+)
 
 if TYPE_CHECKING:
     from kl_pipe.ensemble.spec import EnsembleSpec, ObservationConfig, PSFSpec
@@ -61,6 +83,13 @@ class FitInputs(NamedTuple):
     image_obs: Dict[str, object]
     grism_obs: Dict[str, object]
     truth: Dict[str, float]
+    # realized matched-filter SNR of each channel's noiseless truth against
+    # the actual mock variance (kl_pipe.noise.matched_filter_snr): one entry
+    # per band, per grism roll ('line_roll<j>'), plus the roll coadd
+    # ('line_total'). Under noise_model='matched_filter' these equal the
+    # labels exactly; under 'poisson' they are the realized depth including
+    # shot noise (the snr_effective results columns).
+    snr_effective: Optional[Dict[str, float]] = None
 
 
 def _import_galsim():
@@ -324,8 +353,68 @@ def _wcs_with_pc(shape, pixel_scale: float, rotation_radians: float):
     return wcs
 
 
+def _psf_l2_norm(psf, pixel_scale: float, phase_average: bool = True) -> float:
+    """L2 norm of the unit-flux PSF image at the survey pixel scale.
+
+    ||K||_2 of the point-source template the published imaging depths refer
+    to, drawn from the same PSF object the mock renders with (pixel
+    integration included via galsim drawImage). A published depth describes
+    a point source at a random subpixel position, so the anchor norm is the
+    mean over a 4x4 grid of subpixel offsets (converged to ~1e-5 against
+    8x8 on the production Roman PSF; the corner-vs-mean spread is a 5-15%
+    effect on sigma_bkg). ``phase_average=False`` gives the single
+    corner-phase draw (galsim's even-stamp default, the same phase as
+    kl_pipe's own even-stamp grids), for closure tests against a
+    corner-phase render. The default stamp truncates far-wing flux at the
+    folding threshold; that costs the L2 norm almost nothing (wings are
+    tiny per pixel), but a badly truncated draw means the wrong PSF object
+    and raises.
+    """
+    image = psf.drawImage(scale=pixel_scale)
+    total = float(image.array.sum())
+    if not 0.95 <= total <= 1.02:
+        raise ValueError(
+            f"unit-flux PSF image sums to {total:.4f}; the point-source "
+            f"template is badly truncated or unnormalized"
+        )
+    if not phase_average:
+        return float(np.sqrt(np.sum(np.asarray(image.array, dtype=np.float64) ** 2)))
+    # odd stamp so offset=(0,0) is pixel-centered and the 4x4 grid spans
+    # one full pixel of subpixel phases
+    n = image.array.shape[0] + 1
+    phases = (np.arange(4) + 0.5) / 4 - 0.5
+    norms = [
+        float(
+            np.sqrt(
+                np.sum(
+                    np.asarray(
+                        psf.drawImage(
+                            nx=n, ny=n, scale=pixel_scale, offset=(dx, dy)
+                        ).array,
+                        dtype=np.float64,
+                    )
+                    ** 2
+                )
+            )
+        )
+        for dx in phases
+        for dy in phases
+    ]
+    return float(np.mean(norms))
+
+
 def _make_band_obs(
-    source, truth, psf_mock, psf_fit, image_pars, band, snr, seed, oversample
+    source,
+    truth,
+    psf_mock,
+    psf_fit,
+    image_pars,
+    band,
+    snr,
+    seed,
+    oversample,
+    flux_unit=None,
+    noise_model='matched_filter',
 ):
     int_model = source.broadband_models[band]
     # truth data through the mock-fidelity kernel; the fit obs carries the
@@ -338,16 +427,36 @@ def _make_band_obs(
         broadband_key=band,
     )
     data_true = np.asarray(source.render_broadband(truth, obs_clean, band))
-    data_noisy, var = _noisy(data_true, snr, seed)
-    return build_image_obs(
+    if noise_model == 'poisson':
+        # flat background anchored to the published point-source depth
+        # through this config's own PSF, plus the galaxy's shot noise; the
+        # labeled snr is NOT used to set the noise here -- it stays the
+        # selection/plot axis while snr_effective reports the realized depth
+        if band not in ELECTRONS_PER_UJY:
+            raise KeyError(
+                f"band '{band}' has no electrons_per_ujy conversion; "
+                f"known bands: {sorted(ELECTRONS_PER_UJY)}"
+            )
+        sigma_bkg = band_sigma_bkg_ujy(
+            band, _psf_l2_norm(psf_mock, image_pars.pixel_scale)
+        )
+        var = physical_variance_map(data_true, sigma_bkg, ELECTRONS_PER_UJY[band])
+        data_noisy = add_map_noise(data_true, var, seed)
+        variance = jnp.asarray(var)
+    else:
+        data_noisy, var = _noisy(data_true, snr, seed)
+        variance = var
+    obs = build_image_obs(
         image_pars,
         psf=psf_fit,
         render_config=RenderConfig(oversample=oversample),
         data=jnp.asarray(data_noisy),
-        variance=var,
+        variance=variance,
         int_model=int_model,
         broadband_key=band,
+        flux_unit=flux_unit,
     )
+    return obs, matched_filter_snr(data_true, var)
 
 
 def _grism_pars_for_roll(
@@ -376,6 +485,72 @@ def _grism_pars_for_roll(
     )
 
 
+# reference-template L2 norms keyed by the grism-render-relevant config
+# fields (see _grism_reference_line_norm); a long-lived worker reuses one
+# entry per observation config
+_GRISM_REF_NORM_CACHE: Dict[tuple, float] = {}
+
+
+def _grism_reference_line_norm(config: 'ObservationConfig', oversample: int) -> float:
+    """L2 norm of the survey reference source's dispersed line template.
+
+    The published grism limit refers to an extended reference source, not a
+    point source, so the background anchor requires rendering that reference
+    through this config's own grism model: a round face-on exponential disk
+    of half-light radius F_LIM_REF_R50_ARCSEC, zero rotation, line width
+    GRISM_REF_LINE_WIDTH_KMS, Halpha observed at F_LIM_REF_LAMBDA_A, at the
+    PER-PASS flux limit (see the surveys.roman background block for why and
+    for the stated kinematics systematic). Rendered once per config on the
+    first roll: the scene is circularly symmetric (face-on, centered, no
+    rotation, zero shear), so every roll's template has the same norm.
+    """
+    key = (
+        config.grism_psf,
+        config.stamp_grism_pix,
+        config.pixel_scale_arcsec,
+        config.grism_dispersion_nm_per_pix,
+        len(config.grism_rolls_deg) == 1,
+        config.grism_rolls_deg[0],
+        oversample,
+    )
+    if key in _GRISM_REF_NORM_CACHE:
+        return _GRISM_REF_NORM_CACHE[key]
+
+    z_ref = F_LIM_REF_LAMBDA_A / HALPHA_REST_A - 1.0
+    truth = scene_truth_defaults(config, {})
+    truth.update(
+        {
+            'z': z_ref,
+            'cosi': 1.0,
+            'theta_int': 0.0,
+            'g1': 0.0,
+            'g2': 0.0,
+            'vel.vcirc': 0.0,
+            'vel.v0': 0.0,
+            'Halpha.flux': F_LIM_PER_PASS_CGS * CGS_TO_F17,
+            'Halpha.rscale': F_LIM_REF_R50_ARCSEC / EXP_R50_OVER_RSCALE,
+            'Halpha.dispersion': GRISM_REF_LINE_WIDTH_KMS,
+            'Halpha.cont.flux_per_nm': 0.0,
+        }
+    )
+    source = build_source_model(config)
+    grism_pars = _grism_pars_for_roll(
+        config, z_ref, config.grism_rolls_deg[0], len(config.grism_rolls_deg) == 1
+    )
+    obs_clean = build_grism_obs(
+        grism_pars,
+        z=z_ref,
+        psf=_build_grism_psf(config.grism_psf, z_ref, mock=True),
+        render_config=RenderConfig(oversample=oversample),
+    )
+    line_template = np.asarray(source.render_grism(truth, obs_clean))
+    norm = float(np.sqrt(np.sum(line_template**2)))
+    if norm <= 0:
+        raise ValueError("grism reference template has zero power")
+    _GRISM_REF_NORM_CACHE[key] = norm
+    return norm
+
+
 def _make_roll_obs(
     source,
     truth,
@@ -390,6 +565,10 @@ def _make_roll_obs(
     oversample,
     kernel_size_mock,
     kernel_size_fit,
+    flux_unit=None,
+    noise_model='matched_filter',
+    sigma_bkg=None,
+    electrons_per_f17=None,
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
@@ -415,16 +594,30 @@ def _make_roll_obs(
         k: (0.0 if k.endswith('.cont.flux_per_nm') else v) for k, v in truth.items()
     }
     line_true = np.asarray(source.render_grism(line_truth, obs_clean))
-    data_noisy, var = grism_line_noise(data_true, line_true, line_snr, seed)
-    return build_grism_obs(
+    if noise_model == 'poisson':
+        # flat per-roll background anchored to the per-pass published limit
+        # (sigma_bkg from the rendered reference source), plus shot noise from
+        # the FULL dispersed truth -- the continuum contributes photons even
+        # though only the line defines the labeled SNR
+        var = physical_variance_map(data_true, sigma_bkg, electrons_per_f17)
+        data_noisy = add_map_noise(data_true, var, seed)
+        variance = jnp.asarray(var)
+    else:
+        data_noisy, var = grism_line_noise(data_true, line_true, line_snr, seed)
+        variance = var
+    obs = build_grism_obs(
         grism_pars,
         z=z,
         psf=psf_fit,
         render_config=RenderConfig(oversample=oversample),
         data=jnp.asarray(data_noisy),
-        variance=var,
+        variance=variance,
         psf_kernel_size=kernel_size_fit,
+        flux_unit=flux_unit,
     )
+    # snr_effective normalizes on the LINE template (the labeled convention)
+    # against the full realized variance
+    return obs, matched_filter_snr(line_true, var)
 
 
 def build_fit_inputs(
@@ -433,7 +626,7 @@ def build_fit_inputs(
     spec: 'EnsembleSpec',
     config: 'ObservationConfig',
     *,
-    broadband_snr: float,
+    band_snrs: Dict[str, float],
     line_snr: float,
     row: Optional[Dict] = None,
 ) -> FitInputs:
@@ -450,12 +643,15 @@ def build_fit_inputs(
         Population distributions (for the fit priors).
     config : ObservationConfig
         Structural instrument setup.
-    broadband_snr, line_snr : float
-        Per-fit SNR values from the manifest row (the manifest, not the
-        spec, is the source of truth -- line_snr varies per row on a
-        config-sweep axis and per galaxy in catalog mode). ``line_snr`` is
-        the emission-line matched-filter SNR (see
-        kl_pipe.noise.grism_line_noise).
+    band_snrs : dict
+        Per-band matched-filter SNR from the manifest row (always read from
+        the manifest, never the spec: one shared scalar per fit in sampled
+        mode, per-galaxy published-depth values in catalog mode).
+        Must cover exactly the config's bands.
+    line_snr : float
+        Per-fit emission-line matched-filter SNR (see
+        kl_pipe.noise.grism_line_noise); varies per row on a config-sweep
+        axis and per galaxy in catalog mode.
     row : dict or pd.Series, optional
         The manifest row; required for catalog populations (their vcirc
         prior reads the row's pop.prior_vcirc_* columns).
@@ -465,9 +661,16 @@ def build_fit_inputs(
     FitInputs
         (source, priors, image_obs, grism_obs, truth).
     """
-    if broadband_snr <= 0 or line_snr <= 0:
+    if set(band_snrs) != set(config.bands):
         raise ValueError(
-            f"SNR values must be positive, got ({broadband_snr}, {line_snr})"
+            f"band_snrs keys {sorted(band_snrs)} must match the config's "
+            f"bands {sorted(config.bands)}"
+        )
+    bad_snrs = {k: v for k, v in band_snrs.items() if v <= 0}
+    if bad_snrs or line_snr <= 0:
+        raise ValueError(
+            f"SNR values must be positive, got bands {bad_snrs or 'ok'}, "
+            f"line {line_snr}"
         )
     # catalog mode with the bulge paint on: broadband bands are BulgeDiskModel
     # with this galaxy's fixed Sersic index; sampled mode and the disk-only
@@ -477,6 +680,12 @@ def build_fit_inputs(
         raise ValueError(
             "catalog-mode fits require the manifest row (pop.prior_vcirc_* "
             "and, with the bulge paint, pop.bulge_nsersic columns); pass row"
+        )
+    if config.noise_model == 'poisson' and not is_catalog:
+        raise ValueError(
+            "noise_model 'poisson' requires a catalog population: shot noise "
+            "converts physical fluxes to electrons, and sampled-mode scenes "
+            "carry no physical flux units"
         )
     use_bulge = is_catalog and spec.catalog_population.paint_bulge
     bulge_nsersic = float(row['pop.bulge_nsersic']) if use_bulge else None
@@ -503,18 +712,21 @@ def build_fit_inputs(
         indexing='ij',
     )
     image_obs = {}
+    snr_effective: Dict[str, float] = {}
     for i, band in enumerate(config.bands):
         band_spec = config.band_psf[band]
-        image_obs[band] = _make_band_obs(
+        image_obs[band], snr_effective[band] = _make_band_obs(
             source,
             truth,
             _build_band_psf(band_spec, band, z, mock=True),
             _build_band_psf(band_spec, band, z),
             image_pars,
             band,
-            broadband_snr,
+            band_snrs[band],
             seeds[i],
             spec.render_oversample,
+            flux_unit='uJy (band-averaged f_nu)' if is_catalog else None,
+            noise_model=config.noise_model,
         )
 
     grism_psf_mock = _build_grism_psf(config.grism_psf, z, mock=True)
@@ -522,9 +734,18 @@ def build_fit_inputs(
     kernel_size_mock = _grism_psf_kernel_size(config, spec, mock=True)
     kernel_size_fit = _grism_psf_kernel_size(config, spec)
     single_roll = len(config.grism_rolls_deg) == 1
+    if config.noise_model == 'poisson':
+        grism_sigma_bkg = grism_sigma_bkg_per_pass(
+            _grism_reference_line_norm(config, spec.render_oversample)
+        )
+        lambda_obs_a = HALPHA_REST_A * (1.0 + z)
+        electrons_per_f17 = float(grism_electrons_per_f17_per_pass(lambda_obs_a))
+    else:
+        grism_sigma_bkg = None
+        electrons_per_f17 = None
     grism_obs = {}
     for j, roll in enumerate(config.grism_rolls_deg):
-        grism_obs[f'roll{j}'] = _make_roll_obs(
+        grism_obs[f'roll{j}'], snr_effective[f'line_roll{j}'] = _make_roll_obs(
             source,
             truth,
             grism_psf_mock,
@@ -538,7 +759,23 @@ def build_fit_inputs(
             spec.render_oversample,
             kernel_size_mock,
             kernel_size_fit,
+            flux_unit=(
+                '1e-17 erg/s/cm2 (integrated line flux)' if is_catalog else None
+            ),
+            noise_model=config.noise_model,
+            sigma_bkg=grism_sigma_bkg,
+            electrons_per_f17=electrons_per_f17,
         )
+    # roll coadd: independent noise per roll, so the joint-fit line depth is
+    # the quadrature sum (matches how the labeled total SNR is defined)
+    snr_effective['line_total'] = float(
+        np.sqrt(
+            sum(
+                snr_effective[f'line_roll{j}'] ** 2
+                for j in range(len(config.grism_rolls_deg))
+            )
+        )
+    )
 
     return FitInputs(
         source=source,
@@ -546,4 +783,5 @@ def build_fit_inputs(
         image_obs=image_obs,
         grism_obs=grism_obs,
         truth=truth,
+        snr_effective=snr_effective,
     )

@@ -1,12 +1,12 @@
 """
 Deterministic ensemble expansion: spec -> manifest.parquet + provenance.
 
-The manifest is the dispatch source of truth: one row per fit, fully-resolved
+The manifest is what dispatch runs from: one row per fit, fully-resolved
 truth values, immutable once written (status is derived from the filesystem
 ledger, never stored in the manifest).
 
-Determinism contract
---------------------
+Determinism
+-----------
 - fit_id hashes the integer index tuple (run_name, version, cosi_bin,
   galaxy_id, ring_member, noise_rep, shear_step) -- never float truth values,
   whose repr is unstable across numpy versions.
@@ -39,15 +39,16 @@ from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
     CENTROID_SCATTER_ARCSEC,
     CONT_CENTROID_OFFSET_ARCSEC,
-    N_GRISM_PASSES,
     build_population,
     write_population,
 )
+from kl_pipe.photometry import CGS_TO_F17
+from kl_pipe.surveys.roman import N_GRISM_PASSES, ROMAN_IMAGING_BANDS
 from kl_pipe.ensemble.scene import scene_truth_defaults
 from kl_pipe.ensemble.spec import DrawSpec, EnsembleSpec, ObservationConfig
 
 # bump when the expansion algorithm changes in a way that alters manifests
-EXPANDER_VERSION = 1
+EXPANDER_VERSION = 2
 
 # seed-stream domain tags: keep galaxy-truth draws and noise seeds in
 # non-overlapping SeedSequence key spaces
@@ -77,6 +78,19 @@ _POP_PASSTHROUGH = (
     'bulge_r50_arcsec',
     'bulge_nsersic',
     'f_line_cgs',
+    # physical flux truths, simulated measurements (prior centers), and
+    # measurement errors; per-band imaging SNRs against the published depths
+    'f_line_obs_cgs',
+    'f_line_sigma_cgs',
+) + tuple(
+    f'{stem}_{band.lower()}{suffix}'
+    for band in ROMAN_IMAGING_BANDS
+    for stem, suffix in (
+        ('flux', '_ujy'),
+        ('flux_obs', '_ujy'),
+        ('flux_sigma', '_ujy'),
+        ('snr_bb', ''),
+    )
 )
 
 
@@ -343,6 +357,15 @@ def _catalog_rows(
                 f"(0..{len(population) - 1})"
             )
         population = population.loc[sorted(cp.galaxy_ids)]
+    # catalog mode carries physical per-band fluxes only for the Roman
+    # imaging bands every adapter provides
+    unsupported = [b for b in config.bands if b not in ROMAN_IMAGING_BANDS]
+    if unsupported:
+        raise ValueError(
+            f"observation config '{config.id}' uses bands {unsupported} with "
+            f"no physical catalog flux; catalog mode supports "
+            f"{sorted(ROMAN_IMAGING_BANDS)}"
+        )
     # catalog specs carry no population.fixed block; scene defaults apply.
     # broadband bands are BulgeDiskModel (per-galaxy bulge from the catalog)
     # unless the spec disables the bulge paint (disk-only twin)
@@ -381,22 +404,25 @@ def _catalog_rows(
                     }
                 )
                 # the catalog disk scale length sets the disk spatial scales
-                # (bands, line, continuum, velocity). broadband bands are
+                # (bands, line, continuum, velocity), and the catalog band
+                # flux [uJy] sets the band amplitude. broadband bands are
                 # BulgeDiskModel: the disk scale is disk_rscale, and the bulge
                 # component gets the catalog bulge fraction and half-light
-                # radius per galaxy (total_flux, disk_h_over_r, bulge_h_over_hlr,
-                # x0, y0 keep the scene defaults from base_truth). The Halpha
-                # line + continuum stay single-disk (rscale). With the bulge
-                # paint disabled, bands are single-disk too: the band flux
-                # keeps the scene default, which equals the bulge-mode
-                # total_flux, so the twin's total broadband flux matches.
+                # radius per galaxy (disk_h_over_r, bulge_h_over_hlr, x0, y0
+                # keep the scene defaults from base_truth). The Halpha line +
+                # continuum stay single-disk (rscale). With the bulge paint
+                # disabled, bands are single-disk too, with the same catalog
+                # flux, so the twin's total broadband flux matches.
                 for band in config.bands:
+                    band_flux_ujy = float(g[f'flux_{band.lower()}_ujy'])
                     if cp.paint_bulge:
+                        truth[f'{band}.total_flux'] = band_flux_ujy
                         truth[f'{band}.disk_rscale'] = rscale
                         truth[f'{band}.bulge_frac'] = float(g['bulge_fraction'])
                         truth[f'{band}.bulge_hlr'] = float(g['bulge_r50_arcsec'])
                         truth[f'{band}.bulge_n_sersic'] = float(g['bulge_nsersic'])
                     else:
+                        truth[f'{band}.flux'] = band_flux_ujy
                         truth[f'{band}.rscale'] = rscale
                 # the continuum under the line is the same stellar disk as the
                 # broadband, so it shares that scale exactly; the line and the
@@ -421,13 +447,11 @@ def _catalog_rows(
                 truth['Halpha.cont.y0'] = truth['Halpha.y0'] + crng.normal(
                     0.0, CONT_CENTROID_OFFSET_ARCSEC
                 )
-                # continuum amplitude from the catalog rest-frame EW:
-                # EW_obs [nm] = ew_rest_a [A] * (1 + z) / 10, and
-                # flux_per_nm = line_flux / EW_obs [flux / nm] -- the scene's
-                # internal flux units cancel, so only the EW ratio matters.
-                # Band flux amplitudes stay scene defaults (internal units;
-                # physical flux enters only through SNR); catalog-color
-                # scaling of band fluxes is a flagged future upgrade.
+                # line flux truth: the painted flux in 1e-17 erg/s/cm2 (the
+                # scene's line-channel unit); the continuum amplitude follows
+                # from the catalog rest-frame EW in the same unit per nm:
+                # EW_obs [nm] = ew_rest_a [A] * (1 + z) / 10
+                truth['Halpha.flux'] = float(g['f_line_cgs']) * CGS_TO_F17
                 ew_obs_nm = float(g['ew_rest_a']) * (1.0 + z) / 10.0
                 truth['Halpha.cont.flux_per_nm'] = truth['Halpha.flux'] / ew_obs_nm
 
@@ -454,10 +478,6 @@ def _catalog_rows(
                         spec.seed, 0, int(pop_index), ring_member, noise_rep
                     ),
                     'observation_config_id': config.id,
-                    # broadband depth stays the spec scalar for now; a
-                    # per-galaxy imaging depth anchor is a documented future
-                    # step of the catalog integration
-                    'broadband_snr': spec.broadband_snr,
                     # per-galaxy PER-PASS line SNR from the population's
                     # matched-filter calculation: the mock noise is drawn
                     # once per grism roll, so each roll gets one pass's
@@ -467,6 +487,11 @@ def _catalog_rows(
                     'save_chains': spec.save_chains == 'all',
                     'save_mocks': spec.save_mocks == 'all',
                 }
+                # per-band imaging depth: the mock noise of each band is
+                # normalized to the galaxy's own matched-filter SNR against
+                # the published point-source depth (population columns)
+                for band in config.bands:
+                    row[f'broadband_snr_{band}'] = float(g[f'snr_bb_{band.lower()}'])
                 row.update({f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()})
                 row.update({f'{POP_PREFIX}{c}': g[c] for c in pop_passthrough})
                 rows.append(row)

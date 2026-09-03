@@ -674,7 +674,7 @@ def plot_parameter_recovery(
     if {'g1', 'g2', 'theta_int'}.issubset(true_values) and {'g1', 'g2'}.issubset(
         recovered_values
     ):
-        from kl_pipe.calibration import galaxy_frame_samples, rotate_to_galaxy_frame
+        from kl_pipe.coordinates import galaxy_frame_samples, rotate_to_galaxy_frame
 
         gp_t, gx_t = rotate_to_galaxy_frame(
             true_values['g1'], true_values['g2'], true_values['theta_int']

@@ -681,6 +681,60 @@ class TestHalfwidthAutoSizing:
         checked = _check_source_priors_fit_obs(source, self._priors(), obs)
         assert checked.line_window_halfwidth == 16
 
+    def test_lognormal_vcirc_tail_in_linear_units(self, scene):
+        # LogNormal mu/sigma are log-space: the vcirc term of v_max must be
+        # exp(mu + 6 sigma), not mu + 6 sigma read as km/s (which undersizes
+        # the window by ~two orders of magnitude)
+        from kl_pipe.constants import C_KMS
+        from kl_pipe.priors import LogNormal, PriorDict
+        from kl_pipe.render import line_window_halfwidth_for_priors
+
+        _, gp, _, source = scene
+        oversample = 3
+        mu, sigma = np.log(140.0), 0.2
+        spec = dict(self._priors()._param_spec)
+        spec['vel.vcirc'] = LogNormal(mu, sigma)
+        hw = line_window_halfwidth_for_priors(
+            source, PriorDict(spec), gp, oversample=oversample
+        )
+        lam_line = 656.28 * 2.0
+        scale = oversample / gp.dispersion
+        v_max = (10.0 + 6.0 * 10.0) + np.exp(mu + 6.0 * sigma)
+        expected = (
+            int(
+                np.ceil(
+                    abs(lam_line - gp.lambda_ref) * scale
+                    + lam_line * v_max / C_KMS * scale
+                    + 4.0 * lam_line * 150.0 / C_KMS * scale
+                )
+            )
+            + 2
+        )
+        assert hw == expected
+
+    def test_unknown_unbounded_prior_raises(self, scene):
+        # any unbounded prior type without an explicit tail rule must raise
+        # instead of guessing linear-Gaussian semantics
+        from kl_pipe.priors import Prior, PriorDict
+        from kl_pipe.render import line_window_halfwidth_for_priors
+
+        class HalfCauchyStub(Prior):
+            def sample(self, key, n_samples=1):
+                raise NotImplementedError
+
+            def log_prob(self, x):
+                raise NotImplementedError
+
+            @property
+            def bounds(self):
+                return (0.0, None)
+
+        _, gp, _, source = scene
+        spec = dict(self._priors()._param_spec)
+        spec['vel.vcirc'] = HalfCauchyStub()
+        with pytest.raises(TypeError, match='HalfCauchyStub'):
+            line_window_halfwidth_for_priors(source, PriorDict(spec), gp, oversample=3)
+
     def test_missing_dispersion_prior_raises(self, scene):
         from kl_pipe.priors import PriorDict
         from kl_pipe.render import line_window_halfwidth_for_priors

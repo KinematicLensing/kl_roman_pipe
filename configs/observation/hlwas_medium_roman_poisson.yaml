@@ -1,0 +1,26 @@
+# hlwas_medium_roman with the physical noise model: flat per-band /
+# per-roll backgrounds anchored to the published HLWAS depths plus each
+# source's own shot noise (see docs/units_and_conventions.md, "Ensemble
+# mock noise models"). Everything else identical to hlwas_medium_roman, so
+# an ensemble spec that differs only in pointing here forms a paired
+# noise-model A/B arm (same bank, same noise deviate streams).
+id: hlwas_medium_roman_poisson
+noise_model: poisson
+bands: [F129, F158]
+grism:
+  rolls_deg: [0.0, 45.0, 90.0, 135.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}

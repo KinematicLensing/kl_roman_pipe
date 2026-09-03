@@ -453,6 +453,9 @@ jpsf = galsim.Gaussian(fwhm=0.12)
 jrc = RenderConfig(oversample=3)
 
 # Velocity data (no PSF) + broadband data (PSF-convolved).
+# Fluxes here are in arbitrary units; to work in physical units (e.g. a
+# catalog AB magnitude or a published survey depth), convert with the
+# helpers in kl_pipe.photometry (ab_mag_to_ujy, fnu_to_flambda, ...).
 vobs_clean = build_velocity_obs(jgrid)
 v_true = np.asarray(joint_source.render_velocity(jt, vobs_clean))
 v_noisy, v_var = add_velocity_noise(v_true, target_snr=100, seed=10)
@@ -698,6 +701,24 @@ axes[1].imshow(grism_noisy, origin='lower', cmap='magma');  axes[1].set_title('H
 for ax in axes: ax.set_xticks([]); ax.set_yticks([])
 plt.tight_layout(); plt.show()
 ```
+
+Two notes on the noise used throughout this tutorial:
+
+- **The requested SNR is the matched-filter SNR of the whole stamp**, and it
+  is realized exactly (`var = ||T||^2 / SNR^2`). For a grism stamp a more
+  physically meaningful label normalizes on the emission line alone
+  (`kl_pipe.noise.grism_line_noise`, with a line-only render as the
+  template): the continuum dominates the dispersed power but carries no
+  kinematic signal. The whole-stamp version here keeps the example short.
+- **Choosing a pathway.** Declared-SNR noise is the right tool for
+  controlled experiments: you pick the depth, it is exact by construction,
+  and the flux units stay arbitrary. When the question is instead what
+  *Roman* would deliver for a galaxy of a given physical flux, carry
+  physical units and derive the noise from the published survey depths (a
+  flat depth-anchored background plus the source's own shot noise). That
+  pathway, and when to prefer each, is worked out in the Roman reference
+  tutorial ("Physical flux units and Roman noise" in
+  `roman_reference.md`).
 
 Wire both channels into one joint `InferenceTask`. `from_obs` takes a dict of
 broadband obs (keyed by band) and a dict of grism obs (keyed by an arbitrary
@@ -1027,24 +1048,26 @@ rc_cap = RenderConfig(oversample=3)   # low for tutorial speed; auto-derive in p
 
 # Broadband obs, one per band:
 obs_bb = {}
-for band, model in (('F087', bd_F087), ('F184', bd_F184)):
+for i, (band, model) in enumerate((('F087', bd_F087), ('F184', bd_F184))):
     clean = np.asarray(cap_source.render_broadband(
         cap_truth, build_image_obs(img_pars, psf=roman_psf, render_config=rc_cap,
                                    int_model=model, broadband_key=band), band))
-    noisy, var = add_intensity_noise(clean, target_snr=100, seed=hash(band) % 1000)
+    # deterministic per-band seeds; hash() is salted per process and would
+    # make the noise realization change from run to run
+    noisy, var = add_intensity_noise(clean, target_snr=100, seed=20 + i)
     obs_bb[band] = build_image_obs(img_pars, psf=roman_psf, render_config=rc_cap,
                                    int_model=model, broadband_key=band,
                                    data=jnp.asarray(noisy), variance=var)
 
 # Grism obs, two rolls at different sky PAs:
 obs_rolls = {}
-for roll, pa in (('roll0', 20.0), ('roll90', 110.0)):
+for j, (roll, pa) in enumerate((('roll0', 20.0), ('roll90', 110.0))):
     gp_pars = ImagePars(shape=shape, wcs=make_wcs(shape, ps, pa_deg=pa))
     gpr = build_grism_pars_for_line(LINE_LAMBDAS['Halpha'], redshift=Zc,
                                     image_pars=gp_pars, dispersion=1.1)
     clean = np.asarray(cap_source.render_grism(
         cap_truth, build_grism_obs(gpr, z=Zc, psf=roman_psf, render_config=rc_cap)))
-    noisy, var = add_intensity_noise(clean, target_snr=150, seed=hash(roll) % 1000)
+    noisy, var = add_intensity_noise(clean, target_snr=150, seed=30 + j)
     obs_rolls[roll] = build_grism_obs(gpr, z=Zc, psf=roman_psf, render_config=rc_cap,
                                       data=jnp.asarray(noisy), variance=var)
 ```

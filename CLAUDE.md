@@ -32,7 +32,10 @@ kl_pipe/
 ├── pixel.py           # Pixel response: PixelResponse ABC, BoxPixel (sinc FT)
 ├── render.py          # RenderConfig: k-space grid sizing (oversample, pad_factor, maxk/stepk)
 ├── synthetic.py       # Independent synthetic data generators (NOT using model.py)
-├── noise.py           # SNR-based noise: add_intensity_noise, add_velocity_noise
+├── noise.py           # SNR-based noise + matched-filter compactness (detection math)
+├── photometry.py      # Unit conversions: AB mag<->uJy, f_nu->f_lambda, depth->flux limit, power-law SED interpolation
+├── surveys/           # Published survey parameters, one module per survey
+│   └── roman.py       # HLWAS medium depths, line limits, band wavelengths, depth-referenced SNR helpers
 ├── utils.py           # Grid builders, path getters
 ├── plotting.py        # Velocity/intensity map visualization
 ├── diagnostics/       # Diagnostic plotting subpackage
@@ -146,7 +149,7 @@ All raise `ValueError` on unknown names.
 | Position angle | radians | From +x (Cartesian), [0, 2pi) |
 | Inclination | `cosi = cos(i)` | 0=edge-on, 1=face-on |
 | Shear | dimensionless | `g1`, `g2`; \|g\| < 1 |
-| Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)` |
+| Flux | integrated (not surface brightness) | `I0 = flux / (2*pi*r_scale^2)`; ensemble catalog mode: bands in uJy, line in 1e-17 erg/s/cm² (see docs/units_and_conventions.md) |
 | Wavenumber (k) | rad/arcsec | `maxk`, `stepk`, k-space grids |
 | `folding_threshold` | dimensionless | fraction of flux allowed to alias (default 5e-3) |
 | Render output | flux/pixel | `render_image`, `render_grism`, `render_unconvolved`, scipy synthetic backend; matches GalSim `drawImage` |
@@ -157,7 +160,7 @@ All raise `ValueError` on unknown names.
 
 **Always perform dimensional sanity checks** on numerical quantities before finalizing code.
 
-**Full render-method contract:** see `docs/units_and_conventions.md` for the tracked source-of-truth covering every `render_*` method's units, intermediate representations, and the SB↔flux/pixel conversion shorthand.
+**Full render-method units:** see `docs/units_and_conventions.md` for the tracked reference covering every `render_*` method's units, intermediate representations, and the SB↔flux/pixel conversion shorthand.
 
 ---
 
@@ -245,6 +248,7 @@ return 0.0  # could silently corrupt a likelihood calculation
 | `slow` | Significant runtime | `pytest -m slow` |
 | `diagnostic_plots` | Diagnostic-figure tests (also marked `slow`) | `pytest -m diagnostic_plots` |
 | `grism_validation` | Cross-code grism validation (requires reference data) | `make test-grism-validation` |
+| `roman_ensemble` | Roman ensemble-campaign tests (ensemble machinery, catalog adapters, prior provenance, Roman PSF, shear calibration); excluded from `make test` | `make test-roman-ensemble` |
 
 ### Key Test Patterns
 
@@ -347,9 +351,10 @@ make tutorials            # convert tutorial md → ipynb
 make test-tutorials       # convert + execute all tutorials
 
 # Testing
-make test                 # fast tests (excludes slow, tng_diagnostics, grism_validation)
-make test-basic           # no TNG data required
-make test-extended        # excludes tng_diagnostics + grism_validation only
+make test                 # fast generic tests (excludes slow, tng_diagnostics, grism_validation, roman_ensemble)
+make test-basic           # no TNG data required (also excludes roman_ensemble)
+make test-roman-ensemble  # Roman ensemble-campaign tier (fast, no-download subset)
+make test-extended        # excludes tng_diagnostics + grism_validation only (includes roman_ensemble)
 make test-all             # full suite including TNG diagnostics
 make test-fast            # fast tests, stop on first failure (-x)
 make test-verbose         # verbose with stdout (-v -s)

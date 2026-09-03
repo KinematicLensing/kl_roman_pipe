@@ -1012,6 +1012,26 @@ def build_grism_render_config(
     return worst_rc
 
 
+def _unbounded_tail_upper(spec, n_sd_unbounded: float) -> float:
+    """n-sigma upper tail of an unbounded-above prior, in LINEAR units.
+
+    Gaussian mu/sigma are linear-space; LogNormal mu/sigma are log-space and
+    must be exponentiated. Unknown unbounded types raise rather than guess:
+    a generic mu + n*sigma silently returns log-space values for log-space
+    priors.
+    """
+    from kl_pipe.priors import Gaussian, LogNormal
+
+    if isinstance(spec, LogNormal):
+        return float(np.exp(float(spec.mu) + n_sd_unbounded * float(spec.sigma)))
+    if isinstance(spec, Gaussian):
+        return float(spec.mu) + n_sd_unbounded * float(spec.sigma)
+    raise TypeError(
+        f"cannot bound unbounded prior type {type(spec).__name__}; add an "
+        "explicit tail rule to _unbounded_tail_upper"
+    )
+
+
 def _prior_upper(spec, n_sd_unbounded: float) -> float:
     """Worst-case upper value of a prior spec (or a fixed numeric)."""
     if not hasattr(spec, 'bounds'):
@@ -1019,9 +1039,8 @@ def _prior_upper(spec, n_sd_unbounded: float) -> float:
     _, high = spec.bounds
     if high is not None:
         return float(high)
-    # unbounded (Gaussian): mu + n_sd_unbounded sigma covers all but
-    # erfc-negligible prior mass
-    return float(spec.mu) + n_sd_unbounded * float(spec.sigma)
+    # covers all but erfc-negligible prior mass
+    return _unbounded_tail_upper(spec, n_sd_unbounded)
 
 
 def _prior_abs_max(spec, n_sd_unbounded: float) -> float:
@@ -1031,7 +1050,19 @@ def _prior_abs_max(spec, n_sd_unbounded: float) -> float:
     low, high = spec.bounds
     if low is not None and high is not None:
         return max(abs(float(low)), abs(float(high)))
-    return abs(float(spec.mu)) + n_sd_unbounded * float(spec.sigma)
+    upper = _unbounded_tail_upper(spec, n_sd_unbounded)
+    if low is None:
+        # unbounded below too (Gaussian): the lower tail can dominate |value|
+        from kl_pipe.priors import Gaussian
+
+        if isinstance(spec, Gaussian):
+            lower = float(spec.mu) - n_sd_unbounded * float(spec.sigma)
+            return max(abs(lower), abs(upper))
+        raise TypeError(
+            f"cannot bound unbounded-below prior type {type(spec).__name__}"
+        )
+    # bounded below (e.g. LogNormal at 0): |value| peaks at the upper tail
+    return max(abs(float(low)), abs(upper))
 
 
 def line_window_halfwidth_for_priors(

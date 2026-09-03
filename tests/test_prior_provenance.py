@@ -26,6 +26,8 @@ from test_population import (
     write_fake_catalog,
 )
 
+pytestmark = pytest.mark.roman_ensemble
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 

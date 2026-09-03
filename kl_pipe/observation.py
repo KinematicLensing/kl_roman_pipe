@@ -111,6 +111,11 @@ class ImageObs:
     # broadband_key: key into source.broadband_models that this obs renders
     # (used by SourceModel-based inference; None for rendering-only obs).
     broadband_key: Optional[str] = None
+    # flux_unit: declared physical unit of data/variance (e.g.
+    # 'uJy (band-averaged f_nu)'). Pure metadata -- the model and likelihood
+    # are unit-agnostic and never read it; it exists so the unit a data
+    # vector carries is recorded on the object instead of only in docs.
+    flux_unit: Optional[str] = None
     # _rc_was_default: internal flag — True when build_image_obs supplied the
     # default render_config (caller passed render_config=None), False when the
     # caller passed an explicit one. Read by InferenceTask.from_obs to decide
@@ -291,6 +296,10 @@ class GrismObs:
     # psf_kernel_size: pinned kernel stamp size (fine pixels); preserved by
     # with_render_config so rebuilds keep the pinned shape. None = auto size.
     psf_kernel_size: Optional[int] = None
+    # flux_unit: declared physical unit of data/variance (e.g.
+    # '1e-17 erg/s/cm2 (integrated line flux)'). Pure metadata -- never read
+    # by the model or likelihood; records the unit the data vector carries.
+    flux_unit: Optional[str] = None
     # _rc_was_default: internal flag — True when build_grism_obs supplied the
     # default render_config (caller passed render_config=None), False when the
     # caller passed an explicit one. Read by InferenceTask.from_obs to decide
@@ -446,6 +455,7 @@ def _image_obs_flatten(obs):
         obs.broadband_key,
         obs._rc_was_default,
         obs.psf_kernel_size,
+        obs.flux_unit,
     )
     return children, aux
 
@@ -467,6 +477,7 @@ def _image_obs_unflatten(aux, children):
         psf=aux[2],
         broadband_key=aux[3],
         psf_kernel_size=aux[5],
+        flux_unit=aux[6],
     )
     # _rc_was_default is field(init=False); restore via frozen-dataclass bypass.
     object.__setattr__(obs, '_rc_was_default', aux[4])
@@ -547,6 +558,7 @@ def _grism_obs_flatten(obs):
         obs.psf,
         obs._rc_was_default,
         obs.psf_kernel_size,
+        obs.flux_unit,
     )
     return children, aux
 
@@ -564,6 +576,7 @@ def _grism_obs_unflatten(aux, children):
         pixel_response_fft=children[4],
         psf=aux[4],
         psf_kernel_size=aux[6],
+        flux_unit=aux[7],
     )
     object.__setattr__(obs, '_rc_was_default', aux[5])
     return obs
@@ -682,6 +695,7 @@ def build_image_obs(
     render_config=None,
     broadband_key: Optional[str] = None,
     psf_kernel_size: Optional[int] = None,
+    flux_unit: Optional[str] = None,
 ) -> ImageObs:
     """Build imaging observation. Replaces Model.configure_psf().
 
@@ -793,6 +807,7 @@ def build_image_obs(
         psf=psf,
         psf_kernel_size=psf_kernel_size,
         broadband_key=broadband_key,
+        flux_unit=flux_unit,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor
     # kwargs; set it here via the standard frozen-dataclass escape hatch.
@@ -962,6 +977,7 @@ def build_grism_obs(
     n_lambda: Optional[int] = None,
     slice_width_kms: Optional[float] = None,
     psf_kernel_size: Optional[int] = None,
+    flux_unit: Optional[str] = None,
 ) -> GrismObs:
     """Build grism observation.
 
@@ -1068,6 +1084,7 @@ def build_grism_obs(
         mask=mask,
         pixel_response_fft=pixel_response_fft,
         psf=psf,
+        flux_unit=flux_unit,
         psf_kernel_size=psf_kernel_size,
     )
     # _rc_was_default is field(init=False) so it stays out of the constructor

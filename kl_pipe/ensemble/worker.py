@@ -333,12 +333,20 @@ def _run_fit_attempt(
         inputs = reuse.inputs
         task = reuse.task
     else:
+        # catalog manifests carry per-band published-depth SNR columns;
+        # sampled manifests carry one shared scalar for all bands
+        if f'broadband_snr_{config.bands[0]}' in row:
+            band_snrs = {
+                band: float(row[f'broadband_snr_{band}']) for band in config.bands
+            }
+        else:
+            band_snrs = {band: float(row['broadband_snr']) for band in config.bands}
         inputs = build_fit_inputs(
             truth,
             noise_seed,
             spec,
             config,
-            broadband_snr=float(row['broadband_snr']),
+            band_snrs=band_snrs,
             line_snr=float(row['line_snr']),
             # catalog-mode priors read the row's pop.* columns
             row=row,
@@ -397,6 +405,12 @@ def _run_fit_attempt(
     )
     summary['sampler_seed'] = sampler_seed
     summary['has_chains'] = bool(row['save_chains'])
+    # realized per-channel matched-filter SNR against the actual mock
+    # variance (equals the labels under matched_filter; includes shot noise
+    # under poisson) -- the subsample-analysis axis
+    summary['noise_model'] = str(config.noise_model)
+    for key, value in (inputs.snr_effective or {}).items():
+        summary[f'snr_effective_{key}'] = float(value)
 
     artifacts = _AttemptArtifacts(
         result=result,
@@ -475,7 +489,7 @@ def _summary_row(
     # posterior samples per the configured angle convention (default: each
     # sample by its own theta_int) so g+/gx replace g1/g2 in all diagnostics.
     if all(n in sampled_names for n in ('g1', 'g2', 'theta_int')):
-        from kl_pipe.calibration import galaxy_frame_samples
+        from kl_pipe.coordinates import galaxy_frame_samples
 
         samples = np.asarray(result.samples)
         ig1, ig2, ith = (sampled_names.index(n) for n in ('g1', 'g2', 'theta_int'))

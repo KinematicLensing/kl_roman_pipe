@@ -19,7 +19,7 @@ import yaml
 from kl_pipe.ensemble.catalogs import (
     get_catalog_adapter,
     load_catalog,
-    validate_contract,
+    validate_columns,
 )
 from kl_pipe.ensemble.catalogs.cosmos25 import (
     COSMOS25_COLUMNS,
@@ -27,11 +27,17 @@ from kl_pipe.ensemble.catalogs.cosmos25 import (
     F150W_PIVOT_A,
     F150W_RED_EDGE_A,
     F277W_PIVOT_A,
-    R50_OVER_RSCALE,
+)
+from kl_pipe.ensemble.population import build_population
+from kl_pipe.photometry import (
+    C_A_PER_S,
+    EXP_R50_OVER_RSCALE,
+    HALPHA_REST_A,
     UJY_TO_CGS,
 )
-from kl_pipe.ensemble.population import C_A_PER_S, HALPHA_REST_A, build_population
 from kl_pipe.ensemble.spec import EnsembleSpec
+
+pytestmark = pytest.mark.roman_ensemble
 
 COSMOS25 = get_catalog_adapter('cosmos25')
 
@@ -111,6 +117,38 @@ def fake_cosmos25_rows(n: int = 400, seed: int = 4321) -> pd.DataFrame:
     return df[list(COSMOS25_COLUMNS)]
 
 
+def test_band_flux_powerlaw_interpolation():
+    """Roman band fluxes = power-law interpolation of the JWST pivots.
+
+    Hand-computed per band: F106/F129 through (F115W, F150W), F158 through
+    (F150W, F277W), evaluated at the Roman effective wavelengths.
+    """
+    from kl_pipe.ensemble.catalogs.cosmos25 import (
+        F115W_PIVOT_A,
+        F150W_PIVOT_A,
+        F277W_PIVOT_A,
+    )
+    from kl_pipe.surveys.roman import BAND_EFFECTIVE_LAMBDA_A
+
+    df = fake_cosmos25_rows(n=200, seed=99)
+    out = COSMOS25.preprocess(df, preprocess_spec('as_delivered'))
+    raw = df.set_index('id').loc[out['id'].to_numpy()]
+    f115 = raw['flux_model_f115w'].to_numpy(float)
+    f150 = raw['flux_model_f150w'].to_numpy(float)
+    f277 = raw['flux_model_f277w'].to_numpy(float)
+
+    for band, (fb, lb, fr, lr) in {
+        'F106': (f115, F115W_PIVOT_A, f150, F150W_PIVOT_A),
+        'F129': (f115, F115W_PIVOT_A, f150, F150W_PIVOT_A),
+        'F158': (f150, F150W_PIVOT_A, f277, F277W_PIVOT_A),
+    }.items():
+        alpha = np.log(fr / fb) / np.log(lr / lb)
+        expected = fb * (BAND_EFFECTIVE_LAMBDA_A[band] / lb) ** alpha
+        np.testing.assert_allclose(
+            out[f'flux_{band.lower()}_ujy'].to_numpy(float), expected, rtol=1e-10
+        )
+
+
 def write_fake_catalog(
     data_dir: Path, df: pd.DataFrame, name: str = 'cosmos25_fake'
 ) -> Path:
@@ -171,7 +209,9 @@ def catalog_spec_dict(data_dir: Path, **population_overrides) -> dict:
             'shear': {'sigma': 0.03, 'gmax': 0.1},
             'priors': {'logm_obs_scatter_dex': 0.25},
         },
-        'observation': {'config': 'canonical_P', 'snr': {'broadband': 300}},
+        # no snr block: catalog mode takes both channels' per-galaxy SNRs
+        # from the population table
+        'observation': {'config': 'hlwas_medium'},
         'fit': {'pin_z_to_truth': True},
         'dispatch': {'backend': 'local'},
         'output': {},
@@ -212,7 +252,7 @@ def raw(fake_data_dir) -> pd.DataFrame:
 
 
 # ==============================================================================
-# Adapter identity + contract
+# Adapter identity + column set
 # ==============================================================================
 
 
@@ -229,9 +269,9 @@ class TestAdapter:
         assert COSMOS25.flux_variants == ('as_delivered',)
 
     @pytest.mark.parametrize('variant', COSMOS25.flux_variants)
-    def test_preprocess_output_matches_contract(self, raw, variant):
+    def test_preprocess_output_matches_columns(self, raw, variant):
         pre = COSMOS25.preprocess(raw, preprocess_spec(variant))
-        validate_contract(COSMOS25, pre)
+        validate_columns(COSMOS25, pre)
         assert len(pre) > 0
         for stage in (
             'not_galaxy',
@@ -359,7 +399,7 @@ class TestContinuum:
         pre = COSMOS25.preprocess(raw, preprocess_spec())
         np.testing.assert_allclose(
             pre['rscale_arcsec'],
-            pre['disk_r50'].to_numpy() / R50_OVER_RSCALE,
+            pre['disk_r50'].to_numpy() / EXP_R50_OVER_RSCALE,
             rtol=1e-12,
         )
 
@@ -437,7 +477,7 @@ class TestPriorProvenance:
         assert 'Castander2025' not in used
         assert 'Shuntov2025' in used
         # the redshift note reflects a photo-z truth, not grism spectroscopy
-        assert 'photometric redshift' in reg['z'].notes
+        assert 'photo-z' in reg['z'].notes
         # catalog-fit entries carry the measured cosmos25 constants
         # (n=294 census-selected sample of the regenerated catalog,
         # 2026-07-29: rscale log10 mu -0.774 -> median 0.17, sigma 0.161)

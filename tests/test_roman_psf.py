@@ -37,6 +37,8 @@ from kl_pipe.parameters import ImagePars
 from kl_pipe.psf import precompute_psf_fft
 from kl_pipe.render import RenderConfig
 
+pytestmark = pytest.mark.roman_ensemble
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = REPO_ROOT / 'configs' / 'observation'
 DEV_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'sigma_eps_cosi_dev.yaml'
@@ -726,7 +728,12 @@ def _folding_scan_inputs(tmp_path, ft, seed=11):
     )
     return (
         build_fit_inputs(
-            truth, seed, spec, config, broadband_snr=100.0, line_snr=100.0
+            truth,
+            seed,
+            spec,
+            config,
+            band_snrs={b: 100.0 for b in config.bands},
+            line_snr=100.0,
         ),
         truth,
     )
@@ -930,7 +937,12 @@ def test_dual_fidelity_data_uses_mock_kernel(tmp_path):
             }
         )
         return build_fit_inputs(
-            truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
+            truth,
+            11,
+            spec,
+            config,
+            band_snrs={b: 100.0 for b in config.bands},
+            line_snr=100.0,
         )
 
     split = _inputs(None)  # mock at galsim default, fit at 0.01
@@ -980,7 +992,12 @@ def test_from_obs_roman_production_path(tmp_path):
         }
     )
     inputs = build_fit_inputs(
-        truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
+        truth,
+        11,
+        spec,
+        config,
+        band_snrs={b: 100.0 for b in config.bands},
+        line_snr=100.0,
     )
     task = InferenceTask.from_obs(
         inputs.source,
@@ -1028,7 +1045,12 @@ def test_build_fit_inputs_roman_smoke(tmp_path):
         }
     )
     inputs = build_fit_inputs(
-        truth, 11, spec, config, broadband_snr=100.0, line_snr=100.0
+        truth,
+        11,
+        spec,
+        config,
+        band_snrs={b: 100.0 for b in config.bands},
+        line_snr=100.0,
     )
 
     assert set(inputs.image_obs) == {'F158'}

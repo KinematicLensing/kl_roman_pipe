@@ -2,15 +2,15 @@
 Catalog adapter interface: everything catalog-specific behind one seam.
 
 A ``CatalogAdapter`` owns the raw file schema, the unique row key, the
-preprocess step that maps raw columns to the standardized contract, and the
+preprocess step that maps raw columns to the standardized column set, and the
 catalog-fitted prior constants. The generic population machinery
-(``population.build_population``) consumes only the contract columns and the
+(``population.build_population``) consumes only the standardized columns and the
 adapter's declared capabilities, so a new input catalog is one new adapter
 module plus a spec ``catalog.kind`` value -- no changes to the selection,
 paint, or expansion chain.
 
-Contract columns (post-preprocess)
-----------------------------------
+Standardized columns (post-preprocess)
+---------------------------------------
 Required for every catalog:
 
 - ``z``                  true redshift
@@ -24,10 +24,10 @@ Required for every catalog:
 - ``disk_r50``           disk half-light radius [arcsec]
 
 Plus the adapter's ``id_columns`` (integer, jointly unique; their order is
-the seed-key order and is part of the determinism contract), ``z_obs`` when
+the seed-key order, so it must never change), ``z_obs`` when
 ``has_observed_redshift``, the bulge trio (``bulge_fraction``, ``bulge_r50``,
 ``bulge_nsersic``) when ``has_bulge``, and the source columns named by
-``validation_columns``. ``validate_contract`` enforces exact set equality --
+``validation_columns``. ``validate_columns`` enforces exact set equality --
 a column the adapter forgot, or one it leaked through, is a loud error.
 """
 
@@ -45,8 +45,8 @@ import pandas as pd
 if TYPE_CHECKING:
     from kl_pipe.ensemble.spec import CatalogPopulationSpec
 
-# contract columns every adapter's preprocess must produce (see module doc)
-REQUIRED_CONTRACT_COLUMNS = (
+# columns every adapter's preprocess must produce (see module doc)
+REQUIRED_COLUMNS = (
     'z',
     'logm',
     'log_sfr',
@@ -56,10 +56,16 @@ REQUIRED_CONTRACT_COLUMNS = (
     'ew_rest_a',
     'rscale_arcsec',
     'disk_r50',
+    # per-band Roman imaging fluxes [uJy], line-inclusive (what a broadband
+    # image of the source actually contains), interpolated from the catalog's
+    # own photometry to the Roman effective wavelengths
+    'flux_f106_ujy',
+    'flux_f129_ujy',
+    'flux_f158_ujy',
 )
 
-# contract columns present only when the adapter declares bulge support
-BULGE_CONTRACT_COLUMNS = ('bulge_fraction', 'bulge_r50', 'bulge_nsersic')
+# columns present only when the adapter declares bulge support
+BULGE_COLUMNS = ('bulge_fraction', 'bulge_r50', 'bulge_nsersic')
 
 
 @dataclass(frozen=True)
@@ -79,11 +85,19 @@ class CatalogPriorConstants:
     rscale_log10_sigma: float
     rscale_low: float
     rscale_high: float
-    # continuum amplitude [internal flux units per nm]
+    # continuum amplitude [1e-17 erg/s/cm2 per nm]
     cont_flux_log10_mu: float
     cont_flux_log10_sigma: float
     cont_flux_low: float
     cont_flux_high: float
+    # measurement-prior support bounds: line flux [1e-17 erg/s/cm2] and
+    # band flux [uJy], generous margins around the selected sample's reach
+    # (the priors are simulated measurements at SNR >~ 20, so the bounds
+    # only guard support, never shape the posterior)
+    line_flux_low: float
+    line_flux_high: float
+    band_flux_low: float
+    band_flux_high: float
     # bulge fraction + bulge half-light-radius support (None = no bulge)
     bulge_frac_loc: Optional[float] = None
     bulge_frac_scale: Optional[float] = None
@@ -99,12 +113,12 @@ class CatalogAdapter(ABC):
     - ``kind``: registry name, the spec's ``population.catalog.kind`` value
     - ``columns``: exact raw file schema; loads validate set equality
     - ``id_columns``: integer columns forming the unique row key; their
-      order is the per-galaxy seed-key order (determinism contract)
+      order is the per-galaxy seed-key order and must never change
     - ``flux_variants``: legal ``preprocess.flux_variant`` spec values
     - ``download_hint``: how to obtain the file (used in error messages)
-    - ``has_bulge``: catalog carries the bulge contract trio
+    - ``has_bulge``: catalog carries the bulge column trio
     - ``has_observed_redshift``: catalog carries ``z_obs``
-    - ``validation_columns``: population output name -> contract column name
+    - ``validation_columns``: population output name -> preprocess column name
       for catalog values carried through purely for validation/diagnostics
     - ``prior_constants``: the catalog-fitted ``CatalogPriorConstants``
     - ``citation_bibkeys``: bibkeys of the catalog's source paper(s), used
@@ -147,36 +161,36 @@ class CatalogAdapter(ABC):
     def preprocess(
         self, df: pd.DataFrame, spec: 'CatalogPopulationSpec'
     ) -> pd.DataFrame:
-        """Map raw catalog rows to the contract columns.
+        """Map raw catalog rows to the standardized columns.
 
-        Must return exactly the contract set ``contract_columns()`` and set
+        Must return exactly the set ``required_columns()`` and set
         ``attrs['kills']`` to a dict of per-stage dropped-row counts (empty
         dict if the preprocess drops nothing).
         """
 
-    def contract_columns(self) -> Tuple[str, ...]:
+    def required_columns(self) -> Tuple[str, ...]:
         """The exact column set ``preprocess`` must return."""
-        cols = list(self.id_columns) + list(REQUIRED_CONTRACT_COLUMNS)
+        cols = list(self.id_columns) + list(REQUIRED_COLUMNS)
         if self.has_observed_redshift:
             cols.append('z_obs')
         if self.has_bulge:
-            cols.extend(BULGE_CONTRACT_COLUMNS)
+            cols.extend(BULGE_COLUMNS)
         for src in self.validation_columns.values():
             if src not in cols:
                 cols.append(src)
         return tuple(cols)
 
 
-def validate_contract(adapter: CatalogAdapter, df: pd.DataFrame) -> None:
-    """Enforce exact contract-column set equality on a preprocess output."""
-    expected = set(adapter.contract_columns())
+def validate_columns(adapter: CatalogAdapter, df: pd.DataFrame) -> None:
+    """Enforce exact column-set equality on a preprocess output."""
+    expected = set(adapter.required_columns())
     actual = set(df.columns)
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
     if missing or extra:
         raise ValueError(
-            f"{adapter.kind} preprocess violates the contract: missing "
-            f"columns {missing}, unexpected columns {extra}"
+            f"{adapter.kind} preprocess returned the wrong column set: "
+            f"missing columns {missing}, unexpected columns {extra}"
         )
     if 'kills' not in df.attrs or not isinstance(df.attrs['kills'], dict):
         raise ValueError(

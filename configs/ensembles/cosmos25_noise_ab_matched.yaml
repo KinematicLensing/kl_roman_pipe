@@ -1,12 +1,14 @@
-# Stamp A/B, control arm: identical to cosmos25_shear_dev (same seed, so
-# the same galaxy bank, shears, and noise streams) except n_chains 4 --
-# the 2-chain vectorized NUTS kernel hits an XLA slow path on GH200
-# (per-eval 4.6x worse than solo, measured 2026-07-29 batch probe) while
-# the 4-way batch is clean. Pair with cosmos25_ab_bb48gr16.
+# Noise-model A/B, matched_filter arm: identical to
+# cosmos25_noise_ab_poisson (same seed, so the same 8-galaxy bank, shears,
+# and noise deviate streams) except the observation config points at the
+# matched_filter default. The originally intended pairing against the old
+# cosmos25_ab_bb32gr32 results turned out confounded: that arm predates the
+# physical flux units, the per-band catalog labels, and the h_over_r 0.25
+# pin, so its bank truths differ. This twin isolates noise_model alone.
 run:
-  name: cosmos25_ab_bb32gr32
+  name: cosmos25_noise_ab_matched
   version: 1
-  description: "COSMOS25 stamp A/B control: 32x32 stamps, n_chains 4"
+  description: "COSMOS25 noise-model A/B: matched_filter arm (config twin)"
   seed: 20260728
   measurement: shear_bias
   noise_reps: 1

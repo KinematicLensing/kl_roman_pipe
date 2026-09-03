@@ -22,6 +22,7 @@ EXAMPLE_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'flagship2_shear_dev.yaml'
 
 pytestmark = [
     pytest.mark.cosmohub,
+    pytest.mark.roman_ensemble,
     pytest.mark.skipif(
         not DEV_PARQUET.exists(),
         reason="flagship2_dev.parquet absent (make download-cosmohub-dev)",

@@ -401,6 +401,14 @@ class ObservationConfig:
     pixel_scale_arcsec: float
     stamp_broadband_pix: int
     stamp_grism_pix: int
+    # noise_model: how mock noise is generated.
+    #   'matched_filter' (default) -- uniform per-channel Gaussian variance
+    #       normalized so the labeled SNR is exact (current baseline).
+    #   'poisson' -- flat per-pixel background anchored to the published
+    #       survey depths plus the source's own shot noise (catalog mode
+    #       only; the labeled SNR stays the selection/plot axis and the
+    #       realized snr_effective columns report the actual depth).
+    noise_model: str = 'matched_filter'
     content_hash: str = ''  # sha256 of the source YAML file bytes
 
     def __post_init__(self):
@@ -431,6 +439,11 @@ class ObservationConfig:
         ]:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} ({value}) must be a positive int")
+        if self.noise_model not in _NOISE_MODELS:
+            raise ValueError(
+                f"noise_model must be one of {_NOISE_MODELS}, got "
+                f"{self.noise_model!r}"
+            )
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'ObservationConfig':
@@ -439,7 +452,7 @@ class ObservationConfig:
         raw = yaml.safe_load(raw_bytes)
         if not isinstance(raw, dict):
             raise ValueError(f"{path}: observation config must be a mapping")
-        allowed = (
+        required = (
             'id',
             'bands',
             'grism',
@@ -448,8 +461,10 @@ class ObservationConfig:
             'pixel_scale_arcsec',
             'stamp',
         )
-        _reject_unknown(raw, allowed, str(path))
-        _require_keys(raw, allowed, str(path))
+        # noise_model is optional: absent means the matched_filter baseline,
+        # so existing configs keep their meaning
+        _reject_unknown(raw, required + ('noise_model',), str(path))
+        _require_keys(raw, required, str(path))
 
         grism = raw['grism']
         _reject_unknown(grism, ('rolls_deg', 'dispersion_nm_per_pix'), f"{path}:grism")
@@ -478,6 +493,7 @@ class ObservationConfig:
             pixel_scale_arcsec=float(raw['pixel_scale_arcsec']),
             stamp_broadband_pix=int(stamp['broadband_pix']),
             stamp_grism_pix=int(stamp['grism_pix']),
+            noise_model=str(raw.get('noise_model', 'matched_filter')),
             content_hash=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
@@ -486,6 +502,7 @@ class ObservationConfig:
 # Ensemble spec
 # =============================================================================
 
+_NOISE_MODELS = ('matched_filter', 'poisson')
 _DRAW_DISTS = ('uniform', 'lognormal_tf')
 _POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')
@@ -1099,12 +1116,16 @@ class EnsembleSpec:
                 )
         if abs(self.g1) >= 1 or abs(self.g2) >= 1:
             raise ValueError(f"|g| must be < 1, got ({self.g1}, {self.g2})")
-        if self.broadband_snr <= 0:
-            raise ValueError(f"broadband SNR ({self.broadband_snr}) must be positive")
-        # catalog mode: line_snr is a -1 sentinel (per-galaxy values come
-        # from the population table), so the positivity check is sampled-only
-        if self.population_type != 'catalog' and self.line_snr <= 0:
-            raise ValueError(f"line SNR ({self.line_snr}) must be positive")
+        # catalog mode: both SNR scalars are -1 sentinels (per-galaxy values
+        # come from the population table), so positivity checks are
+        # sampled-only
+        if self.population_type != 'catalog':
+            if self.broadband_snr <= 0:
+                raise ValueError(
+                    f"broadband SNR ({self.broadband_snr}) must be positive"
+                )
+            if self.line_snr <= 0:
+                raise ValueError(f"line SNR ({self.line_snr}) must be positive")
         if self.backend not in _DISPATCH_BACKENDS:
             raise ValueError(
                 f"dispatch backend '{self.backend}'; supported: "
@@ -1230,12 +1251,26 @@ class EnsembleSpec:
 
         observation = raw['observation']
         _reject_unknown(observation, ('config', 'snr'), f"{path}:observation")
-        _require_keys(observation, ('config', 'snr'), f"{path}:observation")
-        snr = observation['snr']
-        # observation.snr.line is required as a scalar UNLESS it is the
-        # swept axis
-        _reject_unknown(snr, ('broadband', 'line'), f"{path}:observation.snr")
-        _require_keys(snr, ('broadband',), f"{path}:observation.snr")
+        _require_keys(observation, ('config',), f"{path}:observation")
+        # catalog populations derive BOTH channels' per-fit SNR from the
+        # population table (matched-filter depth anchors), so the snr block
+        # is rejected outright there; sampled populations require it
+        if population_type == 'catalog':
+            if 'snr' in observation:
+                raise ValueError(
+                    f"{path}:observation.snr is not valid for catalog "
+                    f"populations: per-fit broadband and line SNRs come from "
+                    f"the population table's published-depth matched-filter "
+                    f"columns; remove the block"
+                )
+            snr = {}
+        else:
+            _require_keys(observation, ('snr',), f"{path}:observation")
+            snr = observation['snr']
+            # observation.snr.line is required as a scalar UNLESS it is the
+            # swept axis
+            _reject_unknown(snr, ('broadband', 'line'), f"{path}:observation.snr")
+            _require_keys(snr, ('broadband',), f"{path}:observation.snr")
 
         # sampled-mode placeholders (overwritten in the sampled branch)
         catalog_population: Optional[CatalogPopulationSpec] = None
@@ -1257,16 +1292,6 @@ class EnsembleSpec:
             catalog_population = _parse_catalog_population(
                 population, f"{path}:population"
             )
-            # per-fit line SNR comes from the population table (matched-filter
-            # snr_line_per_pass per galaxy); a scalar here would be silently
-            # ignored, so reject it outright
-            if 'line' in snr:
-                raise ValueError(
-                    f"{path}:observation.snr.line is not valid for catalog "
-                    f"populations: per-fit line SNR comes from the population "
-                    f"table's matched-filter snr_line_per_pass column; "
-                    f"remove it"
-                )
             ring_enabled = catalog_population.ring_members == 2
         else:
             _reject_unknown(
@@ -1445,12 +1470,15 @@ class EnsembleSpec:
             catalog_population=catalog_population,
             render_oversample=render_oversample,
             observed_config=str(observation['config']),
-            broadband_snr=float(snr['broadband']),
-            # catalog populations carry per-galaxy line SNR in the population
-            # table; the scalar field gets a -1 sentinel so any accidental use
-            # fails the positive-SNR checks loudly. Swept axes: per-fit values
-            # live in the manifest; the scalar field is unused (set to the
-            # first sweep value as a placeholder that keeps validation simple)
+            # catalog populations carry per-galaxy SNRs (both channels) in
+            # the population table; the scalar fields get -1 sentinels so any
+            # accidental use fails the positive-SNR checks loudly. Swept
+            # axes: per-fit values live in the manifest; the scalar field is
+            # unused (set to the first sweep value as a placeholder that
+            # keeps validation simple)
+            broadband_snr=(
+                -1.0 if population_type == 'catalog' else float(snr['broadband'])
+            ),
             line_snr=(
                 -1.0
                 if population_type == 'catalog'
