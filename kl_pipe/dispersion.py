@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Tuple, Optional
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -537,6 +538,32 @@ def _normal_cdf_antiderivative(z: jnp.ndarray) -> jnp.ndarray:
     return z * _normal_cdf(z) + _normal_pdf(z)
 
 
+def _bounded_cdf_antiderivative(z: jnp.ndarray) -> jnp.ndarray:
+    # Psi(z) - max(z, 0) = -|z| Phi(-|z|) + phi(z): even, bounded by phi(0);
+    # Phi(-|z|) via erfc avoids the 1 + erf cancellation in the tails
+    az = jnp.abs(z)
+    return -az * 0.5 * jax.scipy.special.erfc(az / jnp.sqrt(2.0)) + _normal_pdf(z)
+
+
+def _tent_second_difference(z_taps: jnp.ndarray, inv_sigma: jnp.ndarray) -> jnp.ndarray:
+    """Second difference of Psi along the last axis, evaluated without
+    differencing large numbers.
+
+    ``z_taps[..., k]`` are consecutive tap arguments spaced ``inv_sigma``
+    apart; the result has one fewer entry at each end. Psi is split into
+    ``max(z, 0)`` -- whose second difference at spacing h is exactly the tent
+    ``clip(h - |z_mid|, 0, h)`` -- and a bounded remainder, so float32
+    keeps its full precision at large |z| (the naive form differences values
+    ~|z| to get O(1) results). In float64 this reorders round-off at the
+    1e-14 level relative to the direct second difference.
+    """
+    bounded = _bounded_cdf_antiderivative(z_taps)
+    curved = bounded[..., 2:] - 2.0 * bounded[..., 1:-1] + bounded[..., :-2]
+    h = inv_sigma[..., None] if jnp.ndim(inv_sigma) else inv_sigma
+    tent = jnp.clip(h - jnp.abs(z_taps[..., 1:-1]), 0.0, h)
+    return curved + tent
+
+
 def gaussian_tent_profile(u: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
     """Closed form of (normalized Gaussian_sigma convolved with unit tent)(u).
 
@@ -548,11 +575,58 @@ def gaussian_tent_profile(u: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
     line width in fine pixels. Both broadcast. Dimensionless; integrates
     to 1 over u.
     """
-    return sigma * (
-        _normal_cdf_antiderivative((u + 1.0) / sigma)
-        - 2.0 * _normal_cdf_antiderivative(u / sigma)
-        + _normal_cdf_antiderivative((u - 1.0) / sigma)
+    u = jnp.asarray(u)
+    sigma = jnp.asarray(sigma)
+    inv_sigma = 1.0 / sigma
+    z_taps = jnp.stack(
+        [(u - 1.0) * inv_sigma, u * inv_sigma, (u + 1.0) * inv_sigma], axis=-1
     )
+    return sigma * _tent_second_difference(z_taps, inv_sigma)[..., 0]
+
+
+def line_dispersion_offsets(
+    lambda_sys: jnp.ndarray,
+    lambda_ref: float,
+    v_los: jnp.ndarray,
+    sigma_kms: jnp.ndarray,
+    dispersion: float,
+    oversample: int,
+) -> tuple:
+    """Per-spaxel footprint centre ``xi`` and width ``sigma_s`` in fine pixels.
+
+    ``xi = (lambda_obs - lambda_ref) / dispersion * oversample`` with
+    ``lambda_obs = lambda_sys * (1 + v_los / c)``, evaluated as the systemic
+    offset ``lambda_sys - lambda_ref`` (one scalar) plus the small Doppler
+    term ``lambda_sys * v_los / c`` per spaxel, so no per-spaxel absolute
+    wavelength (~1e3 nm) is ever differenced. In float32 that keeps ``xi``
+    to ~1e-6 fine pixels instead of ~1e-3 (one float32 ulp of 1300 nm is
+    28 km/s / 1000); in float64 the reordering is round-off level.
+
+    Parameters
+    ----------
+    lambda_sys : scalar
+        Systemic line wavelength ``lambda_rest * (1 + z)`` (nm).
+    lambda_ref : float
+        Grism zero-offset wavelength (nm).
+    v_los : array
+        Line-of-sight velocity per spaxel (km/s).
+    sigma_kms : scalar
+        Velocity dispersion (km/s).
+    dispersion : float
+        nm per coarse pixel.
+    oversample : int
+        Fine pixels per coarse pixel.
+
+    Returns
+    -------
+    (xi, sigma_s)
+        Fine-pixel footprint centre offset and Gaussian width per spaxel.
+    """
+    scale = oversample / dispersion  # fine pixels per nm
+    doppler_nm = lambda_sys * (v_los / C_KMS)
+    xi = ((lambda_sys - lambda_ref) + doppler_nm) * scale
+    sigma_s = (lambda_sys + doppler_nm) * (sigma_kms / C_KMS) * scale
+    return xi, sigma_s
 
 
 def disperse_line_analytic(
@@ -602,17 +676,14 @@ def disperse_line_analytic(
         raise ValueError(f"halfwidth must be >= 1, got {halfwidth}")
     amp = I_line if weight is None else I_line * weight
     n = I_line.shape[1]
-    # all taps at once: Psi on a (row, col, tap) tensor, second difference
-    # along taps gives each spaxel's deposit at offset w, then one gather
+    # all taps at once: a (row, col, tap) tensor of tap arguments, second
+    # difference along taps gives each spaxel's deposit at offset w, then one gather
     # collects the deposits landing on each output column (out-of-stamp
     # sources masked, matching the constant-mode pull semantics)
     taps = jnp.arange(-halfwidth - 1, halfwidth + 2, dtype=I_line.dtype)
     inv_sigma = 1.0 / sigma_s
-    P = _normal_cdf_antiderivative(
-        (taps[None, None, :] - xi[..., None]) * inv_sigma[..., None]
-    )
-    profile = P[..., 2:] - 2.0 * P[..., 1:-1] + P[..., :-2]
-    deposit = (amp * sigma_s)[..., None] * profile
+    z_taps = (taps[None, None, :] - xi[..., None]) * inv_sigma[..., None]
+    deposit = (amp * sigma_s)[..., None] * _tent_second_difference(z_taps, inv_sigma)
     col = jnp.arange(n)
     tap = jnp.arange(2 * halfwidth + 1)
     src_col = col[:, None] - tap[None, :] + halfwidth

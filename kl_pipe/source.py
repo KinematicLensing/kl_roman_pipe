@@ -510,6 +510,7 @@ class SourceModel:
             continuum_trace_kernel,
             disperse_continuum_analytic,
             disperse_line_analytic,
+            line_dispersion_offsets,
         )
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.utils import build_map_grid_from_image_pars
@@ -580,13 +581,15 @@ class SourceModel:
                 f'int:{int_owner}', theta_int, int_model, int_model.amplitude_param
             )
 
-            lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_los / _C_KMS)
             disp_owner = (
                 line.dispersion_key if line.dispersion_key is not None else line_key
             )
             sigma_kms = pars[f'{disp_owner}.dispersion']
-            sigma_s = lam_obs * sigma_kms / _C_KMS / gp.dispersion * os_f
-            xi = (lam_obs - gp.lambda_ref) / gp.dispersion * os_f
+            lam_sys = line.lambda_rest * (1.0 + z)
+            xi, sigma_s = line_dispersion_offsets(
+                lam_sys, gp.lambda_ref, v_los, sigma_kms, gp.dispersion, os_f
+            )
+            lam_obs = lam_sys * (1.0 + v_los / _C_KMS)
 
             halfwidth = obs.line_window_halfwidth
             if halfwidth is None:
