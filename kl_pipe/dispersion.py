@@ -545,23 +545,41 @@ def _bounded_cdf_antiderivative(z: jnp.ndarray) -> jnp.ndarray:
     return -az * 0.5 * jax.scipy.special.erfc(az / jnp.sqrt(2.0)) + _normal_pdf(z)
 
 
-def _tent_second_difference(z_taps: jnp.ndarray, inv_sigma: jnp.ndarray) -> jnp.ndarray:
-    """Second difference of Psi along the last axis, evaluated without
-    differencing large numbers.
+def _tent_second_difference_direct(z_taps: jnp.ndarray) -> jnp.ndarray:
+    # second difference of Psi(z) = z Phi(z) + phi(z) along the last axis
+    psi = _normal_cdf_antiderivative(z_taps)
+    return psi[..., 2:] - 2.0 * psi[..., 1:-1] + psi[..., :-2]
 
-    ``z_taps[..., k]`` are consecutive tap arguments spaced ``inv_sigma``
-    apart; the result has one fewer entry at each end. Psi is split into
-    ``max(z, 0)`` -- whose second difference at spacing h is exactly the tent
-    ``clip(h - |z_mid|, 0, h)`` -- and a bounded remainder, so float32
-    keeps its full precision at large |z| (the naive form differences values
-    ~|z| to get O(1) results). In float64 this reorders round-off at the
-    1e-14 level relative to the direct second difference.
-    """
+
+def _tent_second_difference_stable(
+    z_taps: jnp.ndarray, inv_sigma: jnp.ndarray
+) -> jnp.ndarray:
+    # Psi = max(z, 0) + bounded remainder; the second difference of max(z, 0)
+    # at spacing h is exactly the tent clip(h - |z_mid|, 0, h), so no
+    # values of size |z| are ever differenced
     bounded = _bounded_cdf_antiderivative(z_taps)
     curved = bounded[..., 2:] - 2.0 * bounded[..., 1:-1] + bounded[..., :-2]
     h = inv_sigma[..., None] if jnp.ndim(inv_sigma) else inv_sigma
     tent = jnp.clip(h - jnp.abs(z_taps[..., 1:-1]), 0.0, h)
     return curved + tent
+
+
+def _tent_second_difference(z_taps: jnp.ndarray, inv_sigma: jnp.ndarray) -> jnp.ndarray:
+    """Second difference of Psi along the last axis, dispatched on dtype.
+
+    ``z_taps[..., k]`` are consecutive tap arguments spaced ``inv_sigma``
+    apart; the result has one fewer entry at each end. Float64 inputs use
+    the direct second difference of ``Psi(z) = z Phi(z) + phi(z)``. Float32
+    inputs use the cancellation-free split ``Psi = max(z, 0) + remainder``:
+    the direct form differences values of size |z| (up to ~30) to obtain
+    O(1) results and loses float32 precision, while the split form's
+    intermediates stay bounded. The two agree to 1e-14 in float64; the
+    stable form moves about a quarter more memory in the backward pass,
+    which is why float64 keeps the direct form.
+    """
+    if jnp.dtype(z_taps.dtype) == jnp.dtype(jnp.float64):
+        return _tent_second_difference_direct(z_taps)
+    return _tent_second_difference_stable(z_taps, inv_sigma)
 
 
 def gaussian_tent_profile(u: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:

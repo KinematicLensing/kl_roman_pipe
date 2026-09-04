@@ -28,6 +28,13 @@ _disperse = jax.jit(disperse_line_analytic, static_argnums=3)
 _tent = jax.jit(gaussian_tent_profile)
 _naive_psi = jax.jit(_normal_cdf_antiderivative)
 
+# every test here compares a float32 evaluation against a float64 reference of
+# the same JAX code; with KLPIPE_FP32 set (x64 off) no float64 reference exists
+pytestmark = pytest.mark.skipif(
+    not jax.config.jax_enable_x64,
+    reason="float64 references unavailable under KLPIPE_FP32 (x64 disabled)",
+)
+
 # a third of the production grism roll (32x32 at oversample 3, halfwidth 31)
 # so the module runs in ~1 s; the errors are per element, so they carry over.
 # sigma_s spans the 150 km/s prior ceiling at z ~ 1.9.
@@ -89,6 +96,41 @@ def test_tent_profile_float32_precision(spaxel_fields):
     )
     naive_err = np.abs(np.asarray(naive) - ref).max() / peak
     assert naive_err > 5 * stable_err
+
+
+def test_tent_second_difference_dispatches_on_dtype(spaxel_fields):
+    """Float64 taps take the direct Psi second difference, float32 taps the
+    cancellation-free form; the two forms agree to round-off in float64."""
+    from kl_pipe.dispersion import (
+        _tent_second_difference,
+        _tent_second_difference_direct,
+        _tent_second_difference_stable,
+    )
+
+    xi, sigma_s, _ = spaxel_fields
+    taps = np.arange(-HALFWIDTH - 1, HALFWIDTH + 2, dtype=float)
+    for dt, expected in (
+        (jnp.float64, _tent_second_difference_direct),
+        (jnp.float32, _tent_second_difference_stable),
+    ):
+        inv = 1.0 / _as(sigma_s, dt)
+        z = (_as(taps, dt)[None, None, :] - _as(xi, dt)[..., None]) * inv[..., None]
+        got = _tent_second_difference(z, inv)
+        assert got.dtype == dt
+        want = (
+            expected(z)
+            if expected is _tent_second_difference_direct
+            else expected(z, inv)
+        )
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+    inv = 1.0 / _as(sigma_s, jnp.float64)
+    z = (_as(taps, jnp.float64)[None, None, :] - _as(xi, jnp.float64)[..., None]) * inv[
+        ..., None
+    ]
+    direct = np.asarray(_tent_second_difference_direct(z))
+    stable = np.asarray(_tent_second_difference_stable(z, inv))
+    # measured 3e-14 of peak on these inputs (2026-09-04), budget 10x
+    assert np.abs(direct - stable).max() / np.abs(direct).max() < 3e-13
 
 
 def test_line_image_float32_precision(spaxel_fields):
