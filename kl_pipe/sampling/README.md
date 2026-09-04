@@ -18,7 +18,7 @@ Architecture and implementation reference for the MCMC sampling infrastructure. 
 | `emcee.py` | `EmceeSampler` -- ensemble MCMC (gradient-free) |
 | `nautilus.py` | `NautilusSampler` -- neural nested sampling |
 | `blackjax.py` | `BlackJAXSampler` -- JAX-native HMC/NUTS |
-| `numpyro.py` | `NumpyroSampler` -- NUTS with Z-score reparam (RECOMMENDED) |
+| `numpyro.py` | `NumpyroSampler` -- NUTS; Laplace-preconditioned unconstrained coords in production, Z-score reparam when unpreconditioned (RECOMMENDED) |
 | `ultranest.py` | `UltraNestSampler` -- placeholder, NOT IMPLEMENTED |
 | `diagnostics.py` | Trace plots, corner plots, recovery plots, sampler comparison |
 
@@ -73,7 +73,7 @@ Sampled parameter order is always **sorted alphabetically** -- this is the canon
 
 ### Z-Score Reparameterization (NumPyro)
 
-The NumPyro backend samples in a standardized latent space where all parameters are O(1). For each parameter:
+Used only when `precondition` is unset. With `precondition='laplace'` (the production setting) the backend samples in `UnconstrainingTransform` coordinates with the MAP-Hessian Laplace metric as the initial dense mass matrix instead. Without preconditioning the NumPyro backend samples in a standardized latent space where all parameters are O(1). For each parameter:
 
 ```
 z ~ Normal(0, 1)           # latent variable

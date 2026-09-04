@@ -227,6 +227,13 @@ export KLPIPE_PYTHON="apptainer exec --nv \
 (the from-source galsim finds fftw via `LD_PRELOAD` of the copy provision
 embeds in the sidecar -- no fftw bind or `LD_LIBRARY_PATH` needed.)
 
+Float32 runs (`KLPIPE_FP32=1`) need a released JAX in place of the container
+nightly, whose XLA cannot create single-precision cuFFT plans: install the
+release sidecar once per `experiments/sweverett/vista_kit/SETUP.md` section 3b,
+then `export KLPIPE_JAX_RELEASE=0.11.1` before sourcing `env_vista.sh`. The
+launcher swaps the JAX stack and compilation cache; everything else is
+unchanged. Float64 speed is identical on both stacks.
+
 **idev micro-run** (an idev node is just a local machine -- use the local
 backend; no SLURM machinery involved):
 

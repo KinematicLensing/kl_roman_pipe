@@ -140,6 +140,40 @@ kl_pipe itself is used straight from the repo via
 pulling the full dependency tree; the kit only imports the inference
 modules).
 
+## 3b. Release JAX stack (required for float32 on the GPU)
+
+The container's JAX is a nightly (`0.10.1.dev`) whose XLA cannot create
+single-precision cuFFT plans on the GH200: every float32 or complex64 FFT
+fails with `RET_CHECK fft_plan != nullptr` (float64 FFTs work). Nothing in
+kl_pipe can work around it, so any `KLPIPE_FP32=1` run needs a released JAX.
+The fix is a second pip sidecar holding `jax[cuda13]` at a release version,
+placed ahead of the container's own copy, with the container's `/opt/jax` and
+`/opt/jaxlibs` hidden behind empty bind mounts. `$WORK/klpipe_pipdeps` and the
+container image are not touched.
+
+One-time install (compute node, inside idev; ~3.7 GB, includes the NVIDIA
+runtime libraries the wheels depend on, so it does not use the container's
+cuFFT):
+
+```bash
+JAXVER=0.11.1
+JAXREL=$WORK/klpipe_jax_release_$JAXVER; EMPTY=$SCRATCH/empty_dir; mkdir -p $JAXREL $EMPTY
+apptainer exec --nv -B $WORK -B $SCRATCH -B $EMPTY:/opt/jax -B $EMPTY:/opt/jaxlibs \
+  $WORK/containers/jax_26.06-py3.sif \
+  python -m pip install --no-cache-dir --target $JAXREL "jax[cuda13]==$JAXVER"
+```
+
+Use: `export KLPIPE_JAX_RELEASE=0.11.1` before sourcing `env_vista.sh`; the
+launcher then binds the sidecar, hides `/opt/jax*`, and uses a separate
+compilation cache (`$SCRATCH/jax_cache_rel_<version>`). Unset the variable
+for the container JAX (float64 only).
+
+Verified 2026-09-04 (jobs 968571, 968578): all float32/complex64 FFT probes
+pass; float64 production log-posterior speed is identical to the container
+JAX (0.452 vs 0.455 ms/lane at 64 lanes); float32 gives 2.2x at saturation.
+Sidecar `numpyro 0.21.0` / `blackjax 1.6.2` against jax 0.11.1: worker smoke
+test job 968717 (see docs/sessions/2026-09-04_fp32_gpu_unblock_local_window.md).
+
 ## 4. Sanity checks (compute node -- idev, NOT the login node)
 
 Grab an interactive GPU node first (container execution is banned on login
