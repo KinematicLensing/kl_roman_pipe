@@ -510,6 +510,7 @@ class SourceModel:
             continuum_trace_kernel,
             disperse_continuum_analytic,
             disperse_line_analytic,
+            disperse_line_analytic_local,
             line_dispersion_offsets,
         )
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
@@ -591,15 +592,22 @@ class SourceModel:
             )
             lam_obs = lam_sys * (1.0 + v_los / _C_KMS)
 
+            local_window = obs.line_window_mode == 'local'
             halfwidth = obs.line_window_halfwidth
             if halfwidth is None:
                 # standalone sizing from the concrete parameter values;
                 # jitted/inference use must freeze it in RenderConfig
                 try:
-                    halfwidth = (
-                        int(float(jnp.max(jnp.abs(xi))) + 4.0 * float(jnp.max(sigma_s)))
-                        + 3
-                    )
+                    if local_window:
+                        halfwidth = int(6.0 * float(jnp.max(sigma_s))) + 3
+                    else:
+                        halfwidth = (
+                            int(
+                                float(jnp.max(jnp.abs(xi)))
+                                + 4.0 * float(jnp.max(sigma_s))
+                            )
+                            + 3
+                        )
                 except jax.errors.ConcretizationTypeError as err:
                     raise ValueError(
                         "line_window_halfwidth must be set on RenderConfig for "
@@ -614,7 +622,10 @@ class SourceModel:
                 if throughput is not None
                 else None
             )
-            dispersed = dispersed + disperse_line_analytic(
+            disperse = (
+                disperse_line_analytic_local if local_window else disperse_line_analytic
+            )
+            dispersed = dispersed + disperse(
                 I_line, xi, sigma_s, halfwidth, weight=weight
             )
 

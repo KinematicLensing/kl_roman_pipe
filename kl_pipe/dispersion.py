@@ -710,6 +710,50 @@ def disperse_line_analytic(
     return jnp.sum(jnp.where(valid[None], gathered, 0.0), axis=-1)
 
 
+def disperse_line_analytic_local(
+    I_line: jnp.ndarray,
+    xi: jnp.ndarray,
+    sigma_s: jnp.ndarray,
+    halfwidth: int,
+    weight: jnp.ndarray = None,
+) -> jnp.ndarray:
+    """Closed-form line dispersal with a per-spaxel window (scatter-add).
+
+    Same model as ``disperse_line_analytic``: spaxel (r, j) spreads
+    ``I_line * weight`` along +x as ``gaussian_tent_profile`` centred
+    ``xi[r, j]`` fine pixels from its column. Here the ``2 * halfwidth + 1``
+    taps are centred on ``round(xi)`` for each spaxel instead of on the
+    source column, so ``halfwidth`` only has to cover the profile width
+    (see ``render.local_line_window_halfwidth_for_priors``). Deposits land
+    by scatter-add; flux beyond the stamp edge is dropped. The tap set
+    changes when ``xi`` crosses a half-integer, by the size of the tail
+    outside the window (below 1e-9 of the peak for a six-sigma window).
+    """
+    if halfwidth < 1:
+        raise ValueError(f"halfwidth must be >= 1, got {halfwidth}")
+    amp = I_line if weight is None else I_line * weight
+    nrow, n = I_line.shape
+    xi_round = jnp.round(xi)
+    frac = xi - xi_round
+    taps = jnp.arange(-halfwidth - 1, halfwidth + 2, dtype=I_line.dtype)
+    inv_sigma = 1.0 / sigma_s
+    z_taps = (taps[None, None, :] - frac[..., None]) * inv_sigma[..., None]
+    deposit = (amp * sigma_s)[..., None] * _tent_second_difference(z_taps, inv_sigma)
+    offsets = jnp.arange(-halfwidth, halfwidth + 1)
+    dest = (
+        jnp.arange(n)[None, :, None]
+        + xi_round[..., None].astype(jnp.int32)
+        + offsets[None, None, :]
+    )
+    valid = (dest >= 0) & (dest < n)
+    rows = jnp.broadcast_to(jnp.arange(nrow)[:, None, None], dest.shape)
+    return (
+        jnp.zeros((nrow, n), I_line.dtype)
+        .at[rows, jnp.clip(dest, 0, n - 1)]
+        .add(jnp.where(valid, deposit, 0.0))
+    )
+
+
 def _tent_running_integral(t: np.ndarray) -> np.ndarray:
     """Integral of the unit tent from -inf to t (numpy, precompute only)."""
     p2 = lambda z: 0.5 * np.square(np.clip(z, 0.0, None))  # noqa: E731

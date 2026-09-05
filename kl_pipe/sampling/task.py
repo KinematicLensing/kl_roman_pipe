@@ -166,6 +166,7 @@ def _check_source_priors_fit_obs(
             RenderConfig,
             build_grism_render_config,
             line_window_halfwidth_for_priors,
+            local_line_window_halfwidth_for_priors,
         )
 
         rc_obs = obs.render_config if obs.render_config is not None else RenderConfig()
@@ -178,9 +179,12 @@ def _check_source_priors_fit_obs(
                 or rc.line_window_halfwidth is not None
             ):
                 return rc
-            hw = line_window_halfwidth_for_priors(
-                source, priors, obs.grism_pars, rc.oversample
+            size = (
+                local_line_window_halfwidth_for_priors
+                if rc.line_window_mode == 'local'
+                else line_window_halfwidth_for_priors
             )
+            hw = size(source, priors, obs.grism_pars, rc.oversample)
             return dataclasses.replace(rc, line_window_halfwidth=hw)
 
         # auto-derive + rebuild when the obs carries a builder-default rc;

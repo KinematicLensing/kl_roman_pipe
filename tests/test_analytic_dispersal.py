@@ -23,6 +23,7 @@ from kl_pipe.dispersion import (
     continuum_trace_kernel,
     disperse_continuum_analytic,
     disperse_line_analytic,
+    disperse_line_analytic_local,
     gaussian_tent_profile,
 )
 from kl_pipe.intensity import InclinedExponentialModel
@@ -181,6 +182,147 @@ class TestLineDispersalGather:
             np.testing.assert_allclose(
                 np.asarray(a), np.asarray(b), rtol=0, atol=1e-13 * scale
             )
+
+
+# local window vs global window (wide enough to truncate nothing) on random
+# fields with sigma_s <= 2.6 and a six-sigma local half-width: measured
+# 2026-09-04 over three seeds, image <= 1.2e-12 of peak, gradient <= 3.5e-11
+# relative (the dropped tail beyond 6 sigma); budgets 10x, rounded up
+LOCAL_IMAGE_TOL = 2e-11
+LOCAL_GRAD_TOL = 4e-10
+
+
+class TestLineDispersalLocalWindow:
+    """Per-spaxel window (scatter-add on round(xi)) vs the global gather."""
+
+    SIGMA_MAX = 2.6
+    LOCAL_HW = int(np.ceil(6 * SIGMA_MAX)) + 2  # the production sizing rule
+
+    def _fields(self, seed, shape=(12, 40)):
+        rng = np.random.default_rng(seed)
+        I_line = jnp.asarray(rng.uniform(0.0, 1.0, shape))
+        xi = jnp.asarray(rng.uniform(-12.0, 12.0, shape))
+        sigma_s = jnp.asarray(rng.uniform(0.6, self.SIGMA_MAX, shape))
+        weight = jnp.asarray(rng.uniform(0.5, 1.5, shape))
+        return I_line, xi, sigma_s, weight
+
+    @pytest.mark.parametrize('use_weight', [False, True])
+    def test_matches_global_window(self, use_weight):
+        I_line, xi, sigma_s, weight = self._fields(1 + int(use_weight))
+        w = weight if use_weight else None
+        # global half-width covering max|xi| + 6 sigma so it drops nothing either
+        ref = disperse_line_analytic(I_line, xi, sigma_s, 30, weight=w)
+        got = disperse_line_analytic_local(I_line, xi, sigma_s, self.LOCAL_HW, weight=w)
+        peak = float(jnp.max(jnp.abs(ref)))
+        assert float(jnp.max(jnp.abs(got - ref))) / peak < LOCAL_IMAGE_TOL
+        assert abs(float(got.sum() - ref.sum())) / float(ref.sum()) < LOCAL_IMAGE_TOL
+
+    def test_gradients_match_global_window(self):
+        I_line, xi, sigma_s, weight = self._fields(3)
+        cot = jnp.asarray(np.random.default_rng(4).normal(size=I_line.shape))
+
+        def loss(fn, hw):
+            return lambda a, x, s: jnp.sum(cot * fn(a, x, s, hw, weight=weight))
+
+        g_ref = jax.grad(loss(disperse_line_analytic, 30), argnums=(0, 1, 2))(
+            I_line, xi, sigma_s
+        )
+        g_loc = jax.grad(
+            loss(disperse_line_analytic_local, self.LOCAL_HW), argnums=(0, 1, 2)
+        )(I_line, xi, sigma_s)
+        for a, b in zip(g_loc, g_ref):
+            assert float(jnp.max(jnp.abs(a - b)) / jnp.max(jnp.abs(b))) < LOCAL_GRAD_TOL
+
+    def test_gradient_matches_finite_difference(self):
+        I_line, xi, sigma_s, weight = self._fields(5)
+        rng = np.random.default_rng(6)
+        cot = jnp.asarray(rng.normal(size=I_line.shape))
+        args = [I_line, xi, sigma_s]
+        direction = [jnp.asarray(rng.normal(size=I_line.shape)) for _ in args]
+
+        @jax.jit
+        def loss(a, x, s):
+            return jnp.sum(cot * disperse_line_analytic_local(a, x, s, self.LOCAL_HW))
+
+        grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(*args)
+        directional = sum(float(jnp.sum(g * d)) for g, d in zip(grads, direction))
+        eps = 1e-6
+        plus = float(loss(*[a + eps * d for a, d in zip(args, direction)]))
+        minus = float(loss(*[a - eps * d for a, d in zip(args, direction)]))
+        fd = (plus - minus) / (2 * eps)
+        # round(xi) has zero derivative; the FD step never crosses a
+        # half-integer at eps = 1e-6 on these fields, so the two agree as for
+        # the global path (central-difference truncation ~1e-7 relative)
+        assert abs(directional - fd) / abs(fd) < 1e-6
+
+    def test_rejects_bad_halfwidth(self):
+        I_line, xi, sigma_s, _ = self._fields(7)
+        with pytest.raises(ValueError, match="halfwidth"):
+            disperse_line_analytic_local(I_line, xi, sigma_s, 0)
+
+
+class TestLineWindowMode:
+    """RenderConfig plumbing and prior sizing for line_window_mode."""
+
+    def test_render_config_validates_mode(self):
+        RenderConfig(dispersal_method='analytic', line_window_mode='local')
+        with pytest.raises(ValueError, match="line_window_mode"):
+            RenderConfig(dispersal_method='analytic', line_window_mode='nearest')
+
+    def test_render_config_pytree_round_trip(self):
+        rc = RenderConfig(
+            oversample=3,
+            dispersal_method='analytic',
+            line_window_halfwidth=17,
+            line_window_mode='local',
+            continuum_fills_stamp=False,
+        )
+        leaves, treedef = jax.tree_util.tree_flatten(rc)
+        back = jax.tree_util.tree_unflatten(treedef, leaves)
+        assert back == rc
+
+    def test_local_sizing_from_priors(self, scene):
+        from kl_pipe.priors import PriorDict, TruncatedNormal, Uniform
+        from kl_pipe.render import (
+            line_window_halfwidth_for_priors,
+            local_line_window_halfwidth_for_priors,
+        )
+        from kl_pipe.constants import C_KMS
+
+        _, gp, _, source = scene
+        priors = PriorDict(
+            {
+                'z': 1.0,
+                'vel.v0': Uniform(-50.0, 50.0),
+                'vel.vcirc': Uniform(50.0, 300.0),
+                'Halpha.dispersion': TruncatedNormal(40.0, 20.0, 5.0, 150.0),
+            }
+        )
+        hw_local = local_line_window_halfwidth_for_priors(source, priors, gp, 3)
+        sigma_s_max = 656.28 * 2.0 * 150.0 / C_KMS / gp.dispersion * 3
+        assert hw_local == int(np.ceil(6 * sigma_s_max)) + 2
+        # the local window only carries the profile width; the global one
+        # also carries the largest centre offset, so it is wider
+        assert hw_local < line_window_halfwidth_for_priors(source, priors, gp, 3)
+        with pytest.raises(KeyError, match="dispersion"):
+            local_line_window_halfwidth_for_priors(source, PriorDict({'z': 1.0}), gp, 3)
+
+    def test_render_grism_local_matches_global(self, scene):
+        _, gp, psf, source = scene
+        rc_g = RenderConfig(oversample=3, dispersal_method='analytic')
+        rc_l = dataclasses.replace(rc_g, line_window_mode='local')
+        obs_g = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc_g)
+        obs_l = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc_l)
+        ref = np.asarray(source.render_grism(TRUE_PARS, obs_g))
+        got = np.asarray(source.render_grism(TRUE_PARS, obs_l))
+        assert np.abs(got - ref).max() / np.abs(ref).max() < LOCAL_IMAGE_TOL
+        # jitted local render with a frozen half-width equals eager
+        rc_j = dataclasses.replace(rc_l, line_window_halfwidth=12)
+        obs_j = build_grism_obs(gp, z=1.0, psf=psf, render_config=rc_j)
+        eager = np.asarray(source.render_grism(TRUE_PARS, obs_j))
+        jitted = np.asarray(jax.jit(lambda p: source.render_grism(p, obs_j))(TRUE_PARS))
+        np.testing.assert_allclose(jitted, eager, rtol=0, atol=1e-12)
+        assert obs_l.line_window_mode == 'local' and obs_g.line_window_mode == 'global'
 
 
 class TestContinuumTraceKernel:
