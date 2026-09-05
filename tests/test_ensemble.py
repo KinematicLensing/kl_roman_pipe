@@ -659,6 +659,31 @@ class TestCollate:
         # a truth-pinned param is recorded as fixed
         assert desc['z']['dist'] == 'fixed'
 
+    def test_scene_priors_flat_shear_option(self, dev_spec, canonical_q):
+        import dataclasses
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        flat = dataclasses.replace(
+            dev_spec, shear_fit_prior_type='uniform', shear_fit_prior_halfwidth=0.3
+        )
+        desc = scene_priors(truth, canonical_q, flat).describe()
+        for g in ('g1', 'g2'):
+            assert desc[g]['dist'] == 'uniform'
+            assert desc[g]['low'] == -0.3 and desc[g]['high'] == 0.3
+        bad = dataclasses.replace(dev_spec, shear_fit_prior_type='boxcar')
+        with pytest.raises(ValueError, match="shear_prior_type"):
+            scene_priors(truth, canonical_q, bad)
+
     def test_is_catastrophic_thresholds(self):
         from kl_pipe.ensemble.collate import (
             CATASTROPHIC_DIV_RATE,
@@ -845,6 +870,34 @@ def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
 
 
 @pytest.mark.slow
+def test_local_window_spec_knob_reaches_fit_obs_only(dev_spec, canonical_q):
+    """model.render.line_window_mode switches the FIT observations' deposit
+    window; the mock data vector stays on the global window (bit-identical)."""
+    import dataclasses
+
+    truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+    truth.update(
+        {
+            'cosi': 0.5,
+            'theta_int': 0.6,
+            'g1': 0.02,
+            'g2': -0.01,
+            'vel.vcirc': 200.0,
+            'z': 1.2,
+        }
+    )
+    local_spec = dataclasses.replace(dev_spec, render_line_window_mode='local')
+    kw = dict(band_snrs={b: 100.0 for b in canonical_q.bands}, line_snr=40.0)
+    inp_g = build_fit_inputs(truth, 12345, dev_spec, canonical_q, **kw)
+    inp_l = build_fit_inputs(truth, 12345, local_spec, canonical_q, **kw)
+    for key, obs_l in inp_l.grism_obs.items():
+        obs_g = inp_g.grism_obs[key]
+        assert obs_l.line_window_mode == 'local' and obs_g.line_window_mode == 'global'
+        np.testing.assert_array_equal(np.asarray(obs_l.data), np.asarray(obs_g.data))
+    with pytest.raises(ValueError, match="line_window_mode"):
+        dataclasses.replace(dev_spec, render_line_window_mode='nearest')
+
+
 def test_shear_information_increases_with_line_snr():
     """Data-only galaxy-frame shear widths (sigma_g+, sigma_gx) strictly
     decrease as emission-line SNR rises: the line-SNR knob controls the

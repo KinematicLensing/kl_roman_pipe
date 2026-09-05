@@ -1017,6 +1017,16 @@ class EnsembleSpec:
     # data-driven sigma_eps (less prior floor). Defaults to 0.2, matching the
     # published Roman KL prior half-width (Xu+ 2023) as an isotropic Gaussian.
     shear_fit_prior_sigma: float = 0.2
+    # 'gaussian' (default, N(0, sigma)) or 'uniform' (flat on
+    # [-halfwidth, halfwidth]); the flat prior removes prior shrinkage of
+    # the per-galaxy shear posterior, so the ensemble estimator needs no
+    # width-dependent shrinkage correction
+    shear_fit_prior_type: str = 'gaussian'
+    shear_fit_prior_halfwidth: float = 0.3
+
+    # analytic-dispersal deposit window for the FIT observations ('global' |
+    # 'local'); mock data are always rendered with the global window
+    render_line_window_mode: str = 'global'
 
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
@@ -1031,6 +1041,11 @@ class EnsembleSpec:
             raise ValueError(
                 f"population type '{self.population_type}'; supported: "
                 f"{_POPULATION_TYPES}"
+            )
+        if self.render_line_window_mode not in ('global', 'local'):
+            raise ValueError(
+                f"model.render.line_window_mode must be 'global' or 'local', got "
+                f"{self.render_line_window_mode!r}"
             )
         if not isinstance(self.render_oversample, int) or self.render_oversample <= 0:
             raise ValueError(
@@ -1396,7 +1411,9 @@ class EnsembleSpec:
         model = raw.get('model', {})
         _reject_unknown(model, ('render',), f"{path}:model")
         render = model.get('render', {})
-        _reject_unknown(render, ('oversample',), f"{path}:model.render")
+        _reject_unknown(
+            render, ('oversample', 'line_window_mode'), f"{path}:model.render"
+        )
         render_oversample = _require_yaml_int(
             render, 'oversample', 3, f"{path}:model.render"
         )
@@ -1417,6 +1434,8 @@ class EnsembleSpec:
                 'pin_z_to_truth',
                 'sample_bulge_nsersic',
                 'shear_prior_sigma',
+                'shear_prior_type',
+                'shear_prior_halfwidth',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1466,9 +1485,12 @@ class EnsembleSpec:
             shear_grid=shear_grid,
             shear_component=shear_component,
             shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
+            shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
+            shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,
+            render_line_window_mode=str(render.get('line_window_mode', 'global')),
             observed_config=str(observation['config']),
             # catalog populations carry per-galaxy SNRs (both channels) in
             # the population table; the scalar fields get -1 sentinels so any

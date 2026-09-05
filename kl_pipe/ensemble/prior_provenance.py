@@ -145,6 +145,20 @@ def catalog_registry(
         reg[entry.param] = entry
 
     # --- shared geometry -----------------------------------------------------
+    if spec.shear_fit_prior_type == 'uniform':
+        shear_fit = (
+            f'U(-{spec.shear_fit_prior_halfwidth}, {spec.shear_fit_prior_halfwidth})'
+        )
+        shear_why = (
+            'Flat so the posterior mean needs no shrinkage correction; the '
+            'edges sit far outside the injected |g| < gmax range.'
+        )
+    else:
+        shear_fit = f'N(0, {spec.shear_fit_prior_sigma})'
+        shear_why = (
+            'Wide so the posterior width comes from the data; unbounded '
+            'to avoid a prior edge.'
+        )
     for g in ('g1', 'g2'):
         add(
             PriorProvenance(
@@ -153,10 +167,9 @@ def catalog_registry(
                 '--',
                 f'N(0, {cp.shear_sigma}), redrawn to |g| < {cp.shear_gmax}, '
                 'pair-shared',
-                f'N(0, {spec.shear_fit_prior_sigma})',
+                shear_fit,
                 'paint',
-                'Wide so the posterior width comes from the data; unbounded '
-                'to avoid a prior edge.',
+                shear_why,
                 compact_meaning='shear',
                 compact_painted=f'N(0, {cp.shear_sigma})',
                 compact_note=f'pair-shared; |g| < {cp.shear_gmax}',

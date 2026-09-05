@@ -39,6 +39,7 @@ from kl_pipe.ensemble.population import (
 )
 from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE
 from kl_pipe.priors import (
+    Prior,
     ConditionalLogNormal,
     Gaussian,
     LogNormal,
@@ -324,6 +325,22 @@ def _bulge_nsersic_prior() -> TruncatedNormalMixture:
     )
 
 
+def _shear_fit_prior(spec) -> Prior:
+    """Per-component shear fit prior from the spec: isotropic Gaussian or
+    flat on a symmetric interval."""
+    if spec.shear_fit_prior_type == 'gaussian':
+        return Gaussian(0.0, spec.shear_fit_prior_sigma)
+    if spec.shear_fit_prior_type == 'uniform':
+        hw = spec.shear_fit_prior_halfwidth
+        if not 0.0 < hw < 1.0:
+            raise ValueError(f"shear_prior_halfwidth must be in (0, 1), got {hw}")
+        return Uniform(-hw, hw)
+    raise ValueError(
+        "shear_prior_type must be 'gaussian' or 'uniform', got "
+        f"{spec.shear_fit_prior_type!r}"
+    )
+
+
 def scene_priors(
     truth: Dict[str, float],
     config: 'ObservationConfig',
@@ -385,8 +402,8 @@ def scene_priors(
         # reflect the data's shear constraint, not the prior; unbounded --
         # truncation would re-inject a prior edge (matches the flagship).
         # Width is spec-configurable (wider -> more data-driven sigma_eps).
-        'g1': Gaussian(0.0, spec.shear_fit_prior_sigma),
-        'g2': Gaussian(0.0, spec.shear_fit_prior_sigma),
+        'g1': _shear_fit_prior(spec),
+        'g2': _shear_fit_prior(spec),
         # nuisance kinematics (flagship prior widths/bounds, centered on the
         # fit's truth -- identical to scene defaults unless the spec fixed
         # block overrides them)
