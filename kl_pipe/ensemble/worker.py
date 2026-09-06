@@ -130,10 +130,26 @@ def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
         )
     adapted = np.asarray(adapted)
     if adapted.ndim == 3:
-        return adapted.mean(axis=0)
-    if adapted.ndim == 2:
-        return adapted
-    raise RuntimeError(f"unexpected adapted inverse mass matrix shape {adapted.shape}")
+        pooled = adapted.mean(axis=0)
+    elif adapted.ndim == 2:
+        pooled = adapted
+    else:
+        raise RuntimeError(
+            f"unexpected adapted inverse mass matrix shape {adapted.shape}"
+        )
+    # the adapted metric carries roundoff asymmetry at the sampler's working
+    # precision (Welford outer products); anything larger is not roundoff
+    eps = np.finfo(adapted.dtype).eps
+    scale = float(np.abs(pooled).max())
+    asym = float(np.abs(pooled - pooled.T).max())
+    if not asym <= 1e3 * eps * scale:
+        raise RuntimeError(
+            "adapted inverse mass matrix is asymmetric beyond "
+            f"{adapted.dtype} roundoff (max |m - m.T| = {asym:.3g}, "
+            f"max |m| = {scale:.3g}); refusing to donate it"
+        )
+    pooled = pooled.astype(np.float64)
+    return 0.5 * (pooled + pooled.T)
 
 
 def run_single_fit(
@@ -372,6 +388,7 @@ def _run_fit_attempt(
         init_inverse_mass_matrix=init_inverse_mass,
         n_map_starts=spec.n_map_starts,
         hessian_method=spec.hessian_method,
+        max_tree_depth=spec.max_tree_depth,
         seed=sampler_seed,
     )
 
@@ -540,6 +557,9 @@ def _save_chains(run_dir: Path, fit_id: str, result, sampled_names) -> None:
     }
     if result.chains is not None:
         arrays['chains'] = np.asarray(result.chains)
+    num_steps = result.diagnostics.get('num_steps')
+    if num_steps is not None:
+        arrays['num_steps'] = np.asarray(num_steps)
     _atomic_savez(path, arrays)
 
 

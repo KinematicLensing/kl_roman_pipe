@@ -1043,6 +1043,20 @@ class TestLaplacePreconditioner:
             < 1e-6 * ref
         )
 
+    def test_ad_hessian_matches_dense_jax_hessian(self, simple_velocity_task):
+        """The per-basis-vector HVP Hessian equals ``jax.hessian`` of the same
+        negative log-posterior at the same point (both exact autodiff; the
+        1e-10 relative budget covers reduction-order roundoff only)."""
+        task, _ = simple_velocity_task
+        pre = task.laplace_preconditioner(n_starts=2, seed=0, hessian_method='ad')
+        theta = jnp.asarray(pre.map_point)
+        H_lean = np.asarray(task._ad_hessian(theta))
+        H_dense = np.asarray(
+            jax.hessian(lambda t: -task._log_posterior_jittable(t))(theta)
+        )
+        ref = np.max(np.abs(H_dense))
+        assert np.max(np.abs(H_lean - H_dense)) < 1e-10 * ref
+
     def test_invalid_hessian_method_raises(self, simple_velocity_task):
         """Unknown hessian_method fails loudly."""
         task, _ = simple_velocity_task

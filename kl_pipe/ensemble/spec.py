@@ -1033,6 +1033,9 @@ class EnsembleSpec:
     # only option under KLPIPE_FP32)
     hessian_method: str = 'fd'
 
+    # NUTS tree-depth cap (at most 2**depth - 1 leapfrog steps per draw)
+    max_tree_depth: int = 10
+
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
     catalog_population: Optional[CatalogPopulationSpec] = None
@@ -1050,6 +1053,15 @@ class EnsembleSpec:
         if self.hessian_method not in ('fd', 'ad'):
             raise ValueError(
                 f"fit.hessian_method must be 'fd' or 'ad', got {self.hessian_method!r}"
+            )
+        if (
+            isinstance(self.max_tree_depth, bool)
+            or not isinstance(self.max_tree_depth, int)
+            or not 1 <= self.max_tree_depth <= 12
+        ):
+            raise ValueError(
+                f"fit.max_tree_depth must be an int in [1, 12], got "
+                f"{self.max_tree_depth!r}"
             )
         if self.render_line_window_mode not in ('global', 'local'):
             raise ValueError(
@@ -1446,6 +1458,7 @@ class EnsembleSpec:
                 'shear_prior_type',
                 'shear_prior_halfwidth',
                 'hessian_method',
+                'max_tree_depth',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1498,6 +1511,7 @@ class EnsembleSpec:
             shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
             shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
             hessian_method=str(fit.get('hessian_method', 'fd')),
+            max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,

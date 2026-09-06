@@ -870,6 +870,34 @@ def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
 
 
 @pytest.mark.slow
+def test_donor_mass_matrix_symmetrizes_working_precision_roundoff():
+    """A float32 warmup-adapted metric carries ~1e-7 relative asymmetry; the
+    donor must come back exactly symmetric in float64 (so the sampler config's
+    fp64 symmetry check accepts it) and pooled over chains. Asymmetry beyond
+    roundoff is refused."""
+    from kl_pipe.ensemble.worker import _donor_mass_matrix
+
+    rng = np.random.default_rng(3)
+    A = rng.normal(size=(5, 5))
+    base = A @ A.T + 5.0 * np.eye(5)
+    noise = 3e-7 * rng.normal(size=(2, 5, 5)) * np.abs(base).max()
+    stacked = (base[None] + noise).astype(np.float32)
+    assert np.abs(stacked[0] - stacked[0].T).max() > 1e-10 * np.abs(base).max()
+
+    donor = _donor_mass_matrix({'adapted_inverse_mass_matrix': stacked})
+    assert donor.dtype == np.float64
+    np.testing.assert_array_equal(donor, donor.T)
+    # pooled donor recovers the base to the injected noise level
+    np.testing.assert_allclose(donor, base, rtol=0.0, atol=1e-6 * np.abs(base).max())
+
+    bad = base.copy()
+    bad[0, 1] += 1e-2 * np.abs(base).max()
+    with pytest.raises(RuntimeError, match='asymmetric beyond'):
+        _donor_mass_matrix({'adapted_inverse_mass_matrix': bad})
+    with pytest.raises(RuntimeError, match='none found'):
+        _donor_mass_matrix({})
+
+
 def test_hessian_method_spec_knob(dev_spec):
     import dataclasses
 
@@ -1066,6 +1094,17 @@ class TestPAStratifiedStarts:
         d['fit']['n_map_starts'] = 8
         spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
         assert spec.n_map_starts == 8
+
+    def test_max_tree_depth_spec_knob(self, tmp_path):
+        d = _spec_dict()
+        assert EnsembleSpec.from_yaml(_write_spec(tmp_path, d)).max_tree_depth == 10
+        d['fit']['max_tree_depth'] = 8
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.max_tree_depth == 8
+        for bad in (0, 13, 8.0):
+            d['fit']['max_tree_depth'] = bad
+            with pytest.raises(ValueError, match='max_tree_depth'):
+                EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
 
 class TestSlurmEmission:

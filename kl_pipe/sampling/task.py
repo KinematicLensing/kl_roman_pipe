@@ -734,8 +734,7 @@ class InferenceTask:
 
         theta_map = jnp.asarray(loc + scale * best.x)
         if hessian_method == 'ad':
-            hess_fn = jax.jit(jax.hessian(lambda t: -self._log_posterior_jittable(t)))
-            H = np.asarray(hess_fn(theta_map), dtype=np.float64)
+            H = np.asarray(self._ad_hessian(theta_map), dtype=np.float64)
         else:
             H = self._fd_hessian(val_and_grad, theta_map, scale, fd_rel_step)
         H = 0.5 * (H + H.T)
@@ -761,6 +760,23 @@ class InferenceTask:
             n_starts_converged=n_converged,
             condition_number=cond,
         )
+
+    def _ad_hessian(self, theta: jnp.ndarray) -> jnp.ndarray:
+        """Hessian of the negative log-posterior by one Hessian-vector product
+        per parameter (forward-over-reverse, sequential over basis vectors).
+
+        Peak memory is one tangent through the gradient graph instead of the
+        n_params-wide batch ``jax.hessian`` materializes.
+        """
+        grad_fn = jax.grad(lambda t: -self._log_posterior_jittable(t))
+
+        def hess_fn(th):
+            def hvp(v):
+                return jax.jvp(grad_fn, (th,), (v,))[1]
+
+            return jax.lax.map(hvp, jnp.eye(th.size, dtype=th.dtype))
+
+        return jax.jit(hess_fn)(theta)
 
     def _fd_hessian(
         self,
