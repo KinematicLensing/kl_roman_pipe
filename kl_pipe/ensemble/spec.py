@@ -1028,6 +1028,11 @@ class EnsembleSpec:
     # 'local'); mock data are always rendered with the global window
     render_line_window_mode: str = 'global'
 
+    # Laplace-preconditioner Hessian: 'fd' (central differences of the
+    # compiled gradient; float64 only) or 'ad' (second-order autodiff; the
+    # only option under KLPIPE_FP32)
+    hessian_method: str = 'fd'
+
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
     catalog_population: Optional[CatalogPopulationSpec] = None
@@ -1041,6 +1046,10 @@ class EnsembleSpec:
             raise ValueError(
                 f"population type '{self.population_type}'; supported: "
                 f"{_POPULATION_TYPES}"
+            )
+        if self.hessian_method not in ('fd', 'ad'):
+            raise ValueError(
+                f"fit.hessian_method must be 'fd' or 'ad', got {self.hessian_method!r}"
             )
         if self.render_line_window_mode not in ('global', 'local'):
             raise ValueError(
@@ -1436,6 +1445,7 @@ class EnsembleSpec:
                 'shear_prior_sigma',
                 'shear_prior_type',
                 'shear_prior_halfwidth',
+                'hessian_method',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1487,6 +1497,7 @@ class EnsembleSpec:
             shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
             shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
             shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
+            hessian_method=str(fit.get('hessian_method', 'fd')),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,

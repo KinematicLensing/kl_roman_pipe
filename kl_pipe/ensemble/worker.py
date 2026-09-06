@@ -371,6 +371,7 @@ def _run_fit_attempt(
         ),
         init_inverse_mass_matrix=init_inverse_mass,
         n_map_starts=spec.n_map_starts,
+        hessian_method=spec.hessian_method,
         seed=sampler_seed,
     )
 

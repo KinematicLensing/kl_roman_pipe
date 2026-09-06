@@ -870,6 +870,15 @@ def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
 
 
 @pytest.mark.slow
+def test_hessian_method_spec_knob(dev_spec):
+    import dataclasses
+
+    assert dev_spec.hessian_method == 'fd'
+    assert dataclasses.replace(dev_spec, hessian_method='ad').hessian_method == 'ad'
+    with pytest.raises(ValueError, match="hessian_method"):
+        dataclasses.replace(dev_spec, hessian_method='bfgs')
+
+
 def test_local_window_spec_knob_reaches_fit_obs_only(dev_spec, canonical_q):
     """model.render.line_window_mode switches the FIT observations' deposit
     window; the mock data vector stays on the global window (bit-identical)."""
