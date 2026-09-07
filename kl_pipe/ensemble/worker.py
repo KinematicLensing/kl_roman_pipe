@@ -475,6 +475,9 @@ def _summary_row(
         # quality columns (inclusive -- gate policy applied post hoc)
         'max_rhat': float(max(r_hat.values())),
         'min_ess': float(min(ess.values())),
+        # which parameter sets each gate quantity (failure correlation)
+        'max_rhat_param': str(max(r_hat, key=r_hat.get)),
+        'min_ess_param': str(min(ess, key=ess.get)),
         'ess_g1': float(ess.get('g1', np.nan)),
         'ess_g2': float(ess.get('g2', np.nan)),
         'n_divergences': int(diag.get('n_divergences', -1)),
@@ -485,6 +488,16 @@ def _summary_row(
         'chain_method': str(diag.get('chain_method', '')),
         'n_map_starts_converged': (
             int(preconditioner.n_starts_converged) if preconditioner is not None else -1
+        ),
+        'precond_n_negative_eigenvalues': (
+            int(preconditioner.n_negative_eigenvalues)
+            if preconditioner is not None
+            else -1
+        ),
+        'precond_min_eigenvalue_ratio': (
+            float(preconditioner.min_eigenvalue_ratio)
+            if preconditioner is not None
+            else np.nan
         ),
         'precond_condition_number': (
             float(preconditioner.condition_number)

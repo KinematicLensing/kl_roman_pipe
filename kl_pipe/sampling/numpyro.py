@@ -843,6 +843,8 @@ class NumpyroSampler(Sampler):
             'method': 'laplace',
             'condition_number': pre.condition_number,
             'n_starts_converged': pre.n_starts_converged,
+            'n_negative_eigenvalues': pre.n_negative_eigenvalues,
+            'min_eigenvalue_ratio': pre.min_eigenvalue_ratio,
         }
         if self.config.precondition_adapt_mass:
             # final warmup-adapted metric (sampling coordinates): reusable as

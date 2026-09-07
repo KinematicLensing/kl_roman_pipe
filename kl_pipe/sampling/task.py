@@ -58,6 +58,10 @@ class LaplacePreconditioner:
     inverse_mass_matrix: np.ndarray
     n_starts_converged: int
     condition_number: float
+    # unregularized scale-normalized Hessian spectrum at the MAP: negative
+    # eigenvalues mean the optimizer stopped on a saddle or a lower basin
+    n_negative_eigenvalues: int = 0
+    min_eigenvalue_ratio: float = float('nan')
 
 
 if TYPE_CHECKING:
@@ -746,6 +750,7 @@ class InferenceTask:
         Hn = (scale[:, None] * H) * scale[None, :]
         Hn = 0.5 * (Hn + Hn.T)
         w, V = np.linalg.eigh(Hn)
+        n_negative = int(np.sum(w < 0))
         w_floored = np.maximum(w, w.max() * eig_floor)  # floor soft/neg dirs
         Hn_reg = (V * w_floored) @ V.T
         inv_n = np.linalg.inv(Hn_reg)
@@ -759,6 +764,8 @@ class InferenceTask:
             inverse_mass_matrix=inv_mass,
             n_starts_converged=n_converged,
             condition_number=cond,
+            n_negative_eigenvalues=n_negative,
+            min_eigenvalue_ratio=float(w.min() / w.max()),
         )
 
     def _ad_hessian(self, theta: jnp.ndarray) -> jnp.ndarray:

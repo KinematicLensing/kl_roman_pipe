@@ -1056,6 +1056,12 @@ class TestLaplacePreconditioner:
         )
         ref = np.max(np.abs(H_dense))
         assert np.max(np.abs(H_lean - H_dense)) < 1e-10 * ref
+        # the unregularized spectrum is reported alongside the floored metric
+        assert pre.n_negative_eigenvalues >= 0
+        assert np.isfinite(pre.min_eigenvalue_ratio)
+        assert pre.min_eigenvalue_ratio <= 1.0
+        if pre.n_negative_eigenvalues == 0:
+            assert pre.min_eigenvalue_ratio > 0
 
     def test_invalid_hessian_method_raises(self, simple_velocity_task):
         """Unknown hessian_method fails loudly."""
