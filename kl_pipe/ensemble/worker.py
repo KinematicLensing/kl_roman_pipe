@@ -61,9 +61,10 @@ def _atomic_savez(path: Path, arrays: Dict[str, np.ndarray]) -> None:
 
 
 # PA basins are the known multimodality: every fit's MAP multi-start gets
-# this many extra starts with theta_int stratified across its prior range
+# this many extra starts with theta_int stratified across a half turn
 # (random prior draws can all land in the wrong basin, whose shape-shear-
-# compensated mode traps the sampler)
+# compensated mode traps the sampler); a full-circle PA prior doubles them so
+# both rotation directions are tried for every isophote orientation
 _N_PA_STRATIFIED_STARTS = 4
 
 # a fit whose chains come back broken (stuck wrong mode) gets ONE retry with
@@ -79,14 +80,50 @@ def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS
     names = list(priors.sampled_names)
     if 'theta_int' not in names:
         return None
-    lo, hi = priors.get_prior('theta_int').bounds
-    if lo is None or hi is None:
-        return None
+    prior = priors.get_prior('theta_int')
+    period = getattr(prior, 'period', None)
+    if period is not None:
+        lo, hi, n = 0.0, float(period), 2 * n_pa
+    else:
+        lo, hi = prior.bounds
+        if lo is None or hi is None:
+            return None
+        n = n_pa
     # explicit copy: np.asarray on a jax array returns a read-only view
-    starts = np.array(priors.sample(jax.random.PRNGKey(seed + 2), n_pa))
-    centers = lo + (np.arange(n_pa) + 0.5) * (hi - lo) / n_pa
+    starts = np.array(priors.sample(jax.random.PRNGKey(seed + 2), n))
+    centers = lo + (np.arange(n) + 0.5) * (hi - lo) / n
     starts[:, names.index('theta_int')] = centers
     return starts
+
+
+def _pa_flip_margin(preconditioner, sampled_names, priors) -> float:
+    """Negative-log-posterior margin of the MAP over the best optimization
+    start that settled in the counter-rotating basin (theta_int within a
+    quarter turn of MAP + half period).
+
+    ``inf`` when no start settled there; ``nan`` when theta_int is not a
+    periodic (full-circle) parameter or the preconditioner kept no start
+    records.
+    """
+    if (
+        preconditioner is None
+        or preconditioner.start_map_points is None
+        or priors is None
+        or 'theta_int' not in sampled_names
+    ):
+        return float('nan')
+    period = getattr(priors.get_prior('theta_int'), 'period', None)
+    if period is None:
+        return float('nan')
+    i = list(sampled_names).index('theta_int')
+    offset = np.mod(
+        preconditioner.start_map_points[:, i] - preconditioner.map_point[i], period
+    )
+    flipped = np.abs(offset - 0.5 * period) < 0.25 * period
+    if not flipped.any():
+        return float('inf')
+    funs = preconditioner.start_neg_logposts
+    return float(np.min(funs[flipped]) - np.min(funs))
 
 
 @dataclass
@@ -504,6 +541,8 @@ def _summary_row(
             if preconditioner is not None
             else np.nan
         ),
+        # MAP margin over the counter-rotating PA basin (full-circle PA prior)
+        'map_pa_flip_margin': _pa_flip_margin(preconditioner, sampled_names, priors),
         'fit_wallclock_s': float(wallclock_s),
         'precond_wallclock_s': float(precond_s),
     }

@@ -1024,6 +1024,11 @@ class EnsembleSpec:
     shear_fit_prior_type: str = 'gaussian'
     shear_fit_prior_halfwidth: float = 0.3
 
+    # fit prior on the intrinsic position angle: 'half_turn' (Uniform(0, pi):
+    # one rotation direction, hard walls at 0 and pi) or 'full_circle'
+    # (uniform on the circle, period 2 pi: both rotation directions, no walls)
+    pa_fit_prior: str = 'half_turn'
+
     # analytic-dispersal deposit window for the FIT observations ('global' |
     # 'local'); mock data are always rendered with the global window
     render_line_window_mode: str = 'global'
@@ -1053,6 +1058,11 @@ class EnsembleSpec:
         if self.hessian_method not in ('fd', 'ad'):
             raise ValueError(
                 f"fit.hessian_method must be 'fd' or 'ad', got {self.hessian_method!r}"
+            )
+        if self.pa_fit_prior not in ('half_turn', 'full_circle'):
+            raise ValueError(
+                "fit.pa_prior must be 'half_turn' or 'full_circle', got "
+                f"{self.pa_fit_prior!r}"
             )
         if (
             isinstance(self.max_tree_depth, bool)
@@ -1457,6 +1467,7 @@ class EnsembleSpec:
                 'shear_prior_sigma',
                 'shear_prior_type',
                 'shear_prior_halfwidth',
+                'pa_prior',
                 'hessian_method',
                 'max_tree_depth',
                 'escalation',
@@ -1510,6 +1521,7 @@ class EnsembleSpec:
             shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
             shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
             shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
+            pa_fit_prior=str(fit.get('pa_prior', 'half_turn')),
             hessian_method=str(fit.get('hessian_method', 'fd')),
             max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
             ring_enabled=ring_enabled,

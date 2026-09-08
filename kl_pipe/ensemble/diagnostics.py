@@ -268,11 +268,11 @@ def augment_galaxy_frame(
 
 
 # parameters whose residual must be wrapped before forming a pull, with
-# their period. theta_int is a position angle: it is defined modulo pi, so a
-# recovered value just below pi against a truth just above 0 is a match, not
-# a ~pi discrepancy. Without wrapping, such fits show enormous spurious
-# pulls and inflate the apparent wrong-mode rate.
-_PULL_WRAP_PERIODS = {'theta_int': np.pi}
+# their period. theta_int is a full-turn position angle (the velocity field
+# distinguishes theta from theta + pi), so the residual is wrapped modulo
+# 2 pi: a recovery just below 2 pi against a truth just above 0 is a match,
+# while a counter-rotating solution at theta + pi is the discrepancy it is.
+_PULL_WRAP_PERIODS = {'theta_int': 2.0 * np.pi}
 
 
 def _wrapped_residual(

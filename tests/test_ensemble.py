@@ -1306,3 +1306,129 @@ class TestDiagnostics:
         assert 'pull.g_plus' in pulls.columns
         assert 'pull.g_plus_truth_pa' in pulls.columns
         assert np.isfinite(pulls['pull.g_plus_truth_pa']).all()
+
+
+# ==============================================================================
+# Full-circle position-angle fit prior
+# ==============================================================================
+
+
+class TestPAFitPrior:
+    def test_spec_knob_default_and_validation(self, dev_spec, tmp_path):
+        import dataclasses
+
+        assert dev_spec.pa_fit_prior == 'half_turn'
+        d = _spec_dict()
+        d['fit']['pa_prior'] = 'full_circle'
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.pa_fit_prior == 'full_circle'
+        with pytest.raises(ValueError, match="pa_prior"):
+            dataclasses.replace(dev_spec, pa_fit_prior='wrapped')
+
+    def test_scene_prior_full_circle(self, dev_spec, canonical_q):
+        import dataclasses
+
+        from kl_pipe.priors import CircularUniform
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        base = scene_priors(truth, canonical_q, dev_spec)
+        full = scene_priors(
+            truth,
+            canonical_q,
+            dataclasses.replace(dev_spec, pa_fit_prior='full_circle'),
+        )
+        th = full.get_prior('theta_int')
+        assert isinstance(th, CircularUniform)
+        assert np.isclose(th.period, 2 * np.pi)
+        assert th.bounds == (None, None)
+        # every other prior is untouched
+        base_d, full_d = base.describe(), full.describe()
+        assert set(base_d) == set(full_d)
+        for name in base_d:
+            if name != 'theta_int':
+                assert base_d[name] == full_d[name], name
+        assert full_d['theta_int']['dist'] == 'circular_uniform'
+
+    def test_pa_starts_cover_full_circle(self, dev_spec, canonical_q):
+        import dataclasses
+
+        from kl_pipe.ensemble.worker import _pa_stratified_starts
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        priors = scene_priors(
+            truth,
+            canonical_q,
+            dataclasses.replace(dev_spec, pa_fit_prior='full_circle'),
+        )
+        starts = _pa_stratified_starts(priors, seed=7, n_pa=4)
+        names = list(priors.sampled_names)
+        thetas = starts[:, names.index('theta_int')]
+        # 4 starts per half turn: every isophote orientation in both rotation directions
+        assert starts.shape[0] == 8
+        assert np.allclose(thetas, (np.arange(8) + 0.5) * np.pi / 4)
+        assert np.allclose(np.sort(np.mod(thetas[4:], np.pi)), np.sort(thetas[:4]))
+        for i, name in enumerate(names):
+            lo, hi = priors.get_prior(name).bounds
+            if lo is not None:
+                assert (starts[:, i] >= lo).all()
+            if hi is not None:
+                assert (starts[:, i] <= hi).all()
+
+    def test_pa_flip_margin(self):
+        from kl_pipe.ensemble.worker import _pa_flip_margin
+        from kl_pipe.priors import CircularUniform, PriorDict
+        from kl_pipe.sampling.task import LaplacePreconditioner
+
+        names = ['cosi', 'theta_int']
+        circ = PriorDict({'cosi': Uniform(0.0, 1.0), 'theta_int': CircularUniform()})
+        pre = LaplacePreconditioner(
+            map_point=np.array([0.5, 0.2]),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=3,
+            condition_number=1.0,
+            start_map_points=np.array([[0.5, 0.25], [0.5, 3.4], [0.5, 3.0]]),
+            start_neg_logposts=np.array([10.0, 18.0, 15.0]),
+        )
+        # best counter-rotating start (theta within pi/2 of MAP + pi) is 15 vs MAP 10
+        assert np.isclose(_pa_flip_margin(pre, names, circ), 5.0)
+        # no start in the flipped basin
+        pre_none = LaplacePreconditioner(
+            map_point=np.array([0.5, 0.2]),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=2,
+            condition_number=1.0,
+            start_map_points=np.array([[0.5, 0.25], [0.5, 0.9]]),
+            start_neg_logposts=np.array([10.0, 12.0]),
+        )
+        assert _pa_flip_margin(pre_none, names, circ) == np.inf
+        # half-turn prior: margin undefined
+        half = PriorDict({'cosi': Uniform(0.0, 1.0), 'theta_int': Uniform(0.0, np.pi)})
+        assert np.isnan(_pa_flip_margin(pre, names, half))
+        # preconditioner without start records
+        bare = LaplacePreconditioner(
+            map_point=np.array([0.5, 0.2]),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=1,
+            condition_number=1.0,
+        )
+        assert np.isnan(_pa_flip_margin(bare, names, circ))

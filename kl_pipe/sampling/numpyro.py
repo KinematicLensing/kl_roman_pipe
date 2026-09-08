@@ -47,6 +47,7 @@ from kl_pipe.sampling.base import Sampler, SamplerResult
 from kl_pipe.sampling.configs import NumpyroSamplerConfig, ReparamStrategy
 from kl_pipe.priors import (
     Prior,
+    CircularUniform,
     ConditionalLogNormal,
     Gaussian,
     TruncatedNormal,
@@ -138,6 +139,10 @@ def compute_reparam_scales(
             )
         loc = float(prior.ratio_median * parent_loc)
         return loc, loc * float(prior.sigma_ratio)
+
+    elif isinstance(prior, CircularUniform):
+        # centre at the half-period; 4 sigma spans one period
+        return float(prior.period / 2), float(prior.period / 4)
 
     else:
         raise TypeError(f"Unknown prior type for '{name}': {type(prior)}")
@@ -828,6 +833,11 @@ class NumpyroSampler(Sampler):
         if transform is not None:
             samples = np.asarray(transform.inverse(samples))
             grouped = np.asarray(transform.inverse(grouped))
+            if transform.is_periodic.any():
+                # periodic dims: one contiguous branch centred on the MAP so
+                # the linear r-hat, ESS, mean and std describe the posterior
+                samples = transform.wrap_about(samples, pre.map_point)
+                grouped = transform.wrap_about(grouped, pre.map_point)
 
         log_probs = _batched_log_posterior_chunked(
             self.task._log_posterior_jittable, samples

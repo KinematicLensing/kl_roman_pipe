@@ -927,3 +927,76 @@ class TestMixtureFlatSchema:
     def test_summary_row_schema_is_complete(self):
         rec = PriorDict({'n': _bulge_mixture()}).describe()['n']
         assert all(rec[k] is not None for k in ('dist', 'loc', 'scale', 'low', 'high'))
+
+
+# ==============================================================================
+# CircularUniform Prior Tests
+# ==============================================================================
+
+
+class TestCircularUniform:
+    """Uniform prior on a periodic parameter: no support walls anywhere."""
+
+    def test_log_prob_constant_and_finite_everywhere(self):
+        from kl_pipe.priors import CircularUniform
+
+        prior = CircularUniform(2 * np.pi)
+        x = jnp.array([-20.0, -1.0, 0.0, 1.0, 7.0, 100.0])
+        lp = prior.log_prob(x)
+        assert lp.shape == x.shape
+        assert np.allclose(lp, -np.log(2 * np.pi))
+        assert np.isfinite(float(prior.log_prob(-1e6)))
+
+    def test_sample_in_one_period(self):
+        from kl_pipe.priors import CircularUniform
+
+        prior = CircularUniform(np.pi)
+        samples = prior.sample(random.PRNGKey(3), (20000,))
+        assert jnp.all(samples >= 0) and jnp.all(samples < np.pi)
+        assert np.isclose(np.mean(samples), np.pi / 2, atol=0.03)
+
+    def test_bounds_unbounded(self):
+        from kl_pipe.priors import CircularUniform
+
+        assert CircularUniform().bounds == (None, None)
+        assert np.isclose(CircularUniform().period, 2 * np.pi)
+
+    def test_period_validation(self):
+        from kl_pipe.priors import CircularUniform
+
+        with pytest.raises(ValueError, match="period"):
+            CircularUniform(0.0)
+        with pytest.raises(ValueError, match="period"):
+            CircularUniform(-1.0)
+        with pytest.raises(ValueError, match="period"):
+            CircularUniform(np.inf)
+
+    def test_to_dict_and_repr(self):
+        from kl_pipe.priors import CircularUniform
+
+        prior = CircularUniform(2 * np.pi)
+        rec = prior.to_dict()
+        assert rec == {
+            'dist': 'circular_uniform',
+            'loc': None,
+            'scale': None,
+            'low': 0.0,
+            'high': float(2 * np.pi),
+        }
+        assert 'CircularUniform' in repr(prior)
+
+    def test_jit_compatible(self):
+        from kl_pipe.priors import CircularUniform
+
+        prior = CircularUniform(2 * np.pi)
+        lp = jax.jit(prior.log_prob)(jnp.array(3.0))
+        assert np.isclose(float(lp), -np.log(2 * np.pi))
+
+    def test_priordict_periods(self):
+        from kl_pipe.priors import CircularUniform
+
+        pd_ = PriorDict({'a': Uniform(0.0, 1.0), 'b': CircularUniform(np.pi), 'c': 2.0})
+        assert pd_.get_periods() == [None, np.pi]
+        assert pd_.get_bounds() == [(0.0, 1.0), (None, None)]
+        # log_prior is finite for a periodic value far outside one period
+        assert np.isfinite(float(pd_.log_prior(jnp.array([0.5, 40.0]))))

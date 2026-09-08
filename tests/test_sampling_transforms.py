@@ -213,3 +213,81 @@ class TestConfigValidation:
             precondition='laplace', precondition_unconstrained=True
         )
         assert cfg.precondition_unconstrained
+
+
+class TestPeriodic:
+    """Periodic (CircularUniform) parameters: identity coordinate, branch wrap."""
+
+    @pytest.fixture(scope='class')
+    def periodic_transform(self):
+        from kl_pipe.priors import CircularUniform
+
+        priors = PriorDict(
+            {
+                'a_uniform': Uniform(-2.0, 3.0),
+                'b_circ': CircularUniform(2 * np.pi),
+                'c_gauss': Gaussian(0.0, 1.0),
+            }
+        )
+        return UnconstrainingTransform.from_priors(priors)
+
+    def test_kind_and_period(self, periodic_transform):
+        t = periodic_transform
+        assert t.kind_names == ('logit', 'periodic', 'identity')
+        assert t.is_periodic.tolist() == [False, True, False]
+        assert np.isclose(t.periods[1], 2 * np.pi)
+
+    def test_periodic_coordinate_is_identity(self, periodic_transform):
+        t = periodic_transform
+        eta = jnp.array([[0.3, 7.5, -0.2], [-1.0, -4.0, 2.0]])
+        theta = np.asarray(t.inverse(eta))
+        assert np.allclose(theta[:, 1], np.asarray(eta)[:, 1])
+        # no Jacobian contribution from the periodic dim
+        lj = np.asarray(t.log_jacobian(eta))
+        eta0 = eta.at[:, 1].set(0.0)
+        assert np.allclose(lj, np.asarray(t.log_jacobian(eta0)))
+        assert np.allclose(t.jacobian_diag(np.asarray(eta))[:, 1], 1.0)
+
+    def test_wrap_about_moves_onto_one_branch(self, periodic_transform):
+        t = periodic_transform
+        center = np.array([0.0, 0.05, 0.0])
+        theta = np.array(
+            [
+                [0.5, 6.20, 1.0],  # just below 2 pi -> just below 0
+                [0.5, 0.10, 1.0],  # already on the branch
+                [0.5, -3.30, 1.0],  # below c - pi -> comes back on the +pi side
+                [0.5, 13.0, 1.0],  # two turns up
+            ]
+        )
+        wrapped = t.wrap_about(theta, center)
+        # periodic dim lands in [c - pi, c + pi) and keeps its value mod 2 pi
+        w = wrapped[:, 1]
+        assert np.all(w >= 0.05 - np.pi) and np.all(w < 0.05 + np.pi)
+        turns = (w - theta[:, 1]) / (2 * np.pi)
+        assert np.allclose(turns, np.round(turns), atol=1e-12)
+        assert np.isclose(w[0], 6.20 - 2 * np.pi)
+        assert np.isclose(w[1], 0.10)
+        assert np.isclose(w[2], -3.3 + 2 * np.pi)
+        # other dims untouched
+        assert np.array_equal(wrapped[:, [0, 2]], theta[:, [0, 2]])
+        # idempotent, and works on chain-grouped (3-d) arrays
+        assert np.allclose(t.wrap_about(wrapped, center), wrapped)
+        grouped = np.stack([theta, theta + np.array([0, 2 * np.pi, 0])])
+        gw = t.wrap_about(grouped, center)
+        assert np.allclose(gw[0], wrapped) and np.allclose(gw[1], wrapped)
+
+    def test_non_periodic_priordict_has_no_periodic_dims(self, transform):
+        assert not transform.is_periodic.any()
+        theta = np.arange(5.0)
+        assert np.array_equal(transform.wrap_about(theta, np.zeros(5)), theta)
+
+    def test_bounded_periodic_prior_rejected(self):
+        from kl_pipe.priors import CircularUniform, PriorDict as PD
+
+        class _BoundedCircular(CircularUniform):
+            @property
+            def bounds(self):
+                return (0.0, self.period)
+
+        with pytest.raises(ValueError, match="periodic priors must be unbounded"):
+            UnconstrainingTransform.from_priors(PD({'x': _BoundedCircular(np.pi)}))

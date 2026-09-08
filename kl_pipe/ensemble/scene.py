@@ -40,6 +40,7 @@ from kl_pipe.ensemble.population import (
 from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE
 from kl_pipe.priors import (
     Prior,
+    CircularUniform,
     ConditionalLogNormal,
     Gaussian,
     LogNormal,
@@ -341,6 +342,17 @@ def _shear_fit_prior(spec) -> Prior:
     )
 
 
+def _pa_fit_prior(spec) -> Prior:
+    """Fit prior on the intrinsic position angle from the spec."""
+    if spec.pa_fit_prior == 'half_turn':
+        return Uniform(0.0, math.pi)
+    if spec.pa_fit_prior == 'full_circle':
+        return CircularUniform(2.0 * math.pi)
+    raise ValueError(
+        "pa_prior must be 'half_turn' or 'full_circle', got " f"{spec.pa_fit_prior!r}"
+    )
+
+
 def scene_priors(
     truth: Dict[str, float],
     config: 'ObservationConfig',
@@ -498,7 +510,7 @@ def scene_priors(
         )
         # orientation: the generating distributions (isotropic redraw)
         prior_spec['cosi'] = Uniform(*cp.cosi_range)
-        prior_spec['theta_int'] = Uniform(0.0, math.pi)
+        prior_spec['theta_int'] = _pa_fit_prior(spec)
         # self-consistent population prior on the painted dispersion:
         # sigma0(z) = intercept + slope*z with the paint scatter
         # (Ubler+2019 affine evolution); bounds = the paint floor and the
@@ -634,6 +646,10 @@ def scene_priors(
         raise ValueError(
             "spec population.draw must include theta_int (position angle population)"
         )
+    if spec.pa_fit_prior != 'half_turn':
+        # the drawn (generating) PA range is a half turn; the fit prior may
+        # admit the full circle
+        prior_spec['theta_int'] = _pa_fit_prior(spec)
     if 'vel.vcirc' not in prior_spec:
         raise ValueError(
             "spec population.draw must include vcirc (Tully-Fisher population)"

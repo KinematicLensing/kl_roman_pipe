@@ -1195,3 +1195,105 @@ class TestLaplacePreconditioner:
                 f"{name}: preconditioned std {pre_std[i]:.4g} vs standard "
                 f"{std_std[i]:.4g}"
             )
+
+
+# ==============================================================================
+# Full-circle position angle (periodic coordinate)
+# ==============================================================================
+
+
+@pytest.fixture(scope="module")
+def wrap_point_velocity_task():
+    """Velocity-only task whose true position angle sits just below 2 pi under
+    a full-circle PA prior, so the posterior straddles the wrap point."""
+    from kl_pipe.priors import CircularUniform
+
+    image_pars = ImagePars(shape=(20, 20), pixel_scale=0.4, indexing='ij')
+    theta_true = 2 * np.pi - 0.03
+    true_pars_flat = {
+        'v0': 10.0,
+        'vcirc': 200.0,
+        'rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': theta_true,
+        'g1': 0.02,
+        'g2': -0.01,
+    }
+    true_pars = {
+        'vel.v0': 10.0,
+        'vel.vcirc': 200.0,
+        'vel.rscale': 5.0,
+        'cosi': 0.6,
+        'theta_int': theta_true,
+        'g1': 0.02,
+        'g2': -0.01,
+    }
+    synth_vel = SyntheticVelocity(true_pars_flat, model_type='arctan', seed=7)
+    data_vel_noisy = synth_vel.generate(image_pars, snr=1000)
+    source = SourceModel(velocity_model=CenteredVelocityModel())
+    priors = PriorDict(
+        {
+            'vel.v0': Gaussian(10.0, 5.0),
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel.rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
+            'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
+            'theta_int': CircularUniform(2 * np.pi),
+            'g1': 0.02,
+            'g2': -0.01,
+        }
+    )
+    vel_obs = build_velocity_obs(
+        image_pars, data=jnp.array(data_vel_noisy), variance=synth_vel.variance
+    )
+    return InferenceTask.from_obs(source, priors, velocity_obs=vel_obs), true_pars
+
+
+class TestCircularPositionAngle:
+    def test_preconditioner_map_on_principal_branch(self, wrap_point_velocity_task):
+        task, true_pars = wrap_point_velocity_task
+        # starts at the wrong rotation direction must not win
+        extra = np.array(task.sample_prior(jax.random.PRNGKey(5), n_samples=2))
+        i = list(task.sampled_names).index('theta_int')
+        extra[:, i] = [true_pars['theta_int'] + np.pi, true_pars['theta_int'] - 8.0]
+        pre = task.laplace_preconditioner(n_starts=3, seed=0, extra_starts=extra)
+        th = pre.map_point[i]
+        assert 0.0 <= th < 2 * np.pi
+        resid = np.mod(th - true_pars['theta_int'] + np.pi, 2 * np.pi) - np.pi
+        assert abs(resid) < 0.05
+        assert pre.start_map_points.shape[1] == len(task.sampled_names)
+        assert pre.start_neg_logposts.shape[0] == pre.start_map_points.shape[0]
+        assert np.all(pre.start_map_points[:, i] >= 0.0)
+        assert np.all(pre.start_map_points[:, i] < 2 * np.pi)
+        assert np.isclose(
+            pre.start_neg_logposts.min(),
+            -float(task.log_posterior(jnp.asarray(pre.map_point))),
+            rtol=1e-6,
+        )
+
+    def test_posterior_contiguous_across_wrap(self, wrap_point_velocity_task):
+        task, true_pars = wrap_point_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=400,
+            n_warmup=150,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=42,
+            progress=False,
+            precondition='laplace',
+            precondition_unconstrained=True,
+            n_map_starts=3,
+        )
+        result = build_sampler('numpyro', task, config).run()
+        names = list(result.param_names)
+        i = names.index('theta_int')
+        th = np.asarray(result.samples[:, i])
+        # one contiguous branch centred on the MAP: no split into 0 and 2 pi clumps
+        assert th.std() < 0.2
+        assert th.max() - th.min() < np.pi
+        # recovers the truth across the wrap point
+        resid = np.mod(th.mean() - true_pars['theta_int'] + np.pi, 2 * np.pi) - np.pi
+        assert abs(resid) < 4 * th.std()
+        assert result.get_rhat()['theta_int'] < 1.05
+        assert result.diagnostics['divergence_rate'] < 0.1
+        kinds = result.diagnostics['preconditioner']['unconstrained']['kinds']
+        assert kinds['theta_int'] == 'periodic'

@@ -52,6 +52,10 @@ class LaplacePreconditioner:
         Number of multi-start optimizations that converged to the best mode.
     condition_number : float
         Condition number of the regularized Hessian (post eigenvalue floor).
+    start_map_points, start_neg_logposts : np.ndarray, optional
+        Where every finite-objective optimization start settled
+        (``(n_starts, n_params)``) and its negative log-posterior; lets callers
+        measure the margin of the MAP over competing basins.
     """
 
     map_point: np.ndarray
@@ -62,6 +66,8 @@ class LaplacePreconditioner:
     # eigenvalues mean the optimizer stopped on a saddle or a lower basin
     n_negative_eigenvalues: int = 0
     min_eigenvalue_ratio: float = float('nan')
+    start_map_points: Optional[np.ndarray] = None
+    start_neg_logposts: Optional[np.ndarray] = None
 
 
 if TYPE_CHECKING:
@@ -705,6 +711,17 @@ class InferenceTask:
         # pick; warn loudly if it did not formally converge.
         best = None
         n_converged = 0
+        periods = self.priors.get_periods()
+
+        def _wrap_periodic(theta_np: np.ndarray) -> np.ndarray:
+            out = np.array(theta_np, dtype=np.float64)
+            for j, period in enumerate(periods):
+                if period is not None:
+                    out[j] = np.mod(out[j], period)
+            return out
+
+        start_points = []
+        start_funs = []
         for s0 in starts:
             u0 = (np.asarray(s0, dtype=np.float64) - loc) / scale
             res = minimize(
@@ -716,6 +733,8 @@ class InferenceTask:
             )
             if not np.isfinite(res.fun):
                 continue
+            start_points.append(_wrap_periodic(loc + scale * res.x))
+            start_funs.append(float(res.fun))
             if res.success:
                 n_converged += 1
             if best is None or res.fun < best.fun:
@@ -736,7 +755,7 @@ class InferenceTask:
                 RuntimeWarning,
             )
 
-        theta_map = jnp.asarray(loc + scale * best.x)
+        theta_map = jnp.asarray(_wrap_periodic(loc + scale * best.x))
         if hessian_method == 'ad':
             H = np.asarray(self._ad_hessian(theta_map), dtype=np.float64)
         else:
@@ -766,6 +785,8 @@ class InferenceTask:
             condition_number=cond,
             n_negative_eigenvalues=n_negative,
             min_eigenvalue_ratio=float(w.min() / w.max()),
+            start_map_points=np.asarray(start_points, dtype=np.float64),
+            start_neg_logposts=np.asarray(start_funs, dtype=np.float64),
         )
 
     def _ad_hessian(self, theta: jnp.ndarray) -> jnp.ndarray:

@@ -21,6 +21,7 @@ survive sessions.
 | `precond_n_negative_eigenvalues` | negative eigenvalues of the unregularized scale-normalized MAP Hessian; > 0 means the optimizer stopped on a saddle or in a lower basin |
 | `precond_min_eigenvalue_ratio` | min/max eigenvalue before flooring (negative when the above is > 0) |
 | `n_map_starts_converged` | L-BFGS starts that met the convergence test |
+| `map_pa_flip_margin` | negative-log-posterior margin of the MAP over the best optimization start that settled in the counter-rotating PA basin (`inf`: no start settled there; `nan`: half-turn PA prior, no such basin) |
 | `map.<param>`, `map_minus_postmean_over_sigma.<param>` | MAP vs posterior mean, per parameter |
 
 Gate (production specs): `rhat_max` 1.05, `ess_min` 50, one escalation retry
@@ -36,6 +37,7 @@ after the retry is kept and flagged in `status`/`collate` as catastrophic.
 | C. Ridge geometry | steps/draw pinned at 63-127 (tree depth 6-7) on clean fits; directional curvature changes 30-400x within +/-1 sigma along the softest eigenvectors | all 16 bank fits (curvature_swing study 2026-09-07); metric changes (fd vs ad, escaped MAP) leave steps/draw unchanged | OPEN, the per-draw cost floor | sampler-layer bijective reparam informed by the MAP Hessian (spin-2 disk-frame shear, vcirc sin i); position-dependent metric; MAMS |
 | D. Prior-wall regularization loss | flat shear prior: escalations 4 -> 7, steps +34%, median fit wall 17 -> 43 min, posteriors unchanged | flatprior arm 974729 vs 968810 | PARKED (Gaussian prior stays) | reparam first |
 | E. Tree-depth cap | `max_tree_depth` 8: steps -3%, one extra catastrophic fit (rhat 1.29 / ess 12 after escalation, converged uncapped) | depth8 arm 976034 vs 968810 | REFUTED as a lever, do not adopt | none |
+| F. Position-angle prior wall | truth `theta_int` within ~0.3 rad of the `Uniform(0, pi)` fit-prior walls; first-attempt `max_rhat` 1.07-2.9, `min_ess` 2-60; the counter-rotating solution (theta + pi) is outside the prior, so it appears as theta near the opposite wall with a compensating shear (fit dacee1cd: modes at theta 0.15-0.25 with g2 -0.19 / -0.24 and at 2.9 with g2 0.0, truth 3.04; log-posterior gap ~8 nats in favour of the truth mode) | census v1 (200 fits, July): fail rate 33% / 53% for wall distance < 0.15 / 0.15-0.3 rad vs 15% beyond 0.8 rad, median steps 2x, median theta pull 1.14 sigma vs ~0.5; 16-fit bank 968810: all 4 escalations among the 6 fits within 0.4 rad of a wall, 0 of 10 beyond 0.5 rad | OPEN; fix under test (`fit.pa_prior: full_circle`, `CircularUniform` prior, periodic sampling coordinate, PA starts over both rotation directions, `map_pa_flip_margin` column) | full-circle PA prior; A/B arm `cosmos25_noise_ab_matched_fullcircle` vs 968810 |
 
 ## Infrastructure failures (not sampler pathologies)
 

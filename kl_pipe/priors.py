@@ -178,6 +178,53 @@ class Uniform(Prior):
 
 
 @dataclass(frozen=True)
+class CircularUniform(Prior):
+    """
+    Uniform prior on a periodic parameter (an angle), unbounded on the line.
+
+    The density is the same constant at every real value, so a sampler sees
+    no support walls and a posterior straddling the wrap point stays
+    contiguous in the sampling coordinate. ``bounds`` is ``(None, None)``
+    (identity unconstraining transform); ``period`` lets consumers wrap
+    values onto a principal branch where one is needed
+    (``UnconstrainingTransform.wrap_about``).
+
+    Parameters
+    ----------
+    period : float
+        Period of the parameter (2*pi for a full-turn angle).
+    """
+
+    period: float = 2.0 * math.pi
+
+    def __post_init__(self):
+        if not (self.period > 0 and math.isfinite(self.period)):
+            raise ValueError(f"period must be positive and finite, got {self.period}")
+
+    def log_prob(self, value: jnp.ndarray) -> jnp.ndarray:
+        return jnp.broadcast_to(-jnp.log(self.period), jnp.shape(value))
+
+    def sample(self, rng_key: jax.Array, shape: Tuple[int, ...] = ()) -> jnp.ndarray:
+        return random.uniform(rng_key, shape, minval=0.0, maxval=self.period)
+
+    @property
+    def bounds(self) -> Tuple[None, None]:
+        return (None, None)
+
+    def __repr__(self) -> str:
+        return f"CircularUniform(period={self.period})"
+
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        return {
+            'dist': 'circular_uniform',
+            'loc': None,
+            'scale': None,
+            'low': 0.0,
+            'high': float(self.period),
+        }
+
+
+@dataclass(frozen=True)
 class Gaussian(Prior):
     """
     Gaussian (Normal) prior with mean mu and standard deviation sigma.
@@ -978,6 +1025,12 @@ class PriorDict:
         Useful for bounded optimizers (scipy L-BFGS-B, etc.)
         """
         return [self._priors[name].bounds for name in self._sampled_names]
+
+    def get_periods(self) -> List[Optional[float]]:
+        """Period of each sampled parameter; ``None`` for non-periodic priors."""
+        return [
+            getattr(self._priors[name], 'period', None) for name in self._sampled_names
+        ]
 
     def get_param_bounds(self, name: str) -> Tuple[Optional[float], Optional[float]]:
         """Return (low, high) for a parameter, sampled or fixed.
