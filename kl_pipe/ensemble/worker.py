@@ -151,20 +151,30 @@ def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
     )
 
 
+def restart_reason(summary: Dict, esc: EscalationSpec) -> str:
+    """Why a gate-failing attempt needs a fresh start rather than more draws.
+
+    '' when the attempt is marginal (more draws from the warm chains can
+    pass the gate), 'rhat' when max_rhat exceeds ``continue_rhat_max``
+    (chains in different basins), 'divergences' when the divergence rate
+    exceeds ``continue_divergence_max`` (the metric or step size is wrong).
+    """
+    if float(summary['max_rhat']) > esc.continue_rhat_max:
+        return 'rhat'
+    if float(summary['divergence_rate']) > esc.continue_divergence_max:
+        return 'divergences'
+    return ''
+
+
 def escalation_mode(summary: Dict, esc: EscalationSpec) -> str:
     """'continue' or 'restart' for a first attempt that failed the gate.
 
-    Under ``mode='auto'`` a marginal first attempt (max_rhat within
-    ``continue_rhat_max`` and divergence rate within
-    ``continue_divergence_max``) is continued; anything worse is restarted.
+    Under ``mode='auto'`` a marginal first attempt (no ``restart_reason``)
+    is continued; anything worse is restarted.
     """
     if esc.mode != 'auto':
         return esc.mode
-    marginal = (
-        float(summary['max_rhat']) <= esc.continue_rhat_max
-        and float(summary['divergence_rate']) <= esc.continue_divergence_max
-    )
-    return 'continue' if marginal else 'restart'
+    return 'continue' if restart_reason(summary, esc) == '' else 'restart'
 
 
 def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
@@ -274,9 +284,9 @@ def _run_fit_escalated(
 
     The summary row always carries ``escalated``; when the retry ran it also
     carries the first attempt's quality metrics (``first_attempt_*``) and
-    ``fit_wallclock_s`` covers BOTH attempts. Chains: the retry's chains
-    replace the first attempt's; the first attempt's are kept alongside
-    (``<fit_id>.attempt1.npz``) only when the retry also fails the gate.
+    ``fit_wallclock_s`` covers BOTH attempts. Chains: a restart's chains
+    replace the first attempt's, which are kept alongside
+    (``<fit_id>.attempt1.npz``); a continuation's chains contain them.
     """
     esc = spec.escalation
     fit_id = str(row['fit_id'])
@@ -289,22 +299,39 @@ def _run_fit_escalated(
     summary['n_attempts'] = 1
     summary['escalated'] = False
     summary['escalation_mode'] = ''
+    summary['escalation_n_blocks'] = 0
+    summary['restart_reason'] = ''
+    summary['restart_recommended'] = False
     if not needs_escalation(summary, esc):
         _persist_outputs(run_dir, fit_id, row, art1)
         return summary
 
     mode = escalation_mode(summary, esc)
+    reason = restart_reason(summary, esc)
+    n_blocks = 0
     if mode == 'continue':
-        print(
-            f'[fit {fit_id}] attempt 1 failed the escalation gate '
-            f"(max_rhat={summary['max_rhat']:.3f} vs {esc.rhat_max}, "
-            f"min_ess={summary['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
-            f'continuing the warmed chains: {esc.n_samples} more draws per chain',
-            flush=True,
-        )
-        summary2, art2 = _continue_fit_attempt(
-            row, spec, config, truth, art1, esc.n_samples, summary
-        )
+        # draw in blocks from the warm chains, re-checking the gate after
+        # each, until it passes or the block budget is spent
+        summary2, art2 = summary, art1
+        while n_blocks < esc.continue_max_blocks:
+            print(
+                f'[fit {fit_id}] attempt 1 '
+                + ('failed' if n_blocks == 0 else f'+ {n_blocks} block(s) still fails')
+                + ' the escalation gate '
+                f"(max_rhat={summary2['max_rhat']:.3f} vs {esc.rhat_max}, "
+                f"min_ess={summary2['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
+                f'continuing the warmed chains: {esc.continue_block} more draws '
+                f'per chain (block {n_blocks + 1} of {esc.continue_max_blocks})',
+                flush=True,
+            )
+            summary2, art2 = _continue_fit_attempt(
+                row, spec, config, truth, art2, esc.continue_block, summary
+            )
+            n_blocks += 1
+            if not needs_escalation(summary2, esc):
+                break
+        if needs_escalation(summary2, esc) and reason == '':
+            reason = 'blocks_exhausted'
     else:
         summary2, art2 = _restart_fit_attempt(
             row, spec, config, run_dir, truth, noise_seed, sampler_seed, art1, summary
@@ -312,8 +339,11 @@ def _run_fit_escalated(
     summary2['n_attempts'] = 2
     summary2['escalated'] = True
     summary2['escalation_mode'] = mode
+    summary2['escalation_n_blocks'] = n_blocks
     summary2['first_attempt_max_rhat'] = float(summary['max_rhat'])
     summary2['first_attempt_min_ess'] = float(summary['min_ess'])
+    summary2['first_attempt_max_rhat_param'] = str(summary['max_rhat_param'])
+    summary2['first_attempt_min_ess_param'] = str(summary['min_ess_param'])
     summary2['first_attempt_n_divergences'] = int(summary['n_divergences'])
     summary2['first_attempt_divergence_rate'] = float(summary['divergence_rate'])
     summary2['first_attempt_wallclock_s'] = float(summary['fit_wallclock_s'])
@@ -322,9 +352,17 @@ def _run_fit_escalated(
     summary2['fit_wallclock_s'] = float(time.time() - t_start)
 
     retry_failed = needs_escalation(summary2, esc)
-    if retry_failed and bool(row['save_chains']):
-        # keep the first attempt's chains for forensics only when the retry
-        # also failed the gate
+    # restart_reason names why more draws would not (or did not) rescue the
+    # first attempt; restart_recommended marks fits to re-run fresh: any
+    # continuation that ended below the gate, or a forced continuation of an
+    # attempt that had a restart reason to begin with
+    summary2['restart_reason'] = reason
+    summary2['restart_recommended'] = bool(
+        mode == 'continue' and (retry_failed or reason != '')
+    )
+    if mode == 'restart' and bool(row['save_chains']):
+        # the restarted fit's final chains do not contain the failing attempt,
+        # so keep it for forensics (a continuation keeps it in the union)
         _save_chains(run_dir, f'{fit_id}.attempt1', art1.result, art1.sampled_names)
     _persist_outputs(run_dir, fit_id, row, art2)
     print(
@@ -705,6 +743,10 @@ def _save_chains(run_dir: Path, fit_id: str, result, sampled_names) -> None:
     num_steps = result.diagnostics.get('num_steps')
     if num_steps is not None:
         arrays['num_steps'] = np.asarray(num_steps)
+    # warmup-adapted inverse mass matrix (sampling coordinates), per chain
+    adapted = result.diagnostics.get('adapted_inverse_mass_matrix')
+    if adapted is not None:
+        arrays['adapted_inverse_mass_matrix'] = np.asarray(adapted)
     _atomic_savez(path, arrays)
 
 

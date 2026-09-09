@@ -423,7 +423,32 @@ plt.show()
 
 The plain dense-mass path (`precondition='none'`, the default) is the stable
 anchor; switch to `'laplace'` with a short warmup for the joint phot+grism
-configuration. `tests/test_flagship.py` runs the full production version.
+configuration. Production also sets `precondition_adapt_mass=True`, which lets
+warmup re-adapt the dense metric starting from the Laplace one instead of
+freezing it. `tests/test_flagship.py` runs the full production version.
+
+### Continuing a run instead of restarting it
+
+NUTS runs a fixed number of draws; there is no early exit when r-hat and ESS
+look fine, and no way to ask for more draws mid-run. A preconditioned
+`NumpyroSampler` keeps its warm state (positions, step size, adapted metric)
+after `run()`, so a run that comes back marginal can be extended without paying
+warmup again:
+
+```{code-cell} python
+sampler_pg = build_sampler('numpyro', task_pg, config_laplace)
+result_pg = sampler_pg.run()
+if max(result_pg.get_rhat().values()) > 1.01 or min(result_pg.get_ess().values()) < 400:
+    result_pg = sampler_pg.continue_sampling(config_laplace.n_samples)   # one more block
+print(result_pg.metadata['continuations'], result_pg.metadata['n_samples_per_chain'])
+```
+
+The result is the union of all draws (chain-major), with r-hat/ESS recomputed on
+the union. Repeat in blocks until the gate passes, up to a budget. This rescues
+slow mixing; it cannot rescue chains sitting in different modes (r-hat well
+above 1.2), which need a fresh start. The ensemble pipeline exposes exactly this
+policy as `fit.escalation.mode: restart | continue | auto` (see
+`docs/ensemble_workflow.md`).
 
 ---
 

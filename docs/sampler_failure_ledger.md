@@ -14,7 +14,8 @@ survive sessions.
 | `max_rhat`, `min_ess` | escalation-gate quantities over all sampled parameters |
 | `max_rhat_param`, `min_ess_param` | which parameter sets each (failure correlation) |
 | `ess_g1`, `ess_g2` | shear ESS, the quantities the science uses |
-| `n_attempts`, `escalated`, `escalation_mode`, `first_attempt_max_rhat`, `first_attempt_min_ess` | escalation history; `escalation_mode` is 'restart' (fresh warmup, donated metric), 'continue' (more draws from the warm chains, first-attempt draws kept) or '' (no escalation) |
+| `n_attempts`, `escalated`, `escalation_mode`, `escalation_n_blocks`, `first_attempt_max_rhat`, `first_attempt_min_ess` | escalation history; `escalation_mode` is 'restart' (fresh warmup, donated metric), 'continue' (more draws from the warm chains in `escalation_n_blocks` blocks, first-attempt draws kept) or '' (no escalation) |
+| `restart_reason`, `restart_recommended` | why more draws would not (or did not) rescue the first attempt: '' (marginal), 'rhat' (> `continue_rhat_max`), 'divergences' (> `continue_divergence_max`), 'blocks_exhausted' (continued to the block cap, still below the gate); `restart_recommended` marks fits to re-run fresh |
 | `divergence_rate`, `mean_accept_prob` | NUTS health |
 | `num_steps_total` | leapfrog steps summed over chains and draws (per-draw array in `chains/<fit_id>.npz['num_steps']`) |
 | `precond_condition_number` | condition of the floored Laplace metric (`1/eig_floor` when the floor is active) |
@@ -26,8 +27,10 @@ survive sessions.
 
 Gate (production specs): `rhat_max` 1.05, `ess_min` 50, one escalation retry
 (800/1000 warmup/samples, donated adapted metric; with `escalation.mode: auto`
-a marginal first attempt is instead continued for 1000 more draws per chain). A fit that fails the gate
-after the retry is kept and flagged in `status`/`collate` as catastrophic.
+a marginal first attempt is instead continued from its warm chains in blocks
+of `continue_block` = 300 draws per chain, gate re-checked per block, at most
+`continue_max_blocks` = 4 blocks). A fit that fails the gate after the retry
+is kept and flagged in `status`/`collate` as catastrophic.
 
 ## Failure classes
 
@@ -38,7 +41,7 @@ after the retry is kept and flagged in `status`/`collate` as catastrophic.
 | C. Ridge geometry | steps/draw pinned at 63-127 (tree depth 6-7) on clean fits; directional curvature changes 30-400x within +/-1 sigma along the softest eigenvectors | all 16 bank fits (curvature_swing study 2026-09-07); metric changes (fd vs ad, escaped MAP) leave steps/draw unchanged | OPEN, the per-draw cost floor | sampler-layer bijective reparam informed by the MAP Hessian (spin-2 disk-frame shear, vcirc sin i); position-dependent metric; MAMS |
 | D. Prior-wall regularization loss | flat shear prior: escalations 4 -> 7, steps +34%, median fit wall 17 -> 43 min, posteriors unchanged | flatprior arm 974729 vs 968810 | PARKED (Gaussian prior stays) | reparam first |
 | E. Tree-depth cap | `max_tree_depth` 8: steps -3%, one extra catastrophic fit (rhat 1.29 / ess 12 after escalation, converged uncapped) | depth8 arm 976034 vs 968810 | REFUTED as a lever, do not adopt | none |
-| F. Position-angle prior wall | truth `theta_int` within ~0.3 rad of the `Uniform(0, pi)` fit-prior walls; first-attempt `max_rhat` 1.07-2.9, `min_ess` 2-60; the counter-rotating solution (theta + pi) is outside the prior, so it appears as theta near the opposite wall with a compensating shear (fit dacee1cd: modes at theta 0.15-0.25 with g2 -0.19 / -0.24 and at 2.9 with g2 0.0, truth 3.04; log-posterior gap ~8 nats in favour of the truth mode) | census v1 (200 fits, July): fail rate 33% / 53% for wall distance < 0.15 / 0.15-0.3 rad vs 15% beyond 0.8 rad, median steps 2x, median theta pull 1.14 sigma vs ~0.5; 16-fit bank 968810: all 4 escalations among the 6 fits within 0.4 rad of a wall, 0 of 10 beyond 0.5 rad | OPEN; fix under test (`fit.pa_prior: full_circle`, `CircularUniform` prior, periodic sampling coordinate, PA starts over both rotation directions, `map_pa_flip_margin` column) | full-circle PA prior; A/B arm `cosmos25_noise_ab_matched_fullcircle` vs 968810 |
+| F. Position-angle prior wall | truth `theta_int` within ~0.3 rad of the `Uniform(0, pi)` fit-prior walls; first-attempt `max_rhat` 1.07-2.9, `min_ess` 2-60; the counter-rotating solution (theta + pi) is outside the prior, so it appears as theta near the opposite wall with a compensating shear (fit dacee1cd: modes at theta 0.15-0.25 with g2 -0.19 / -0.24 and at 2.9 with g2 0.0, truth 3.04; log-posterior gap ~8 nats in favour of the truth mode) | census v1 (200 fits, July): fail rate 33% / 53% for wall distance < 0.15 / 0.15-0.3 rad vs 15% beyond 0.8 rad, median steps 2x, median theta pull 1.14 sigma vs ~0.5; 16-fit bank 968810: all 4 escalations among the 6 fits within 0.4 rad of a wall, 0 of 10 beyond 0.5 rad | FIXED: `fit.pa_prior: full_circle` is the default since 4a4a317 (`CircularUniform` prior, periodic sampling coordinate, PA starts over both rotation directions, `map_pa_flip_margin` column); A/B 983939 vs 968810: steps -30%, near-wall steps x0.38, tail fit 460k -> 104k first try | none; fits with `map_pa_flip_margin` < ~3 nats have a genuinely ambiguous rotation direction and the circle samples both modes |
 
 ## Infrastructure failures (not sampler pathologies)
 
@@ -65,3 +68,4 @@ after the retry is kept and flagged in `status`/`collate` as catastrophic.
 | 2026-09-07 | 976766 saddle-escape A/B, 7 fits x 2 arms | eccfc62 | 7 | - | - | class B prevalence 2/7; class A fit unchanged; steps/draw unchanged |
 | 2026-09-08 | 983442 fp64 fd, 32-fit bank cosmos25_bank32 | a3af13c | 32 | 4 | 0 | first-pass 12.5%; theta_int sets min_ess in 16/32; near-wall median steps 107-132k vs 61k far; no negative MAP eigenvalues among the escalations |
 | 2026-09-08 | 983939 fp64 fd, full-circle PA prior (class F fix) | 1a6f914 | 16 | 4 | 0 | vs 968810: steps 2.65M -> 1.85M, sum wall 7.45 -> 5.09 h; near-wall (6 fits) steps x0.38, escalations 4 -> 1, the tail fit 460k -> 104k steps first try; far-wall (10 fits) steps x1.11, escalations 0 -> 3 at first-attempt rhat 1.06-1.07; shear means agree (g1 max 0.16 sigma; g2 max 0.72 sigma on a near-wall fit, 0.12 far); flip margins 0.6-1396 nats, 2/16 below 2 nats |
+| 2026-09-09 | 985582 fp64 fd, escalation mode auto (continue), same 16 fits as 983939 | 4a4a317 | 16 | 4 | 0 | first attempts bit-identical to 983939; all 4 escalations marginal (rhat 1.06-1.07, min_ess 63-130) -> continued 1000 draws/chain, all passed (rhat 1.004-1.009, min_ess 367-703); escalated fits wall 113 vs 140 min (x0.81) despite 1.6x more sampling steps (no 800-draw re-warmup); run wall 2662 vs 3175 s; posteriors agree with the restart arm (shear |dmean|/sigma <= 0.12, widths 0.91-1.05); the 1000-draw block was ~3x more than the gate needed, hence the block-wise continuation (continue_block 300, max 4) |

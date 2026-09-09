@@ -940,14 +940,19 @@ class NumpyroSampler(Sampler):
         sampled_names = list(self.task.sampled_names)
         n_params = len(sampled_names)
 
-        mcmc = MCMC(
-            c['mcmc'].sampler,
-            num_warmup=0,
-            num_samples=n_samples,
-            num_chains=c['n_chains'],
-            chain_method=c['chain_method'],
-            progress_bar=self.config.progress,
-        )
+        # one no-warmup MCMC object per block size, reused across blocks
+        block_mcmcs = c.setdefault('block_mcmcs', {})
+        mcmc = block_mcmcs.get(n_samples)
+        if mcmc is None:
+            mcmc = MCMC(
+                c['mcmc'].sampler,
+                num_warmup=0,
+                num_samples=n_samples,
+                num_chains=c['n_chains'],
+                chain_method=c['chain_method'],
+                progress_bar=self.config.progress,
+            )
+            block_mcmcs[n_samples] = mcmc
         mcmc.post_warmup_state = c['mcmc'].last_state
         mcmc.run(
             c['mcmc'].last_state.rng_key,

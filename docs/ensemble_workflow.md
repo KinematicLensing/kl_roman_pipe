@@ -93,9 +93,30 @@ Key blocks:
   the position-angle basins are the known multimodality, and random draws
   alone can land every start in the wrong basin, whose shape-shear-
   compensated mode traps the sampler); `pin_z_to_truth: true` (v1 -- sampled
-  narrow-spec-z planned). A fit whose chains come back broken (max_rhat >
-  1.1 or divergence rate > 0.9) is retried once with a fresh sampler seed;
-  `n_attempts` is recorded in the summary row.
+  narrow-spec-z planned); `pa_prior: full_circle` (default; the position
+  angle is sampled on the circle so both rotation directions are in the
+  prior) or `half_turn` (Uniform(0, pi)); `hessian_method: fd | ad`,
+  `max_tree_depth`, `shear_prior_type: gaussian | uniform`, and the render
+  knob `model.render.line_window_mode` are the remaining sampler-side
+  switches (see `kl_pipe/ensemble/spec.py` for provenance).
+- `fit.escalation`: quality-gated retry. A first attempt that fails the gate
+  (`max_rhat > rhat_max` = 1.05 or `min_ess < ess_min` = 50) is escalated
+  once. `mode: restart` (default) reruns with `n_warmup`/`n_samples`
+  (800/1000) and the first attempt's warmup-adapted metric donated as the
+  initial mass matrix. `mode: continue` draws more from the warm chains
+  instead -- no re-warmup, first-attempt draws kept -- in blocks of
+  `continue_block` (300) draws per chain, re-checking the gate after each
+  block, up to `continue_max_blocks` (4). `mode: auto` continues a marginal
+  first attempt (`max_rhat <= continue_rhat_max` = 1.2 and divergence rate
+  `<= continue_divergence_max` = 0.05) and restarts anything worse, since
+  chains sitting in different basins need a new start, not more draws.
+  Summary columns: `n_attempts`, `escalated`, `escalation_mode`,
+  `escalation_n_blocks`, `first_attempt_*`, `restart_reason` ('' | 'rhat' |
+  'divergences' | 'blocks_exhausted') and `restart_recommended` (a
+  continuation that ended below the gate, or a forced continuation of an
+  attempt that had a restart reason): fits to re-run fresh in a special
+  mode. See `docs/sampler_failure_ledger.md` for the measured effect of
+  each mode.
 - `output.save_chains/save_mocks`: `none | subset | all`. `subset` = the
   first galaxy of each cos-i bin; chains -> `chains/<fit_id>.npz`, mock
   datavectors + truth/MAP renders -> `mocks/<fit_id>.npz`.

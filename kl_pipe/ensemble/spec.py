@@ -895,14 +895,20 @@ class EscalationSpec:
     n_warmup: int = 800
     n_samples: int = 1000
     # retry mode: 'restart' (fresh warmup with the donated metric),
-    # 'continue' (n_samples more draws from the warmed chains, no re-warmup,
-    # first-attempt draws kept) or 'auto' (continue when the first attempt is
-    # marginal -- max_rhat <= continue_rhat_max and divergence_rate <=
-    # continue_divergence_max -- restart otherwise, since chains sitting in
-    # different basins need a new start, not more draws)
+    # 'continue' (more draws from the warmed chains in blocks of
+    # continue_block per chain, gate re-checked after each block, at most
+    # continue_max_blocks blocks, no re-warmup, first-attempt draws kept) or
+    # 'auto' (continue when the first attempt is marginal -- max_rhat <=
+    # continue_rhat_max and divergence_rate <= continue_divergence_max --
+    # restart otherwise, since chains sitting in different basins need a new
+    # start, not more draws)
     mode: str = 'restart'
     continue_rhat_max: float = 1.2
     continue_divergence_max: float = 0.05
+    # block size matches the production first-attempt draw count; four blocks
+    # cap the continuation at ~the restart draw budget (n_samples 1000)
+    continue_block: int = 300
+    continue_max_blocks: int = 4
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
@@ -941,6 +947,8 @@ class EscalationSpec:
         for name, value in [
             ('n_warmup', self.n_warmup),
             ('n_samples', self.n_samples),
+            ('continue_block', self.continue_block),
+            ('continue_max_blocks', self.continue_max_blocks),
         ]:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(
@@ -963,6 +971,8 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         'mode',
         'continue_rhat_max',
         'continue_divergence_max',
+        'continue_block',
+        'continue_max_blocks',
     )
     _reject_unknown(block, allowed, context)
     return EscalationSpec(
@@ -974,6 +984,8 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         mode=str(block.get('mode', 'restart')),
         continue_rhat_max=float(block.get('continue_rhat_max', 1.2)),
         continue_divergence_max=float(block.get('continue_divergence_max', 0.05)),
+        continue_block=_require_yaml_int(block, 'continue_block', 300, context),
+        continue_max_blocks=_require_yaml_int(block, 'continue_max_blocks', 4, context),
     )
 
 

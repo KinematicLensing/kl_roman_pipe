@@ -239,6 +239,15 @@ donating a previous same-fit run's warmup-adapted matrix
 (`diagnostics['adapted_inverse_mass_matrix']`, recorded with
 `precondition_adapt_mass=True`) to an escalation rerun.
 
+A completed preconditioned run keeps its warm state: `sampler.continue_sampling(n)`
+draws `n` more per chain from the final position, step size and metric with no
+warmup and returns the union of all draws so far (chain-major; r-hat/ESS on the
+union; per-draw diagnostics concatenated; `metadata['continuations']` counts the
+calls). Repeated calls extend the same chains; same-size calls reuse one MCMC
+object. This is how a marginal run (r-hat 1.05-1.2, no divergences) is cheaply
+brought over a convergence gate: draw a block, check, repeat. Chains in
+different basins (r-hat well above 1.2) need a fresh start, not more draws.
+
 ---
 
 ## InferenceTask API

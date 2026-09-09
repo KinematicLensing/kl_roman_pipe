@@ -206,6 +206,8 @@ def _fake_summary(fit_id: str, quality: dict) -> dict:
         'error_message': '',
         'max_rhat': float(quality['max_rhat']),
         'min_ess': float(quality['min_ess']),
+        'max_rhat_param': 'g2',
+        'min_ess_param': 'theta_int',
         'n_divergences': int(quality.get('n_divergences', 0)),
         'divergence_rate': float(quality.get('divergence_rate', 0.0)),
         'fit_wallclock_s': 1.0,
@@ -332,10 +334,12 @@ class TestEscalationFlow:
         assert isinstance(summary['fit_wallclock_s'], float)
         assert summary['fit_wallclock_s'] >= 0.0
 
-        # retry passed the gate: only the final chains file is kept
+        # a restart replaces the chains, so the failing attempt is kept alongside
         fit_id = str(row['fit_id'])
         assert (run_dir / 'chains' / f'{fit_id}.npz').exists()
-        assert not (run_dir / 'chains' / f'{fit_id}.attempt1.npz').exists()
+        assert (run_dir / 'chains' / f'{fit_id}.attempt1.npz').exists()
+        assert summary['first_attempt_max_rhat_param'] == 'g2'
+        assert summary['first_attempt_min_ess_param'] == 'theta_int'
 
     def test_frozen_first_pass_retries_with_adaptation(
         self, frozen_escalation_run, monkeypatch
@@ -573,21 +577,33 @@ class TestEscalationModeSpec:
         assert spec.escalation.mode == 'restart'
         assert spec.escalation.continue_rhat_max == 1.2
         assert spec.escalation.continue_divergence_max == 0.05
+        assert spec.escalation.continue_block == 300
+        assert spec.escalation.continue_max_blocks == 4
 
     def test_mode_parses_and_validates(self, tmp_path):
         d = _escalation_spec_dict()
         d['fit']['escalation'].update(
-            {'mode': 'auto', 'continue_rhat_max': 1.15, 'continue_divergence_max': 0.1}
+            {
+                'mode': 'auto',
+                'continue_rhat_max': 1.15,
+                'continue_divergence_max': 0.1,
+                'continue_block': 150,
+                'continue_max_blocks': 6,
+            }
         )
         spec_path = _write_spec(tmp_path, d)
         spec, _, _ = load_run(expand(spec_path, REGISTRY, tmp_path / 'runs'))
         assert spec.escalation.mode == 'auto'
         assert spec.escalation.continue_rhat_max == 1.15
         assert spec.escalation.continue_divergence_max == 0.1
+        assert spec.escalation.continue_block == 150
+        assert spec.escalation.continue_max_blocks == 6
         for bad in (
             {'mode': 'resume'},
             {'continue_rhat_max': 1.0},
             {'continue_divergence_max': 1.5},
+            {'continue_block': 0},
+            {'continue_max_blocks': -1},
         ):
             d = _escalation_spec_dict()
             d['fit']['escalation'].update(bad)
@@ -622,15 +638,17 @@ class TestEscalationModeSpec:
 
 
 class _ContinueRecorder:
-    """Replaces worker._continue_fit_attempt; plays back one scripted quality."""
+    """Replaces worker._continue_fit_attempt; plays back scripted qualities,
+    one per continuation block (the last one repeats)."""
 
-    def __init__(self, quality):
-        self.quality = quality
+    def __init__(self, *qualities):
+        self.qualities = list(qualities)
         self.calls = []
 
     def __call__(self, row, spec, config, truth, art1, n_samples, summary1):
         self.calls.append({'n_samples': n_samples, 'art1': art1, 'summary1': summary1})
-        summary = _fake_summary(str(row['fit_id']), self.quality)
+        quality = self.qualities[min(len(self.calls) - 1, len(self.qualities) - 1)]
+        summary = _fake_summary(str(row['fit_id']), quality)
         summary['sampler_seed'] = summary1['sampler_seed']
         summary['has_chains'] = bool(row['save_chains'])
         return summary, art1
@@ -657,16 +675,84 @@ class TestContinuationFlow:
         summary = run_single_fit(row, spec, config, run_dir)
 
         assert len(rec.calls) == 1 and len(cont.calls) == 1
-        assert cont.calls[0]['n_samples'] == spec.escalation.n_samples
+        assert cont.calls[0]['n_samples'] == spec.escalation.continue_block
         assert isinstance(cont.calls[0]['art1'], worker._AttemptArtifacts)
         assert cont.calls[0]['summary1']['max_rhat'] == _MARGINAL['max_rhat']
         assert summary['escalated'] is True and summary['n_attempts'] == 2
         assert summary['escalation_mode'] == 'continue'
+        assert summary['escalation_n_blocks'] == 1
+        assert summary['restart_reason'] == ''
+        assert summary['restart_recommended'] is False
         assert summary['first_attempt_max_rhat'] == _MARGINAL['max_rhat']
         assert summary['max_rhat'] == _GOOD['max_rhat']
         fit_id = str(row['fit_id'])
         assert (run_dir / 'chains' / f'{fit_id}.npz').exists()
         assert not (run_dir / 'chains' / f'{fit_id}.attempt1.npz').exists()
+
+    def test_blocks_repeat_until_the_gate_passes(self, tmp_path, monkeypatch):
+        run_dir, spec, config, row = _mode_run(tmp_path, 'continue')
+        assert spec.escalation.continue_max_blocks == 4
+        rec = _AttemptRecorder([_MARGINAL])
+        cont = _ContinueRecorder(_MARGINAL, _MARGINAL, _GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert len(cont.calls) == 3
+        assert all(c['n_samples'] == spec.escalation.continue_block for c in cont.calls)
+        # every block continues the previous block's artifacts
+        assert all(c['art1'] is cont.calls[0]['art1'] for c in cont.calls)
+        assert summary['escalation_n_blocks'] == 3
+        assert summary['max_rhat'] == _GOOD['max_rhat']
+        assert summary['restart_reason'] == ''
+        assert summary['restart_recommended'] is False
+
+    def test_exhausted_blocks_recommend_a_restart(self, tmp_path, monkeypatch):
+        run_dir, spec, config, row = _mode_run(tmp_path, 'continue')
+        rec = _AttemptRecorder([_MARGINAL])
+        cont = _ContinueRecorder(_MARGINAL)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert len(cont.calls) == spec.escalation.continue_max_blocks
+        assert summary['escalation_n_blocks'] == spec.escalation.continue_max_blocks
+        assert summary['max_rhat'] == _MARGINAL['max_rhat']
+        assert summary['restart_reason'] == 'blocks_exhausted'
+        assert summary['restart_recommended'] is True
+        fit_id = str(row['fit_id'])
+        # a continuation's chains contain the first attempt's draws
+        assert (run_dir / 'chains' / f'{fit_id}.npz').exists()
+        assert not (run_dir / 'chains' / f'{fit_id}.attempt1.npz').exists()
+
+    def test_forced_continue_of_a_split_attempt_is_flagged(self, tmp_path, monkeypatch):
+        # mode 'continue' obeys the spec but records that a restart was warranted
+        run_dir, spec, config, row = _mode_run(tmp_path, 'continue')
+        rec = _AttemptRecorder([_CATASTROPHIC])
+        cont = _ContinueRecorder(_GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert summary['escalation_mode'] == 'continue'
+        assert summary['max_rhat'] == _GOOD['max_rhat']
+        assert summary['restart_reason'] == 'rhat'
+        assert summary['restart_recommended'] is True
+
+    def test_restart_reason(self):
+        from kl_pipe.ensemble.spec import EscalationSpec
+        from kl_pipe.ensemble.worker import restart_reason
+
+        esc = EscalationSpec(enabled=True, mode='auto')
+        assert restart_reason(_fake_summary('f', _MARGINAL), esc) == ''
+        assert restart_reason(_fake_summary('f', _CATASTROPHIC), esc) == 'rhat'
+        assert (
+            restart_reason(_fake_summary('f', _DIVERGENT_MARGINAL), esc)
+            == 'divergences'
+        )
 
     def test_auto_continues_marginal_restarts_catastrophic(self, tmp_path, monkeypatch):
         # marginal first attempt -> continue

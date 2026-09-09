@@ -1,15 +1,13 @@
-# Twin of cosmos25_noise_ab_matched (same bank, truths and noise streams)
-# with escalation.mode auto: a marginal first attempt (max_rhat <= 1.2,
-# divergence rate <= 0.05) is continued from its warm chains in blocks of
-# continue_block draws per chain (gate re-checked after each block, at most
-# continue_max_blocks blocks) instead of a fresh 800-warmup restart;
-# catastrophic first attempts still restart with the donated metric.
-# Job 985582 ran this twin at the pre-block design (one 1000-draw
-# continuation): all 4 escalations continued and passed.
+# Twin of cosmos25_bank32 (same seed, bank, noise streams and sampler seeds)
+# with fit.n_warmup 400 instead of 200. numpyro's windowed adaptation gives
+# the dense mass matrix a final estimation window of 50 draws at 200 warmup
+# (100 at 250, 200 at 400); the hypothesis under test is that the 12.5%
+# first-pass failure rate of the 200-warmup bank is a per-chain metric-estimate
+# lottery on the two slow posterior ridges, not posterior geometry.
 run:
-  name: cosmos25_noise_ab_matched_continue
+  name: cosmos25_bank32_w400
   version: 1
-  description: "COSMOS25 matched-filter bank with escalation mode auto (continue marginal first attempts, restart catastrophic ones); A/B against the restart arm"
+  description: "COSMOS25 32-fit bank, n_warmup 400 (dense-metric adaptation window A/B against cosmos25_bank32 at 200)"
   seed: 20260728
   measurement: shear_bias
   noise_reps: 1
@@ -37,7 +35,7 @@ population:
     # Halpha for a measurable velocity gradient
     min_r50_over_psf_fwhm: 1.0
   sample:
-    n_galaxies: 8
+    n_galaxies: 16
     replace: false
   paint:
     bulge: false                   # disk-only twin (catalog has no bulge)
@@ -68,7 +66,7 @@ fit:
   # baseline sampler config inherited from the flagship dev spec (see its
   # comments for the measurements behind these numbers)
   sampler: numpyro
-  n_warmup: 200
+  n_warmup: 400
   n_samples: 300
   n_chains: 4
   precondition: laplace
@@ -82,7 +80,6 @@ fit:
     ess_min: 50
     n_warmup: 800
     n_samples: 1000
-    mode: auto
 
 dispatch:
   backend: local

@@ -1435,6 +1435,20 @@ class TestContinueSampling:
             np.asarray(third.samples).reshape(2, 450, n)[:, :400], new
         )
         assert third.metadata['continuations'] == 2
+        # same-size blocks reuse one no-warmup MCMC object (no retrace)
+        block_mcmc = sampler._continuation['block_mcmcs'][50]
+        fourth = sampler.continue_sampling(50)
+        assert sampler._continuation['block_mcmcs'][50] is block_mcmc
+        assert set(sampler._continuation['block_mcmcs']) == {200, 50}
+        assert fourth.samples.shape == (2 * 500, n)
+        assert np.array_equal(
+            np.asarray(fourth.samples).reshape(2, 500, n)[:, :450],
+            np.asarray(third.samples).reshape(2, 450, n),
+        )
+        assert not np.array_equal(
+            np.asarray(fourth.samples).reshape(2, 500, n)[:, 450:],
+            np.asarray(third.samples).reshape(2, 450, n)[:, 400:],
+        )
 
     def test_continue_requires_a_run(self, simple_velocity_task):
         task, _ = simple_velocity_task
