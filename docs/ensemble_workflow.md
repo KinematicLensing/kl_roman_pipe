@@ -316,6 +316,33 @@ Join truth with recovery via `kl_pipe.ensemble.collate.analysis_table(run_dir)`
 (`measure_shear_bias`, `compute_shape_noise`) and
 `kl_pipe.coordinates.rotate_to_galaxy_frame`.
 
+### Inspecting a fit's posterior surface
+
+`kl_pipe.diagnostics.posterior_slices` rebuilds one fit's exact log-posterior
+from the run directory (manifest row + frozen provenance regenerate the mock
+from the noise seed; a saved `mocks/<fit_id>.npz` is checked against the
+rebuilt data to roundoff) and evaluates it on 2D grids or a 3D grid:
+
+```bash
+python -m kl_pipe.diagnostics.posterior_slices --run-dir runs/<run> --fit-id <fit_id> \
+    --planes g2,theta_int eigen:0,1 --mode profile --n 40 --out runs/<run>/slices \
+    [--iso g2,theta_int,cosi --n3 18] \
+    [--results other.parquet --chains-dir DIR --mocks-dir DIR]   # explicit-path overrides
+```
+
+Planes are parameter pairs or `eigen:i,j` (eigenvectors of the chain
+correlation matrix, or of the inverse MAP Hessian when no chains were saved;
+mode 0 is the softest direction and the grid coordinate is in mode-sigma
+units). Chain draws, MAP, and truth are overlaid; contours at delta log P =
+-0.5, -2, -4.5 are the 1/2/3-sigma levels of a Gaussian. Read the mode in the
+title: a `conditional` slice holds every other parameter at the MAP and shows
+only the local curvature, which on a correlated 24-parameter ridge is ~10x
+narrower than the chain's marginal scatter; a `profile` slice maximizes over
+the other parameters at each grid point (one L-BFGS-B per point, warm-started
+from its neighbour) and follows the ridge, at roughly two orders of magnitude
+more evaluations per point. Each figure is written with an `.npz` of the grid,
+and the CLI prints `n_evals` and wall time per figure.
+
 ## Catalog-mode runs
 
 Catalog-backed specs (`population.type: catalog`, e.g.
