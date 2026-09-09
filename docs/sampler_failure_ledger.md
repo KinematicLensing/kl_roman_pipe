@@ -14,7 +14,7 @@ survive sessions.
 | `max_rhat`, `min_ess` | escalation-gate quantities over all sampled parameters |
 | `max_rhat_param`, `min_ess_param` | which parameter sets each (failure correlation) |
 | `ess_g1`, `ess_g2` | shear ESS, the quantities the science uses |
-| `n_attempts`, `escalated`, `first_attempt_max_rhat`, `first_attempt_min_ess` | escalation history |
+| `n_attempts`, `escalated`, `escalation_mode`, `first_attempt_max_rhat`, `first_attempt_min_ess` | escalation history; `escalation_mode` is 'restart' (fresh warmup, donated metric), 'continue' (more draws from the warm chains, first-attempt draws kept) or '' (no escalation) |
 | `divergence_rate`, `mean_accept_prob` | NUTS health |
 | `num_steps_total` | leapfrog steps summed over chains and draws (per-draw array in `chains/<fit_id>.npz['num_steps']`) |
 | `precond_condition_number` | condition of the floored Laplace metric (`1/eig_floor` when the floor is active) |
@@ -25,7 +25,8 @@ survive sessions.
 | `map.<param>`, `map_minus_postmean_over_sigma.<param>` | MAP vs posterior mean, per parameter |
 
 Gate (production specs): `rhat_max` 1.05, `ess_min` 50, one escalation retry
-(800/1000 warmup/samples, donated adapted metric). A fit that fails the gate
+(800/1000 warmup/samples, donated adapted metric; with `escalation.mode: auto`
+a marginal first attempt is instead continued for 1000 more draws per chain). A fit that fails the gate
 after the retry is kept and flagged in `status`/`collate` as catastrophic.
 
 ## Failure classes

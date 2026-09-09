@@ -888,7 +888,7 @@ class NumpyroSampler(Sampler):
             'init_mass_donated': self.config.init_inverse_mass_matrix is not None,
             'chain_method': chain_method,
         }
-        return SamplerResult(
+        result = SamplerResult(
             samples=samples,
             log_prob=log_probs,
             param_names=self.task.sampled_names,
@@ -898,3 +898,132 @@ class NumpyroSampler(Sampler):
             diagnostics=diagnostics,
             metadata=metadata,
         )
+        # warm state kept for continue_sampling (more draws, no re-warmup)
+        self._continuation = {
+            'mcmc': mcmc,
+            'transform': transform,
+            'map_point': np.asarray(pre.map_point),
+            'grouped': grouped,
+            'result': result,
+            'n_chains': n_chains,
+            'chain_method': chain_method,
+        }
+        return result
+
+    def continue_sampling(self, n_samples: int) -> SamplerResult:
+        """Draw ``n_samples`` more per chain from the completed preconditioned
+        run's final state (position, step size, metric), with no warmup, and
+        return the union of all draws so far as one result.
+
+        The returned samples are chain-major (all draws of chain 0, then
+        chain 1, ...), r-hat/ESS are recomputed on the combined per-chain
+        draws, and the per-draw diagnostic arrays (divergences, acceptance,
+        leapfrog steps) are the first run's followed by the new draws'.
+        Repeatable: each call extends the same chains.
+        """
+        from numpyro.infer import MCMC
+
+        if getattr(self, '_continuation', None) is None:
+            raise RuntimeError(
+                "continue_sampling requires a completed preconditioned run "
+                "(precondition='laplace') on this sampler instance"
+            )
+        if (
+            not isinstance(n_samples, int)
+            or isinstance(n_samples, bool)
+            or n_samples < 1
+        ):
+            raise ValueError(f"n_samples must be a positive int, got {n_samples!r}")
+        c = self._continuation
+        start_time = time.time()
+        prev = c['result']
+        sampled_names = list(self.task.sampled_names)
+        n_params = len(sampled_names)
+
+        mcmc = MCMC(
+            c['mcmc'].sampler,
+            num_warmup=0,
+            num_samples=n_samples,
+            num_chains=c['n_chains'],
+            chain_method=c['chain_method'],
+            progress_bar=self.config.progress,
+        )
+        mcmc.post_warmup_state = c['mcmc'].last_state
+        mcmc.run(
+            c['mcmc'].last_state.rng_key,
+            extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
+        )
+
+        grouped_new = np.asarray(mcmc.get_samples(group_by_chain=True))
+        grouped_new = grouped_new.reshape(c['n_chains'], n_samples, n_params)
+        transform = c['transform']
+        if transform is not None:
+            grouped_new = np.asarray(transform.inverse(grouped_new))
+            if transform.is_periodic.any():
+                grouped_new = transform.wrap_about(grouped_new, c['map_point'])
+        grouped = np.concatenate([c['grouped'], grouped_new], axis=1)
+        samples = grouped.reshape(-1, n_params)
+        log_probs_new = _batched_log_posterior_chunked(
+            self.task._log_posterior_jittable, grouped_new.reshape(-1, n_params)
+        )
+        n_prev = c['grouped'].shape[1]
+        log_probs = np.concatenate(
+            [
+                np.asarray(prev.log_prob).reshape(c['n_chains'], n_prev),
+                log_probs_new.reshape(c['n_chains'], n_samples),
+            ],
+            axis=1,
+        ).reshape(-1)
+
+        samples_by_chain = {
+            name: grouped[:, :, i] for i, name in enumerate(sampled_names)
+        }
+        diagnostics = self._collect_diagnostics(
+            mcmc, reparam_scales=None, samples_by_chain=samples_by_chain
+        )
+        # per-draw arrays: first run's draws followed by the new draws
+        for key in ('diverging', 'accept_prob', 'num_steps'):
+            old = prev.diagnostics.get(key)
+            new = diagnostics.get(key)
+            if old is None or new is None:
+                raise RuntimeError(f"continue_sampling: per-draw field '{key}' missing")
+            diagnostics[key] = np.concatenate([np.asarray(old), np.asarray(new)])
+        diverging = diagnostics['diverging']
+        diagnostics['n_divergences'] = int(diverging.sum())
+        diagnostics['divergence_rate'] = (
+            float(diverging.mean()) if diverging.size else 0.0
+        )
+        diagnostics['mean_accept_prob'] = float(np.mean(diagnostics['accept_prob']))
+        diagnostics['mean_tree_depth'] = float(
+            np.log2(np.asarray(diagnostics['num_steps']) + 1).mean()
+        )
+        diagnostics['preconditioner'] = dict(prev.diagnostics['preconditioner'])
+        if self.config.precondition_adapt_mass:
+            diagnostics['adapted_inverse_mass_matrix'] = np.asarray(
+                mcmc.last_state.adapt_state.inverse_mass_matrix
+            )
+
+        r_hats = diagnostics.get('r_hat', {})
+        max_rhat = max(r_hats.values()) if r_hats else 1.0
+        converged = max_rhat < 1.1 and diagnostics['divergence_rate'] < 0.1
+        metadata = dict(prev.metadata)
+        metadata['elapsed_seconds'] = float(prev.metadata['elapsed_seconds']) + (
+            time.time() - start_time
+        )
+        metadata['n_samples_per_chain'] = int(grouped.shape[1])
+        metadata['continuations'] = int(prev.metadata.get('continuations', 0)) + 1
+        metadata['continued_draws_per_chain'] = int(
+            prev.metadata.get('continued_draws_per_chain', 0)
+        ) + int(n_samples)
+        result = SamplerResult(
+            samples=samples,
+            log_prob=log_probs,
+            param_names=self.task.sampled_names,
+            fixed_params=self.task.fixed_params,
+            acceptance_fraction=diagnostics['mean_accept_prob'],
+            converged=converged,
+            diagnostics=diagnostics,
+            metadata=metadata,
+        )
+        self._continuation = dict(c, mcmc=mcmc, grouped=grouped, result=result)
+        return result

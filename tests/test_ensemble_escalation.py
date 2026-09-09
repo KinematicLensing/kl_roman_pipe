@@ -550,3 +550,176 @@ class TestInitInverseMassConfig:
                 precondition='laplace',
                 init_inverse_mass_matrix=np.diag([1.0, np.nan]),
             )
+
+
+# ==============================================================================
+# Continuation-based escalation (mode: restart | continue | auto)
+# ==============================================================================
+
+_MARGINAL = {'max_rhat': 1.08, 'min_ess': 30.0}
+_CATASTROPHIC = {'max_rhat': 1.6, 'min_ess': 5.0}
+_DIVERGENT_MARGINAL = {
+    'max_rhat': 1.08,
+    'min_ess': 30.0,
+    'n_divergences': 300,
+    'divergence_rate': 0.25,
+}
+
+
+class TestEscalationModeSpec:
+    def test_defaults(self, tmp_path):
+        spec_path = _write_spec(tmp_path, _escalation_spec_dict())
+        spec, _, _ = load_run(expand(spec_path, REGISTRY, tmp_path / 'runs'))
+        assert spec.escalation.mode == 'restart'
+        assert spec.escalation.continue_rhat_max == 1.2
+        assert spec.escalation.continue_divergence_max == 0.05
+
+    def test_mode_parses_and_validates(self, tmp_path):
+        d = _escalation_spec_dict()
+        d['fit']['escalation'].update(
+            {'mode': 'auto', 'continue_rhat_max': 1.15, 'continue_divergence_max': 0.1}
+        )
+        spec_path = _write_spec(tmp_path, d)
+        spec, _, _ = load_run(expand(spec_path, REGISTRY, tmp_path / 'runs'))
+        assert spec.escalation.mode == 'auto'
+        assert spec.escalation.continue_rhat_max == 1.15
+        assert spec.escalation.continue_divergence_max == 0.1
+        for bad in (
+            {'mode': 'resume'},
+            {'continue_rhat_max': 1.0},
+            {'continue_divergence_max': 1.5},
+        ):
+            d = _escalation_spec_dict()
+            d['fit']['escalation'].update(bad)
+            with pytest.raises(ValueError, match="escalation"):
+                EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+
+    def test_mode_policy(self):
+        from kl_pipe.ensemble.spec import EscalationSpec
+        from kl_pipe.ensemble.worker import escalation_mode
+
+        auto = EscalationSpec(enabled=True, mode='auto')
+        assert escalation_mode(_fake_summary('f', _MARGINAL), auto) == 'continue'
+        assert escalation_mode(_fake_summary('f', _CATASTROPHIC), auto) == 'restart'
+        assert (
+            escalation_mode(_fake_summary('f', _DIVERGENT_MARGINAL), auto) == 'restart'
+        )
+        # the threshold is inclusive
+        edge = _fake_summary('f', {'max_rhat': 1.2, 'min_ess': 10.0})
+        assert escalation_mode(edge, auto) == 'continue'
+        assert (
+            escalation_mode(
+                _fake_summary('f', _CATASTROPHIC), EscalationSpec(mode='continue')
+            )
+            == 'continue'
+        )
+        assert (
+            escalation_mode(
+                _fake_summary('f', _MARGINAL), EscalationSpec(mode='restart')
+            )
+            == 'restart'
+        )
+
+
+class _ContinueRecorder:
+    """Replaces worker._continue_fit_attempt; plays back one scripted quality."""
+
+    def __init__(self, quality):
+        self.quality = quality
+        self.calls = []
+
+    def __call__(self, row, spec, config, truth, art1, n_samples, summary1):
+        self.calls.append({'n_samples': n_samples, 'art1': art1, 'summary1': summary1})
+        summary = _fake_summary(str(row['fit_id']), self.quality)
+        summary['sampler_seed'] = summary1['sampler_seed']
+        summary['has_chains'] = bool(row['save_chains'])
+        return summary, art1
+
+
+def _mode_run(tmp_path, mode: str):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    d = _escalation_spec_dict()
+    d['fit']['escalation']['mode'] = mode
+    spec_path = _write_spec(tmp_path, d)
+    run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
+    spec, config, manifest = load_run(run_dir)
+    return run_dir, spec, config, manifest.iloc[0]
+
+
+class TestContinuationFlow:
+    def test_continue_mode_extends_the_first_attempt(self, tmp_path, monkeypatch):
+        run_dir, spec, config, row = _mode_run(tmp_path, 'continue')
+        rec = _AttemptRecorder([_MARGINAL])
+        cont = _ContinueRecorder(_GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert len(rec.calls) == 1 and len(cont.calls) == 1
+        assert cont.calls[0]['n_samples'] == spec.escalation.n_samples
+        assert isinstance(cont.calls[0]['art1'], worker._AttemptArtifacts)
+        assert cont.calls[0]['summary1']['max_rhat'] == _MARGINAL['max_rhat']
+        assert summary['escalated'] is True and summary['n_attempts'] == 2
+        assert summary['escalation_mode'] == 'continue'
+        assert summary['first_attempt_max_rhat'] == _MARGINAL['max_rhat']
+        assert summary['max_rhat'] == _GOOD['max_rhat']
+        fit_id = str(row['fit_id'])
+        assert (run_dir / 'chains' / f'{fit_id}.npz').exists()
+        assert not (run_dir / 'chains' / f'{fit_id}.attempt1.npz').exists()
+
+    def test_auto_continues_marginal_restarts_catastrophic(self, tmp_path, monkeypatch):
+        # marginal first attempt -> continue
+        run_dir, spec, config, row = _mode_run(tmp_path, 'auto')
+        rec = _AttemptRecorder([_MARGINAL])
+        cont = _ContinueRecorder(_GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+        summary = run_single_fit(row, spec, config, run_dir)
+        assert len(rec.calls) == 1 and len(cont.calls) == 1
+        assert summary['escalation_mode'] == 'continue'
+
+        # catastrophic first attempt -> restart with the donated metric
+        run_dir, spec, config, row = _mode_run(tmp_path / 'b', 'auto')
+        rec = _AttemptRecorder([_CATASTROPHIC, _GOOD])
+        cont = _ContinueRecorder(_GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+        summary = run_single_fit(row, spec, config, run_dir)
+        assert len(rec.calls) == 2 and len(cont.calls) == 0
+        assert summary['escalation_mode'] == 'restart'
+        retry = rec.calls[1]
+        assert retry['n_warmup'] == spec.escalation.n_warmup
+        np.testing.assert_allclose(retry['init_inverse_mass'], _EXPECTED_DONOR)
+
+        # divergent-but-marginal first attempt -> restart
+        run_dir, spec, config, row = _mode_run(tmp_path / 'c', 'auto')
+        rec = _AttemptRecorder([_DIVERGENT_MARGINAL, _GOOD])
+        cont = _ContinueRecorder(_GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+        summary = run_single_fit(row, spec, config, run_dir)
+        assert len(rec.calls) == 2 and len(cont.calls) == 0
+        assert summary['escalation_mode'] == 'restart'
+
+    def test_restart_mode_records_mode(self, escalation_run, monkeypatch):
+        run_dir, spec, config, row = escalation_run
+        assert spec.escalation.mode == 'restart'
+        rec = _AttemptRecorder([_MARGINAL, _GOOD])
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        summary = run_single_fit(row, spec, config, run_dir)
+        assert len(rec.calls) == 2
+        assert summary['escalation_mode'] == 'restart'
+        clean = _AttemptRecorder([_GOOD])
+        monkeypatch.setattr(worker, '_run_fit_attempt', clean)
+        summary = run_single_fit(row, spec, config, run_dir)
+        assert summary['escalation_mode'] == ''
+
+    def test_continue_without_warm_state_is_loud(self, tmp_path):
+        from kl_pipe.ensemble.worker import _continue_fit_attempt
+
+        art = worker._AttemptArtifacts(
+            result=None, inputs=None, task=None, preconditioner=None, sampled_names=[]
+        )
+        with pytest.raises(RuntimeError, match="warm state"):
+            _continue_fit_attempt({'fit_id': 'x'}, None, None, None, art, 10, {})

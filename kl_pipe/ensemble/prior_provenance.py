@@ -197,12 +197,15 @@ def catalog_registry(
             'intrinsic position angle',
             'rad',
             'U(0, pi); ring partner at +pi/2',
-            'U(0, pi)',
+            'uniform on the circle (period 2 pi)',
             'paint',
             'Ring partner at +pi/2 averages orientation-dependent residuals '
-            'out of the ensemble shear.',
+            'out of the ensemble shear. The fit prior admits both rotation '
+            'directions with no support walls; the painted range is one '
+            'half turn.',
             compact_meaning='intrinsic PA',
             compact_painted='U(0, pi)',
+            compact_prior='U(circle)',
             compact_note='ring partner at +pi/2',
         )
     )

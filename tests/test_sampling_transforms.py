@@ -291,3 +291,39 @@ class TestPeriodic:
 
         with pytest.raises(ValueError, match="periodic priors must be unbounded"):
             UnconstrainingTransform.from_priors(PD({'x': _BoundedCircular(np.pi)}))
+
+
+class TestPeriodicSummaries:
+    """Deterministic evidence that wrapping about the MAP makes linear
+    convergence statistics honest for a posterior straddling the wrap point."""
+
+    def test_wrapped_chains_give_unit_rhat_unwrapped_do_not(self):
+        from numpyro.diagnostics import summary as numpyro_summary
+
+        from kl_pipe.priors import CircularUniform
+
+        t = UnconstrainingTransform.from_priors(
+            PriorDict({'a': Gaussian(0.0, 1.0), 'theta': CircularUniform(2 * np.pi)})
+        )
+        rng = np.random.default_rng(0)
+        # four chains sampling the same narrow posterior centred on theta = 0;
+        # two chains report values just below 2 pi, two just above 0
+        n = 300
+        base = rng.normal(0.0, 0.05, size=(4, n))
+        unwrapped = base.copy()
+        unwrapped[:2] += 2 * np.pi
+        grouped = np.stack([rng.normal(size=(4, n)), unwrapped], axis=-1)
+        center = np.array([0.0, 2 * np.pi - 0.01])  # MAP reported near 2 pi
+        wrapped = t.wrap_about(grouped, center)
+        # the wrapped theta is contiguous, one branch, and preserves values mod 2 pi
+        th = wrapped[..., 1]
+        assert th.max() - th.min() < 0.5
+        turns = (th - unwrapped) / (2 * np.pi)
+        assert np.allclose(turns, np.round(turns))
+        r_unwrapped = numpyro_summary({'theta': unwrapped})['theta']['r_hat']
+        r_wrapped = numpyro_summary({'theta': th})['theta']['r_hat']
+        assert r_unwrapped > 5.0
+        assert r_wrapped < 1.02
+        # mean/std on the wrapped branch describe the narrow posterior
+        assert abs(th.mean() - 2 * np.pi) < 0.01
+        assert abs(th.std() - 0.05) < 0.01

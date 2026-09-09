@@ -1297,3 +1297,155 @@ class TestCircularPositionAngle:
         assert result.diagnostics['divergence_rate'] < 0.1
         kinds = result.diagnostics['preconditioner']['unconstrained']['kinds']
         assert kinds['theta_int'] == 'periodic'
+
+
+class TestCircularPriorEquivalence:
+    """The circular prior changes the posterior only by a constant on the
+    half-turn support, and the likelihood is periodic in theta with period
+    2 pi but not pi (the velocity field distinguishes the rotation direction)."""
+
+    @staticmethod
+    def _tasks():
+        from kl_pipe.priors import CircularUniform
+
+        image_pars = ImagePars(shape=(20, 20), pixel_scale=0.4, indexing='ij')
+        true_pars_flat = {
+            'v0': 10.0,
+            'vcirc': 200.0,
+            'rscale': 5.0,
+            'cosi': 0.6,
+            'theta_int': 1.9,
+            'g1': 0.02,
+            'g2': -0.01,
+        }
+        synth = SyntheticVelocity(true_pars_flat, model_type='arctan', seed=3)
+        data = synth.generate(image_pars, snr=200)
+        source = SourceModel(velocity_model=CenteredVelocityModel())
+        common = {
+            'vel.v0': Gaussian(10.0, 5.0),
+            'vel.vcirc': TruncatedNormal(200.0, 50.0, 100, 300),
+            'vel.rscale': TruncatedNormal(5.0, 2.0, 0.4, 20.0),
+            'cosi': TruncatedNormal(0.6, 0.2, 0.01, 0.99),
+            'g1': 0.02,
+            'g2': -0.01,
+        }
+        obs = build_velocity_obs(
+            image_pars, data=jnp.array(data), variance=synth.variance
+        )
+        half = InferenceTask.from_obs(
+            source,
+            PriorDict({**common, 'theta_int': Uniform(0.0, np.pi)}),
+            velocity_obs=obs,
+        )
+        full = InferenceTask.from_obs(
+            source,
+            PriorDict({**common, 'theta_int': CircularUniform(2 * np.pi)}),
+            velocity_obs=obs,
+        )
+        return half, full
+
+    def test_posteriors_differ_by_the_prior_constant_on_the_half_turn(self):
+        half, full = self._tasks()
+        assert list(half.sampled_names) == list(full.sampled_names)
+        draws = np.asarray(half.sample_prior(jax.random.PRNGKey(1), n_samples=64))
+        lp_h = np.array([float(half.log_posterior(jnp.asarray(t))) for t in draws])
+        lp_f = np.array([float(full.log_posterior(jnp.asarray(t))) for t in draws])
+        assert np.all(np.isfinite(lp_h))
+        # log(1/2pi) - log(1/pi) = -log 2, at every point of the shared support
+        assert np.allclose(lp_f - lp_h, -np.log(2.0), rtol=0, atol=1e-9)
+        g_h = np.asarray(jax.grad(half.log_posterior)(jnp.asarray(draws[0])))
+        g_f = np.asarray(jax.grad(full.log_posterior)(jnp.asarray(draws[0])))
+        assert np.allclose(g_h, g_f, rtol=1e-10, atol=1e-8)
+
+    def test_likelihood_periodic_in_2pi_not_pi(self):
+        _, full = self._tasks()
+        i = list(full.sampled_names).index('theta_int')
+        theta = np.asarray(full.sample_prior(jax.random.PRNGKey(2), n_samples=1))[0]
+        lp0 = float(full.log_posterior(jnp.asarray(theta)))
+        for k in (-2, -1, 1, 3):
+            shifted = theta.copy()
+            shifted[i] += 2 * np.pi * k
+            assert np.isclose(
+                float(full.log_posterior(jnp.asarray(shifted))), lp0, rtol=0, atol=1e-7
+            )
+        flipped = theta.copy()
+        flipped[i] += np.pi
+        # counter-rotation: the same isophotes, the opposite velocity field
+        assert abs(float(full.log_posterior(jnp.asarray(flipped))) - lp0) > 10.0
+
+
+class TestContinueSampling:
+    def test_continuation_extends_chains_without_rewarmup(self, simple_velocity_task):
+        task, true_pars = simple_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=200,
+            n_warmup=150,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=5,
+            progress=False,
+            precondition='laplace',
+            precondition_unconstrained=True,
+            precondition_adapt_mass=True,
+            n_map_starts=3,
+        )
+        sampler = build_sampler('numpyro', task, config)
+        first = sampler.run()
+        second = sampler.continue_sampling(200)
+        n = len(task.sampled_names)
+
+        # union of draws, chain-major: chain 0 (old, new), chain 1 (old, new)
+        assert second.samples.shape == (2 * 400, n)
+        assert second.log_prob.shape == (2 * 400,)
+        old = np.asarray(first.samples).reshape(2, 200, n)
+        new = np.asarray(second.samples).reshape(2, 400, n)
+        assert np.array_equal(new[:, :200, :], old)
+        assert np.array_equal(
+            np.asarray(second.log_prob).reshape(2, 400)[:, :200],
+            np.asarray(first.log_prob).reshape(2, 200),
+        )
+        # the new draws are real posterior draws with consistent log-posteriors
+        lp_check = np.array(
+            [float(task.log_posterior(jnp.asarray(t))) for t in new[0, 200:205]]
+        )
+        assert np.allclose(
+            lp_check, np.asarray(second.log_prob).reshape(2, 400)[0, 200:205]
+        )
+        # the warm state carried over: no warmup, same adapted step size
+        assert second.diagnostics['step_size'] == first.diagnostics['step_size']
+        assert second.metadata['continuations'] == 1
+        assert second.metadata['continued_draws_per_chain'] == 200
+        assert second.metadata['n_samples_per_chain'] == 400
+        # per-draw arrays cover every draw; convergence stats on the union
+        assert second.diagnostics['num_steps'].shape == (800,)
+        assert second.diagnostics['diverging'].shape == (800,)
+        assert np.array_equal(
+            second.diagnostics['num_steps'][:400], first.diagnostics['num_steps']
+        )
+        assert 0.0 <= second.diagnostics['divergence_rate'] < 0.1
+        assert max(second.get_rhat().values()) < 1.1
+        ess1 = np.array(list(first.diagnostics['ess'].values()))
+        ess2 = np.array(list(second.diagnostics['ess'].values()))
+        assert np.mean(ess2 / ess1) > 1.3
+        assert 'adapted_inverse_mass_matrix' in second.diagnostics
+        # chained continuation keeps extending the same chains
+        third = sampler.continue_sampling(50)
+        assert third.samples.shape == (2 * 450, n)
+        assert np.array_equal(
+            np.asarray(third.samples).reshape(2, 450, n)[:, :400], new
+        )
+        assert third.metadata['continuations'] == 2
+
+    def test_continue_requires_a_run(self, simple_velocity_task):
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=10,
+            n_warmup=10,
+            n_chains=1,
+            seed=1,
+            progress=False,
+            precondition='laplace',
+        )
+        sampler = build_sampler('numpyro', task, config)
+        with pytest.raises(RuntimeError, match="completed preconditioned run"):
+            sampler.continue_sampling(10)

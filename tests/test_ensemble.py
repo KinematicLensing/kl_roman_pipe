@@ -387,9 +387,12 @@ class TestScene:
         )
         priors = scene_priors(truth, canonical_q, dev_spec)
 
-        # drawn params carry their generating distribution
-        assert isinstance(priors.get_prior('theta_int'), Uniform)
-        assert priors.get_prior('theta_int').bounds == (0.0, np.pi)
+        # position angle: full-circle fit prior (both rotation directions)
+        from kl_pipe.priors import CircularUniform
+
+        th = priors.get_prior('theta_int')
+        assert isinstance(th, CircularUniform)
+        assert np.isclose(th.period, 2 * np.pi) and th.bounds == (None, None)
         vc = priors.get_prior('vel.vcirc')
         assert isinstance(vc, LogNormal)
         assert np.isclose(vc.median, 200.0)
@@ -1062,8 +1065,11 @@ def test_shear_information_increases_with_line_snr():
 
 class TestPAStratifiedStarts:
     def test_grid_covers_prior_range(self, dev_spec, canonical_q):
+        import dataclasses
+
         from kl_pipe.ensemble.worker import _pa_stratified_starts
 
+        dev_spec = dataclasses.replace(dev_spec, pa_fit_prior='half_turn')
         truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
         truth.update(
             {
@@ -1317,11 +1323,11 @@ class TestPAFitPrior:
     def test_spec_knob_default_and_validation(self, dev_spec, tmp_path):
         import dataclasses
 
-        assert dev_spec.pa_fit_prior == 'half_turn'
+        assert dev_spec.pa_fit_prior == 'full_circle'
         d = _spec_dict()
-        d['fit']['pa_prior'] = 'full_circle'
+        d['fit']['pa_prior'] = 'half_turn'
         spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
-        assert spec.pa_fit_prior == 'full_circle'
+        assert spec.pa_fit_prior == 'half_turn'
         with pytest.raises(ValueError, match="pa_prior"):
             dataclasses.replace(dev_spec, pa_fit_prior='wrapped')
 
@@ -1341,12 +1347,11 @@ class TestPAFitPrior:
                 'z': 1.3,
             }
         )
-        base = scene_priors(truth, canonical_q, dev_spec)
-        full = scene_priors(
-            truth,
-            canonical_q,
-            dataclasses.replace(dev_spec, pa_fit_prior='full_circle'),
+        base = scene_priors(
+            truth, canonical_q, dataclasses.replace(dev_spec, pa_fit_prior='half_turn')
         )
+        assert base.get_prior('theta_int').bounds == (0.0, np.pi)
+        full = scene_priors(truth, canonical_q, dev_spec)
         th = full.get_prior('theta_int')
         assert isinstance(th, CircularUniform)
         assert np.isclose(th.period, 2 * np.pi)
@@ -1375,11 +1380,7 @@ class TestPAFitPrior:
                 'z': 1.2,
             }
         )
-        priors = scene_priors(
-            truth,
-            canonical_q,
-            dataclasses.replace(dev_spec, pa_fit_prior='full_circle'),
-        )
+        priors = scene_priors(truth, canonical_q, dev_spec)
         starts = _pa_stratified_starts(priors, seed=7, n_pa=4)
         names = list(priors.sampled_names)
         thetas = starts[:, names.index('theta_int')]

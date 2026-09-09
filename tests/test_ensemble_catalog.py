@@ -399,9 +399,11 @@ class TestCatalogPriors:
         cosi = priors.get_prior('cosi')
         assert isinstance(cosi, Uniform)
         assert cosi.bounds == spec.catalog_population.cosi_range == (0.05, 0.95)
+        from kl_pipe.priors import CircularUniform
+
         theta = priors.get_prior('theta_int')
-        assert isinstance(theta, Uniform)
-        assert theta.bounds == (0.0, np.pi)
+        assert isinstance(theta, CircularUniform)
+        assert np.isclose(theta.period, 2 * np.pi)
         # z pinned to the per-fit truth
         assert priors.fixed_values['z'] == truth['z']
 

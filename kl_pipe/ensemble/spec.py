@@ -894,11 +894,41 @@ class EscalationSpec:
     ess_min: float = 50.0
     n_warmup: int = 800
     n_samples: int = 1000
+    # retry mode: 'restart' (fresh warmup with the donated metric),
+    # 'continue' (n_samples more draws from the warmed chains, no re-warmup,
+    # first-attempt draws kept) or 'auto' (continue when the first attempt is
+    # marginal -- max_rhat <= continue_rhat_max and divergence_rate <=
+    # continue_divergence_max -- restart otherwise, since chains sitting in
+    # different basins need a new start, not more draws)
+    mode: str = 'restart'
+    continue_rhat_max: float = 1.2
+    continue_divergence_max: float = 0.05
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
             raise ValueError(
                 f"escalation.enabled must be a boolean, got {self.enabled!r}"
+            )
+        if self.mode not in ('restart', 'continue', 'auto'):
+            raise ValueError(
+                "escalation.mode must be 'restart', 'continue' or 'auto', got "
+                f"{self.mode!r}"
+            )
+        if (
+            not isinstance(self.continue_rhat_max, float)
+            or self.continue_rhat_max <= 1.0
+        ):
+            raise ValueError(
+                f"escalation.continue_rhat_max ({self.continue_rhat_max!r}) must be "
+                "a float > 1.0"
+            )
+        if (
+            not isinstance(self.continue_divergence_max, float)
+            or not 0.0 <= self.continue_divergence_max <= 1.0
+        ):
+            raise ValueError(
+                f"escalation.continue_divergence_max ({self.continue_divergence_max!r}) "
+                "must be a float in [0, 1]"
             )
         if not isinstance(self.rhat_max, float) or self.rhat_max <= 1.0:
             raise ValueError(
@@ -924,7 +954,16 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         return EscalationSpec()
     if not isinstance(block, dict):
         raise ValueError(f"{context}: must be a mapping, got {block!r}")
-    allowed = ('enabled', 'rhat_max', 'ess_min', 'n_warmup', 'n_samples')
+    allowed = (
+        'enabled',
+        'rhat_max',
+        'ess_min',
+        'n_warmup',
+        'n_samples',
+        'mode',
+        'continue_rhat_max',
+        'continue_divergence_max',
+    )
     _reject_unknown(block, allowed, context)
     return EscalationSpec(
         enabled=block.get('enabled', False),
@@ -932,6 +971,9 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         ess_min=float(block.get('ess_min', 50.0)),
         n_warmup=_require_yaml_int(block, 'n_warmup', 800, context),
         n_samples=_require_yaml_int(block, 'n_samples', 1000, context),
+        mode=str(block.get('mode', 'restart')),
+        continue_rhat_max=float(block.get('continue_rhat_max', 1.2)),
+        continue_divergence_max=float(block.get('continue_divergence_max', 0.05)),
     )
 
 
@@ -1024,10 +1066,10 @@ class EnsembleSpec:
     shear_fit_prior_type: str = 'gaussian'
     shear_fit_prior_halfwidth: float = 0.3
 
-    # fit prior on the intrinsic position angle: 'half_turn' (Uniform(0, pi):
-    # one rotation direction, hard walls at 0 and pi) or 'full_circle'
-    # (uniform on the circle, period 2 pi: both rotation directions, no walls)
-    pa_fit_prior: str = 'half_turn'
+    # fit prior on the intrinsic position angle: 'full_circle' (uniform on
+    # the circle, period 2 pi: both rotation directions, no support walls) or
+    # 'half_turn' (Uniform(0, pi): one rotation direction, walls at 0 and pi)
+    pa_fit_prior: str = 'full_circle'
 
     # analytic-dispersal deposit window for the FIT observations ('global' |
     # 'local'); mock data are always rendered with the global window
@@ -1521,7 +1563,7 @@ class EnsembleSpec:
             shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
             shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
             shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
-            pa_fit_prior=str(fit.get('pa_prior', 'half_turn')),
+            pa_fit_prior=str(fit.get('pa_prior', 'full_circle')),
             hessian_method=str(fit.get('hessian_method', 'fd')),
             max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
             ring_enabled=ring_enabled,

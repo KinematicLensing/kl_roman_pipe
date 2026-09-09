@@ -646,10 +646,9 @@ def scene_priors(
         raise ValueError(
             "spec population.draw must include theta_int (position angle population)"
         )
-    if spec.pa_fit_prior != 'half_turn':
-        # the drawn (generating) PA range is a half turn; the fit prior may
-        # admit the full circle
-        prior_spec['theta_int'] = _pa_fit_prior(spec)
+    # the drawn (generating) PA range is a half turn; the fit prior is set by
+    # the spec knob (full circle by default)
+    prior_spec['theta_int'] = _pa_fit_prior(spec)
     if 'vel.vcirc' not in prior_spec:
         raise ValueError(
             "spec population.draw must include vcirc (Tully-Fisher population)"

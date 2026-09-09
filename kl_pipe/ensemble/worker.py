@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import time
 import traceback
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -135,6 +136,7 @@ class _AttemptArtifacts:
     task: object  # InferenceTask
     preconditioner: object  # LaplacePreconditioner or None
     sampled_names: List[str]
+    sampler: object = None  # NumpyroSampler holding the warm state, if any
 
 
 def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
@@ -147,6 +149,22 @@ def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
         float(summary['max_rhat']) > esc.rhat_max
         or float(summary['min_ess']) < esc.ess_min
     )
+
+
+def escalation_mode(summary: Dict, esc: EscalationSpec) -> str:
+    """'continue' or 'restart' for a first attempt that failed the gate.
+
+    Under ``mode='auto'`` a marginal first attempt (max_rhat within
+    ``continue_rhat_max`` and divergence rate within
+    ``continue_divergence_max``) is continued; anything worse is restarted.
+    """
+    if esc.mode != 'auto':
+        return esc.mode
+    marginal = (
+        float(summary['max_rhat']) <= esc.continue_rhat_max
+        and float(summary['divergence_rate']) <= esc.continue_divergence_max
+    )
+    return 'continue' if marginal else 'restart'
 
 
 def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
@@ -270,10 +288,73 @@ def _run_fit_escalated(
     )
     summary['n_attempts'] = 1
     summary['escalated'] = False
+    summary['escalation_mode'] = ''
     if not needs_escalation(summary, esc):
         _persist_outputs(run_dir, fit_id, row, art1)
         return summary
 
+    mode = escalation_mode(summary, esc)
+    if mode == 'continue':
+        print(
+            f'[fit {fit_id}] attempt 1 failed the escalation gate '
+            f"(max_rhat={summary['max_rhat']:.3f} vs {esc.rhat_max}, "
+            f"min_ess={summary['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
+            f'continuing the warmed chains: {esc.n_samples} more draws per chain',
+            flush=True,
+        )
+        summary2, art2 = _continue_fit_attempt(
+            row, spec, config, truth, art1, esc.n_samples, summary
+        )
+    else:
+        summary2, art2 = _restart_fit_attempt(
+            row, spec, config, run_dir, truth, noise_seed, sampler_seed, art1, summary
+        )
+    summary2['n_attempts'] = 2
+    summary2['escalated'] = True
+    summary2['escalation_mode'] = mode
+    summary2['first_attempt_max_rhat'] = float(summary['max_rhat'])
+    summary2['first_attempt_min_ess'] = float(summary['min_ess'])
+    summary2['first_attempt_n_divergences'] = int(summary['n_divergences'])
+    summary2['first_attempt_divergence_rate'] = float(summary['divergence_rate'])
+    summary2['first_attempt_wallclock_s'] = float(summary['fit_wallclock_s'])
+    # total wallclock over both attempts (per-attempt time stays available
+    # via first_attempt_wallclock_s)
+    summary2['fit_wallclock_s'] = float(time.time() - t_start)
+
+    retry_failed = needs_escalation(summary2, esc)
+    if retry_failed and bool(row['save_chains']):
+        # keep the first attempt's chains for forensics only when the retry
+        # also failed the gate
+        _save_chains(run_dir, f'{fit_id}.attempt1', art1.result, art1.sampled_names)
+    _persist_outputs(run_dir, fit_id, row, art2)
+    print(
+        f'[fit {fit_id}] escalation ({mode}) '
+        + (
+            f"still fails the gate (max_rhat={summary2['max_rhat']:.3f}, "
+            f"min_ess={summary2['min_ess']:.0f}); recorded as-is"
+            if retry_failed
+            else f"passed the gate (max_rhat={summary2['max_rhat']:.3f}, "
+            f"min_ess={summary2['min_ess']:.0f})"
+        ),
+        flush=True,
+    )
+    return summary2
+
+
+def _restart_fit_attempt(
+    row: Dict,
+    spec: EnsembleSpec,
+    config: ObservationConfig,
+    run_dir: Path,
+    truth: Dict[str, float],
+    noise_seed: int,
+    sampler_seed: int,
+    art1: '_AttemptArtifacts',
+    summary: Dict,
+) -> Tuple[dict, '_AttemptArtifacts']:
+    """Escalation by restart: a fresh, longer run with the donated metric."""
+    esc = spec.escalation
+    fit_id = str(row['fit_id'])
     if spec.adapt_mass:
         # adaptive first pass: donate its warmup-adapted metric to the retry
         donor = _donor_mass_matrix(art1.result.diagnostics)
@@ -293,7 +374,7 @@ def _run_fit_escalated(
         f'{retry_metric_note}',
         flush=True,
     )
-    summary2, art2 = _run_fit_attempt(
+    return _run_fit_attempt(
         row,
         spec,
         config,
@@ -307,35 +388,40 @@ def _run_fit_escalated(
         adapt_mass=retry_adapt_mass,
         reuse=art1,
     )
-    summary2['n_attempts'] = 2
-    summary2['escalated'] = True
-    summary2['first_attempt_max_rhat'] = float(summary['max_rhat'])
-    summary2['first_attempt_min_ess'] = float(summary['min_ess'])
-    summary2['first_attempt_n_divergences'] = int(summary['n_divergences'])
-    summary2['first_attempt_divergence_rate'] = float(summary['divergence_rate'])
-    summary2['first_attempt_wallclock_s'] = float(summary['fit_wallclock_s'])
-    # total wallclock over both attempts (per-attempt time stays available
-    # via first_attempt_wallclock_s)
-    summary2['fit_wallclock_s'] = float(time.time() - t_start)
 
-    retry_failed = needs_escalation(summary2, esc)
-    if retry_failed and bool(row['save_chains']):
-        # keep the first attempt's chains for forensics only when the retry
-        # also failed the gate
-        _save_chains(run_dir, f'{fit_id}.attempt1', art1.result, art1.sampled_names)
-    _persist_outputs(run_dir, fit_id, row, art2)
-    print(
-        f'[fit {fit_id}] escalation retry '
-        + (
-            f"still fails the gate (max_rhat={summary2['max_rhat']:.3f}, "
-            f"min_ess={summary2['min_ess']:.0f}); recorded as-is"
-            if retry_failed
-            else f"passed the gate (max_rhat={summary2['max_rhat']:.3f}, "
-            f"min_ess={summary2['min_ess']:.0f})"
-        ),
-        flush=True,
+
+def _continue_fit_attempt(
+    row: Dict,
+    spec: EnsembleSpec,
+    config: ObservationConfig,
+    truth: Dict[str, float],
+    art1: '_AttemptArtifacts',
+    n_samples: int,
+    summary1: Dict,
+) -> Tuple[dict, '_AttemptArtifacts']:
+    """Escalation by continuation: more draws from the first attempt's warm
+    chains; the result carries the first attempt's draws too."""
+    if art1.sampler is None or not hasattr(art1.sampler, 'continue_sampling'):
+        raise RuntimeError(
+            f"[fit {row['fit_id']}] escalation mode 'continue' needs the first "
+            "attempt's sampler with a warm state; none was kept"
+        )
+    t_start = time.time()
+    with profiling.trace(f'{row["fit_id"]}/sampler_continue'):
+        result = art1.sampler.continue_sampling(n_samples)
+    summary = _summary_row(
+        row,
+        spec,
+        result,
+        art1.preconditioner,
+        art1.sampled_names,
+        wallclock_s=time.time() - t_start,
+        precond_s=float(summary1['precond_wallclock_s']),
+        truth=truth,
+        priors=art1.inputs.priors,
     )
-    return summary2
+    _finish_attempt_summary(summary, row, config, art1.inputs, summary1['sampler_seed'])
+    return summary, dataclasses.replace(art1, result=result)
 
 
 def _persist_outputs(
@@ -461,6 +547,22 @@ def _run_fit_attempt(
         truth=truth,
         priors=inputs.priors,
     )
+    _finish_attempt_summary(summary, row, config, inputs, sampler_seed)
+
+    artifacts = _AttemptArtifacts(
+        result=result,
+        inputs=inputs,
+        task=task,
+        preconditioner=preconditioner,
+        sampled_names=sampled_names,
+        sampler=sampler,
+    )
+    return summary, artifacts
+
+
+def _finish_attempt_summary(
+    summary: dict, row: Dict, config: ObservationConfig, inputs, sampler_seed: int
+) -> None:
     summary['sampler_seed'] = sampler_seed
     summary['has_chains'] = bool(row['save_chains'])
     # realized per-channel matched-filter SNR against the actual mock
@@ -469,15 +571,6 @@ def _run_fit_attempt(
     summary['noise_model'] = str(config.noise_model)
     for key, value in (inputs.snr_effective or {}).items():
         summary[f'snr_effective_{key}'] = float(value)
-
-    artifacts = _AttemptArtifacts(
-        result=result,
-        inputs=inputs,
-        task=task,
-        preconditioner=preconditioner,
-        sampled_names=sampled_names,
-    )
-    return summary, artifacts
 
 
 def _summary_row(
