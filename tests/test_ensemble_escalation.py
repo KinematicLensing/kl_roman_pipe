@@ -637,6 +637,44 @@ class TestEscalationModeSpec:
         )
 
 
+class TestFitQualityColumns:
+    def test_chi2_and_map_deviation(self):
+        from types import SimpleNamespace
+
+        from kl_pipe.ensemble.worker import _fit_quality_columns
+
+        names = ['a', 'b']
+
+        class _Task:
+            def log_likelihood(self, theta):
+                # -0.5 chi2 with chi2 = 10 at the MAP (1, 2), 30 at the mean
+                return -0.5 * (10.0 if float(theta[0]) == 1.0 else 30.0)
+
+        inputs = SimpleNamespace(
+            image_obs={'F': SimpleNamespace(data=np.zeros((4, 4)), mask=None)},
+            grism_obs={
+                'r0': SimpleNamespace(
+                    data=np.zeros((3, 5)),
+                    mask=np.array([[True] * 5] * 2 + [[False] * 5]),
+                )
+            },
+        )
+        summary = {
+            'map.a': 1.0,
+            'map.b': 2.0,
+            'post.a.mean': 1.5,
+            'post.b.mean': 2.0,
+            'map_minus_postmean_over_sigma.a': -0.5,
+            'map_minus_postmean_over_sigma.b': 12.0,
+        }
+        _fit_quality_columns(summary, _Task(), inputs, names)
+        assert summary['n_data'] == 16 + 10
+        assert summary['map_chi2'] == 10.0
+        assert summary['postmean_chi2'] == 30.0
+        assert summary['map_postmean_max_dev'] == 12.0
+        assert summary['map_postmean_max_dev_param'] == 'b'
+
+
 class _ContinueRecorder:
     """Replaces worker._continue_fit_attempt; plays back scripted qualities,
     one per continuation block (the last one repeats)."""

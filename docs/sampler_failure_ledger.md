@@ -24,6 +24,8 @@ survive sessions.
 | `n_map_starts_converged` | L-BFGS starts that met the convergence test |
 | `map_pa_flip_margin` | negative-log-posterior margin of the MAP over the best optimization start that settled in the counter-rotating PA basin (`inf`: no start settled there; `nan`: half-turn PA prior, no such basin) |
 | `map.<param>`, `map_minus_postmean_over_sigma.<param>` | MAP vs posterior mean, per parameter |
+| `map_postmean_max_dev`, `map_postmean_max_dev_param` | largest \|MAP - posterior mean\| / sigma over the sampled parameters, and which one; healthy fits sit at 0.5-2.7 (64 fits, banks 983442 + 985872), a MAP the optimizer left in a wrong basin at 11-25 |
+| `map_chi2`, `postmean_chi2`, `n_data` | -2 log L at the MAP and at the posterior mean (no data constant, so plain chi-squares) against the number of masked data pixels; a posterior stuck in a wrong basin shows a chi-square excess of hundreds to thousands (fit fcfb5651 in 985872: 1586 nats = 3172 in chi-square above the truth basin) |
 
 Gate (production specs): `rhat_max` 1.05, `ess_min` 50, one escalation retry
 (800/1000 warmup/samples, donated adapted metric; with `escalation.mode: auto`

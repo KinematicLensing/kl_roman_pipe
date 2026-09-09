@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
@@ -459,6 +460,7 @@ def _continue_fit_attempt(
         priors=art1.inputs.priors,
     )
     _finish_attempt_summary(summary, row, config, art1.inputs, summary1['sampler_seed'])
+    _fit_quality_columns(summary, art1.task, art1.inputs, art1.sampled_names)
     return summary, dataclasses.replace(art1, result=result)
 
 
@@ -586,6 +588,7 @@ def _run_fit_attempt(
         priors=inputs.priors,
     )
     _finish_attempt_summary(summary, row, config, inputs, sampler_seed)
+    _fit_quality_columns(summary, task, inputs, sampled_names)
 
     artifacts = _AttemptArtifacts(
         result=result,
@@ -596,6 +599,40 @@ def _run_fit_attempt(
         sampler=sampler,
     )
     return summary, artifacts
+
+
+def _fit_quality_columns(summary: dict, task, inputs, sampled_names) -> None:
+    """Goodness-of-fit and MAP-vs-posterior columns.
+
+    ``map_chi2`` / ``postmean_chi2`` are -2 log L at the MAP and at the
+    posterior mean (the likelihood carries no data constant, so these are
+    plain chi-squares against ``n_data`` masked pixels); ``map_postmean_max_dev``
+    is the largest |MAP - posterior mean| / sigma over the sampled parameters.
+    A MAP stuck in a wrong basin shows up as a chi-square far above ``n_data``
+    or a deviation of order ten sigma.
+    """
+    n_data = 0
+    for obs in list(inputs.image_obs.values()) + list(inputs.grism_obs.values()):
+        mask = getattr(obs, 'mask', None)
+        n_data += (
+            int(np.sum(np.asarray(mask)))
+            if mask is not None
+            else int(np.asarray(obs.data).size)
+        )
+    theta_map = np.array([summary[f'map.{n}'] for n in sampled_names])
+    theta_mean = np.array([summary[f'post.{n}.mean'] for n in sampled_names])
+    summary['n_data'] = n_data
+    summary['map_chi2'] = float(-2.0 * task.log_likelihood(jnp.asarray(theta_map)))
+    summary['postmean_chi2'] = float(
+        -2.0 * task.log_likelihood(jnp.asarray(theta_mean))
+    )
+    devs = {
+        n: abs(float(summary[f'map_minus_postmean_over_sigma.{n}']))
+        for n in sampled_names
+    }
+    worst = max(devs, key=devs.get)
+    summary['map_postmean_max_dev'] = devs[worst]
+    summary['map_postmean_max_dev_param'] = worst
 
 
 def _finish_attempt_summary(
