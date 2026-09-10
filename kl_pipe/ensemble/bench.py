@@ -389,23 +389,38 @@ def compute_agreement(fits: pd.DataFrame, fits_ref: pd.DataFrame) -> dict:
         )
     keys = set(fits['match_key'])
     keys_ref = set(fits_ref['match_key'])
+    # posterior columns are NaN for a fit that did not succeed (infrastructure
+    # failure); the agreement statistics use the fits finite on both sides
+    post_cols = [
+        f'post.{p}.{s}{suf}'
+        for p in AGREEMENT_PARAMS
+        for s in ('mean', 'std')
+        for suf in ('', '_ref')
+    ]
+    finite = np.isfinite(both[post_cols].to_numpy(float)).all(axis=1)
     out = {
         'n_matched': int(len(both)),
         'n_unmatched_arm': int(len(keys - keys_ref)),
         'n_unmatched_ref': int(len(keys_ref - keys)),
+        'n_agreement_fits': int(finite.sum()),
         'params': {},
     }
+    if not finite.any():
+        raise ValueError(
+            "no matched fit has finite posterior means and widths on both sides"
+        )
+    good = both[finite]
     for p in AGREEMENT_PARAMS:
-        d = both[f'post.{p}.mean'].to_numpy(float) - both[
+        d = good[f'post.{p}.mean'].to_numpy(float) - good[
             f'post.{p}.mean_ref'
         ].to_numpy(float)
         if p == 'theta_int':
             d = wrap_angle(d)
-        sigma_ref = both[f'post.{p}.std_ref'].to_numpy(float)
+        sigma_ref = good[f'post.{p}.std_ref'].to_numpy(float)
         if not np.all(sigma_ref > 0):
             raise ValueError(f"reference posterior std of {p} must be > 0")
         pull = np.abs(d) / sigma_ref
-        ratio = both[f'post.{p}.std'].to_numpy(float) / sigma_ref
+        ratio = good[f'post.{p}.std'].to_numpy(float) / sigma_ref
         out['params'][p] = {
             'median_abs_dmean_over_sigma_ref': float(np.median(pull)),
             'max_abs_dmean_over_sigma_ref': float(np.max(pull)),
@@ -728,14 +743,15 @@ def _agreement_table(agreement: dict) -> str:
     lines = [
         f"matched {agreement['n_matched']} fits "
         f"(unmatched arm {agreement['n_unmatched_arm']}, "
-        f"ref {agreement['n_unmatched_ref']})",
+        f"ref {agreement['n_unmatched_ref']}; "
+        f"{_fmt_cell(agreement.get('n_agreement_fits'))} finite on both sides)",
         f"{'param':<10} {'med|dm|/sig':>12} {'max|dm|/sig':>12} {'med width':>10}",
     ]
     for p, s in agreement['params'].items():
         lines.append(
-            f"{p:<10} {s['median_abs_dmean_over_sigma_ref']:>12.3f} "
-            f"{s['max_abs_dmean_over_sigma_ref']:>12.3f} "
-            f"{s['median_width_ratio']:>10.3f}"
+            f"{p:<10} {_fmt_cell(s['median_abs_dmean_over_sigma_ref']):>12} "
+            f"{_fmt_cell(s['max_abs_dmean_over_sigma_ref']):>12} "
+            f"{_fmt_cell(s['median_width_ratio']):>10}"
         )
     for key in (
         'first_pass_fail_only_arm',

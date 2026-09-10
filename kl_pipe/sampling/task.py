@@ -56,6 +56,13 @@ class LaplacePreconditioner:
         Where every finite-objective optimization start settled
         (``(n_starts, n_params)``) and its negative log-posterior; lets callers
         measure the margin of the MAP over competing basins.
+    start_labels : list of str, optional
+        Start family per row of ``start_map_points``.
+    basin_points, basin_neg_logposts : np.ndarray, optional
+        Best endpoint and objective per endpoint basin, MAP basin first.
+    n_floored_eigenvalues, eig_floor_mode, eig_floor_value
+        How many prior-scaled Hessian eigenvalues the floor raised, and the
+        floor rule (``initialization.EigenFloor``).
     """
 
     map_point: np.ndarray
@@ -68,6 +75,21 @@ class LaplacePreconditioner:
     min_eigenvalue_ratio: float = float('nan')
     start_map_points: Optional[np.ndarray] = None
     start_neg_logposts: Optional[np.ndarray] = None
+    # start family per row of start_map_points ('prior', 'pa_stratified',
+    # 'moments', 'extra'); basin records from initialization.find_map: best
+    # endpoint and objective per basin, MAP basin first
+    start_labels: Optional[list] = None
+    basin_points: Optional[np.ndarray] = None
+    basin_neg_logposts: Optional[np.ndarray] = None
+    # eigenvalue-floor bookkeeping (initialization.EigenFloor)
+    n_floored_eigenvalues: int = -1
+    eig_floor_mode: str = 'relative'
+    eig_floor_value: float = 1e-4
+    # MAP stationarity from initialization.find_map (nan without a polish
+    # stage): scaled gradient norm and smallest prior-scaled Hessian eigenvalue
+    map_grad_norm: float = float('nan')
+    map_min_eigenvalue: float = float('nan')
+    polish_gain: float = 0.0
 
 
 if TYPE_CHECKING:
@@ -75,6 +97,7 @@ if TYPE_CHECKING:
     from kl_pipe.source import SourceModel
     from kl_pipe.priors import PriorDict
     from kl_pipe.observation import ImageObs, VelocityObs, GrismObs
+    from kl_pipe.sampling.initialization import StartSet
 
 
 def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
@@ -599,63 +622,67 @@ class InferenceTask:
         hessian_method: str = 'fd',
         fd_rel_step: float = 1e-5,
         extra_starts: Optional[np.ndarray] = None,
+        *,
+        starts: Optional['StartSet'] = None,
+        eig_floor_mode: str = 'relative',
+        bounded: bool = False,
+        polish_steps: int = 0,
+        polish_basins: int = 1,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
-        Multi-start L-BFGS-B from prior draws (truth-free) locates the MAP,
-        then the Hessian of the negative log-posterior there is regularized
-        (eigenvalue floor) and inverted to serve as a NUTS mass matrix. Lets
-        warmup begin near-optimally conditioned, skipping the expensive
-        early-warmup transient (~2x faster warmup measured on correlated
-        joint posteriors).
-
-        The optimizer runs unbounded in scaled coordinates (``theta = loc +
-        scale * u``); out-of-support iterates receive ``-inf`` log-posterior
-        from the prior, which acts as a soft barrier keeping the converged MAP
-        in-support. The Hessian is taken at that MAP.
+        Composes the pieces of ``kl_pipe.sampling.initialization``: optimizer
+        starts (``n_starts`` prior draws plus ``extra_starts``, or an explicit
+        ``starts`` set), ``find_map`` (multi-start L-BFGS-B in prior-scaled
+        coordinates, every endpoint kept and clustered into basins) and
+        ``laplace_metric`` (scale-normalized Hessian at the MAP, eigenvalue
+        floor, inverse). Lets NUTS begin at the MAP with a near-optimal
+        metric, skipping the early-warmup transient.
 
         Parameters
         ----------
         n_starts : int, default 4
-            Number of L-BFGS-B starts from independent prior draws. The best
-            (highest log-posterior) converged mode is used. Multi-start guards
-            against local modes (e.g. the position-angle multimodality).
+            Number of L-BFGS-B starts from independent prior draws (ignored
+            when ``starts`` is given).
         eig_floor : float, default 1e-4
-            Hessian eigenvalues below ``eig_floor * max_eigenvalue`` are floored
-            to that value before inversion, capping the mass-matrix condition
-            number at ``1/eig_floor`` (handles near-degenerate directions).
+            Floor value; its meaning follows ``eig_floor_mode``.
         maxiter : int, default 2000
             Max L-BFGS-B iterations per start. Sharp high-SNR posteriors need
             more than a few hundred iterations to reach the mode; too low a cap
             leaves the mode-finding start unconverged and produces a garbage MAP.
         seed : int, default 0
-            PRNG seed for the prior-draw starting points.
+            PRNG seed for the prior scaling draws and the prior-draw starts.
         hessian_method : {'fd', 'ad'}, default 'fd'
-            How to evaluate the Hessian at the MAP. 'fd' (default) uses
-            central finite differences of the already-compiled gradient
-            (2 * n_params grad evaluations, no new compilation); with float64
-            and prior-scaled steps the resulting mass matrix agrees with 'ad'
-            to well below the ``eig_floor`` regularization. 'ad' uses exact
-            second-order autodiff (``jax.hessian``); tracing and compiling
-            that second-order graph is paid on every call and dominates the
-            preconditioner cost on large joint tasks -- use it only for
-            float32 runs or as a cross-check.
+            'fd' differences the compiled gradient (2 * n_params evaluations,
+            no new compilation; float64 only); 'ad' is exact second-order
+            autodiff (compiles a second-order graph per call; the float32
+            option).
         fd_rel_step : float, default 1e-5
-            Relative step for ``hessian_method='fd'``, in units of the
-            per-parameter prior scale. Steps are shrunk to stay inside prior
-            bounds when the MAP sits near a bound.
+            Relative step for ``hessian_method='fd'`` in prior-scale units.
         extra_starts : np.ndarray, optional
-            Additional explicit start points, shape (n_extra, n_sampled), in
-            sampled-parameter order, appended to the prior-draw starts. Use
-            when random prior draws can miss a known multimodal basin (e.g.
-            position-angle-stratified starts: random draws may all land in
-            the wrong PA basin, whose shape-shear-compensated mode then traps
-            the sampler).
+            Explicit extra start points ``(n_extra, n_sampled)`` appended to
+            the prior draws (family label 'extra'), e.g. position-angle
+            stratified starts.
+        starts : StartSet, optional
+            Full replacement for the prior-draw + extra starts.
+        eig_floor_mode : {'relative', 'prior'}, default 'relative'
+            'relative': eigenvalues below ``eig_floor * max`` are floored
+            (condition number capped at ``1/eig_floor``). 'prior': absolute
+            floor at ``eig_floor`` in prior-width units (1 = as wide as the
+            prior); see ``initialization.EigenFloor``.
+        bounded : bool, default False
+            Hand the prior support bounds to L-BFGS-B (projected gradient
+            slides along walls) instead of relying on the ``-inf`` barrier.
+        polish_steps, polish_basins : int
+            Regularized Newton polish steps from the best endpoint of each of
+            the ``polish_basins`` best basins (0 = off); see
+            ``initialization.newton_polish``.
 
         Returns
         -------
         LaplacePreconditioner
-            MAP point + regularized inverse-Hessian mass matrix.
+            MAP point, regularized inverse-Hessian mass matrix, every start's
+            endpoint/objective/family and the basin records.
 
         Raises
         ------
@@ -664,129 +691,48 @@ class InferenceTask:
             or if the finite-difference Hessian encounters non-finite
             gradients.
         """
-        from scipy.optimize import minimize
+        from kl_pipe.sampling.initialization import (
+            EigenFloor,
+            StartSet,
+            build_preconditioner,
+            find_map,
+            prior_starts,
+        )
 
         if hessian_method not in ('ad', 'fd'):
             raise ValueError(
                 f"hessian_method must be 'ad' or 'fd', got '{hessian_method}'"
             )
-
-        val_and_grad = self.get_log_posterior_and_grad_fn()
-
-        # Per-parameter characteristic scale from prior draws. The physical
-        # problem is badly scaled (e.g. vcirc~200 vs g1~0.02); optimizing in
-        # scaled coords u (theta = loc + scale*u) conditions L-BFGS-B well.
-        prior_batch = np.asarray(
-            self.sample_prior(jax.random.PRNGKey(seed), n_samples=512)
-        )
-        loc = prior_batch.mean(axis=0)
-        scale = prior_batch.std(axis=0)
-        scale = np.where(scale > 0, scale, 1.0)  # guard degenerate/fixed dims
-
-        def neg_u(u):
-            theta = jnp.asarray(loc + scale * u)
-            v, g = val_and_grad(theta)
-            # chain rule: d(-logpost)/du = -grad_theta * scale
-            return float(-v), np.asarray(-g, dtype=np.float64) * scale
-
-        # Multi-start from prior draws (truth-free), in scaled coords.
-        starts = np.asarray(
-            self.sample_prior(jax.random.PRNGKey(seed + 1), n_samples=n_starts)
-        )
-        if extra_starts is not None:
-            extra_starts = np.atleast_2d(np.asarray(extra_starts, dtype=np.float64))
-            if extra_starts.shape[1] != starts.shape[1]:
-                raise ValueError(
-                    f"extra_starts has {extra_starts.shape[1]} columns; task "
-                    f"has {starts.shape[1]} sampled parameters"
+        if starts is None:
+            starts = prior_starts(self, n_starts, seed=seed)
+            if extra_starts is not None:
+                extra = np.atleast_2d(np.asarray(extra_starts, dtype=np.float64))
+                if extra.shape[1] != starts.points.shape[1]:
+                    raise ValueError(
+                        f"extra_starts has {extra.shape[1]} columns; task "
+                        f"has {starts.points.shape[1]} sampled parameters"
+                    )
+                starts = StartSet.concat(
+                    starts,
+                    StartSet(extra, ['extra'] * extra.shape[0], starts.names),
                 )
-            starts = np.vstack([starts, extra_starts])
-        # Keep the best finite objective across all starts, converged or not.
-        # A sharp high-SNR posterior can need > maxiter iterations to satisfy
-        # L-BFGS-B's convergence test, so the mode-finding start may return
-        # success=False; discarding it (keeping only success=True starts) lets a
-        # spuriously-"converged" start on a flat plateau win, yielding a garbage
-        # MAP -> a mis-scaled mass matrix -> ~100% NUTS divergence. Lower neg-log
-        # posterior is always closer to the mode, so best-of-finite is the right
-        # pick; warn loudly if it did not formally converge.
-        best = None
-        n_converged = 0
-        periods = self.priors.get_periods()
-
-        def _wrap_periodic(theta_np: np.ndarray) -> np.ndarray:
-            out = np.array(theta_np, dtype=np.float64)
-            for j, period in enumerate(periods):
-                if period is not None:
-                    out[j] = np.mod(out[j], period)
-            return out
-
-        start_points = []
-        start_funs = []
-        for s0 in starts:
-            u0 = (np.asarray(s0, dtype=np.float64) - loc) / scale
-            res = minimize(
-                neg_u,
-                u0,
-                jac=True,
-                method='L-BFGS-B',
-                options={'maxiter': maxiter},
-            )
-            if not np.isfinite(res.fun):
-                continue
-            start_points.append(_wrap_periodic(loc + scale * res.x))
-            start_funs.append(float(res.fun))
-            if res.success:
-                n_converged += 1
-            if best is None or res.fun < best.fun:
-                best = res
-
-        if best is None:
-            raise RuntimeError(
-                "laplace_preconditioner: no optimization start reached a "
-                "finite log-posterior (tried "
-                f"{len(starts)} starts). Check priors/data."
-            )
-        if not best.success:
-            warnings.warn(
-                "laplace_preconditioner: best MAP start did not satisfy "
-                f"L-BFGS-B convergence (neg_logpost={best.fun:.4g}); using it "
-                f"anyway as the closest of {len(starts)} starts to the mode. "
-                f"Raise maxiter (currently {maxiter}) if sampling diverges.",
-                RuntimeWarning,
-            )
-
-        theta_map = jnp.asarray(_wrap_periodic(loc + scale * best.x))
-        if hessian_method == 'ad':
-            H = np.asarray(self._ad_hessian(theta_map), dtype=np.float64)
-        else:
-            H = self._fd_hessian(val_and_grad, theta_map, scale, fd_rel_step)
-        H = 0.5 * (H + H.T)
-        # Scale-aware regularization: normalize the Hessian by the per-parameter
-        # scale (diag(scale) @ H @ diag(scale)) BEFORE flooring eigenvalues, so
-        # the eigenvalue floor caps only genuine degeneracy -- not the benign
-        # scale spread (e.g. vcirc~200 vs g1~0.02, which the mass matrix must
-        # keep). Floor a raw physical Hessian and you destroy that scale range.
-        Hn = (scale[:, None] * H) * scale[None, :]
-        Hn = 0.5 * (Hn + Hn.T)
-        w, V = np.linalg.eigh(Hn)
-        n_negative = int(np.sum(w < 0))
-        w_floored = np.maximum(w, w.max() * eig_floor)  # floor soft/neg dirs
-        Hn_reg = (V * w_floored) @ V.T
-        inv_n = np.linalg.inv(Hn_reg)
-        # map back: inv_mass_theta = S @ inv(Hn_reg) @ S = inv(H_reg) with scale kept
-        inv_mass = (scale[:, None] * inv_n) * scale[None, :]
-        inv_mass = 0.5 * (inv_mass + inv_mass.T)
-        cond = float(w_floored.max() / w_floored.min())
-
-        return LaplacePreconditioner(
-            map_point=np.asarray(theta_map, dtype=np.float64),
-            inverse_mass_matrix=inv_mass,
-            n_starts_converged=n_converged,
-            condition_number=cond,
-            n_negative_eigenvalues=n_negative,
-            min_eigenvalue_ratio=float(w.min() / w.max()),
-            start_map_points=np.asarray(start_points, dtype=np.float64),
-            start_neg_logposts=np.asarray(start_funs, dtype=np.float64),
+        map_result = find_map(
+            self,
+            starts,
+            maxiter=maxiter,
+            seed=seed,
+            bounded=bounded,
+            polish_steps=polish_steps,
+            polish_basins=polish_basins,
+            hessian_method=hessian_method,
+            fd_rel_step=fd_rel_step,
+        )
+        return build_preconditioner(
+            self,
+            map_result,
+            floor=EigenFloor(eig_floor_mode, eig_floor),
+            hessian_method=hessian_method,
+            fd_rel_step=fd_rel_step,
         )
 
     def _ad_hessian(self, theta: jnp.ndarray) -> jnp.ndarray:

@@ -358,6 +358,13 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # finite, and positive definite (dimension checked against the task at
     # run time).
     init_inverse_mass_matrix: Optional[np.ndarray] = None
+    # Chain initial points for the preconditioned path: 'map_jitter' (every
+    # chain at the MAP plus a 1% metric-scale jitter) or 'map_basins' (chain
+    # 0 at the MAP, the next chains at the best endpoint of each competing
+    # optimizer basin within chain_init_max_margin nats of the MAP, the rest
+    # jittered) -- see kl_pipe.sampling.initialization.chain_inits.
+    chain_init: str = 'map_jitter'
+    chain_init_max_margin: float = 20.0
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:

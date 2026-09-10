@@ -427,6 +427,14 @@ configuration. Production also sets `precondition_adapt_mass=True`, which lets
 warmup re-adapt the dense metric starting from the Laplace one instead of
 freezing it. `tests/test_flagship.py` runs the full production version.
 
+The MAP search, the metric's eigenvalue floor and the chain initial points are
+built from the pieces in `kl_pipe.sampling.initialization` (start proposals
+with family labels, a MAP finder that keeps every endpoint and clusters them
+into basins, an explicit `EigenFloor`, `chain_inits`); `laplace_preconditioner`
+accepts `starts=`, `bounded=`, `polish_steps=`, `eig_floor_mode=` to refine
+the procedure one piece at a time, and `MapResult.format_summary()` shows
+where every start went. See `docs/fit_initialization.md`.
+
 ### Continuing a run instead of restarting it
 
 NUTS runs a fixed number of draws; there is no early exit when r-hat and ESS

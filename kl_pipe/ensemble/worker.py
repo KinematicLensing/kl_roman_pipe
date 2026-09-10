@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 import traceback
 import dataclasses
 from dataclasses import dataclass
@@ -76,26 +77,47 @@ _MAX_ATTEMPTS = 2
 
 
 def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS):
-    """Prior-draw start points with theta_int overridden by a PA grid."""
-    import jax
+    """Prior-draw start points with theta_int overridden by a PA grid
+    (``initialization.pa_stratified_starts``; ``None`` when not applicable)."""
+    from kl_pipe.sampling.initialization import pa_stratified_starts
 
-    names = list(priors.sampled_names)
-    if 'theta_int' not in names:
-        return None
-    prior = priors.get_prior('theta_int')
-    period = getattr(prior, 'period', None)
-    if period is not None:
-        lo, hi, n = 0.0, float(period), 2 * n_pa
-    else:
-        lo, hi = prior.bounds
-        if lo is None or hi is None:
-            return None
-        n = n_pa
-    # explicit copy: np.asarray on a jax array returns a read-only view
-    starts = np.array(priors.sample(jax.random.PRNGKey(seed + 2), n))
-    centers = lo + (np.arange(n) + 0.5) * (hi - lo) / n
-    starts[:, names.index('theta_int')] = centers
-    return starts
+    starts = pa_stratified_starts(priors, n_pa=n_pa, seed=seed)
+    return None if starts is None else starts.points
+
+
+def _assemble_map_starts(task, inputs, spec: EnsembleSpec, sampler_seed: int):
+    """Optimizer start set for the Laplace preconditioner: prior draws,
+    position-angle-stratified draws and (``fit.map_moment_starts``) image-
+    moment starts. Returns ``(StartSet, moment_starts_ok)`` where the flag
+    is None when moment starts were not requested and False when the images
+    yielded no usable moments (the fit proceeds on the other starts)."""
+    from kl_pipe.sampling.initialization import (
+        MomentsError,
+        StartSet,
+        moment_starts,
+        pa_stratified_starts,
+        prior_starts,
+    )
+
+    sets = [prior_starts(task, spec.n_map_starts, seed=sampler_seed)]
+    pa = pa_stratified_starts(
+        inputs.priors, n_pa=_N_PA_STRATIFIED_STARTS, seed=sampler_seed
+    )
+    if pa is not None:
+        sets.append(pa)
+    moments_ok = None
+    if spec.map_moment_starts:
+        try:
+            sets.append(moment_starts(task, inputs.image_obs, seed=sampler_seed))
+            moments_ok = True
+        except MomentsError as err:
+            moments_ok = False
+            warnings.warn(
+                f"image-moment starts unavailable ({err}); MAP search proceeds "
+                "on the prior and position-angle starts only",
+                RuntimeWarning,
+            )
+    return StartSet.concat(*sets), moments_ok
 
 
 def _pa_flip_margin(preconditioner, sampled_names, priors) -> float:
@@ -552,6 +574,8 @@ def _run_fit_attempt(
         n_map_starts=spec.n_map_starts,
         hessian_method=spec.hessian_method,
         max_tree_depth=spec.max_tree_depth,
+        chain_init=spec.chain_init,
+        chain_init_max_margin=spec.chain_init_max_margin,
         seed=sampler_seed,
     )
 
@@ -561,13 +585,23 @@ def _run_fit_attempt(
         # internally) so the MAP point and precond diagnostics reach the
         # summary row; PA-stratified extra starts guarantee the position-
         # angle basins are all visited
+        from kl_pipe.sampling.initialization import EigenFloor
+
+        starts, moments_ok = _assemble_map_starts(task, inputs, spec, sampler_seed)
+        floor = EigenFloor(spec.eig_floor_mode, spec.eig_floor)
         with profiling.trace(f'{row["fit_id"]}/precondition'):
             preconditioner = task.laplace_preconditioner(
-                n_starts=sampler_config.n_map_starts,
                 seed=sampler_seed,
                 hessian_method=sampler_config.hessian_method,
-                extra_starts=_pa_stratified_starts(inputs.priors, sampler_seed),
+                starts=starts,
+                eig_floor_mode=floor.mode,
+                eig_floor=floor.value,
+                bounded=spec.map_bounded,
+                polish_steps=spec.map_polish_steps,
+                polish_basins=spec.map_polish_basins,
             )
+    else:
+        moments_ok = None
     t_precond = time.time()
 
     sampler = NumpyroSampler(task, sampler_config, preconditioner=preconditioner)
@@ -587,6 +621,7 @@ def _run_fit_attempt(
         truth=truth,
         priors=inputs.priors,
     )
+    _initialization_columns(summary, preconditioner, moments_ok, spec)
     _finish_attempt_summary(summary, row, config, inputs, sampler_seed)
     _fit_quality_columns(summary, task, inputs, sampled_names)
 
@@ -599,6 +634,40 @@ def _run_fit_attempt(
         sampler=sampler,
     )
     return summary, artifacts
+
+
+def _initialization_columns(summary: dict, preconditioner, moments_ok, spec) -> None:
+    """Fit-initialization bookkeeping: optimizer basins, winning start
+    family, moment-start availability, metric floor, chain init mode."""
+    labels = getattr(preconditioner, 'start_labels', None)
+    funs = getattr(preconditioner, 'start_neg_logposts', None)
+    basins = getattr(preconditioner, 'basin_neg_logposts', None)
+    summary['map_n_basins'] = int(len(basins)) if basins is not None else -1
+    summary['map_basin_margin'] = (
+        float(basins[1] - basins[0])
+        if basins is not None and len(basins) > 1
+        else float('inf') if basins is not None else float('nan')
+    )
+    summary['map_winning_start'] = (
+        str(labels[int(np.argmin(funs))])
+        if labels is not None and funs is not None
+        else ''
+    )
+    summary['map_moment_starts_ok'] = (
+        'n/a' if moments_ok is None else ('yes' if moments_ok else 'no')
+    )
+    summary['precond_n_floored_eigenvalues'] = int(
+        getattr(preconditioner, 'n_floored_eigenvalues', -1)
+    )
+    summary['precond_eig_floor_mode'] = str(
+        getattr(preconditioner, 'eig_floor_mode', '')
+    )
+    summary['map_grad_norm'] = float(getattr(preconditioner, 'map_grad_norm', np.nan))
+    summary['map_min_eigenvalue'] = float(
+        getattr(preconditioner, 'map_min_eigenvalue', np.nan)
+    )
+    summary['map_polish_gain'] = float(getattr(preconditioner, 'polish_gain', np.nan))
+    summary['chain_init'] = str(spec.chain_init)
 
 
 def _fit_quality_columns(summary: dict, task, inputs, sampled_names) -> None:

@@ -1095,6 +1095,28 @@ class EnsembleSpec:
     # NUTS tree-depth cap (at most 2**depth - 1 leapfrog steps per draw)
     max_tree_depth: int = 10
 
+    # fit-initialization toolkit knobs (kl_pipe.sampling.initialization):
+    # add image-moment optimizer starts (centroid, flux, size, inclination,
+    # position angle read off the broadband stamps) to the prior-draw and
+    # position-angle-stratified starts
+    map_moment_starts: bool = False
+    # hand the prior support bounds to the MAP optimizer (projected L-BFGS-B)
+    map_bounded: bool = False
+    # regularized Newton polish steps after L-BFGS on the best map_polish_basins
+    # basins (0 = off)
+    map_polish_steps: int = 0
+    map_polish_basins: int = 1
+    # eigenvalue floor of the Laplace metric: 'relative' (below
+    # eig_floor * max eigenvalue; default value 1e-4) or 'prior' (absolute,
+    # in prior-width units; default value 0.5). None = the mode's default.
+    eig_floor_mode: str = 'relative'
+    eig_floor: Optional[float] = None
+    # chain initial points: 'map_jitter' (all chains at the MAP, 1% jitter)
+    # or 'map_basins' (one chain per competing optimizer basin within
+    # chain_init_max_margin nats of the MAP)
+    chain_init: str = 'map_jitter'
+    chain_init_max_margin: float = 20.0
+
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
     catalog_population: Optional[CatalogPopulationSpec] = None
@@ -1113,6 +1135,44 @@ class EnsembleSpec:
             raise ValueError(
                 f"fit.hessian_method must be 'fd' or 'ad', got {self.hessian_method!r}"
             )
+        if self.eig_floor_mode not in ('relative', 'prior'):
+            raise ValueError(
+                "fit.eig_floor_mode must be 'relative' or 'prior', got "
+                f"{self.eig_floor_mode!r}"
+            )
+        if self.eig_floor is not None and not (
+            isinstance(self.eig_floor, float) and self.eig_floor > 0
+        ):
+            raise ValueError(
+                f"fit.eig_floor must be a positive float or absent, got {self.eig_floor!r}"
+            )
+        if self.chain_init not in ('map_jitter', 'map_basins'):
+            raise ValueError(
+                "fit.chain_init must be 'map_jitter' or 'map_basins', got "
+                f"{self.chain_init!r}"
+            )
+        if not (
+            isinstance(self.chain_init_max_margin, float)
+            and self.chain_init_max_margin > 0
+        ):
+            raise ValueError(
+                "fit.chain_init_max_margin must be a positive float, got "
+                f"{self.chain_init_max_margin!r}"
+            )
+        if not isinstance(self.map_moment_starts, bool):
+            raise ValueError(
+                f"fit.map_moment_starts must be a boolean, got {self.map_moment_starts!r}"
+            )
+        if not isinstance(self.map_bounded, bool):
+            raise ValueError(
+                f"fit.map_bounded must be a boolean, got {self.map_bounded!r}"
+            )
+        for name, value, low in (
+            ('map_polish_steps', self.map_polish_steps, 0),
+            ('map_polish_basins', self.map_polish_basins, 1),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < low:
+                raise ValueError(f"fit.{name} must be an int >= {low}, got {value!r}")
         if self.pa_fit_prior not in ('half_turn', 'full_circle'):
             raise ValueError(
                 "fit.pa_prior must be 'half_turn' or 'full_circle', got "
@@ -1524,6 +1584,14 @@ class EnsembleSpec:
                 'pa_prior',
                 'hessian_method',
                 'max_tree_depth',
+                'map_moment_starts',
+                'map_bounded',
+                'map_polish_steps',
+                'map_polish_basins',
+                'eig_floor_mode',
+                'eig_floor',
+                'chain_init',
+                'chain_init_max_margin',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1578,6 +1646,20 @@ class EnsembleSpec:
             pa_fit_prior=str(fit.get('pa_prior', 'full_circle')),
             hessian_method=str(fit.get('hessian_method', 'fd')),
             max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
+            map_moment_starts=fit.get('map_moment_starts', False),
+            map_bounded=fit.get('map_bounded', False),
+            map_polish_steps=_require_yaml_int(
+                fit, 'map_polish_steps', 0, f"{path}:fit"
+            ),
+            map_polish_basins=_require_yaml_int(
+                fit, 'map_polish_basins', 1, f"{path}:fit"
+            ),
+            eig_floor_mode=str(fit.get('eig_floor_mode', 'relative')),
+            eig_floor=(
+                None if fit.get('eig_floor') is None else float(fit['eig_floor'])
+            ),
+            chain_init=str(fit.get('chain_init', 'map_jitter')),
+            chain_init_max_margin=float(fit.get('chain_init_max_margin', 20.0)),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,

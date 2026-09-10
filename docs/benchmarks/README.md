@@ -67,4 +67,6 @@ in the local `runs/` copies (gitignored).
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-09-08 | cosmos25_bank32 | 983442 | a3af13c | 4/32 | 0/32 | 58.5 | 12.8 | 9.45 | 4/32 first-pass fail, 0 final; theta_int limits ESS in 16/32 |
 | 2026-09-09 | cosmos25_bank32_w250 | 985872 | 3c80b5a | 4/32 | 1/32 | 36.1 | 9.4 | 8.37 | 4/32 first-pass fails again but a different set; steps/draw on clean fits 63... |
+| 2026-09-10 | cosmos25_bank32_w400 | 985873 | 3c80b5a | 3/32 | 0/32 | 32.0 | 11.2 | 9.67 | 31/32 fits (one lost to a JAX autotune-cache race between the remainder job a... |
+| 2026-09-10 | cosmos25_bank32_w200 | 986080 | cbf2d0d | 2/32 | 0/32 | 41.9 | 9.1 | 7.14 | vs 983442: steps/draw on clean fits 58 -> 42, clean fit wall 12.8 -> 8.8 min,... |
 <!-- index:end -->

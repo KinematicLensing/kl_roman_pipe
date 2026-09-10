@@ -239,6 +239,11 @@ donating a previous same-fit run's warmup-adapted matrix
 (`diagnostics['adapted_inverse_mass_matrix']`, recorded with
 `precondition_adapt_mass=True`) to an escalation rerun.
 
+The preconditioner is assembled from `kl_pipe/sampling/initialization.py`
+(start proposals incl. image-moment starts, multi-start MAP finder with basin
+clustering and an optional Newton polish, `EigenFloor` rules, chain initial
+points); see `docs/fit_initialization.md` for the user pathway.
+
 A completed preconditioned run keeps its warm state: `sampler.continue_sampling(n)`
 draws `n` more per chain from the final position, step size and metric with no
 warmup and returns the union of all draws so far (chain-major; r-hat/ESS on the

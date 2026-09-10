@@ -713,6 +713,8 @@ class NumpyroSampler(Sampler):
         """
         from numpyro.infer import MCMC, NUTS
 
+        from kl_pipe.sampling.initialization import chain_inits
+
         start_time = time.time()
         seed = self.config.seed if self.config.seed is not None else int(time.time())
 
@@ -783,19 +785,22 @@ class NumpyroSampler(Sampler):
                 )
             inv_mass = jnp.asarray(donated)
 
-        # Init each chain at the MAP; jitter across chains (for n_chains > 1) by
-        # 1% of the per-dim posterior scale (sqrt of the mass-matrix diagonal).
+        # chain initial points in sampling coordinates: all at the MAP with a
+        # 1% metric-scale jitter, or one chain per competing MAP basin
         n_chains = self.config.n_chains
-        if n_chains == 1:
-            init_params = theta_map
-        else:
-            post_scale = jnp.sqrt(jnp.diag(inv_mass))
-            jit = (
-                0.01
-                * post_scale[None, :]
-                * random.normal(random.PRNGKey(seed), (n_chains, n_params))
+        init_params = jnp.asarray(
+            chain_inits(
+                pre,
+                np.asarray(inv_mass),
+                n_chains,
+                mode=self.config.chain_init,
+                seed=seed,
+                transform=transform,
+                max_margin=self.config.chain_init_max_margin,
             )
-            init_params = theta_map[None, :] + jit
+        )
+        if n_chains == 1:
+            init_params = init_params[0]
 
         kernel = NUTS(
             potential_fn=potential_fn,
@@ -886,6 +891,7 @@ class NumpyroSampler(Sampler):
             'precondition': 'laplace',
             'precondition_unconstrained': transform is not None,
             'init_mass_donated': self.config.init_inverse_mass_matrix is not None,
+            'chain_init': self.config.chain_init,
             'chain_method': chain_method,
         }
         result = SamplerResult(

@@ -1433,3 +1433,168 @@ class TestPAFitPrior:
             condition_number=1.0,
         )
         assert np.isnan(_pa_flip_margin(bare, names, circ))
+
+
+# ==============================================================================
+# Fit-initialization toolkit knobs (fit.map_*, fit.eig_floor*, fit.chain_init)
+# ==============================================================================
+
+
+class TestInitializationSpecKnobs:
+    def test_defaults_are_the_historical_procedure(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, _spec_dict()))
+        assert spec.map_moment_starts is False
+        assert spec.map_bounded is False
+        assert spec.map_polish_steps == 0 and spec.map_polish_basins == 1
+        assert spec.eig_floor_mode == 'relative' and spec.eig_floor is None
+        assert spec.chain_init == 'map_jitter'
+        assert spec.chain_init_max_margin == 20.0
+
+    def test_knobs_parse(self, tmp_path):
+        d = _spec_dict()
+        d['fit'].update(
+            {
+                'map_moment_starts': True,
+                'map_bounded': True,
+                'map_polish_steps': 8,
+                'map_polish_basins': 3,
+                'eig_floor_mode': 'prior',
+                'eig_floor': 0.5,
+                'chain_init': 'map_basins',
+                'chain_init_max_margin': 10.0,
+            }
+        )
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.map_moment_starts and spec.map_bounded
+        assert spec.map_polish_steps == 8 and spec.map_polish_basins == 3
+        assert spec.eig_floor_mode == 'prior' and spec.eig_floor == 0.5
+        assert spec.chain_init == 'map_basins'
+        assert spec.chain_init_max_margin == 10.0
+
+    @pytest.mark.parametrize(
+        'key, bad',
+        [
+            ('eig_floor_mode', 'bogus'),
+            ('eig_floor', -1.0),
+            ('chain_init', 'bogus'),
+            ('chain_init_max_margin', 0.0),
+            ('map_moment_starts', 'yes'),
+            ('map_bounded', 1),
+            ('map_polish_steps', -1),
+            ('map_polish_basins', 0),
+            ('map_polish_steps', 2.0),
+        ],
+    )
+    def test_invalid_knobs_rejected(self, tmp_path, key, bad):
+        d = _spec_dict()
+        d['fit'][key] = bad
+        with pytest.raises(ValueError, match=key):
+            EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+
+
+class TestWorkerStartAssembly:
+    def _task_and_inputs(self, dev_spec, canonical_q):
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 1.0,
+                'g1': 0.02,
+                'g2': -0.01,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        inputs = build_fit_inputs(
+            truth,
+            12345,
+            dev_spec,
+            canonical_q,
+            band_snrs={b: 100.0 for b in canonical_q.bands},
+            line_snr=40.0,
+        )
+        from kl_pipe.sampling import InferenceTask
+
+        task = InferenceTask.from_obs(
+            inputs.source,
+            inputs.priors,
+            image_obs=inputs.image_obs,
+            grism_obs=inputs.grism_obs,
+        )
+        return task, inputs, truth
+
+    def test_families_without_moments(self, dev_spec, canonical_q):
+        from kl_pipe.ensemble.worker import _assemble_map_starts
+
+        task, inputs, _ = self._task_and_inputs(dev_spec, canonical_q)
+        starts, ok = _assemble_map_starts(task, inputs, dev_spec, sampler_seed=7)
+        fam = starts.families()
+        assert fam['prior'] == dev_spec.n_map_starts
+        assert 'pa_stratified' in fam and 'moments' not in fam
+        assert ok is None
+
+    def test_moment_starts_land_near_truth(self, dev_spec, canonical_q):
+        """Moment starts read the truth off the (SNR 100) mock stamps: size
+        within 25%, centroid within a pixel, both PA directions covered."""
+        import dataclasses
+
+        from kl_pipe.ensemble.worker import _assemble_map_starts
+
+        spec = dataclasses.replace(dev_spec, map_moment_starts=True)
+        task, inputs, truth = self._task_and_inputs(dev_spec, canonical_q)
+        starts, ok = _assemble_map_starts(task, inputs, spec, sampler_seed=7)
+        assert ok is True
+        assert starts.families()['moments'] == 2
+        names = list(task.sampled_names)
+        rows = starts.points[[i for i, l in enumerate(starts.labels) if l == 'moments']]
+        band = canonical_q.bands[0]
+        pix = canonical_q.pixel_scale_arcsec
+        assert abs(rows[0, names.index(f'{band}.x0')] - truth[f'{band}.x0']) < pix
+        assert abs(rows[0, names.index(f'{band}.y0')] - truth[f'{band}.y0']) < pix
+        assert (
+            abs(rows[0, names.index(f'{band}.rscale')] / truth[f'{band}.rscale'] - 1.0)
+            < 0.25
+        )
+        th = rows[:, names.index('theta_int')]
+        assert abs(abs(th[0] - th[1]) - np.pi) < 1e-9
+
+    def test_initialization_columns(self):
+        from kl_pipe.ensemble.worker import _initialization_columns
+        from kl_pipe.sampling.task import LaplacePreconditioner
+
+        pre = LaplacePreconditioner(
+            map_point=np.zeros(2),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=3,
+            condition_number=1.0,
+            start_labels=['prior', 'moments', 'prior'],
+            start_neg_logposts=np.array([5.0, 1.0, 9.0]),
+            basin_points=np.zeros((2, 2)),
+            basin_neg_logposts=np.array([1.0, 5.0]),
+            n_floored_eigenvalues=2,
+            eig_floor_mode='prior',
+            map_grad_norm=1e-4,
+            map_min_eigenvalue=0.7,
+            polish_gain=3.5,
+        )
+        summary: dict = {}
+        _initialization_columns(summary, pre, True, _FakeSpec('map_basins'))
+        assert summary['map_n_basins'] == 2
+        assert summary['map_basin_margin'] == 4.0
+        assert summary['map_winning_start'] == 'moments'
+        assert summary['map_moment_starts_ok'] == 'yes'
+        assert summary['precond_n_floored_eigenvalues'] == 2
+        assert summary['precond_eig_floor_mode'] == 'prior'
+        assert summary['map_grad_norm'] == 1e-4
+        assert summary['map_polish_gain'] == 3.5
+        assert summary['chain_init'] == 'map_basins'
+        single: dict = {}
+        pre.basin_neg_logposts = np.array([1.0])
+        _initialization_columns(single, pre, None, _FakeSpec('map_jitter'))
+        assert single['map_basin_margin'] == np.inf
+        assert single['map_moment_starts_ok'] == 'n/a'
+
+
+class _FakeSpec:
+    def __init__(self, chain_init):
+        self.chain_init = chain_init
