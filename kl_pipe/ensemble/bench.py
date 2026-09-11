@@ -38,6 +38,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from kl_pipe.ensemble.quality import FLAG_COLUMNS
+
 DEFAULT_BENCH_DIR = Path('docs/benchmarks')
 INDEX_START = '<!-- index:start -->'
 INDEX_END = '<!-- index:end -->'
@@ -366,6 +368,12 @@ def compute_metrics(
         'fit_wall_sum_s': float(ok['fit_wallclock_s'].sum()),
         'run_wall_s': None if run_wall_s is None else float(run_wall_s),
     }
+    # failure-flag counts over the non-catastrophic fits; None (printed '-')
+    # for results written before the flag columns existed
+    for col in FLAG_COLUMNS:
+        metrics[f'n_{col}'] = (
+            int(ok[col].fillna(False).astype(bool).sum()) if col in ok.columns else None
+        )
     return metrics
 
 

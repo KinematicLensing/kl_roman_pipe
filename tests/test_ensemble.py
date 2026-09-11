@@ -1193,6 +1193,29 @@ def _write_fake_results(run_dir):
             summary[f'post.{p}.mean'] = row[f'truth.{p}'] + rng.normal(0, std)
             summary[f'post.{p}.std'] = std
             summary[f'post.{p}.median'] = summary[f'post.{p}.mean']
+            # gaussian central intervals about the median and the matching rank
+            med = summary[f'post.{p}.median']
+            for label, z in (
+                ('q025', -1.96),
+                ('q16', -1.0),
+                ('q84', 1.0),
+                ('q975', 1.96),
+            ):
+                summary[f'post.{p}.{label}'] = med + z * std
+            from scipy.stats import norm
+
+            summary[f'truth_rank.{p}'] = float(
+                norm.cdf((row[f'truth.{p}'] - med) / std)
+            )
+        summary.update(
+            {
+                'flag_gate': bool(broken),
+                'flag_map_dev': False,
+                'flag_chi2_excess': bool(broken),
+                'flag_rotation_ambiguous': False,
+                'n_flags': 2 if broken else 0,
+            }
+        )
         pd.DataFrame([summary]).to_parquet(
             run_dir / 'results' / f"{row['fit_id']}.parquet", index=False
         )
@@ -1677,3 +1700,215 @@ class TestWorkerStartAssembly:
         bare = initialization_columns(None, None, 'map_jitter')
         assert bare['map_n_basins'] == -1 and bare['map_winning_start'] == ''
         assert np.isnan(bare['map_basin_margin'])
+
+
+# ==============================================================================
+# Quality columns: intervals, ranks, flags, coverage, timeline
+# ==============================================================================
+
+
+class TestQualityColumns:
+    def test_interval_and_rank_columns_exact(self):
+        from kl_pipe.ensemble.quality import posterior_interval_columns
+
+        n = 1001
+        grid = np.linspace(0.0, 1.0, n)
+        # theta straddles the 2 pi cut: half the draws just below, half just above
+        theta = np.mod(6.2 + 0.2 * grid, 2 * np.pi)
+        samples = np.column_stack([grid, theta])
+        cols = posterior_interval_columns(
+            samples, ['a', 'theta_int'], truth={'a': 0.3, 'theta_int': 6.25}
+        )
+        # quantiles of an evenly spaced grid are the quantile levels themselves
+        assert cols['post.a.q025'] == pytest.approx(0.025)
+        assert cols['post.a.q16'] == pytest.approx(0.16)
+        assert cols['post.a.q84'] == pytest.approx(0.84)
+        assert cols['post.a.q975'] == pytest.approx(0.975)
+        assert cols['truth_rank.a'] == pytest.approx(300 / n)
+        # the periodic parameter is read on one contiguous branch whose median
+        # (6.3 mod 2 pi) lies in [0, 2 pi): the lower half sits below zero
+        assert cols['post.theta_int.q16'] == pytest.approx(6.2 + 0.2 * 0.16 - 2 * np.pi)
+        assert cols['post.theta_int.q84'] == pytest.approx(6.2 + 0.2 * 0.84 - 2 * np.pi)
+        assert cols['truth_rank.theta_int'] == pytest.approx(250 / n)
+        # the same truth on another branch gives the same rank
+        other = posterior_interval_columns(
+            samples, ['a', 'theta_int'], truth={'theta_int': 6.25 - 2 * np.pi}
+        )
+        assert other['truth_rank.theta_int'] == pytest.approx(250 / n)
+        assert 'truth_rank.a' not in other
+        with pytest.raises(ValueError, match='n_draws'):
+            posterior_interval_columns(samples[:, :1], ['a', 'b'])
+
+    def test_quality_flags(self):
+        from kl_pipe.ensemble.quality import FLAG_COLUMNS, quality_flags
+
+        healthy = {
+            'max_rhat': 1.02,
+            'min_ess': 180.0,
+            'map_postmean_max_dev': 1.1,
+            'postmean_chi2': 6100.0,
+            'n_data': 6000,
+            'map_pa_flip_margin': 17.0,
+        }
+        f = quality_flags(healthy, rhat_max=1.05, ess_min=50.0)
+        assert all(f[c] is False for c in FLAG_COLUMNS)
+        assert f['n_flags'] == 0
+        # sqrt(2 * 6000) = 109.5; 5 sigma = 548 above n_data fires the chi2 flag
+        cases = {
+            'flag_gate': {'max_rhat': 1.06},
+            'flag_map_dev': {'map_postmean_max_dev': 24.7},
+            'flag_chi2_excess': {'postmean_chi2': 6000.0 + 600.0},
+            'flag_rotation_ambiguous': {'map_pa_flip_margin': 0.14},
+        }
+        for flag, change in cases.items():
+            f = quality_flags({**healthy, **change}, rhat_max=1.05, ess_min=50.0)
+            assert f[flag] is True, flag
+            assert f['n_flags'] == 1, flag
+            assert all(f[c] is False for c in FLAG_COLUMNS if c != flag), flag
+        # ESS gate and a chi2 excess just below 5 sigma
+        f = quality_flags({**healthy, 'min_ess': 9.0}, rhat_max=1.05, ess_min=50.0)
+        assert f['flag_gate'] is True
+        f = quality_flags(
+            {**healthy, 'postmean_chi2': 6000.0 + 500.0}, rhat_max=1.05, ess_min=50.0
+        )
+        assert f['flag_chi2_excess'] is False
+        # absent or non-finite evidence never flags
+        f = quality_flags({'max_rhat': 1.0, 'min_ess': 500.0}, 1.05, 50.0)
+        assert f['n_flags'] == 0
+        f = quality_flags(
+            {**healthy, 'map_pa_flip_margin': np.inf, 'map_postmean_max_dev': np.nan},
+            1.05,
+            50.0,
+        )
+        assert f['n_flags'] == 0
+
+    def test_coverage_table_exact(self):
+        from kl_pipe.ensemble.diagnostics import coverage_table
+
+        n = 10
+        t = pd.DataFrame(
+            {
+                'fit_id': [f'f{i}' for i in range(n)],
+                'cosi_bin': [0] * 5 + [1] * 5,
+                'truth.cosi': np.linspace(0.1, 0.9, n),
+                'post.a.median': 0.0,
+                'post.a.q16': -1.0,
+                'post.a.q84': 1.0,
+                'post.a.q025': -2.0,
+                'post.a.q975': 2.0,
+                # 6 inside the 68% interval, 2 more inside 95%, 2 outside
+                'truth.a': [0.0, 0.5, -0.5, 1.0, -1.0, 0.9, 1.5, -1.5, 3.0, -3.0],
+                # periodic: median just above 0, truth just below 2 pi
+                'post.theta_int.median': 0.1,
+                'post.theta_int.q16': 0.1 - 0.2,
+                'post.theta_int.q84': 0.1 + 0.2,
+                'post.theta_int.q025': 0.1 - 0.4,
+                'post.theta_int.q975': 0.1 + 0.4,
+                'truth.theta_int': [2 * np.pi - 0.05] * 5 + [0.1 + np.pi] * 5,
+            }
+        )
+        cov = coverage_table(t, params=('a', 'theta_int', 'g1'))
+        assert set(cov['param']) == {'a', 'theta_int'}  # g1 has no columns
+        a_all = cov[(cov['param'] == 'a') & (cov['axis_step'] == -1)].iloc[0]
+        assert a_all['n_fits'] == n
+        assert a_all['frac68'] == pytest.approx(0.6)
+        assert a_all['frac95'] == pytest.approx(0.8)
+        assert a_all['err68'] == pytest.approx(np.sqrt(0.6 * 0.4 / n))
+        a_bin0 = cov[(cov['param'] == 'a') & (cov['axis_step'] == 0)].iloc[0]
+        assert a_bin0['frac68'] == pytest.approx(1.0)
+        assert a_bin0['err68'] == 0.0
+        th = cov[(cov['param'] == 'theta_int') & (cov['axis_step'] == -1)].iloc[0]
+        # first bin: wrapped residual -0.15, inside both intervals; second bin:
+        # the counter-rotating truth (pi away) is outside both
+        assert th['frac68'] == pytest.approx(0.5)
+        assert th['frac95'] == pytest.approx(0.5)
+
+    def test_flags_table(self):
+        from kl_pipe.ensemble.diagnostics import flags_table
+
+        t = pd.DataFrame(
+            {
+                'fit_id': ['a', 'b', 'c'],
+                'truth.cosi': [0.1, 0.5, 0.9],
+                'flag_gate': [False, True, False],
+                'flag_map_dev': [False, False, False],
+                'flag_chi2_excess': [False, True, False],
+                'flag_rotation_ambiguous': [True, False, False],
+            }
+        )
+        f = flags_table(t)
+        assert f['fit_id'].tolist() == ['a', 'b']
+        assert f['flags'].tolist() == ['rotation_ambiguous', 'gate,chi2_excess']
+        assert len(flags_table(t[['fit_id', 'truth.cosi']])) == 0
+
+    def test_draws_per_fit(self, dev_spec):
+        import dataclasses
+
+        from kl_pipe.ensemble.quality import draws_per_fit
+        from kl_pipe.ensemble.spec import EscalationSpec
+
+        spec = dataclasses.replace(
+            dev_spec,
+            n_chains=4,
+            n_samples=300,
+            escalation=EscalationSpec(enabled=True, n_samples=1000, continue_block=300),
+        )
+        t = pd.DataFrame(
+            {
+                'escalation_mode': ['', 'restart', 'continue', None],
+                'escalation_n_blocks': [0, 0, 2, 0],
+            }
+        )
+        d = draws_per_fit(t, spec)
+        assert d.tolist() == [1200.0, 4000.0, 1200.0 + 2 * 1200.0, 1200.0]
+        assert draws_per_fit(pd.DataFrame({'x': [1, 2]}), spec).tolist() == [
+            1200.0,
+            1200.0,
+        ]
+
+    def test_worker_timeline(self, run_dir, tmp_path):
+        from kl_pipe.ensemble.diagnostics import (
+            plot_worker_timeline,
+            worker_timeline_table,
+        )
+
+        _, _, manifest = load_run(run_dir)
+        ids = manifest['fit_id'].tolist()
+        assert plot_worker_timeline(run_dir, tmp_path) is None  # nothing claimed
+        ledger.try_claim(run_dir, ids[0])
+        ledger.mark_done(run_dir, ids[0])
+        ledger.try_claim(run_dir, ids[1])
+        ledger.mark_done(run_dir, ids[1])
+        ledger.try_claim(run_dir, ids[2])  # claimed, never finished: omitted
+        tl = worker_timeline_table(run_dir)
+        assert sorted(tl['fit_id']) == sorted(ids[:2])
+        assert (tl['end'] >= tl['start']).all()
+        assert tl['worker'].nunique() == 1  # one process claimed both
+        path = plot_worker_timeline(run_dir, tmp_path)
+        assert path is not None and path.exists() and path.stat().st_size > 0
+
+    def test_rank_hist_and_coverage_from_fake_results(self, run_dir, tmp_path):
+        from kl_pipe.ensemble.collate import analysis_table, collate_results
+        from kl_pipe.ensemble.diagnostics import (
+            augment_galaxy_frame,
+            coverage_table,
+            flags_table,
+            plot_quality_vs_cosi,
+            plot_rank_hist,
+        )
+        from kl_pipe.ensemble.quality import draws_per_fit
+
+        _write_fake_results(run_dir)
+        collate_results(run_dir)
+        spec, _, _ = load_run(run_dir)
+        table = augment_galaxy_frame(run_dir, analysis_table(run_dir))
+        cov = coverage_table(table)
+        assert set(cov['param']) == {'cosi', 'theta_int', 'g1', 'g2', 'vel.vcirc'}
+        assert (cov['n_fits'] <= 4).all()
+        assert cov['frac68'].between(0, 1).all()
+        flags = flags_table(table)
+        assert len(flags) == 1 and flags['flags'].iloc[0] == 'gate,chi2_excess'
+        paths = plot_rank_hist(table, tmp_path)
+        assert len(paths) == 5 and all(p.exists() for p in paths)
+        out = plot_quality_vs_cosi(table, tmp_path, draws=draws_per_fit(table, spec))
+        assert out.exists()

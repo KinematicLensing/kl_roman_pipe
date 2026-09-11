@@ -326,6 +326,19 @@ columns (`max_rhat`, `min_ess`, `ess_g1/g2`, `n_divergences`,
 `max_rhat > 1.01 OR min_ess < 400 OR divergence-rate outlier`) is applied
 post hoc in analysis -- nothing is filtered at write time.
 
+`run_report` also writes `coverage.csv` (fraction of truths inside the
+posterior 68% and 95% intervals per parameter and cosi bin, from the
+`post.<param>.q16/q84/q025/q975` columns; the calibration test a mean-based
+pull cannot give for a skewed or bounded parameter), `rank_hist_<param>.png`
+(rank of the truth among the draws, `truth_rank.<param>`, uniform when the
+posterior is calibrated), `flags.csv` (fits with any `flag_*` set: gate,
+MAP deviation, chi-square excess, rotation ambiguity; thresholds in
+`kl_pipe/ensemble/quality.py`), the per-draw cost panels in
+`quality_vs_cosi.png` (leapfrog steps and min ESS per posterior draw against
+truth cos i) and `worker_timeline.png` (one bar per fit on its worker's row
+from the claim and done timestamps, so packing gaps and the end-of-run tail
+are visible).
+
 Join truth with recovery via `kl_pipe.ensemble.collate.analysis_table(run_dir)`
 (manifest joined with results on `fit_id`), then feed `kl_pipe/ensemble/calibration.py`
 (`measure_shear_bias`, `compute_shape_noise`) and
