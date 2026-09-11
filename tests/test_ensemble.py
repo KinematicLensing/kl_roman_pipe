@@ -1505,14 +1505,24 @@ class TestPAFitPrior:
 
 
 class TestInitializationSpecKnobs:
-    def test_defaults_are_the_historical_procedure(self, tmp_path):
+    def test_defaults_are_the_robust_procedure(self, tmp_path):
+        # defaults = the cosmos25_bank32 A/B winners: bounded MAP + 8-step
+        # polish of 3 basins (988356), prior-unit floor 0.5 (988824), the two
+        # together (990891, the matched reference); moment starts stayed
+        # opt-in (did not change the basin reached) and chain_init map_basins
+        # was refuted on the legacy search (988826)
         spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, _spec_dict()))
         assert spec.map_moment_starts is False
-        assert spec.map_bounded is False
-        assert spec.map_polish_steps == 0 and spec.map_polish_basins == 1
-        assert spec.eig_floor_mode == 'relative' and spec.eig_floor is None
+        assert spec.map_bounded is True
+        assert spec.map_polish_steps == 8 and spec.map_polish_basins == 3
+        assert spec.eig_floor_mode == 'prior' and spec.eig_floor is None
         assert spec.chain_init == 'map_jitter'
         assert spec.chain_init_max_margin == 20.0
+        from kl_pipe.sampling.initialization import InitConfig
+
+        cfg = InitConfig.from_spec(spec)
+        assert cfg == InitConfig(n_map_starts=spec.n_map_starts)
+        assert cfg.floor.mode == 'prior' and cfg.floor.value == 0.5
 
     def test_knobs_parse(self, tmp_path):
         d = _spec_dict()
@@ -1588,26 +1598,33 @@ class TestWorkerStartAssembly:
         return task, inputs, truth
 
     def test_families_without_moments(self, dev_spec, canonical_q):
-        from kl_pipe.ensemble.worker import _assemble_map_starts
+        from kl_pipe.sampling.initialization import InitConfig, Initializer
 
         task, inputs, _ = self._task_and_inputs(dev_spec, canonical_q)
-        starts, ok = _assemble_map_starts(task, inputs, dev_spec, sampler_seed=7)
+        init = Initializer(
+            task, InitConfig.from_spec(dev_spec), seed=7, image_obs=inputs.image_obs
+        )
+        starts = init.starts()
         fam = starts.families()
         assert fam['prior'] == dev_spec.n_map_starts
-        assert 'pa_stratified' in fam and 'moments' not in fam
-        assert ok is None
+        assert fam['pa_stratified'] == 2 * init.config.n_pa_starts
+        assert 'moments' not in fam
+        assert init.moment_starts_ok is None
 
     def test_moment_starts_land_near_truth(self, dev_spec, canonical_q):
         """Moment starts read the truth off the (SNR 100) mock stamps: size
         within 25%, centroid within a pixel, both PA directions covered."""
-        import dataclasses
+        from kl_pipe.sampling.initialization import InitConfig, Initializer
 
-        from kl_pipe.ensemble.worker import _assemble_map_starts
-
-        spec = dataclasses.replace(dev_spec, map_moment_starts=True)
         task, inputs, truth = self._task_and_inputs(dev_spec, canonical_q)
-        starts, ok = _assemble_map_starts(task, inputs, spec, sampler_seed=7)
-        assert ok is True
+        init = Initializer(
+            task,
+            InitConfig.from_spec(dev_spec, map_moment_starts=True),
+            seed=7,
+            image_obs=inputs.image_obs,
+        )
+        starts = init.starts()
+        assert init.moment_starts_ok is True
         assert starts.families()['moments'] == 2
         names = list(task.sampled_names)
         rows = starts.points[[i for i, l in enumerate(starts.labels) if l == 'moments']]
@@ -1623,7 +1640,7 @@ class TestWorkerStartAssembly:
         assert abs(abs(th[0] - th[1]) - np.pi) < 1e-9
 
     def test_initialization_columns(self):
-        from kl_pipe.ensemble.worker import _initialization_columns
+        from kl_pipe.sampling.initialization import initialization_columns
         from kl_pipe.sampling.task import LaplacePreconditioner
 
         pre = LaplacePreconditioner(
@@ -1641,8 +1658,7 @@ class TestWorkerStartAssembly:
             map_min_eigenvalue=0.7,
             polish_gain=3.5,
         )
-        summary: dict = {}
-        _initialization_columns(summary, pre, True, _FakeSpec('map_basins'))
+        summary = initialization_columns(pre, True, 'map_basins')
         assert summary['map_n_basins'] == 2
         assert summary['map_basin_margin'] == 4.0
         assert summary['map_winning_start'] == 'moments'
@@ -1652,13 +1668,12 @@ class TestWorkerStartAssembly:
         assert summary['map_grad_norm'] == 1e-4
         assert summary['map_polish_gain'] == 3.5
         assert summary['chain_init'] == 'map_basins'
-        single: dict = {}
         pre.basin_neg_logposts = np.array([1.0])
-        _initialization_columns(single, pre, None, _FakeSpec('map_jitter'))
+        single = initialization_columns(pre, None, 'map_jitter')
         assert single['map_basin_margin'] == np.inf
         assert single['map_moment_starts_ok'] == 'n/a'
-
-
-class _FakeSpec:
-    def __init__(self, chain_init):
-        self.chain_init = chain_init
+        assert single['chain_init'] == 'map_jitter'
+        # a reused preconditioner without records (escalation retry path)
+        bare = initialization_columns(None, None, 'map_jitter')
+        assert bare['map_n_basins'] == -1 and bare['map_winning_start'] == ''
+        assert np.isnan(bare['map_basin_margin'])

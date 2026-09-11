@@ -24,8 +24,18 @@ time and every piece leaves a record:
   small jitter, or one chain per competing basin so r-hat can see basin
   disagreement.
 
-``InferenceTask.laplace_preconditioner`` composes these with the historical
-defaults; the ensemble worker exposes each knob in the fit spec.
+``Initializer`` runs the whole procedure from an ``InitConfig`` whose fields
+are the ensemble spec's ``fit.*`` initialization knobs, and returns one
+``InitResult``; the ensemble worker calls nothing else. The pieces stay
+public for refining the procedure one at a time.
+``InferenceTask.laplace_preconditioner`` is the same procedure behind the
+older keyword interface.
+
+Defaults are the measured-robust settings (cosmos25_bank32 A/B jobs 988356,
+988824, 990891): bounded L-BFGS-B with an 8-step Newton polish of the three
+leading basins and the prior-unit eigenvalue floor at 0.5. The historical
+procedure (unbounded search, no polish, relative floor 1e-4) is reproduced by
+passing those values explicitly.
 """
 
 from __future__ import annotations
@@ -88,28 +98,29 @@ class StartSet:
     def __len__(self) -> int:
         return self.points.shape[0]
 
-    @staticmethod
-    def concat(*sets: 'StartSet') -> 'StartSet':
-        """Stack start sets (same parameter names required)."""
-        sets = [s for s in sets if s is not None]
-        if not sets:
-            raise ValueError("concat needs at least one StartSet")
-        names = sets[0].names
-        for s in sets[1:]:
-            if s.names != names:
-                raise ValueError("StartSet.concat: parameter names differ")
-        return StartSet(
-            points=np.vstack([s.points for s in sets]),
-            labels=sum((list(s.labels) for s in sets), []),
-            names=names,
-        )
-
     def families(self) -> Dict[str, int]:
         """Number of starts per family label."""
         out: Dict[str, int] = {}
         for lab in self.labels:
             out[lab] = out.get(lab, 0) + 1
         return out
+
+
+def combine_starts(*start_sets: Optional[StartSet]) -> StartSet:
+    """Stack start sets into one (``None`` entries skipped; same parameter
+    names required)."""
+    kept = [s for s in start_sets if s is not None]
+    if not kept:
+        raise ValueError("combine_starts needs at least one StartSet")
+    names = kept[0].names
+    for s in kept[1:]:
+        if s.names != names:
+            raise ValueError("combine_starts: parameter names differ")
+    return StartSet(
+        points=np.vstack([s.points for s in kept]),
+        labels=sum((list(s.labels) for s in kept), []),
+        names=names,
+    )
 
 
 def prior_starts(task: 'InferenceTask', n: int, seed: int = 0) -> StartSet:
@@ -883,9 +894,9 @@ def find_map(
     maxiter: int = 2000,
     seed: int = 0,
     basin_tol: float = 0.25,
-    bounded: bool = False,
-    polish_steps: int = 0,
-    polish_basins: int = 1,
+    bounded: bool = True,
+    polish_steps: int = 8,
+    polish_basins: int = 3,
     hessian_method: str = 'fd',
     fd_rel_step: float = 1e-5,
 ) -> MapResult:
@@ -893,18 +904,18 @@ def find_map(
 
     The optimizer runs in ``u`` with ``theta = loc + scale * u``
     (``loc``/``scale`` = mean/std of 512 prior draws, ``PRNGKey(seed)``).
-    ``bounded=False`` (historical): unbounded, out-of-support iterates get
-    ``-inf`` from the prior, a soft barrier -- a start whose steepest
-    direction points through a prior wall stalls there with a large
-    in-support gradient. ``bounded=True``: the prior support bounds are
-    handed to L-BFGS-B, whose projected gradient slides along the wall.
+    ``bounded=True`` (default): the prior support bounds are handed to
+    L-BFGS-B, whose projected gradient slides along a wall.
+    ``bounded=False``: unbounded, out-of-support iterates get ``-inf`` from
+    the prior, a soft barrier -- a start whose steepest direction points
+    through a prior wall stalls there with a large in-support gradient.
     Every start with a finite endpoint is kept, converged or not: the best
     finite objective is the MAP (a high-SNR posterior can need more than
     ``maxiter`` iterations to satisfy L-BFGS-B's test, and a formally
     converged start on a plateau must not win over it).
 
-    ``polish_steps > 0`` runs ``newton_polish`` from the best endpoint of
-    each of the ``polish_basins`` best basins (regularized Newton with a
+    ``polish_steps > 0`` (default 8) runs ``newton_polish`` from the best
+    endpoint of each of the ``polish_basins`` best basins (regularized Newton with a
     line search descends through saddles and along walls where L-BFGS
     stops); the basin records are then rebuilt from the polished endpoints
     and ``map_grad_norm`` / ``map_min_eigenvalue`` report the final MAP's
@@ -990,7 +1001,9 @@ def find_map(
                 hessian_method=hessian_method,
                 fd_rel_step=fd_rel_step,
             )
-            n_evals += taken * (2 * len(scale) + 1)
+            # the polish evaluates the gradient and Hessian once before its
+            # first step, then once per step taken
+            n_evals += (taken + 1) * (2 * len(scale) + 1)
             polish_gain = max(polish_gain, objectives[i] - f_p)
             end_points[i] = _wrap_periodic(theta_p, periods)
             objectives[i] = f_p
@@ -1039,17 +1052,17 @@ def find_map(
 class EigenFloor:
     """Eigenvalue floor for the prior-scaled MAP Hessian.
 
-    ``mode='relative'``: eigenvalues below ``value * max_eigenvalue`` are
-    raised to it (condition number capped at ``1/value``; historical rule,
-    default 1e-4). ``mode='prior'``: eigenvalues below ``value`` are raised
-    to it, in units where 1 means the posterior is as wide as the prior along
-    that direction (default 0.5: a direction is never made stiffer than
-    sqrt(2) prior widths). The prior floor never touches a direction the
-    data constrain; the relative floor clips soft directions whenever the
-    stiffest one is more than ``1/value`` times stiffer.
+    ``mode='prior'`` (default): eigenvalues below ``value`` are raised to it,
+    in units where 1 means the posterior is as wide as the prior along that
+    direction (default 0.5: a direction is never made stiffer than sqrt(2)
+    prior widths). ``mode='relative'``: eigenvalues below ``value *
+    max_eigenvalue`` are raised to it (condition number capped at
+    ``1/value``; default 1e-4). The prior floor never touches a direction
+    the data constrain; the relative floor clips soft directions whenever
+    the stiffest one is more than ``1/value`` times stiffer.
     """
 
-    mode: str = 'relative'
+    mode: str = 'prior'
     value: Optional[float] = None
 
     _DEFAULTS = {'relative': 1e-4, 'prior': 0.5}
@@ -1143,18 +1156,26 @@ def build_preconditioner(
     floor: EigenFloor = EigenFloor(),
     hessian_method: str = 'fd',
     fd_rel_step: float = 1e-5,
+    metric: Optional[MetricResult] = None,
 ) -> 'LaplacePreconditioner':
-    """MAP + Laplace metric packaged for ``NumpyroSampler``."""
+    """MAP + Laplace metric packaged for ``NumpyroSampler``.
+
+    ``metric`` (a ``laplace_metric`` result at ``map_result.theta_map``)
+    skips the Hessian evaluation when the caller already has it; its floor
+    then takes precedence over ``floor``.
+    """
     from kl_pipe.sampling.task import LaplacePreconditioner
 
-    metric = laplace_metric(
-        task,
-        map_result.theta_map,
-        map_result.scale,
-        floor=floor,
-        hessian_method=hessian_method,
-        fd_rel_step=fd_rel_step,
-    )
+    if metric is None:
+        metric = laplace_metric(
+            task,
+            map_result.theta_map,
+            map_result.scale,
+            floor=floor,
+            hessian_method=hessian_method,
+            fd_rel_step=fd_rel_step,
+        )
+    floor = metric.floor
     return LaplacePreconditioner(
         map_point=np.asarray(map_result.theta_map, dtype=np.float64),
         inverse_mass_matrix=metric.inverse_mass_matrix,
@@ -1247,3 +1268,328 @@ def chain_inits(
         for c, theta in enumerate(competing[: n_chains - 1], start=1):
             inits[c] = to_sampling(theta)
     return inits
+
+
+# ==============================================================================
+# One-call procedure: InitConfig -> Initializer.run() -> InitResult
+# ==============================================================================
+
+
+@dataclass(frozen=True)
+class InitConfig:
+    """Settings of the whole initialization procedure.
+
+    Field names and defaults are those of the ensemble spec's ``fit.*``
+    initialization knobs (``InitConfig.from_spec`` copies them), plus the
+    position-angle start count and the optimizer internals the spec does not
+    expose.
+
+    Attributes
+    ----------
+    n_map_starts : int
+        Prior-draw optimizer starts.
+    n_pa_starts : int
+        Position-angle-stratified starts per rotation direction (``2 *
+        n_pa_starts`` on a periodic prior); 0 = none.
+    map_moment_starts : bool
+        Add image-moment starts (needs broadband ``image_obs``).
+    map_bounded : bool
+        Projected L-BFGS-B on the prior support instead of the ``-inf``
+        barrier.
+    map_polish_steps, map_polish_basins : int
+        Regularized Newton polish steps from the best endpoint of each of the
+        leading basins (0 steps = off).
+    eig_floor_mode, eig_floor : str, float or None
+        Laplace-metric eigenvalue floor rule (``'prior'`` | ``'relative'``)
+        and value (None = the rule's default: 0.5 prior, 1e-4 relative).
+    chain_init, chain_init_max_margin : str, float
+        Chain initial points: ``'map_jitter'`` or ``'map_basins'`` (competing
+        basins within ``chain_init_max_margin`` nats of the MAP).
+    hessian_method : {'fd', 'ad'}
+        Hessian for the metric and the polish.
+    maxiter : int
+        L-BFGS-B iteration cap per start.
+    fd_rel_step : float
+        Relative step of the finite-difference Hessian (prior-scale units).
+    """
+
+    n_map_starts: int = 4
+    n_pa_starts: int = 4
+    map_moment_starts: bool = False
+    map_bounded: bool = True
+    map_polish_steps: int = 8
+    map_polish_basins: int = 3
+    eig_floor_mode: str = 'prior'
+    eig_floor: Optional[float] = None
+    chain_init: str = 'map_jitter'
+    chain_init_max_margin: float = 20.0
+    hessian_method: str = 'fd'
+    maxiter: int = 2000
+    fd_rel_step: float = 1e-5
+
+    def __post_init__(self):
+        if self.n_map_starts < 1:
+            raise ValueError(f"n_map_starts must be >= 1, got {self.n_map_starts}")
+        if self.n_pa_starts < 0:
+            raise ValueError(f"n_pa_starts must be >= 0, got {self.n_pa_starts}")
+        if self.map_polish_steps < 0 or self.map_polish_basins < 1:
+            raise ValueError(
+                "map_polish_steps must be >= 0 and map_polish_basins >= 1, got "
+                f"{self.map_polish_steps} / {self.map_polish_basins}"
+            )
+        if self.hessian_method not in ('ad', 'fd'):
+            raise ValueError(
+                f"hessian_method must be 'ad' or 'fd', got {self.hessian_method!r}"
+            )
+        if self.chain_init not in CHAIN_INIT_MODES:
+            raise ValueError(
+                f"chain_init must be one of {CHAIN_INIT_MODES}, got {self.chain_init!r}"
+            )
+        if not self.chain_init_max_margin > 0:
+            raise ValueError(
+                f"chain_init_max_margin must be > 0, got {self.chain_init_max_margin}"
+            )
+        if self.maxiter < 1:
+            raise ValueError(f"maxiter must be >= 1, got {self.maxiter}")
+        # validates the floor rule and value
+        self.floor
+
+    @property
+    def floor(self) -> EigenFloor:
+        return EigenFloor(self.eig_floor_mode, self.eig_floor)
+
+    @classmethod
+    def from_spec(cls, spec, **overrides) -> 'InitConfig':
+        """Copy the ``fit.*`` initialization knobs of an ``EnsembleSpec``."""
+        fields = dict(
+            n_map_starts=spec.n_map_starts,
+            map_moment_starts=spec.map_moment_starts,
+            map_bounded=spec.map_bounded,
+            map_polish_steps=spec.map_polish_steps,
+            map_polish_basins=spec.map_polish_basins,
+            eig_floor_mode=spec.eig_floor_mode,
+            eig_floor=spec.eig_floor,
+            chain_init=spec.chain_init,
+            chain_init_max_margin=spec.chain_init_max_margin,
+            hessian_method=spec.hessian_method,
+        )
+        fields.update(overrides)
+        return cls(**fields)
+
+
+@dataclass
+class InitResult:
+    """What one ``Initializer.run()`` produced.
+
+    Attributes
+    ----------
+    starts : StartSet
+        Every optimizer start with its family label.
+    map : MapResult
+        MAP finder output (endpoints, basins, stationarity).
+    metric : MetricResult
+        Laplace metric with its spectrum diagnostics.
+    preconditioner : LaplacePreconditioner
+        MAP + metric packaged for ``NumpyroSampler``.
+    moment_starts_ok : bool or None
+        None when moment starts were not requested, False when the images
+        yielded no usable moments (the procedure went on without them).
+    config : InitConfig
+    """
+
+    starts: StartSet
+    map: MapResult
+    metric: MetricResult
+    preconditioner: 'LaplacePreconditioner'
+    moment_starts_ok: Optional[bool]
+    config: InitConfig
+
+    def chain_points(
+        self,
+        inverse_mass_matrix: np.ndarray,
+        n_chains: int,
+        *,
+        seed: int = 0,
+        transform: Optional['UnconstrainingTransform'] = None,
+    ) -> np.ndarray:
+        """Initial point per chain in sampling coordinates (``chain_inits``
+        with this result's ``chain_init`` settings)."""
+        return chain_inits(
+            self.preconditioner,
+            inverse_mass_matrix,
+            n_chains,
+            mode=self.config.chain_init,
+            seed=seed,
+            transform=transform,
+            max_margin=self.config.chain_init_max_margin,
+        )
+
+    def columns(self) -> Dict[str, object]:
+        """Per-fit summary columns describing what the initialization did."""
+        return initialization_columns(
+            self.preconditioner, self.moment_starts_ok, self.config.chain_init
+        )
+
+
+def initialization_columns(
+    preconditioner: Optional['LaplacePreconditioner'],
+    moment_starts_ok: Optional[bool],
+    chain_init: str,
+) -> Dict[str, object]:
+    """Summary columns from a preconditioner's initialization records.
+
+    ``map_n_basins`` / ``map_basin_margin`` (nats between the MAP basin and
+    the runner-up; inf with one basin), ``map_winning_start`` (family of the
+    start that produced the MAP), ``map_moment_starts_ok`` ('yes' | 'no' |
+    'n/a'), ``map_grad_norm`` / ``map_min_eigenvalue`` / ``map_polish_gain``
+    (stationarity of the final MAP), ``precond_n_floored_eigenvalues`` /
+    ``precond_eig_floor_mode`` and ``chain_init``. A preconditioner without
+    records (or None) yields the sentinels -1 / nan / ''.
+    """
+    labels = getattr(preconditioner, 'start_labels', None)
+    objectives = getattr(preconditioner, 'start_neg_logposts', None)
+    basins = getattr(preconditioner, 'basin_neg_logposts', None)
+    if basins is None:
+        margin = float('nan')
+    elif len(basins) > 1:
+        margin = float(basins[1] - basins[0])
+    else:
+        margin = float('inf')
+    return {
+        'map_n_basins': int(len(basins)) if basins is not None else -1,
+        'map_basin_margin': margin,
+        'map_winning_start': (
+            str(labels[int(np.argmin(objectives))])
+            if labels is not None and objectives is not None
+            else ''
+        ),
+        'map_moment_starts_ok': (
+            'n/a' if moment_starts_ok is None else ('yes' if moment_starts_ok else 'no')
+        ),
+        'precond_n_floored_eigenvalues': int(
+            getattr(preconditioner, 'n_floored_eigenvalues', -1)
+        ),
+        'precond_eig_floor_mode': str(getattr(preconditioner, 'eig_floor_mode', '')),
+        'map_grad_norm': float(getattr(preconditioner, 'map_grad_norm', np.nan)),
+        'map_min_eigenvalue': float(
+            getattr(preconditioner, 'map_min_eigenvalue', np.nan)
+        ),
+        'map_polish_gain': float(getattr(preconditioner, 'polish_gain', np.nan)),
+        'chain_init': str(chain_init),
+    }
+
+
+class Initializer:
+    """The initialization procedure for one task.
+
+    ``run()`` performs every stage and returns an ``InitResult``; the stages
+    are also callable one at a time (``starts``, ``find_map``, ``metric``,
+    ``preconditioner``) for inspection.
+
+    Parameters
+    ----------
+    task : InferenceTask
+    config : InitConfig, optional
+        Defaults = the robust procedure.
+    seed : int
+        Seeds the prior-draw and position-angle start streams and the prior
+        scaling draws.
+    image_obs : dict of ImageObs, optional
+        Broadband images for the moment starts (required when
+        ``config.map_moment_starts``).
+    """
+
+    def __init__(
+        self,
+        task: 'InferenceTask',
+        config: Optional[InitConfig] = None,
+        seed: int = 0,
+        image_obs: Optional[Dict[str, 'ImageObs']] = None,
+    ):
+        self.task = task
+        self.config = config if config is not None else InitConfig()
+        self.seed = int(seed)
+        self.image_obs = image_obs
+        self.moment_starts_ok: Optional[bool] = None
+        if self.config.map_moment_starts and not image_obs:
+            raise ValueError("InitConfig.map_moment_starts needs broadband image_obs")
+
+    def starts(self) -> StartSet:
+        """Prior-draw, position-angle-stratified and (optionally) image-moment
+        starts. A moment failure is a warning: ``moment_starts_ok`` records
+        it and the other families carry the search."""
+        cfg = self.config
+        sets: List[Optional[StartSet]] = [
+            prior_starts(self.task, cfg.n_map_starts, seed=self.seed)
+        ]
+        if cfg.n_pa_starts > 0:
+            sets.append(
+                pa_stratified_starts(
+                    self.task.priors, n_pa=cfg.n_pa_starts, seed=self.seed
+                )
+            )
+        self.moment_starts_ok = None
+        if cfg.map_moment_starts:
+            try:
+                sets.append(moment_starts(self.task, self.image_obs, seed=self.seed))
+                self.moment_starts_ok = True
+            except MomentsError as err:
+                self.moment_starts_ok = False
+                warnings.warn(
+                    f"image-moment starts unavailable ({err}); MAP search proceeds "
+                    "on the prior and position-angle starts only",
+                    RuntimeWarning,
+                )
+        return combine_starts(*sets)
+
+    def find_map(self, starts: Optional[StartSet] = None) -> MapResult:
+        cfg = self.config
+        return find_map(
+            self.task,
+            starts if starts is not None else self.starts(),
+            maxiter=cfg.maxiter,
+            seed=self.seed,
+            bounded=cfg.map_bounded,
+            polish_steps=cfg.map_polish_steps,
+            polish_basins=cfg.map_polish_basins,
+            hessian_method=cfg.hessian_method,
+            fd_rel_step=cfg.fd_rel_step,
+        )
+
+    def metric(self, map_result: MapResult) -> MetricResult:
+        cfg = self.config
+        return laplace_metric(
+            self.task,
+            map_result.theta_map,
+            map_result.scale,
+            floor=cfg.floor,
+            hessian_method=cfg.hessian_method,
+            fd_rel_step=cfg.fd_rel_step,
+        )
+
+    def preconditioner(
+        self, map_result: MapResult, metric: Optional[MetricResult] = None
+    ) -> 'LaplacePreconditioner':
+        cfg = self.config
+        return build_preconditioner(
+            self.task,
+            map_result,
+            floor=cfg.floor,
+            hessian_method=cfg.hessian_method,
+            fd_rel_step=cfg.fd_rel_step,
+            metric=metric,
+        )
+
+    def run(self) -> InitResult:
+        """Starts -> MAP -> metric -> preconditioner."""
+        starts = self.starts()
+        map_result = self.find_map(starts)
+        metric = self.metric(map_result)
+        return InitResult(
+            starts=starts,
+            map=map_result,
+            metric=metric,
+            preconditioner=self.preconditioner(map_result, metric),
+            moment_starts_ok=self.moment_starts_ok,
+            config=self.config,
+        )

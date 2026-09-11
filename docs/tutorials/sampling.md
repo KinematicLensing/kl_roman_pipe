@@ -427,13 +427,32 @@ configuration. Production also sets `precondition_adapt_mass=True`, which lets
 warmup re-adapt the dense metric starting from the Laplace one instead of
 freezing it. `tests/test_flagship.py` runs the full production version.
 
-The MAP search, the metric's eigenvalue floor and the chain initial points are
-built from the pieces in `kl_pipe.sampling.initialization` (start proposals
-with family labels, a MAP finder that keeps every endpoint and clusters them
-into basins, an explicit `EigenFloor`, `chain_inits`); `laplace_preconditioner`
-accepts `starts=`, `bounded=`, `polish_steps=`, `eig_floor_mode=` to refine
-the procedure one piece at a time, and `MapResult.format_summary()` shows
-where every start went. See `docs/fit_initialization.md`.
+### Initialization
+
+Everything before the first NUTS step (optimizer starts, MAP, Laplace metric,
+chain initial points) is one call:
+
+```python
+from kl_pipe.sampling.initialization import InitConfig, Initializer
+
+init = Initializer(task, InitConfig(), seed=0).run()
+print(init.map.format_summary())          # where every start went, basins, margin
+sampler = NumpyroSampler(task, config, preconditioner=init.preconditioner)
+```
+
+`InitConfig` carries the same knobs as the ensemble spec's `fit.*` block. Its
+defaults are the settings that won their A/B on the 32-fit benchmark bank:
+the MAP search is bounded L-BFGS-B (the unbounded search stalled at prior
+walls with a large gradient and, once, left a counter-rotating posterior that
+passed the convergence gate), followed by 8 regularized Newton steps on the 3
+leading basins so the MAP is certified stationary; the metric's eigenvalue
+floor is 0.5 in prior units (a direction is never made stiffer than sqrt(2)
+prior widths), which unlike the old relative floor never clips a direction the
+data constrain. Image-moment starts stay opt-in (they did not change the
+basin reached) and chains start jittered about the MAP. `laplace_preconditioner`
+is the same procedure behind keywords, with the same defaults;
+`InitConfig(map_bounded=False, map_polish_steps=0, eig_floor_mode='relative')`
+is the pre-2026-09 procedure. See `docs/fit_initialization.md`.
 
 ### Continuing a run instead of restarting it
 

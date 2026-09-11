@@ -1,7 +1,11 @@
-# Twin of cosmos25_bank32 with no setting changed: a fresh run at the current
-# code defaults. The original bank32 run (job 983442, a3af13c) predates the
-# full-circle PA prior default, so the n_warmup 250/400 and frozen-metric twins
-# need this run, not 983442, as their matched reference.
+# Twin of cosmos25_bank32 with no setting changed: a fresh run at the code
+# defaults of 2026-09-09 (job 986080: unbounded MAP search, no polish,
+# relative eigenvalue floor). The original bank32 run (job 983442, a3af13c)
+# predates the full-circle PA prior default, so the n_warmup 250/400 and
+# frozen-metric twins need this run, not 983442, as their matched reference.
+# The initialization defaults changed afterwards (bounded MAP + polish,
+# prior-unit floor); re-expanding this file today does not reproduce 986080.
+# cosmos25_bank32_robust is the reference at the current defaults.
 run:
   name: cosmos25_bank32_w200
   version: 1

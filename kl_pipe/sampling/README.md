@@ -239,10 +239,13 @@ donating a previous same-fit run's warmup-adapted matrix
 (`diagnostics['adapted_inverse_mass_matrix']`, recorded with
 `precondition_adapt_mass=True`) to an escalation rerun.
 
-The preconditioner is assembled from `kl_pipe/sampling/initialization.py`
-(start proposals incl. image-moment starts, multi-start MAP finder with basin
-clustering and an optional Newton polish, `EigenFloor` rules, chain initial
-points); see `docs/fit_initialization.md` for the user pathway.
+The preconditioner is assembled by `kl_pipe/sampling/initialization.py`:
+`Initializer(task, InitConfig(), seed).run()` gives the starts, MAP, metric,
+preconditioner and summary columns in one `InitResult`; the pieces (start
+proposals incl. image-moment starts, multi-start MAP finder with basin
+clustering and Newton polish, `EigenFloor` rules, chain initial points) stay
+public. See `docs/fit_initialization.md` for the user pathway and the
+provenance of the defaults.
 
 A completed preconditioned run keeps its warm state: `sampler.continue_sampling(n)`
 draws `n` more per chain from the final position, step size and metric with no

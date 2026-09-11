@@ -1103,21 +1103,23 @@ class EnsembleSpec:
     # NUTS tree-depth cap (at most 2**depth - 1 leapfrog steps per draw)
     max_tree_depth: int = 10
 
-    # fit-initialization toolkit knobs (kl_pipe.sampling.initialization):
+    # fit-initialization knobs (kl_pipe.sampling.initialization.InitConfig
+    # carries the same names; defaults = the robust procedure measured on
+    # cosmos25_bank32, jobs 988356 / 988824 / 990891):
     # add image-moment optimizer starts (centroid, flux, size, inclination,
     # position angle read off the broadband stamps) to the prior-draw and
     # position-angle-stratified starts
     map_moment_starts: bool = False
     # hand the prior support bounds to the MAP optimizer (projected L-BFGS-B)
-    map_bounded: bool = False
+    map_bounded: bool = True
     # regularized Newton polish steps after L-BFGS on the best map_polish_basins
     # basins (0 = off)
-    map_polish_steps: int = 0
-    map_polish_basins: int = 1
-    # eigenvalue floor of the Laplace metric: 'relative' (below
-    # eig_floor * max eigenvalue; default value 1e-4) or 'prior' (absolute,
-    # in prior-width units; default value 0.5). None = the mode's default.
-    eig_floor_mode: str = 'relative'
+    map_polish_steps: int = 8
+    map_polish_basins: int = 3
+    # eigenvalue floor of the Laplace metric: 'prior' (absolute, in
+    # prior-width units; default value 0.5) or 'relative' (below
+    # eig_floor * max eigenvalue; default value 1e-4). None = the mode's default.
+    eig_floor_mode: str = 'prior'
     eig_floor: Optional[float] = None
     # chain initial points: 'map_jitter' (all chains at the MAP, 1% jitter)
     # or 'map_basins' (one chain per competing optimizer basin within
@@ -1755,14 +1757,14 @@ class EnsembleSpec:
             hessian_method=str(fit.get('hessian_method', 'fd')),
             max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
             map_moment_starts=fit.get('map_moment_starts', False),
-            map_bounded=fit.get('map_bounded', False),
+            map_bounded=fit.get('map_bounded', True),
             map_polish_steps=_require_yaml_int(
-                fit, 'map_polish_steps', 0, f"{path}:fit"
+                fit, 'map_polish_steps', 8, f"{path}:fit"
             ),
             map_polish_basins=_require_yaml_int(
-                fit, 'map_polish_basins', 1, f"{path}:fit"
+                fit, 'map_polish_basins', 3, f"{path}:fit"
             ),
-            eig_floor_mode=str(fit.get('eig_floor_mode', 'relative')),
+            eig_floor_mode=str(fit.get('eig_floor_mode', 'prior')),
             eig_floor=(
                 None if fit.get('eig_floor') is None else float(fit['eig_floor'])
             ),

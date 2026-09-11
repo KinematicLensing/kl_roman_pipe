@@ -101,12 +101,14 @@ Key blocks:
   `max_tree_depth`, `shear_prior_type: gaussian | uniform`, and the render
   knob `model.render.line_window_mode` are the remaining sampler-side
   switches (see `kl_pipe/ensemble/spec.py` for provenance).
-- fit-initialization knobs (`docs/fit_initialization.md`; all default to
-  the historical procedure): `map_moment_starts` (image-moment optimizer
-  starts), `map_bounded` (projected L-BFGS-B on the prior support),
-  `map_polish_steps` / `map_polish_basins` (Newton polish of the leading
-  optimizer basins), `eig_floor_mode: relative | prior` + `eig_floor`
-  (Laplace-metric eigenvalue floor rule), `chain_init: map_jitter |
+- fit-initialization knobs (`docs/fit_initialization.md`; same names as
+  `kl_pipe.sampling.initialization.InitConfig`, defaults = the robust
+  procedure from the bank A/Bs 988356 / 988824 / 990891): `map_moment_starts`
+  (image-moment optimizer starts, default off), `map_bounded` (projected
+  L-BFGS-B on the prior support, default on), `map_polish_steps` /
+  `map_polish_basins` (Newton polish of the leading optimizer basins, default
+  8 / 3), `eig_floor_mode: prior | relative` + `eig_floor` (Laplace-metric
+  eigenvalue floor rule, default prior 0.5), `chain_init: map_jitter |
   map_basins` + `chain_init_max_margin` (chain initial points). Summary
   columns `map_n_basins`, `map_basin_margin`, `map_winning_start`,
   `map_moment_starts_ok`, `map_grad_norm`, `map_min_eigenvalue`,

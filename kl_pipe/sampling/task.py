@@ -83,8 +83,8 @@ class LaplacePreconditioner:
     basin_neg_logposts: Optional[np.ndarray] = None
     # eigenvalue-floor bookkeeping (initialization.EigenFloor)
     n_floored_eigenvalues: int = -1
-    eig_floor_mode: str = 'relative'
-    eig_floor_value: float = 1e-4
+    eig_floor_mode: str = 'prior'
+    eig_floor_value: float = 0.5
     # MAP stationarity from initialization.find_map (nan without a polish
     # stage): scaled gradient norm and smallest prior-scaled Hessian eigenvalue
     map_grad_norm: float = float('nan')
@@ -616,7 +616,7 @@ class InferenceTask:
     def laplace_preconditioner(
         self,
         n_starts: int = 4,
-        eig_floor: float = 1e-4,
+        eig_floor: Optional[float] = None,
         maxiter: int = 2000,
         seed: int = 0,
         hessian_method: str = 'fd',
@@ -624,28 +624,33 @@ class InferenceTask:
         extra_starts: Optional[np.ndarray] = None,
         *,
         starts: Optional['StartSet'] = None,
-        eig_floor_mode: str = 'relative',
-        bounded: bool = False,
-        polish_steps: int = 0,
-        polish_basins: int = 1,
+        eig_floor_mode: str = 'prior',
+        bounded: bool = True,
+        polish_steps: int = 8,
+        polish_basins: int = 3,
     ) -> 'LaplacePreconditioner':
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
-        Composes the pieces of ``kl_pipe.sampling.initialization``: optimizer
-        starts (``n_starts`` prior draws plus ``extra_starts``, or an explicit
+        Keyword interface to the pieces of ``kl_pipe.sampling.initialization``
+        (``Initializer`` is the config-driven one): optimizer starts
+        (``n_starts`` prior draws plus ``extra_starts``, or an explicit
         ``starts`` set), ``find_map`` (multi-start L-BFGS-B in prior-scaled
         coordinates, every endpoint kept and clustered into basins) and
         ``laplace_metric`` (scale-normalized Hessian at the MAP, eigenvalue
         floor, inverse). Lets NUTS begin at the MAP with a near-optimal
-        metric, skipping the early-warmup transient.
+        metric, skipping the early-warmup transient. Defaults are the robust
+        procedure (bounded search, Newton polish, prior-unit floor); the
+        historical one is ``bounded=False, polish_steps=0,
+        eig_floor_mode='relative', eig_floor=1e-4``.
 
         Parameters
         ----------
         n_starts : int, default 4
             Number of L-BFGS-B starts from independent prior draws (ignored
             when ``starts`` is given).
-        eig_floor : float, default 1e-4
-            Floor value; its meaning follows ``eig_floor_mode``.
+        eig_floor : float, optional
+            Floor value; its meaning follows ``eig_floor_mode``. None = the
+            mode's default (0.5 prior, 1e-4 relative).
         maxiter : int, default 2000
             Max L-BFGS-B iterations per start. Sharp high-SNR posteriors need
             more than a few hundred iterations to reach the mode; too low a cap
@@ -665,15 +670,15 @@ class InferenceTask:
             stratified starts.
         starts : StartSet, optional
             Full replacement for the prior-draw + extra starts.
-        eig_floor_mode : {'relative', 'prior'}, default 'relative'
-            'relative': eigenvalues below ``eig_floor * max`` are floored
-            (condition number capped at ``1/eig_floor``). 'prior': absolute
-            floor at ``eig_floor`` in prior-width units (1 = as wide as the
-            prior); see ``initialization.EigenFloor``.
-        bounded : bool, default False
+        eig_floor_mode : {'prior', 'relative'}, default 'prior'
+            'prior': absolute floor at ``eig_floor`` in prior-width units
+            (1 = as wide as the prior). 'relative': eigenvalues below
+            ``eig_floor * max`` are floored (condition number capped at
+            ``1/eig_floor``); see ``initialization.EigenFloor``.
+        bounded : bool, default True
             Hand the prior support bounds to L-BFGS-B (projected gradient
             slides along walls) instead of relying on the ``-inf`` barrier.
-        polish_steps, polish_basins : int
+        polish_steps, polish_basins : int, default 8 and 3
             Regularized Newton polish steps from the best endpoint of each of
             the ``polish_basins`` best basins (0 = off); see
             ``initialization.newton_polish``.
@@ -695,6 +700,7 @@ class InferenceTask:
             EigenFloor,
             StartSet,
             build_preconditioner,
+            combine_starts,
             find_map,
             prior_starts,
         )
@@ -712,7 +718,7 @@ class InferenceTask:
                         f"extra_starts has {extra.shape[1]} columns; task "
                         f"has {starts.points.shape[1]} sampled parameters"
                     )
-                starts = StartSet.concat(
+                starts = combine_starts(
                     starts,
                     StartSet(extra, ['extra'] * extra.shape[0], starts.names),
                 )

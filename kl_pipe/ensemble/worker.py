@@ -85,41 +85,6 @@ def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS
     return None if starts is None else starts.points
 
 
-def _assemble_map_starts(task, inputs, spec: EnsembleSpec, sampler_seed: int):
-    """Optimizer start set for the Laplace preconditioner: prior draws,
-    position-angle-stratified draws and (``fit.map_moment_starts``) image-
-    moment starts. Returns ``(StartSet, moment_starts_ok)`` where the flag
-    is None when moment starts were not requested and False when the images
-    yielded no usable moments (the fit proceeds on the other starts)."""
-    from kl_pipe.sampling.initialization import (
-        MomentsError,
-        StartSet,
-        moment_starts,
-        pa_stratified_starts,
-        prior_starts,
-    )
-
-    sets = [prior_starts(task, spec.n_map_starts, seed=sampler_seed)]
-    pa = pa_stratified_starts(
-        inputs.priors, n_pa=_N_PA_STRATIFIED_STARTS, seed=sampler_seed
-    )
-    if pa is not None:
-        sets.append(pa)
-    moments_ok = None
-    if spec.map_moment_starts:
-        try:
-            sets.append(moment_starts(task, inputs.image_obs, seed=sampler_seed))
-            moments_ok = True
-        except MomentsError as err:
-            moments_ok = False
-            warnings.warn(
-                f"image-moment starts unavailable ({err}); MAP search proceeds "
-                "on the prior and position-angle starts only",
-                RuntimeWarning,
-            )
-    return StartSet.concat(*sets), moments_ok
-
-
 def _pa_flip_margin(preconditioner, sampled_names, priors) -> float:
     """Negative-log-posterior margin of the MAP over the best optimization
     start that settled in the counter-rotating basin (theta_int within a
@@ -581,27 +546,21 @@ def _run_fit_attempt(
 
     preconditioner = reuse.preconditioner if reuse is not None else None
     if preconditioner is None and spec.precondition == 'laplace':
-        # build explicitly (rather than letting the sampler build it
-        # internally) so the MAP point and precond diagnostics reach the
-        # summary row; PA-stratified extra starts guarantee the position-
-        # angle basins are all visited
-        from kl_pipe.sampling.initialization import EigenFloor
+        # built here (not inside the sampler) so the MAP point and the
+        # initialization records reach the summary row
+        from kl_pipe.sampling.initialization import InitConfig, Initializer
 
-        starts, moments_ok = _assemble_map_starts(task, inputs, spec, sampler_seed)
-        floor = EigenFloor(spec.eig_floor_mode, spec.eig_floor)
+        init_config = InitConfig.from_spec(spec, n_pa_starts=_N_PA_STRATIFIED_STARTS)
         with profiling.trace(f'{row["fit_id"]}/precondition'):
-            preconditioner = task.laplace_preconditioner(
-                seed=sampler_seed,
-                hessian_method=sampler_config.hessian_method,
-                starts=starts,
-                eig_floor_mode=floor.mode,
-                eig_floor=floor.value,
-                bounded=spec.map_bounded,
-                polish_steps=spec.map_polish_steps,
-                polish_basins=spec.map_polish_basins,
-            )
+            init = Initializer(
+                task, init_config, seed=sampler_seed, image_obs=inputs.image_obs
+            ).run()
+        preconditioner = init.preconditioner
+        init_columns = init.columns()
     else:
-        moments_ok = None
+        from kl_pipe.sampling.initialization import initialization_columns
+
+        init_columns = initialization_columns(preconditioner, None, spec.chain_init)
     t_precond = time.time()
 
     sampler = NumpyroSampler(task, sampler_config, preconditioner=preconditioner)
@@ -621,7 +580,7 @@ def _run_fit_attempt(
         truth=truth,
         priors=inputs.priors,
     )
-    _initialization_columns(summary, preconditioner, moments_ok, spec)
+    summary.update(init_columns)
     _finish_attempt_summary(summary, row, config, inputs, sampler_seed)
     _fit_quality_columns(summary, task, inputs, sampled_names)
 
@@ -634,40 +593,6 @@ def _run_fit_attempt(
         sampler=sampler,
     )
     return summary, artifacts
-
-
-def _initialization_columns(summary: dict, preconditioner, moments_ok, spec) -> None:
-    """Fit-initialization bookkeeping: optimizer basins, winning start
-    family, moment-start availability, metric floor, chain init mode."""
-    labels = getattr(preconditioner, 'start_labels', None)
-    funs = getattr(preconditioner, 'start_neg_logposts', None)
-    basins = getattr(preconditioner, 'basin_neg_logposts', None)
-    summary['map_n_basins'] = int(len(basins)) if basins is not None else -1
-    summary['map_basin_margin'] = (
-        float(basins[1] - basins[0])
-        if basins is not None and len(basins) > 1
-        else float('inf') if basins is not None else float('nan')
-    )
-    summary['map_winning_start'] = (
-        str(labels[int(np.argmin(funs))])
-        if labels is not None and funs is not None
-        else ''
-    )
-    summary['map_moment_starts_ok'] = (
-        'n/a' if moments_ok is None else ('yes' if moments_ok else 'no')
-    )
-    summary['precond_n_floored_eigenvalues'] = int(
-        getattr(preconditioner, 'n_floored_eigenvalues', -1)
-    )
-    summary['precond_eig_floor_mode'] = str(
-        getattr(preconditioner, 'eig_floor_mode', '')
-    )
-    summary['map_grad_norm'] = float(getattr(preconditioner, 'map_grad_norm', np.nan))
-    summary['map_min_eigenvalue'] = float(
-        getattr(preconditioner, 'map_min_eigenvalue', np.nan)
-    )
-    summary['map_polish_gain'] = float(getattr(preconditioner, 'polish_gain', np.nan))
-    summary['chain_init'] = str(spec.chain_init)
 
 
 def _fit_quality_columns(summary: dict, task, inputs, sampled_names) -> None:
