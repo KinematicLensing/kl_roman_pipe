@@ -4,8 +4,8 @@
 # predates the full-circle PA prior default, so the n_warmup 250/400 and
 # frozen-metric twins need this run, not 983442, as their matched reference.
 # The initialization defaults changed afterwards (bounded MAP + polish,
-# prior-unit floor); re-expanding this file today does not reproduce 986080.
-# cosmos25_bank32_robust is the reference at the current defaults.
+# prior-unit floor), so those knobs are pinned below at the values 986080 ran
+# with. cosmos25_bank32_robust is the reference at the current defaults.
 run:
   name: cosmos25_bank32_w200
   version: 1
@@ -74,6 +74,12 @@ fit:
   precondition: laplace
   unconstrained: true
   adapt_mass: true
+  # pinned at the values this arm ran with; the code defaults changed later
+  map_bounded: false
+  map_polish_steps: 0
+  map_polish_basins: 1
+  eig_floor_mode: relative
+  eig_floor: 1.0e-4
   target_accept: 0.9
   pin_z_to_truth: true
   escalation:

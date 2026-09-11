@@ -69,6 +69,12 @@ fit:
   precondition: laplace
   unconstrained: true
   adapt_mass: true
+  # pinned at the values this arm ran with; the code defaults changed later
+  map_bounded: false
+  map_polish_steps: 0
+  map_polish_basins: 1
+  eig_floor_mode: relative
+  eig_floor: 1.0e-4
   # fit-initialization toolkit: one chain per competing MAP basin
   chain_init: map_basins
   chain_init_max_margin: 20.0

@@ -73,6 +73,9 @@ fit:
   precondition: laplace
   unconstrained: true
   adapt_mass: true
+  # pinned at the values this arm ran with; the code defaults changed later
+  eig_floor_mode: relative
+  eig_floor: 1.0e-4
   # fit-initialization toolkit: MAP finder fix (docs/fit_initialization.md)
   map_bounded: true
   map_polish_steps: 8
