@@ -115,6 +115,13 @@ steps. Open: metric at a boundary MAP; g8_r90 has two rotation-direction
 modes 0.14 nats apart and each run sampled a single one (chain-per-basin arm
 988826 pending).
 
+Combined with the prior-unit floor (990891 `cosmos25_bank32_robust`, the
+reference for later arms): the two fixes compose. 2/32 first-pass fails on a
+different pair of fits (gate noise), g5_r90 in the truth basin, posteriors
+identical to the mapfix arm, and the cost is neutral (steps 1.00, wall 0.98
+of 986080) once the two cosi-0.054 wall fits are set aside; those two cost
+2.3x and are the target of the wider cosi fit prior.
+
 ## 5. The relative eigenvalue floor clips real posterior directions
 
 **Symptom.** `precond_condition_number` pegged at 1e4 (= 1/eig_floor) in
@@ -189,7 +196,9 @@ target is the (cosi, theta) funnel, e.g. the projected spin vector
 - A saved spec YAML records only the keys the author wrote; a rebuild
   resolves the missing ones at the *current* code defaults. The 983442
   baseline (half-turn PA prior) rebuilds today with the full-circle prior.
-  Record the resolved fit settings with the run.
+  Since 48859df expansion writes `provenance/ensemble_spec_resolved.yaml`
+  with every fit, escalation and render knob written out, and rebuilds read
+  it; run dirs from before it warn on load.
 - Two jobs sharing a node and the JAX persistent-cache directory race on the
   per-fusion autotune files (986384 vs 986080 on c642-001; one fit lost).
 - Escalation-restart fits under float32 rejected their donor metric on

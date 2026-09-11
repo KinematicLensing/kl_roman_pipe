@@ -71,4 +71,5 @@ in the local `runs/` copies (gitignored).
 | 2026-09-10 | cosmos25_bank32_w200 | 986080 | cbf2d0d | 2/32 | 0/32 | 41.9 | 9.1 | 7.14 | vs 983442: steps/draw on clean fits 58 -> 42, clean fit wall 12.8 -> 8.8 min,... |
 | 2026-09-10 | cosmos25_bank32_mapfix | 988356 | e73c019 | 3/32 | 0/32 | 46.7 | 9.0 | 8.18 | SUPPORTED on the MAP: max dev 0.5-1.2 on all 32 (ref 24.7 on g5_r90); grad no... |
 | 2026-09-10 | cosmos25_bank32_priorfloor | 988824 | e73c019 | 0/32 | 0/32 | 48.3 | 9.3 | 6.48 | SUPPORTED. 14/32 fits (truth cosi >= 0.32, no clipping either way) reproduce... |
+| 2026-09-11 | cosmos25_bank32_robust | 990891 | ae63ae0 | 2/32 | 0/32 | 45.1 | 8.8 | 7.81 | Composes as expected. 32/32, 2 first-pass fails (g15_r90 rhat 1.20 / ess 9, g... |
 <!-- index:end -->
