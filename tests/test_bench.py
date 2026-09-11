@@ -143,6 +143,26 @@ class TestMetrics:
         assert m['fit_wall_sum_s'] == pytest.approx(5900.0)
         assert m['run_wall_s'] == pytest.approx(5000.0)
 
+    def test_flag_counts_present_or_unknown(self, run_dir):
+        fits = _fits(run_dir)
+        m = bench.compute_metrics(fits, N_CHAINS, N_SAMPLES)
+        # results written before the flag columns: unknown, not zero
+        assert m['n_flag_gate'] is None
+        assert m['n_flag_rotation_ambiguous'] is None
+        fits['flag_gate'] = [True, False, False, True]
+        fits['flag_map_dev'] = False
+        fits['flag_chi2_excess'] = [False, False, True, False]
+        fits['flag_rotation_ambiguous'] = [None, True, None, None]
+        m = bench.compute_metrics(fits, N_CHAINS, N_SAMPLES)
+        assert m['n_flag_gate'] == 2
+        assert m['n_flag_map_dev'] == 0
+        assert m['n_flag_chi2_excess'] == 1
+        assert m['n_flag_rotation_ambiguous'] == 1
+        # the compare table prints unknown counts as '-'
+        table = bench._metrics_table(m, {**m, 'n_flag_gate': None}, 'a', 'b')
+        row = [ln for ln in table.splitlines() if ln.startswith('n_flag_gate')][0]
+        assert row.split()[-2:] == ['2', '-']
+
     def test_missing_escalation_mode_column_means_restart(self, tmp_path):
         run_dir = make_run_dir(tmp_path, mode_column=False)
         fits = _fits(run_dir)

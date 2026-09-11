@@ -37,6 +37,7 @@ from kl_pipe import profiling
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.collate import is_catastrophic
 from kl_pipe.ensemble.expander import truth_from_row
+from kl_pipe.ensemble.quality import posterior_interval_columns, quality_flags
 from kl_pipe.ensemble.mocks import FitInputs, build_fit_inputs
 from kl_pipe.ensemble.spec import EnsembleSpec, EscalationSpec, ObservationConfig
 
@@ -237,7 +238,11 @@ def run_single_fit(
     noise_seed = int(row['noise_seed'])
 
     if spec.escalation.enabled:
-        return _run_fit_escalated(row, spec, config, run_dir, truth, noise_seed)
+        summary = _run_fit_escalated(row, spec, config, run_dir, truth, noise_seed)
+        summary.update(
+            quality_flags(summary, spec.escalation.rhat_max, spec.escalation.ess_min)
+        )
+        return summary
 
     summary = None
     artifacts = None
@@ -261,6 +266,11 @@ def run_single_fit(
             flush=True,
         )
     _persist_outputs(run_dir, fit_id, row, artifacts)
+    # no gate is configured on this path: the flags use the escalation
+    # defaults (rhat 1.05, ESS 50) so the columns exist on every run
+    summary.update(
+        quality_flags(summary, spec.escalation.rhat_max, spec.escalation.ess_min)
+    )
     return summary
 
 
@@ -723,6 +733,10 @@ def _summary_row(
             out[f'map_minus_postmean_over_sigma.{name}'] = float(
                 (map_theta[i] - s['mean']) / s['std']
             )
+    # central intervals and truth ranks from the pooled draws
+    out.update(
+        posterior_interval_columns(np.asarray(result.samples), sampled_names, truth)
+    )
 
     # galaxy-frame shear (g+, gx): the interpretable KL diagnostic. Rotate the
     # posterior samples per the configured angle convention (default: each

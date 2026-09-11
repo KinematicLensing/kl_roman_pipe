@@ -40,6 +40,7 @@ from kl_pipe.ensemble.calibration import (
 )
 from kl_pipe.ensemble.collate import analysis_table
 from kl_pipe.ensemble.expander import load_run
+from kl_pipe.ensemble.quality import FLAG_COLUMNS, PERIODIC_PARAMS, draws_per_fit
 
 # shear is reported in the galaxy frame (g+, gx), not sky-frame (g1, g2): g+/gx
 # are the interpretable kinematic-lensing quantities and their marginals do not
@@ -268,11 +269,16 @@ def augment_galaxy_frame(
 
 
 # parameters whose residual must be wrapped before forming a pull, with
-# their period. theta_int is a full-turn position angle (the velocity field
-# distinguishes theta from theta + pi), so the residual is wrapped modulo
-# 2 pi: a recovery just below 2 pi against a truth just above 0 is a match,
-# while a counter-rotating solution at theta + pi is the discrepancy it is.
-_PULL_WRAP_PERIODS = {'theta_int': 2.0 * np.pi}
+# their period (shared with the fit-time interval columns in quality.py).
+# theta_int is a full-turn position angle (the velocity field distinguishes
+# theta from theta + pi), so the residual is wrapped modulo 2 pi: a recovery
+# just below 2 pi against a truth just above 0 is a match, while a
+# counter-rotating solution at theta + pi is the discrepancy it is.
+_PULL_WRAP_PERIODS = PERIODIC_PARAMS
+
+# sampled parameters with fit-time interval / rank columns used by the
+# coverage table and the rank histograms
+COVERAGE_PARAMS = ('cosi', 'theta_int', 'g1', 'g2', 'vel.vcirc')
 
 
 def _wrapped_residual(
@@ -302,6 +308,88 @@ def pull_table(
             )
         out[f'pull.{p}'] = resid / table[f'post.{p}.std']
     return out
+
+
+def _inside_interval(
+    table: pd.DataFrame, p: str, lo_col: str, hi_col: str
+) -> pd.Series:
+    """Truth inside the central interval, as an offset from the posterior median."""
+    period = _PULL_WRAP_PERIODS.get(p)
+    median = table[f'post.{p}.median']
+    if period is None:
+        resid = table[f'truth.{p}'] - median
+    else:
+        resid = _wrapped_residual(table[f'truth.{p}'], median, period)
+    lo = table[f'post.{p}.{lo_col}'] - median
+    hi = table[f'post.{p}.{hi_col}'] - median
+    return (resid >= lo) & (resid <= hi)
+
+
+def coverage_table(
+    table: pd.DataFrame,
+    params: Sequence[str] = COVERAGE_PARAMS,
+    group_col: str = 'cosi_bin',
+) -> pd.DataFrame:
+    """Central-interval coverage per parameter, per group and overall.
+
+    ``frac68`` / ``frac95``: fraction of truths inside the posterior 16-84
+    and 2.5-97.5 percentile intervals (interval edges taken relative to the
+    posterior median, wrapped for periodic parameters); ``err68`` / ``err95``
+    are binomial standard errors ``sqrt(p (1 - p) / n)``. A calibrated
+    posterior gives 0.68 and 0.95 within the errors; a mean-based pull cannot
+    test this for a skewed or bounded parameter. Parameters without interval
+    columns (runs from before they were written) are skipped. Rows with
+    ``axis_step == -1`` are the overall numbers.
+    """
+    rows = []
+    groups = [(-1, table)] + [
+        (int(k), g) for k, g in table.groupby(group_col, sort=True)
+    ]
+    for p in params:
+        needed = [f'post.{p}.{c}' for c in ('median', 'q16', 'q84', 'q025', 'q975')]
+        if f'truth.{p}' not in table.columns or any(
+            c not in table.columns for c in needed
+        ):
+            continue
+        for step, g in groups:
+            g = g.dropna(subset=needed + [f'truth.{p}'])
+            n = int(len(g))
+            if n == 0:
+                continue
+            in68 = _inside_interval(g, p, 'q16', 'q84').mean()
+            in95 = _inside_interval(g, p, 'q025', 'q975').mean()
+            rows.append(
+                {
+                    'param': p,
+                    'axis_step': step,
+                    'n_fits': n,
+                    'frac68': float(in68),
+                    'err68': float(np.sqrt(in68 * (1 - in68) / n)),
+                    'frac95': float(in95),
+                    'err95': float(np.sqrt(in95 * (1 - in95) / n)),
+                }
+            )
+    return pd.DataFrame(
+        rows,
+        columns=['param', 'axis_step', 'n_fits', 'frac68', 'err68', 'frac95', 'err95'],
+    )
+
+
+def flags_table(table: pd.DataFrame) -> pd.DataFrame:
+    """Flagged fits (any ``flag_*`` true) with the flags that fired."""
+    present = [c for c in FLAG_COLUMNS if c in table.columns]
+    cols = ['fit_id', 'truth.cosi'] + present
+    if not present:
+        return pd.DataFrame(columns=cols + ['flags'])
+    t = table[cols].copy()
+    for c in present:
+        t[c] = t[c].fillna(False).astype(bool)
+    t = t[t[present].any(axis=1)].copy()
+    t['flags'] = [
+        ','.join(c[len('flag_') :] for c in present if row[c])
+        for _, row in t.iterrows()
+    ]
+    return t.reset_index(drop=True)
 
 
 def _galaxy_frame_sigmas(run_dir: Path, row: pd.Series) -> Tuple[float, float, str]:
@@ -544,16 +632,35 @@ def plot_pulls(
     return path
 
 
-def plot_quality_vs_cosi(table: pd.DataFrame, out_dir: Path) -> Path:
-    """Divergence rate, rhat, ess, wallclock vs cosi -- the stiffness map."""
+def plot_quality_vs_cosi(
+    table: pd.DataFrame, out_dir: Path, draws: Optional[pd.Series] = None
+) -> Path:
+    """Sampler quality and cost vs cosi -- the stiffness map.
+
+    ``draws`` (posterior draws per fit, see ``quality.draws_per_fit``) adds
+    the per-draw panels: leapfrog steps per draw and min ESS per draw.
+    """
     plt = _mpl()
-    fig, axes = plt.subplots(1, 4, figsize=(14, 3.2))
+    table = table.copy()
     panels = [
         ('divergence_rate', 'divergence rate', 'log'),
         ('max_rhat', 'max R-hat', 'log'),
         ('min_ess', 'min ESS', 'log'),
         ('fit_wallclock_s', 'fit wallclock [s]', 'linear'),
     ]
+    if draws is not None and 'num_steps_total' in table.columns:
+        table['steps_per_draw'] = table['num_steps_total'] / draws
+        table['ess_per_draw'] = table['min_ess'] / draws
+        panels += [
+            ('steps_per_draw', 'leapfrog steps / draw', 'log'),
+            ('ess_per_draw', 'min ESS / draw', 'log'),
+        ]
+    n_col = 4
+    n_row = int(np.ceil(len(panels) / n_col))
+    fig, axes = plt.subplots(n_row, n_col, figsize=(14, 3.2 * n_row), squeeze=False)
+    axes = axes.ravel()
+    for ax in axes[len(panels) :]:
+        ax.set_axis_off()
     for ax, (col, label, scale) in zip(axes, panels):
         ax.scatter(table['truth.cosi'], table[col], s=18)
         ax.set_xlabel('truth cos i')
@@ -562,6 +669,122 @@ def plot_quality_vs_cosi(table: pd.DataFrame, out_dir: Path) -> Path:
     fig.suptitle('sampler quality vs inclination', fontsize=10)
     fig.tight_layout()
     path = out_dir / 'quality_vs_cosi.png'
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    return path
+
+
+def plot_rank_hist(
+    table: pd.DataFrame,
+    out_dir: Path,
+    params: Sequence[str] = COVERAGE_PARAMS,
+    n_bins: int = 10,
+) -> List[Path]:
+    """Simulation-based-calibration rank histograms, one file per parameter.
+
+    ``truth_rank.<p>`` is uniform on [0, 1] for a calibrated posterior; the
+    band is the binomial 2-sigma range of a uniform histogram with the same
+    count. Parameters without the rank column are skipped.
+    """
+    plt = _mpl()
+    paths = []
+    for p in params:
+        col = f'truth_rank.{p}'
+        if col not in table.columns:
+            continue
+        ranks = table[col].dropna().values
+        if len(ranks) == 0:
+            continue
+        n = len(ranks)
+        expected = n / n_bins
+        band = 2.0 * np.sqrt(n * (1.0 / n_bins) * (1.0 - 1.0 / n_bins))
+        fig, ax = plt.subplots(figsize=(4.2, 3.2))
+        ax.axhspan(expected - band, expected + band, color='0.85', zorder=0)
+        ax.axhline(expected, color='0.5', lw=1)
+        ax.hist(ranks, bins=np.linspace(0, 1, n_bins + 1), color='C0')
+        ax.set_xlabel(f'rank of truth in posterior draws ({_label(p)})')
+        ax.set_ylabel('fits')
+        ax.set_title(f'{p}: n = {n}', fontsize=10)
+        fig.tight_layout()
+        path = Path(out_dir) / f'rank_hist_{p.replace(".", "_")}.png'
+        fig.savefig(path, dpi=140)
+        plt.close(fig)
+        paths.append(path)
+    return paths
+
+
+def worker_timeline_table(run_dir: Path) -> pd.DataFrame:
+    """Per-fit start/end times from the status ledger.
+
+    Start is the claim timestamp (``status/claims/<fit_id>/claim.json``),
+    end the done marker (``status/done/<fit_id>``); the worker is
+    ``hostname:pid`` (a worker process claims fits sequentially). Fits with
+    a claim but no done marker are omitted.
+    """
+    import json
+
+    run_dir = Path(run_dir)
+    columns = ['fit_id', 'worker', 'host', 'start', 'end']
+    rows = []
+    claims_dir = run_dir / 'status' / 'claims'
+    done_dir = run_dir / 'status' / 'done'
+    if not claims_dir.is_dir():
+        return pd.DataFrame(columns=columns)
+    for claim in sorted(claims_dir.iterdir()):
+        meta_path = claim / 'claim.json'
+        done_path = done_dir / claim.name
+        if not meta_path.exists() or not done_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text())
+        end = json.loads(done_path.read_text()).get('ts')
+        if end is None:
+            continue
+        rows.append(
+            {
+                'fit_id': claim.name,
+                'worker': f"{meta.get('hostname', '?')}:{meta.get('pid', '?')}",
+                'host': str(meta.get('hostname', '?')),
+                'start': float(meta['ts']),
+                'end': float(end),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def plot_worker_timeline(run_dir: Path, out_dir: Path) -> Optional[Path]:
+    """One bar per fit on its worker's row, time from the first claim.
+
+    Idle gaps and the end-of-run tail (few bars still running while the
+    other rows have ended) read directly off the plot.
+    """
+    tl = worker_timeline_table(run_dir)
+    if len(tl) == 0:
+        return None
+    plt = _mpl()
+    t0 = tl['start'].min()
+    workers = sorted(tl['worker'].unique())
+    fig, ax = plt.subplots(figsize=(10, 0.35 * len(workers) + 1.5))
+    for i, w in enumerate(workers):
+        sub = tl[tl['worker'] == w]
+        ax.broken_barh(
+            [
+                ((s - t0) / 60.0, (e - s) / 60.0)
+                for s, e in zip(sub['start'], sub['end'])
+            ],
+            (i - 0.4, 0.8),
+            color='C0',
+            edgecolor='white',
+        )
+    ax.set_yticks(range(len(workers)))
+    ax.set_yticklabels(workers, fontsize=7)
+    ax.set_xlabel('minutes since first claim')
+    ax.set_title(
+        f'{len(tl)} fits on {len(workers)} workers; '
+        f'run span {(tl["end"].max() - t0) / 60:.0f} min',
+        fontsize=10,
+    )
+    fig.tight_layout()
+    path = Path(out_dir) / 'worker_timeline.png'
     fig.savefig(path, dpi=140)
     plt.close(fig)
     return path
@@ -806,17 +1029,23 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     )
     quality = quality_table(table)
     pulls = pull_table(table)
+    coverage = coverage_table(table, group_col=group_col)
+    flags = flags_table(table)
     sigma = sigma_eps_table(run_dir, table, group_col, value_col)
     bias = shear_bias_table(table, spec.shear_fit_prior_sigma)
     quality.to_csv(out_dir / 'quality.csv', index=False)
     pulls.to_csv(out_dir / 'pulls.csv', index=False)
+    coverage.to_csv(out_dir / 'coverage.csv', index=False)
+    flags.to_csv(out_dir / 'flags.csv', index=False)
     sigma.to_csv(out_dir / 'sigma_eps.csv', index=False)
     if len(bias):
         bias.to_csv(out_dir / 'shear_bias.csv', index=False)
 
     plot_recovery(table, out_dir)
     plot_pulls(table, out_dir)
-    plot_quality_vs_cosi(table, out_dir)
+    plot_quality_vs_cosi(table, out_dir, draws=draws_per_fit(table, spec))
+    plot_rank_hist(table, out_dir)
+    plot_worker_timeline(run_dir, out_dir)
     plot_sigma_eps(sigma, out_dir, axis_label=axis_label, xscale=xscale)
     plot_sigma_eps_slide(sigma, out_dir, axis_label=axis_label)
 
@@ -858,6 +1087,18 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     print(f'run: {run_dir.name}  fits: {len(table)}')
     print(f'  catastrophic (max_rhat > 1.1): {n_cat}')
     print(f'  low_quality  (full gate):      {n_low}')
+    if len(flags):
+        counts = flags['flags'].str.split(',').explode().value_counts()
+        print(
+            f'  flagged fits: {len(flags)} ('
+            + ', '.join(f'{k} {v}' for k, v in counts.items())
+            + ')'
+        )
+    for _, r in coverage[coverage['axis_step'] == -1].iterrows():
+        print(
+            f"  coverage {r['param']}: 68% -> {r['frac68']:.2f} +/- {r['err68']:.2f}, "
+            f"95% -> {r['frac95']:.2f} +/- {r['err95']:.2f} ({int(r['n_fits'])} fits)"
+        )
     for gate in ('exclude_catastrophic', 'full_gate'):
         head = sigma[(sigma['gate'] == gate) & (sigma['axis_step'] == -1)]
         if len(head):
@@ -876,6 +1117,8 @@ def run_report(run_dir: Path, out_dir: Optional[Path] = None) -> Dict[str, objec
     return {
         'quality': quality,
         'pulls': pulls,
+        'coverage': coverage,
+        'flags': flags,
         'sigma_eps': sigma,
         'shear_bias': bias,
         'out_dir': out_dir,
