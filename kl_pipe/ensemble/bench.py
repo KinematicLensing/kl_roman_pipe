@@ -129,6 +129,14 @@ def load_results(run_dir: Path, results: Optional[Path] = None) -> pd.DataFrame:
                 f"no results in {run_dir}: expected results.parquet or "
                 f"results/*.parquet (or pass --results PATH)"
             )
+    # the worker writes first_attempt_* only on escalated fits; a run with no
+    # escalation has no such column and the first attempt is the final one
+    for col, final in (
+        ('first_attempt_max_rhat', 'max_rhat'),
+        ('first_attempt_min_ess', 'min_ess'),
+    ):
+        if col not in df.columns and final in df.columns:
+            df[col] = df[final]
     _require_columns(df, RESULTS_COLUMNS, 'results')
     if df['fit_id'].duplicated().any():
         raise ValueError("results contain duplicated fit_id rows")

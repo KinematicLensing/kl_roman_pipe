@@ -101,8 +101,19 @@ Recorded per fit: `map_grad_norm`, `map_min_eigenvalue`, `map_n_basins`,
 bad MAPs; a stuck posterior shows a chi-square excess (`postmean_chi2 -
 n_data`).
 
-**Status.** Toolkit landed; bank A/B (`cosmos25_bank32_mapfix`: bounded +
-polish) pending.
+**Status.** Bank A/B read (988356 `cosmos25_bank32_mapfix` vs 986080):
+every MAP interior and stationary except at the cosi prior wall (28/32 with
+gradient norm < 1e-3, smallest eigenvalue 0.6-1.2; `map_postmean_max_dev`
+0.5-1.2 on all 32, was 24.7 on g5_r90). The w200 reference posterior of
+g5_r90 turns out to have been in the counter-rotating mode on all four
+chains (v0 -104 vs truth +15) after passing the gate on escalation; the
+bounded search recovers the truth basin. Cost: preconditioner wall 22 -> 43
+s median, sum wall +14%, of which most is the two fits with truth cosi 0.054:
+their MAP sits on the cosi 0.05 wall (nonzero projected gradient, negative
+Hessian eigenvalue) and the Laplace metric built there costs 1.6-2.1x the
+steps. Open: metric at a boundary MAP; g8_r90 has two rotation-direction
+modes 0.14 nats apart and each run sampled a single one (chain-per-basin arm
+988826 pending).
 
 ## 5. The relative eigenvalue floor clips real posterior directions
 
@@ -119,8 +130,12 @@ exactly along the directions that cost leapfrog steps.
 **Fix.** `EigenFloor('prior', 0.5)`: an absolute floor in prior-width units;
 the softest true eigenvalue is 0.6-1.1 in every healthy fit, so the floor
 never touches a data-constrained direction. The one fit with a softer
-direction (0.11) is the stuck wrong-basin posterior. Status: implemented,
-A/B pending.
+direction (0.11) is the stuck wrong-basin posterior. Status: bank A/B read
+(988824 vs 986080): the 14 fits where the relative floor never engaged are
+bit-identical; on the 18 edge-on fits the condition number runs free (up to
+2.4e5) with steps 0.42-1.45x (median 1.00), both reference escalations pass
+first try at 0.42-0.44x the steps, 0/32 first-pass fails, sum wall -9%,
+posteriors unchanged (max 0.2 sigma). Candidate default.
 
 ## 6. Four chains started at one point cannot see a basin error
 
@@ -129,6 +144,13 @@ began at the same (wrong) MAP with 1% jitter.
 
 **Fix.** `chain_init: map_basins` starts one chain per competing optimizer
 basin within 20 nats of the MAP. Costs nothing when the basins agree.
+
+**Status.** Bank A/B (988826) with the legacy unbounded search REFUTED the
+knob in that combination: the 3-12 "basins" per fit are mostly the stall
+points of lesson 4, so chains start at non-optima; 8/31 escalations, 5
+final gate failures, sum wall +37%, job timed out. The knob is only
+meaningful after the bounded search leaves real optima (1-5 per fit in
+988356); rerun as bounded + polish + map_basins.
 Status: implemented, A/B pending.
 
 ## 7. Levers that did not work
