@@ -133,10 +133,14 @@ def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
     The gate is on convergence quality (max_rhat / min_ess), NOT
     divergences: the silent unconverged class shows zero divergences.
     """
-    return (
+    failed = (
         float(summary['max_rhat']) > esc.rhat_max
         or float(summary['min_ess']) < esc.ess_min
     )
+    if esc.ess_min_shear is not None:
+        ess_shear = min(float(summary['ess_g1']), float(summary['ess_g2']))
+        failed = failed or ess_shear < esc.ess_min_shear
+    return failed
 
 
 def restart_reason(summary: Dict, esc: EscalationSpec) -> str:
@@ -817,6 +821,28 @@ def _save_mocks(
     _atomic_savez(path, arrays)
 
 
+def claim_order_index(manifest: pd.DataFrame, claim_order: str) -> np.ndarray:
+    """Row order in which a dynamic worker walks the manifest.
+
+    'manifest' keeps the row order. 'hard_first' puts the predicted-slow fits
+    first: truth cos i farthest from 0.5 (the cosmos25_bank32_robust arm ran
+    the two fits at cos i 0.054 at 2.3x the median steps and the face-on
+    fits at 1.3x), ties broken by lower line SNR. A proxy for scheduling
+    only; it does not change which fits run or how they are fit.
+    """
+    if claim_order == 'manifest':
+        return np.arange(len(manifest))
+    if claim_order == 'hard_first':
+        extremity = -((manifest['truth.cosi'].to_numpy(dtype=float) - 0.5) ** 2)
+        snr = (
+            manifest['line_snr'].to_numpy(dtype=float)
+            if 'line_snr' in manifest
+            else np.zeros(len(manifest))
+        )
+        return np.lexsort((snr, extremity))
+    raise ValueError(f"unknown claim_order {claim_order!r}")
+
+
 def worker_loop(
     run_dir: Path,
     worker_label: str = 'worker0',
@@ -858,6 +884,7 @@ def worker_loop(
         raise ValueError(f"invalid shard {shard_index}/{shard_count}")
     if shard_count > 1:
         manifest = manifest.iloc[shard_index::shard_count]
+    manifest = manifest.iloc[claim_order_index(manifest, spec.claim_order)]
     counts = {'succeeded': 0, 'failed': 0, 'skipped': 0}
 
     for _, row in manifest.iterrows():

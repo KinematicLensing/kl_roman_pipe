@@ -508,6 +508,8 @@ _DRAW_DISTS = ('uniform', 'lognormal_tf')
 _POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
+# order in which dynamic workers walk the manifest when claiming fits
+_CLAIM_ORDERS = ('manifest', 'hard_first')
 _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
 _MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr', 'shear_bias')
@@ -910,6 +912,10 @@ class EscalationSpec:
     # cap the continuation at ~the restart draw budget (n_samples 1000)
     continue_block: int = 300
     continue_max_blocks: int = 4
+    # extra gate on the shear ESS (min of ess_g1, ess_g2): the science uses
+    # the per-fit shear width, whose error is 1/sqrt(2 ESS), so this floor
+    # is the fidelity that matters; None = no shear-specific floor
+    ess_min_shear: Optional[float] = None
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
@@ -945,6 +951,13 @@ class EscalationSpec:
             raise ValueError(
                 f"escalation.ess_min ({self.ess_min!r}) must be a positive float"
             )
+        if self.ess_min_shear is not None and (
+            not isinstance(self.ess_min_shear, float) or self.ess_min_shear <= 0
+        ):
+            raise ValueError(
+                f"escalation.ess_min_shear ({self.ess_min_shear!r}) must be a "
+                "positive float or null"
+            )
         for name, value in [
             ('n_warmup', self.n_warmup),
             ('n_samples', self.n_samples),
@@ -974,6 +987,7 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         'continue_divergence_max',
         'continue_block',
         'continue_max_blocks',
+        'ess_min_shear',
     )
     _reject_unknown(block, allowed, context)
     return EscalationSpec(
@@ -987,6 +1001,11 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         continue_divergence_max=float(block.get('continue_divergence_max', 0.05)),
         continue_block=_require_yaml_int(block, 'continue_block', 300, context),
         continue_max_blocks=_require_yaml_int(block, 'continue_max_blocks', 4, context),
+        ess_min_shear=(
+            None
+            if block.get('ess_min_shear') is None
+            else float(block['ess_min_shear'])
+        ),
     )
 
 
@@ -1058,6 +1077,9 @@ class EnsembleSpec:
     # dispatch
     backend: str
     mode: str
+    # 'manifest' (row order) or 'hard_first' (predicted-slow fits first, so
+    # the slow tail overlaps the rest of the job instead of ending it)
+    claim_order: str
     workers_per_node: int
     target_task_walltime_min: float
     queue: str
@@ -1318,6 +1340,11 @@ class EnsembleSpec:
             raise ValueError(
                 f"dispatch mode '{self.mode}'; supported: {_DISPATCH_MODES}"
             )
+        if self.claim_order not in _CLAIM_ORDERS:
+            raise ValueError(
+                f"dispatch.claim_order must be one of {_CLAIM_ORDERS}, got "
+                f"{self.claim_order!r}"
+            )
         if self.workers_per_node < 1:
             raise ValueError(f"workers_per_node ({self.workers_per_node}) must be >= 1")
         for name, value in [
@@ -1411,8 +1438,8 @@ class EnsembleSpec:
         Return a copy of the raw spec mapping with every defaulted knob written
         out at the value this spec resolved it to.
 
-        The fit block, its escalation sub-block and model.render.line_window_mode
-        are the only optional keys whose defaults have changed over time. A run
+        The fit block, its escalation sub-block, the dispatch block and
+        model.render.line_window_mode are the optional keys with code defaults. A run
         directory stores this resolved form so a later rebuild reads the values
         the fits actually ran with, not the defaults of whatever code does the
         rebuilding.
@@ -1463,10 +1490,25 @@ class EnsembleSpec:
                     'continue_divergence_max': esc.continue_divergence_max,
                     'continue_block': esc.continue_block,
                     'continue_max_blocks': esc.continue_max_blocks,
+                    'ess_min_shear': esc.ess_min_shear,
                 },
             }
         )
         out['fit'] = fit
+        dispatch = dict(out.get('dispatch') or {})
+        dispatch.update(
+            {
+                'backend': self.backend,
+                'mode': self.mode,
+                'claim_order': self.claim_order,
+                'workers_per_node': self.workers_per_node,
+                'target_task_walltime_min': self.target_task_walltime_min,
+                'queue': self.queue,
+                'account': self.account,
+                'max_fit_walltime_min': self.max_fit_walltime_min,
+            }
+        )
+        out['dispatch'] = dispatch
         model = dict(out.get('model') or {})
         render = dict(model.get('render') or {})
         render['line_window_mode'] = self.render_line_window_mode
@@ -1711,6 +1753,7 @@ class EnsembleSpec:
             (
                 'backend',
                 'mode',
+                'claim_order',
                 'workers_per_node',
                 'target_task_walltime_min',
                 'queue',
@@ -1802,6 +1845,7 @@ class EnsembleSpec:
             escalation=escalation,
             backend=str(dispatch.get('backend', 'local')),
             mode=str(dispatch.get('mode', 'dynamic')),
+            claim_order=str(dispatch.get('claim_order', 'manifest')),
             workers_per_node=int(dispatch.get('workers_per_node', 1)),
             target_task_walltime_min=float(
                 dispatch.get('target_task_walltime_min', 90.0)
