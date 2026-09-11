@@ -506,6 +506,30 @@ class TestExpander:
         assert len(manifest) == 4
         # snapshot, not live registry: hash matches the copied file
         assert config.content_hash == record['observation_config_hash']
+        # resolved spec: every fit knob written out; reload is identical
+        resolved_path = run_dir / 'provenance' / 'ensemble_spec_resolved.yaml'
+        resolved = yaml.safe_load(resolved_path.read_text())
+        raw = yaml.safe_load(Path(DEV_SPEC).read_text())
+        for key in (
+            'pa_prior',
+            'eig_floor_mode',
+            'map_bounded',
+            'chain_init',
+            'hessian_method',
+            'max_tree_depth',
+        ):
+            assert key not in raw['fit'], f"{key} set in DEV_SPEC; pick another"
+            assert key in resolved['fit']
+        assert resolved['fit']['escalation']['continue_block'] == 300
+        assert resolved['model']['render']['line_window_mode'] == 'global'
+        assert EnsembleSpec.from_yaml(resolved_path) == spec
+        assert record['resolved_spec_hash'] != record['spec_hash']
+        # the reload reads the resolved spec, so an edited default in the
+        # original file does not leak into it
+        assert spec == EnsembleSpec.from_yaml(resolved_path)
+        resolved_path.unlink()
+        with pytest.warns(UserWarning, match='resolved'):
+            load_run(run_dir)
 
     def test_expand_refuses_overwrite(self, tmp_path):
         expand(DEV_SPEC, REGISTRY, tmp_path / 'runs')

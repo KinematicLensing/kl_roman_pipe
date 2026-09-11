@@ -29,11 +29,13 @@ import hashlib
 import json
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
@@ -544,6 +546,9 @@ def _git_commit() -> str:
         return 'unknown'
 
 
+RESOLVED_SPEC_NAME = 'ensemble_spec_resolved.yaml'
+
+
 def expand(
     spec_path: Path,
     registry_dir: Path,
@@ -636,6 +641,13 @@ def expand(
     manifest.to_parquet(run_dir / 'manifest.parquet', index=False)
 
     shutil.copy2(spec_path, run_dir / 'provenance' / 'ensemble_spec.yaml')
+    # every defaulted knob written out, so a rebuild at later code (with
+    # different defaults) reproduces the fits as run
+    resolved_text = yaml.safe_dump(
+        spec.resolve_defaults(yaml.safe_load(spec_path.read_text())),
+        sort_keys=False,
+    )
+    (run_dir / 'provenance' / RESOLVED_SPEC_NAME).write_text(resolved_text)
     shutil.copy2(config_path, run_dir / 'provenance' / 'observation_config.yaml')
     expansion_record = {
         'run_name': spec.run_name,
@@ -645,6 +657,7 @@ def expand(
         'observation_config_id': config.id,
         'observation_config_hash': config.content_hash,
         'spec_hash': hashlib.sha256(spec_path.read_bytes()).hexdigest(),
+        'resolved_spec_hash': hashlib.sha256(resolved_text.encode()).hexdigest(),
         'git_commit': _git_commit(),
         **population_record,
     }
@@ -657,7 +670,18 @@ def expand(
 def load_run(run_dir: Path):
     """Load (spec, config, manifest) from a run directory's provenance."""
     run_dir = Path(run_dir)
-    spec = EnsembleSpec.from_yaml(run_dir / 'provenance' / 'ensemble_spec.yaml')
+    resolved = run_dir / 'provenance' / RESOLVED_SPEC_NAME
+    if resolved.exists():
+        spec = EnsembleSpec.from_yaml(resolved)
+    else:
+        warnings.warn(
+            f"{run_dir}: no provenance/{RESOLVED_SPEC_NAME} (expanded before "
+            "resolved specs were written); knobs absent from ensemble_spec.yaml "
+            "resolve to the CURRENT code defaults, which may differ from the "
+            "values the fits ran with",
+            stacklevel=2,
+        )
+        spec = EnsembleSpec.from_yaml(run_dir / 'provenance' / 'ensemble_spec.yaml')
     config = ObservationConfig.from_yaml(
         run_dir / 'provenance' / 'observation_config.yaml'
     )

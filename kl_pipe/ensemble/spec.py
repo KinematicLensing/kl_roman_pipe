@@ -19,6 +19,7 @@ Unknown YAML keys raise. Every enum-like field is validated at construction.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 from dataclasses import dataclass
@@ -1371,6 +1372,69 @@ class EnsembleSpec:
         n_shear = len(self.shear_grid) if self.shear_scheme == 'grid' else 1
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
+
+    def resolve_defaults(self, raw: dict) -> dict:
+        """
+        Return a copy of the raw spec mapping with every defaulted knob written
+        out at the value this spec resolved it to.
+
+        The fit block, its escalation sub-block and model.render.line_window_mode
+        are the only optional keys whose defaults have changed over time. A run
+        directory stores this resolved form so a later rebuild reads the values
+        the fits actually ran with, not the defaults of whatever code does the
+        rebuilding.
+        """
+        out = copy.deepcopy(raw)
+        esc = self.escalation
+        fit = dict(out.get('fit') or {})
+        fit.update(
+            {
+                'sampler': 'numpyro',
+                'n_warmup': self.n_warmup,
+                'n_samples': self.n_samples,
+                'n_chains': self.n_chains,
+                'precondition': self.precondition,
+                'unconstrained': self.unconstrained,
+                'adapt_mass': self.adapt_mass,
+                'target_accept': self.target_accept,
+                'n_map_starts': self.n_map_starts,
+                'pin_z_to_truth': self.pin_z_to_truth,
+                'sample_bulge_nsersic': self.sample_bulge_nsersic,
+                'shear_prior_sigma': self.shear_fit_prior_sigma,
+                'shear_prior_type': self.shear_fit_prior_type,
+                'shear_prior_halfwidth': self.shear_fit_prior_halfwidth,
+                'pa_prior': self.pa_fit_prior,
+                'hessian_method': self.hessian_method,
+                'max_tree_depth': self.max_tree_depth,
+                'map_moment_starts': self.map_moment_starts,
+                'map_bounded': self.map_bounded,
+                'map_polish_steps': self.map_polish_steps,
+                'map_polish_basins': self.map_polish_basins,
+                'eig_floor_mode': self.eig_floor_mode,
+                'eig_floor': self.eig_floor,
+                'chain_init': self.chain_init,
+                'chain_init_max_margin': self.chain_init_max_margin,
+                'escalation': {
+                    'enabled': esc.enabled,
+                    'rhat_max': esc.rhat_max,
+                    'ess_min': esc.ess_min,
+                    'n_warmup': esc.n_warmup,
+                    'n_samples': esc.n_samples,
+                    'mode': esc.mode,
+                    'continue_rhat_max': esc.continue_rhat_max,
+                    'continue_divergence_max': esc.continue_divergence_max,
+                    'continue_block': esc.continue_block,
+                    'continue_max_blocks': esc.continue_max_blocks,
+                },
+            }
+        )
+        out['fit'] = fit
+        model = dict(out.get('model') or {})
+        render = dict(model.get('render') or {})
+        render['line_window_mode'] = self.render_line_window_mode
+        model['render'] = render
+        out['model'] = model
+        return out
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'EnsembleSpec':
