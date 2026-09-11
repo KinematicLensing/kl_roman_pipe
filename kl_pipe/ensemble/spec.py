@@ -1084,6 +1084,13 @@ class EnsembleSpec:
     # 'half_turn' (Uniform(0, pi): one rotation direction, walls at 0 and pi)
     pa_fit_prior: str = 'full_circle'
 
+    # fit prior on cos i as a [lo, hi] pair, or None for the generating range
+    # (catalog orientation.cosi_range, the stratify range, or the uniform
+    # draw). A fit prior wider than the generating range keeps the truth away
+    # from a support wall: fits whose truth sits within ~2 sigma of a wall
+    # bias the posterior mean inward and put the MAP on the wall.
+    cosi_fit_prior_range: Optional[Tuple[float, float]] = None
+
     # analytic-dispersal deposit window for the FIT observations ('global' |
     # 'local'); mock data are always rendered with the global window
     render_line_window_mode: str = 'global'
@@ -1179,6 +1186,19 @@ class EnsembleSpec:
                 "fit.pa_prior must be 'half_turn' or 'full_circle', got "
                 f"{self.pa_fit_prior!r}"
             )
+        if self.cosi_fit_prior_range is not None:
+            lo, hi = self.cosi_fit_prior_range
+            if not 0.0 < lo < hi <= 1.0:
+                raise ValueError(
+                    f"fit.cosi_prior_range {self.cosi_fit_prior_range} must "
+                    "satisfy 0 < lo < hi <= 1"
+                )
+            gen = self.generating_cosi_range()
+            if gen is not None and not (lo <= gen[0] and gen[1] <= hi):
+                raise ValueError(
+                    f"fit.cosi_prior_range {self.cosi_fit_prior_range} must "
+                    f"contain the generating cos i range {gen}"
+                )
         if (
             isinstance(self.max_tree_depth, bool)
             or not isinstance(self.max_tree_depth, int)
@@ -1373,6 +1393,17 @@ class EnsembleSpec:
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
 
+    def generating_cosi_range(self) -> Optional[Tuple[float, float]]:
+        """Range of the generating cos i distribution, None if not bounded."""
+        if self.catalog_population is not None:
+            return tuple(self.catalog_population.cosi_range)
+        if self.stratify_param == 'cosi':
+            return tuple(self.stratify_range)
+        draw = self.draw.get('cosi')
+        if draw is not None and draw.dist == 'uniform':
+            return (float(draw.params['low']), float(draw.params['high']))
+        return None
+
     def resolve_defaults(self, raw: dict) -> dict:
         """
         Return a copy of the raw spec mapping with every defaulted knob written
@@ -1404,6 +1435,11 @@ class EnsembleSpec:
                 'shear_prior_type': self.shear_fit_prior_type,
                 'shear_prior_halfwidth': self.shear_fit_prior_halfwidth,
                 'pa_prior': self.pa_fit_prior,
+                'cosi_prior_range': (
+                    None
+                    if self.cosi_fit_prior_range is None
+                    else list(self.cosi_fit_prior_range)
+                ),
                 'hessian_method': self.hessian_method,
                 'max_tree_depth': self.max_tree_depth,
                 'map_moment_starts': self.map_moment_starts,
@@ -1646,6 +1682,7 @@ class EnsembleSpec:
                 'shear_prior_type',
                 'shear_prior_halfwidth',
                 'pa_prior',
+                'cosi_prior_range',
                 'hessian_method',
                 'max_tree_depth',
                 'map_moment_starts',
@@ -1708,6 +1745,13 @@ class EnsembleSpec:
             shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
             shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
             pa_fit_prior=str(fit.get('pa_prior', 'full_circle')),
+            cosi_fit_prior_range=(
+                None
+                if fit.get('cosi_prior_range') is None
+                else _parse_pair(
+                    fit['cosi_prior_range'], f"{path}:fit.cosi_prior_range"
+                )
+            ),
             hessian_method=str(fit.get('hessian_method', 'fd')),
             max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
             map_moment_starts=fit.get('map_moment_starts', False),

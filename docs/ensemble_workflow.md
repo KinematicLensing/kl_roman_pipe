@@ -95,7 +95,9 @@ Key blocks:
   compensated mode traps the sampler); `pin_z_to_truth: true` (v1 -- sampled
   narrow-spec-z planned); `pa_prior: full_circle` (default; the position
   angle is sampled on the circle so both rotation directions are in the
-  prior) or `half_turn` (Uniform(0, pi)); `hessian_method: fd | ad`,
+  prior) or `half_turn` (Uniform(0, pi)); `cosi_prior_range: [lo, hi]` (fit
+  prior on cos i wider than the generating range, so no truth sits on a
+  support wall; default = the generating range); `hessian_method: fd | ad`,
   `max_tree_depth`, `shear_prior_type: gaussian | uniform`, and the render
   knob `model.render.line_window_mode` are the remaining sampler-side
   switches (see `kl_pipe/ensemble/spec.py` for provenance).

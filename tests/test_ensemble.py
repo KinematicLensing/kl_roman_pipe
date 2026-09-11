@@ -1388,6 +1388,46 @@ class TestPAFitPrior:
                 assert base_d[name] == full_d[name], name
         assert full_d['theta_int']['dist'] == 'circular_uniform'
 
+    def test_cosi_fit_prior_range_knob(self, dev_spec, canonical_q, tmp_path):
+        import dataclasses
+
+        assert dev_spec.cosi_fit_prior_range is None
+        gen = dev_spec.generating_cosi_range()
+        assert gen is not None
+        d = _spec_dict()
+        d['fit']['cosi_prior_range'] = [0.02, 1.0]
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.cosi_fit_prior_range == (0.02, 1.0)
+        assert spec.resolve_defaults(d)['fit']['cosi_prior_range'] == [0.02, 1.0]
+        for bad in ((0.0, 1.0), (0.5, 0.5), (0.02, 1.1)):
+            with pytest.raises(ValueError, match="0 < lo < hi <= 1"):
+                dataclasses.replace(dev_spec, cosi_fit_prior_range=bad)
+        # must contain the generating range
+        with pytest.raises(ValueError, match="contain the generating"):
+            dataclasses.replace(
+                dev_spec, cosi_fit_prior_range=(gen[0] + 0.01, min(1.0, gen[1] + 0.02))
+            )
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        base = scene_priors(truth, canonical_q, dev_spec)
+        assert base.get_prior('cosi').bounds == gen
+        wide = scene_priors(truth, canonical_q, spec)
+        assert wide.get_prior('cosi').bounds == (0.02, 1.0)
+        base_d, wide_d = base.describe(), wide.describe()
+        assert set(base_d) == set(wide_d)
+        for name in base_d:
+            if name != 'cosi':
+                assert base_d[name] == wide_d[name], name
+
     def test_pa_starts_cover_full_circle(self, dev_spec, canonical_q):
         import dataclasses
 

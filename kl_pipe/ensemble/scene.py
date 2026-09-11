@@ -637,6 +637,10 @@ def scene_priors(
                 continue  # z is pinned above in v1
             prior_spec[name] = population_prior(name, draw)
 
+    # fit prior wider than the generating range, when the spec asks for it
+    if spec.cosi_fit_prior_range is not None:
+        prior_spec['cosi'] = Uniform(*spec.cosi_fit_prior_range)
+
     if 'cosi' not in prior_spec:
         raise ValueError(
             "cosi has no prior: it must be either the stratified axis or a "
