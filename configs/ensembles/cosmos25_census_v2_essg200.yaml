@@ -77,9 +77,9 @@ fit:
   map_polish_basins: 3
   eig_floor_mode: prior
   eig_floor: 0.5
-  # fit prior on cos i wider than the generating range; the wall arm
-  # cosmos25_bank32_cosiwide is the evidence
-  cosi_prior_range: [0.02, 1.0]
+  # cos i fit prior = generating range: widening the lower bound (arm
+  # 990979) cost 1.14x per step for every fit and moved the wall, not the
+  # bias; a face-on-only widening [0.05, 1.0] is untested
   target_accept: 0.9
   pin_z_to_truth: true
   escalation:
