@@ -158,6 +158,16 @@ points of lesson 4, so chains start at non-optima; 8/31 escalations, 5
 final gate failures, sum wall +37%, job timed out. The knob is only
 meaningful after the bounded search leaves real optima (1-5 per fit in
 988356); rerun as bounded + polish + map_basins.
+
+Rerun on the bounded search (990892): still refuted as a default. 21/32
+fits keep 2-5 distinct optima after polish; the chains started in optima
+3-20 nats below the MAP never join the main chains in 500 draws (9 final
+gate failures, sum wall 1.58x). Those optima carry e^-3 to e^-20 of the
+posterior mass, so this measures the trap, not the posterior. The useful
+product is the basin margin from the ordinary run: three fits have a
+competitor within 3 nats (the genuinely rotation-ambiguous g8_r90 at 0.14
+nats among them), and the census flags margin < 3 nats rather than starting
+chains there.
 Status: implemented, A/B pending.
 
 ## 7. Levers that did not work
@@ -203,3 +213,24 @@ target is the (cosi, theta) funnel, e.g. the projected spin vector
   per-fusion autotune files (986384 vs 986080 on c642-001; one fit lost).
 - Escalation-restart fits under float32 rejected their donor metric on
   roundoff asymmetry until it was symmetrized at working precision.
+## 10. Edge-on inclination is prior-dominated at any lower bound
+
+Widening the cos i fit prior from the generating [0.05, 0.95] to [0.02, 1.0]
+(990979 vs 990891) moved the two truth-0.054 MAPs from the 0.05 wall to the
+0.02 wall with the same projected gradient, cost every fit 1.14x per step
+(the lower bound sets the worst-case k-space grid), and moved cos i means by
+0.03 with unchanged widths and identical shear posteriors. For a thick disk
+(h/r 0.25) the observed axis ratio is flat in cos i below about 0.15, so the
+likelihood there is flat and the posterior mean is set by where the prior
+stops. The coherent +0.6 sigma cos i pull at edge-on and -0.4 sigma face-on
+is truncation of a skewed, bounded posterior, not a sampler bias: judge
+inclination recovery by coverage and rank, not by the mean pull. A face-on
+only widening [0.05, 1.0] would cost no grid and is the remaining untested
+variant.
+
+## 11. Packing is memory-bound at 8 workers per GH200
+
+Twelve workers per node (991151): 22 of 32 fits died allocating ~5 GiB for
+the compiled log-posterior, the survivors ran 1.36x slower per step. Eight is
+the production packing; throughput gains have to come from per-evaluation
+cost, not from more processes.

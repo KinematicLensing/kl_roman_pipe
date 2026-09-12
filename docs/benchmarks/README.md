@@ -72,4 +72,6 @@ in the local `runs/` copies (gitignored).
 | 2026-09-10 | cosmos25_bank32_mapfix | 988356 | e73c019 | 3/32 | 0/32 | 46.7 | 9.0 | 8.18 | SUPPORTED on the MAP: max dev 0.5-1.2 on all 32 (ref 24.7 on g5_r90); grad no... |
 | 2026-09-10 | cosmos25_bank32_priorfloor | 988824 | e73c019 | 0/32 | 0/32 | 48.3 | 9.3 | 6.48 | SUPPORTED. 14/32 fits (truth cosi >= 0.32, no clipping either way) reproduce... |
 | 2026-09-11 | cosmos25_bank32_robust | 990891 | ae63ae0 | 2/32 | 0/32 | 45.1 | 8.8 | 7.81 | Composes as expected. 32/32, 2 first-pass fails (g15_r90 rhat 1.20 / ess 9, g... |
+| 2026-09-11 | cosmos25_bank32_robust_basins | 990892 | 6bf17ae | 11/32 | 9/32 | 43.9 | 8.4 | 12.35 | REFUTED as a default. 21/32 fits report 2-5 basins after the bounded search;... |
+| 2026-09-11 | cosmos25_bank32_robust_w12 | 991151 | 6bf17ae | 1/32 | 0/32 | 51.4 | 13.2 | 4.22 | REFUTED. 22/32 fits failed with RESOURCE_EXHAUSTED allocating 4.9-5.3 GiB for... |
 <!-- index:end -->
