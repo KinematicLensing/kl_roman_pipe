@@ -12,6 +12,8 @@ collate  merge per-fit results -> results.parquet + <run>_collated.parquet (+ ta
 slurm    emit submit.slurm into the run directory
 reclaim  release stale claims (and optionally clear failed markers) so a
          re-run picks those fits up again
+dashboard  write diagnostics/dashboard.html (progress, failures, flags,
+         early science, plots, notes) for a run directory
 """
 
 from __future__ import annotations
@@ -102,6 +104,12 @@ def main(argv=None) -> int:
         help='also clear failed markers so those fits re-run',
     )
 
+    p_dash = sub.add_parser('dashboard', help='write diagnostics/dashboard.html')
+    p_dash.add_argument('--run-dir', type=Path, required=True)
+    p_dash.add_argument(
+        '--open', action='store_true', help='open the page in the default browser'
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == 'expand':
@@ -190,6 +198,13 @@ def main(argv=None) -> int:
                 ledger.clear_failed(args.run_dir, fit_id)
                 ledger.release_claim(args.run_dir, fit_id)
                 print(f'cleared failed marker {fit_id}')
+        return 0
+
+    if args.command == 'dashboard':
+        from kl_pipe.ensemble.dashboard import build_dashboard
+
+        out = build_dashboard(args.run_dir, open_browser=args.open)
+        print(f'wrote {out}')
         return 0
 
     raise ValueError(f'unhandled command {args.command}')
