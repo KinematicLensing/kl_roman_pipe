@@ -228,9 +228,36 @@ inclination recovery by coverage and rank, not by the mean pull. A face-on
 only widening [0.05, 1.0] would cost no grid and is the remaining untested
 variant.
 
-## 11. Packing is memory-bound at 8 workers per GH200
+## 11. The 12-worker packing failure was the log-posterior chunk, not the sampler
 
-Twelve workers per node (991151): 22 of 32 fits died allocating ~5 GiB for
-the compiled log-posterior, the survivors ran 1.36x slower per step. Eight is
-the production packing; throughput gains have to come from per-evaluation
-cost, not from more processes.
+Twelve workers per node (991151): 22 of 32 fits died allocating ~5 GiB and
+the survivors ran 1.36x slower per step. The 5 GiB was the end-of-run
+log-posterior evaluated over 256 draws at once; 9cbf221 evaluates 16 (the
+NUTS gradient itself needs 0.16 GiB). The same transient killed 20 of 64
+census v2 fits at 8 workers. With the chunk fixed, 8 workers hold 3 GiB each
+of 95.6 at 100% GPU utilisation and 51% memory bandwidth (992869), so the
+packing ceiling is compute, not memory. 12 and 16 workers on the bank are
+untested since the fix; the 1.36x per-step slowdown at 12 is the expected
+price of oversubscribing a saturated GPU.
+
+## 12. Disk-frame plus-shear is skewed at edge-on under the wide fit shear prior
+
+Sky-frame g1, g2 truth ranks are uniform in every cos i bin of census v2
+(121 fits), but the shear rotated into the disk frame is not: the g+ truth
+rank averages 0.26 at cos i < 0.15 (68% coverage 0.55, mean pull +0.78
+sigma) and 0.47 face-on; gx is uniform everywhere. Spearman(rank g+,
+rank cos i) is 0.87, so this is the inclination / size / plus-shear ridge
+of lesson 8. The truth sits at the likelihood peak (2 dlogP median 23 for
+24 parameters, edge-on and face-on alike), so it is not model mismatch.
+The mechanism is the two prior walls: the cos i lower bound cuts the ridge
+on one side (lesson 10) while the N(0, 0.2) fit shear prior lets it run to
+positive g+ on the other. Importance-reweighting the saved chains to the
+N(0, 0.03) population prior restores edge-on rank 0.46, coverage 0.72 and
+pull +0.15, with sigma(g+) 0.089 -> 0.027: the population prior dominates
+g+ per galaxy at this SNR. Random position angles average the skew out of
+the sky-frame means, so the mean-based estimator is calibrated but pays in
+scatter, and any PA-shear correlation (intrinsic alignment) would turn the
+skew into a bias. A hierarchical or population prior (equivalently the
+reweighting) removes it at the cost of the shrinkage A_ivw already corrects.
+To quantify on the full census; the paper reports the sky-frame calibration
+and states this mechanism.
