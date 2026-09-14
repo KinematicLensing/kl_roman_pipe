@@ -1662,6 +1662,14 @@ class TestWorkerStartAssembly:
         th = rows[:, names.index('theta_int')]
         assert abs(abs(th[0] - th[1]) - np.pi) < 1e-9
 
+    def test_git_commit_label_format(self):
+        import re
+
+        from kl_pipe.ensemble.expander import git_commit_label
+
+        label = git_commit_label()
+        assert label == 'unknown' or re.fullmatch(r'[0-9a-f]{9}(-dirty)?', label)
+
     def test_initialization_columns(self):
         from kl_pipe.sampling.initialization import initialization_columns
         from kl_pipe.sampling.task import LaplacePreconditioner

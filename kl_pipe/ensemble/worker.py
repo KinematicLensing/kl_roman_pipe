@@ -36,7 +36,7 @@ import pandas as pd
 from kl_pipe import profiling
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.collate import is_catastrophic
-from kl_pipe.ensemble.expander import truth_from_row
+from kl_pipe.ensemble.expander import git_commit_label, truth_from_row
 from kl_pipe.ensemble.quality import posterior_interval_columns, quality_flags
 from kl_pipe.ensemble.mocks import FitInputs, build_fit_inputs
 from kl_pipe.ensemble.spec import EnsembleSpec, EscalationSpec, ObservationConfig
@@ -685,6 +685,7 @@ def _summary_row(
         'fit_id': str(row['fit_id']),
         'status': 'succeeded',
         'error_message': '',
+        'git_commit': git_commit_label(),
         # quality columns (inclusive -- gate policy applied post hoc)
         'max_rhat': float(max(r_hat.values())),
         'min_ess': float(min(ess.values())),
@@ -777,6 +778,7 @@ def failed_summary_row(row: Dict, message: str) -> dict:
         'fit_id': str(row['fit_id']),
         'status': 'failed',
         'error_message': message,
+        'git_commit': git_commit_label(),
     }
 
 

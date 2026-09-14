@@ -546,6 +546,26 @@ def _git_commit() -> str:
         return 'unknown'
 
 
+def git_commit_label() -> str:
+    """Short sha of the kl_pipe checkout, with ``-dirty`` when kl_pipe/ has
+    uncommitted changes; ``'unknown'`` outside a git checkout."""
+    sha = _git_commit()
+    if sha == 'unknown':
+        return sha
+    label = sha[:9]
+    try:
+        status = subprocess.run(
+            ['git', 'status', '--porcelain', '--', '.'],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return label
+    return f'{label}-dirty' if status else label
+
+
 RESOLVED_SPEC_NAME = 'ensemble_spec_resolved.yaml'
 
 
