@@ -91,7 +91,17 @@ cost 3.7x the steps; one common production step size (chain median) cut wall
 40% but failed 2 of 7 fit-seeds (r-hat 1.07 / 1.17), so part of the spread is
 real chain-local curvature, not adaptation noise. The unseeded frozen
 50-draw variant stays the only one with r-hat <= 1.03 and min ESS >= 93 on
-every fit-seed.
+every fit-seed. The bank32 decision run (1001111, 29/32 fits inside the 2 h
+job) then refuted it at the gate that matters: against 990891 the shear ESS
+per leapfrog step is 1.02x overall (1.33x on the 26 fits neither side
+escalated), but the second warmup costs a median 7.1k steps on top of the
+39.6k of stage 1 and the production draws are fixed at 300, so shear ESS
+per fit is 0.93-1.0x, sum wall 1.16x and shear ESS per wall-hour 0.94x, with
+posteriors identical (|dmean|/sigma 0.03-0.10, widths 0.96-0.99). A better
+metric only pays if the draws saved are actually not taken; with a fixed
+draw count the gain has to come as fewer steps per draw, and the pooled
+metric's 1.33x per-step efficiency did not translate into fewer steps.
+`warmup_metric` stays `adapted`.
 
 ## 4. "Wrong-basin MAPs" were optimizer false convergence
 
