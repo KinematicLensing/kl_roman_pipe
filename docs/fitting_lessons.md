@@ -62,9 +62,36 @@ floor clips its soft directions, lesson 5). n_warmup 400 (985873): steps/draw
 the frozen metric are the fastest of any arm (427 s median): a *good* fixed
 metric is the cheapest regime.
 
-**Direction.** Pool the covariance across chains and shrink toward the
-Laplace metric (staged warmup: Laplace metric, N draws, pooled shrunk
-estimate, freeze, step-size warmup, production). Not yet run.
+**Direction.** Pool the covariance across chains (staged warmup: adaptive
+warmup, pooled window covariance, restart every chain from that metric,
+production). Landed opt-in as `fit.warmup_metric: pooled`. A four-fit
+prototype (2026-09-14, cosmos25_bank32_robust fits on gh-dev) found the
+pooled metric 2-3x closer to the reference posterior covariance than any
+single chain's, the frozen Laplace metric the worst option on every fit,
+and a Laplace admixture unsafe without a guard: at a cos i prior-wall MAP the
+unconstrained-coordinate Laplace metric has a 2e10 eigenvalue that a 25%
+blend inherits, and a frozen blended metric sent three chains to the tree
+cap (r-hat 400) where adaptation had discarded it. The 4-fit x 2-seed
+follow-up (997155) ranked the stage-2 variants by shear ESS per leapfrog
+step relative to the status quo: frozen pooled metric 1.40x median (worst
+0.88x, r-hat <= 1.03, the wall fit included); re-adapting from the pooled
+metric 0.99x (one seed at r-hat 1.23: adaptation re-noises the metric per
+chain); Laplace blend with its eigenvalues clipped to within 10x of the
+pooled covariance 0.85x frozen, 0.71x adapting (the blend knob was dropped
+from the code); 150 stage-2 draws 0.84x. The status quo itself varies 35-85 steps/draw between seeds on
+one fit, so per-fit comparisons need seeds; the bank32 A/B decides the
+default. A third run (998895, same 7 fit-seeds; GPU reruns reproduce
+experiment 2 exactly) tested whether the 2-5x spread of adapted step sizes
+between chains sharing the frozen pooled metric comes from numpyro's default
+initial step size of 1.0: seeding the stage-2 step size from the median
+stage-1 value left the spread unchanged (2.6x median vs 2.5x) and produced
+one r-hat 1.42 failure; 100 stage-2 draws did not shrink it either (3.0x);
+numpyro's doubling/halving heuristic drove the step size to 0.01-0.02 and
+cost 3.7x the steps; one common production step size (chain median) cut wall
+40% but failed 2 of 7 fit-seeds (r-hat 1.07 / 1.17), so part of the spread is
+real chain-local curvature, not adaptation noise. The unseeded frozen
+50-draw variant stays the only one with r-hat <= 1.03 and min ESS >= 93 on
+every fit-seed.
 
 ## 4. "Wrong-basin MAPs" were optimizer false convergence
 

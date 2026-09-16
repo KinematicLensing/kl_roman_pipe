@@ -427,6 +427,19 @@ configuration. Production also sets `precondition_adapt_mass=True`, which lets
 warmup re-adapt the dense metric starting from the Laplace one instead of
 freezing it. `tests/test_flagship.py` runs the full production version.
 
+With `precondition_adapt_mass=True` each chain estimates its own dense metric
+from the last adaptation window (50 draws at `n_warmup=200`), so four chains
+end warmup with four noisy metrics and the slowest chain sets the fit's cost.
+`warmup_metric='pooled'` (opt-in) adds a second stage: the draws of that last
+window are pooled over chains into one regularized covariance, and every
+chain restarts from its warmup position with that one
+metric frozen for `warmup_stage2_draws` of step-size warmup before the
+production draws (`warmup_stage2_adapt=True` re-adapts the mass matrix in
+stage 2, which re-noises it per chain). The
+result's metadata records both stages' leapfrog steps and each chain's
+metric mismatch against the pooled one; `continue_sampling` extends the
+stage-2 chains.
+
 ### Initialization
 
 Everything before the first NUTS step (optimizer starts, MAP, Laplace metric,

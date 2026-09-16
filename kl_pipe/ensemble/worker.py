@@ -555,6 +555,9 @@ def _run_fit_attempt(
         max_tree_depth=spec.max_tree_depth,
         chain_init=spec.chain_init,
         chain_init_max_margin=spec.chain_init_max_margin,
+        warmup_metric=spec.warmup_metric,
+        warmup_stage2_draws=spec.warmup_stage2_draws,
+        warmup_stage2_adapt=spec.warmup_stage2_adapt,
         seed=sampler_seed,
     )
 
@@ -698,6 +701,13 @@ def _summary_row(
         'divergence_rate': float(diag.get('divergence_rate', np.nan)),
         'mean_accept_prob': float(diag.get('mean_accept_prob', np.nan)),
         'num_steps_total': float(np.sum(diag.get('num_steps', np.nan))),
+        # two-stage warmup columns (-1 / nan on the single-stage path)
+        'warmup_metric': str(result.metadata.get('warmup_metric', 'adapted')),
+        'warmup_stage1_steps': int(result.metadata.get('warmup_stage1_steps', -1)),
+        'warmup_stage2_steps': int(result.metadata.get('warmup_stage2_steps', -1)),
+        'warmup_chain_metric_mismatch_max': float(
+            max(result.metadata.get('warmup_chain_metric_mismatch', [np.nan]))
+        ),
         'converged': bool(result.converged),
         'chain_method': str(diag.get('chain_method', '')),
         'n_map_starts_converged': (

@@ -1148,6 +1148,12 @@ class EnsembleSpec:
     # chain_init_max_margin nats of the MAP)
     chain_init: str = 'map_jitter'
     chain_init_max_margin: float = 20.0
+    # two-stage warmup (NumpyroSamplerConfig.warmup_*): 'adapted' is the
+    # single-stage path; 'pooled' pools the last mass-matrix window over
+    # chains and restarts every chain from that one metric
+    warmup_metric: str = 'adapted'
+    warmup_stage2_draws: int = 50
+    warmup_stage2_adapt: bool = False
 
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
@@ -1195,6 +1201,22 @@ class EnsembleSpec:
             raise ValueError(
                 f"fit.map_moment_starts must be a boolean, got {self.map_moment_starts!r}"
             )
+        if self.warmup_metric not in ('adapted', 'pooled'):
+            raise ValueError(
+                "fit.warmup_metric must be 'adapted' or 'pooled', got "
+                f"{self.warmup_metric!r}"
+            )
+        if self.warmup_metric == 'pooled' and not (
+            self.precondition == 'laplace' and self.adapt_mass
+        ):
+            raise ValueError(
+                "fit.warmup_metric: pooled requires fit.precondition: laplace and "
+                "fit.adapt_mass: true"
+            )
+        if not isinstance(self.warmup_stage2_adapt, bool):
+            raise ValueError(
+                f"fit.warmup_stage2_adapt must be a boolean, got {self.warmup_stage2_adapt!r}"
+            )
         if not isinstance(self.map_bounded, bool):
             raise ValueError(
                 f"fit.map_bounded must be a boolean, got {self.map_bounded!r}"
@@ -1202,6 +1224,7 @@ class EnsembleSpec:
         for name, value, low in (
             ('map_polish_steps', self.map_polish_steps, 0),
             ('map_polish_basins', self.map_polish_basins, 1),
+            ('warmup_stage2_draws', self.warmup_stage2_draws, 1),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < low:
                 raise ValueError(f"fit.{name} must be an int >= {low}, got {value!r}")
@@ -1479,6 +1502,9 @@ class EnsembleSpec:
                 'eig_floor': self.eig_floor,
                 'chain_init': self.chain_init,
                 'chain_init_max_margin': self.chain_init_max_margin,
+                'warmup_metric': self.warmup_metric,
+                'warmup_stage2_draws': self.warmup_stage2_draws,
+                'warmup_stage2_adapt': self.warmup_stage2_adapt,
                 'escalation': {
                     'enabled': esc.enabled,
                     'rhat_max': esc.rhat_max,
@@ -1737,6 +1763,9 @@ class EnsembleSpec:
                 'eig_floor',
                 'chain_init',
                 'chain_init_max_margin',
+                'warmup_metric',
+                'warmup_stage2_draws',
+                'warmup_stage2_adapt',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1813,6 +1842,11 @@ class EnsembleSpec:
             ),
             chain_init=str(fit.get('chain_init', 'map_jitter')),
             chain_init_max_margin=float(fit.get('chain_init_max_margin', 20.0)),
+            warmup_metric=str(fit.get('warmup_metric', 'adapted')),
+            warmup_stage2_draws=_require_yaml_int(
+                fit, 'warmup_stage2_draws', 50, f"{path}:fit"
+            ),
+            warmup_stage2_adapt=fit.get('warmup_stage2_adapt', False),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,

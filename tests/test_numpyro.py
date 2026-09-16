@@ -1395,6 +1395,110 @@ class TestCircularPriorEquivalence:
         assert abs(float(full.log_posterior(jnp.asarray(flipped))) - lp0) > 10.0
 
 
+class TestPooledWarmupMetric:
+    """Two-stage pooled-metric warmup (opt-in, warmup_metric='pooled')."""
+
+    def test_config_validation(self):
+        base = dict(precondition='laplace', precondition_adapt_mass=True)
+        assert NumpyroSamplerConfig().warmup_metric == 'adapted'
+        cfg = NumpyroSamplerConfig(warmup_metric='pooled', **base)
+        assert cfg.warmup_stage2_draws == 50
+        assert cfg.warmup_stage2_adapt is False
+        with pytest.raises(ValueError, match='warmup_metric'):
+            NumpyroSamplerConfig(warmup_metric='mean', **base)
+        with pytest.raises(ValueError, match='precondition_adapt_mass'):
+            NumpyroSamplerConfig(warmup_metric='pooled', precondition='laplace')
+        with pytest.raises(ValueError, match='precondition_adapt_mass'):
+            NumpyroSamplerConfig(warmup_metric='pooled')
+        for bad in (0, -5, 2.0, True):
+            with pytest.raises(ValueError, match='stage2_draws'):
+                NumpyroSamplerConfig(
+                    warmup_metric='pooled', warmup_stage2_draws=bad, **base
+                )
+        with pytest.raises(ValueError, match='stage2_adapt'):
+            NumpyroSamplerConfig(
+                warmup_metric='pooled', warmup_stage2_adapt='yes', **base
+            )
+
+    def test_pooled_window_metric(self):
+        from kl_pipe.sampling.numpyro import pooled_window_metric
+
+        rng = np.random.default_rng(0)
+        cov = np.array([[2.0, 0.5], [0.5, 1.0]])
+        # 4 chains x 200 draws of a known covariance; the last mass window of
+        # numpyro's n_warmup=200 schedule is draws [100, 150)
+        draws = rng.multivariate_normal(np.zeros(2), cov, size=(4, 200))
+        metric, window = pooled_window_metric(draws, 200)
+        assert window == (100, 150)
+        n = 4 * 50
+        expected = (n / (n + 5)) * np.cov(
+            draws[:, 100:150].reshape(-1, 2), rowvar=False
+        ) + 1e-3 * (5 / (n + 5)) * np.eye(2)
+        assert np.allclose(metric, expected)
+        assert np.allclose(metric, metric.T)
+        # pooling over 200 draws recovers the covariance to sampling accuracy
+        assert np.abs(metric - cov).max() < 0.4
+        with pytest.raises(ValueError, match='no mass-matrix window'):
+            pooled_window_metric(draws[:, :10], 10)
+        with pytest.raises(ValueError, match='shape'):
+            pooled_window_metric(draws, 150)
+
+    def test_pooled_two_stage_run_and_continuation(self, simple_velocity_task):
+        task, true_pars = simple_velocity_task
+        base = dict(
+            n_samples=200,
+            n_warmup=150,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=5,
+            progress=False,
+            precondition='laplace',
+            precondition_unconstrained=True,
+            precondition_adapt_mass=True,
+            n_map_starts=3,
+        )
+        ref = build_sampler('numpyro', task, NumpyroSamplerConfig(**base)).run()
+        sampler = build_sampler(
+            task=task,
+            name='numpyro',
+            config=NumpyroSamplerConfig(warmup_metric='pooled', **base),
+        )
+        res = sampler.run()
+        n = len(task.sampled_names)
+        assert res.samples.shape == (2 * 200, n)
+        meta = res.metadata
+        assert meta['warmup_metric'] == 'pooled'
+        # n_warmup 150: windows (0, 74) (75, 99) (100, 149); the last mass window is [75, 100)
+        assert meta['warmup_pooled_window'] == [75, 100]
+        assert meta['warmup_stage1_steps'] > 0 and meta['warmup_stage2_steps'] > 0
+        assert (
+            meta['warmup_stage2_draws'] == 50 and meta['warmup_stage2_adapt'] is False
+        )
+        assert len(meta['warmup_chain_metric_mismatch']) == 2
+        assert all(m >= 1.0 for m in meta['warmup_chain_metric_mismatch'])
+        pooled = res.diagnostics['warmup_pooled_inverse_mass_matrix']
+        assert pooled.shape == (n, n)
+        assert np.allclose(pooled, pooled.T)
+        assert np.linalg.eigvalsh(pooled).min() > 0
+        assert 'adapted_inverse_mass_matrix' in res.diagnostics
+        assert max(res.get_rhat().values()) < 1.1
+        # same posterior as the single-stage run: means agree within the
+        # combined Monte Carlo error (4 sigma_mc; sampling noise, not a
+        # tolerance claim)
+        ess_ref = np.array([ref.diagnostics['ess'][k] for k in task.sampled_names])
+        ess_res = np.array([res.diagnostics['ess'][k] for k in task.sampled_names])
+        se = np.sqrt(ref.samples.var(0) / ess_ref + res.samples.var(0) / ess_res)
+        assert np.all(np.abs(res.samples.mean(0) - ref.samples.mean(0)) < 4 * se)
+        # the stage-2 chains carry the warm state for continuation
+        more = sampler.continue_sampling(50)
+        assert more.samples.shape == (2 * 250, n)
+        assert more.metadata['warmup_metric'] == 'pooled'
+        assert more.metadata['continuations'] == 1
+        # the single-stage path records no stage columns
+        assert 'warmup_stage1_steps' not in ref.metadata
+        assert ref.metadata['warmup_metric'] == 'adapted'
+
+
 class TestContinueSampling:
     def test_continuation_extends_chains_without_rewarmup(self, simple_velocity_task):
         task, true_pars = simple_velocity_task

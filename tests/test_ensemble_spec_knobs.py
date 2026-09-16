@@ -95,3 +95,48 @@ class TestGateAndOrder:
         assert order == ['d', 'b', 'c', 'e', 'a']
         with pytest.raises(ValueError, match='claim_order'):
             claim_order_index(man, 'random')
+
+
+class TestWarmupMetric:
+    def test_default_and_parse(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        assert spec.warmup_metric == 'adapted'
+        assert spec.warmup_stage2_draws == 50
+        assert spec.warmup_stage2_adapt is False
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit'].update(
+            {
+                'precondition': 'laplace',
+                'adapt_mass': True,
+                'warmup_metric': 'pooled',
+                'warmup_stage2_draws': 100,
+                'warmup_stage2_adapt': True,
+            }
+        )
+        spec2 = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        assert spec2.warmup_metric == 'pooled'
+        assert spec2.warmup_stage2_draws == 100
+        assert spec2.warmup_stage2_adapt is True
+        fit = spec2.resolve_defaults(d)['fit']
+        assert fit['warmup_metric'] == 'pooled'
+        assert fit['warmup_stage2_draws'] == 100
+        assert fit['warmup_stage2_adapt'] is True
+        resolved_default = spec.resolve_defaults(yaml.safe_load(DEV_SPEC.read_text()))
+        assert resolved_default['fit']['warmup_metric'] == 'adapted'
+
+    def test_validation(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        with pytest.raises(ValueError, match='warmup_metric'):
+            dataclasses.replace(spec, warmup_metric='mean')
+        with pytest.raises(ValueError, match='adapt_mass'):
+            dataclasses.replace(
+                spec, warmup_metric='pooled', precondition='laplace', adapt_mass=False
+            )
+        with pytest.raises(ValueError, match='warmup_stage2_draws'):
+            dataclasses.replace(spec, warmup_stage2_draws=0)
+        with pytest.raises(ValueError, match='warmup_stage2_adapt'):
+            dataclasses.replace(spec, warmup_stage2_adapt='no')
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit']['warmup_metrics'] = 'pooled'
+        with pytest.raises(ValueError):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
