@@ -2246,6 +2246,189 @@ def _section_headline(ok: pd.DataFrame) -> str:
     )
 
 
+# ==============================================================================
+# vcirc constraint beyond the TF prior
+# ==============================================================================
+
+VCIRC_PRIOR_INFORMATIVE = (
+    0.8  # posterior/prior width ratio below which the data constrain vcirc
+)
+
+
+def vcirc_prior_table(ok: pd.DataFrame) -> pd.DataFrame:
+    """Posterior vs prior width of vcirc per cos i subset.
+
+    The vcirc fit prior is log-normal with width ``pop.prior_vcirc_sigma_dex``;
+    the posterior width in dex is ``std / (mean ln 10)``. A ratio near 1 means
+    the kinematics add nothing to vcirc and the inclination (hence the shear)
+    is set by the prior width.
+    """
+    need = ('post.vel.vcirc.mean', 'post.vel.vcirc.std', 'pop.prior_vcirc_sigma_dex')
+    if any(c not in ok for c in need):
+        raise KeyError('vcirc posterior or prior columns missing')
+    rows = []
+    for label, sub in _cosi_subsets(ok):
+        post_dex = sub['post.vel.vcirc.std'] / (sub['post.vel.vcirc.mean'] * np.log(10))
+        ratio = post_dex / sub['pop.prior_vcirc_sigma_dex']
+        row = {
+            'subset': label,
+            'n': int(len(sub)),
+            'prior_sigma_dex': float(sub['pop.prior_vcirc_sigma_dex'].median()),
+            'post_sigma_dex_med': float(post_dex.median()),
+            'ratio_med': float(ratio.median()),
+            'ratio_p10': float(ratio.quantile(0.1)),
+            f'frac_ratio_lt_{VCIRC_PRIOR_INFORMATIVE}': float(
+                (ratio < VCIRC_PRIOR_INFORMATIVE).mean()
+            ),
+        }
+        for p, name in (
+            ('cosi', 'sigma_cosi_med'),
+            ('theta_int', 'sigma_theta_med'),
+            ('g_plus', 'sigma_gplus_med'),
+            ('g_cross', 'sigma_gcross_med'),
+        ):
+            if f'post.{p}.std' in sub:
+                row[name] = float(sub[f'post.{p}.std'].median())
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _vcirc_ratio(ok: pd.DataFrame) -> np.ndarray:
+    post_dex = ok['post.vel.vcirc.std'] / (ok['post.vel.vcirc.mean'] * np.log(10))
+    return (post_dex / ok['pop.prior_vcirc_sigma_dex']).values.astype(float)
+
+
+def _plot_vcirc_ratio(ok: pd.DataFrame, xcol: str, xlabel: str, logx: bool) -> str:
+    import matplotlib.pyplot as plt
+
+    if xcol not in ok:
+        raise KeyError(f'{xcol} missing')
+    x = ok[xcol].values.astype(float)
+    ratio = _vcirc_ratio(ok)
+    fig, ax = plt.subplots(figsize=(5.2, 3.4))
+    bins = _cosi_bin_index(ok['truth.cosi'])
+    for i, (lo, hi) in enumerate(COSI_BINS):
+        m = bins == i
+        if m.any():
+            ax.scatter(
+                x[m],
+                ratio[m],
+                s=12,
+                color=C_SEQ[i],
+                label=f'true cos i [{lo:.1f}, {min(hi, 1.0):.1f})',
+            )
+    bx, by, be = _binned_median(x, ratio)
+    ax.errorbar(
+        bx, by, yerr=be, fmt='o-', color=C_INK, ms=5, lw=1.4, label='binned median'
+    )
+    ax.axhline(1.0, color=C_ORANGE, lw=1.2, ls='--', label='prior only (ratio 1)')
+    ax.axhline(VCIRC_PRIOR_INFORMATIVE, color=C_TEXT2, lw=0.8, ls=':')
+    if logx:
+        ax.set_xscale('log')
+    ax.set_xlabel(xlabel, fontsize=8)
+    ax.set_ylabel('sigma(vcirc) posterior / prior', fontsize=8)
+    ax.set_ylim(0, 1.15)
+    _style_axes(ax)
+    ax.legend(fontsize=7, frameon=False, loc='lower left')
+    fig.tight_layout()
+    return _img_from_fig(
+        fig,
+        f'vcirc posterior/prior width ratio vs {xlabel}',
+        'Ratio of the posterior width of vcirc (dex) to the TFR-implied fit prior '
+        'width (pop.prior_vcirc_sigma_dex). 1 = the kinematics add nothing to vcirc; '
+        f'the dotted line at {VCIRC_PRIOR_INFORMATIVE} marks the informative threshold '
+        'used in the table. Error bars: 1.253 MAD / sqrt(n) per quantile bin.',
+    )
+
+
+def _plot_gplus_vs_cosi_sigma(okd: pd.DataFrame) -> str:
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import NullFormatter, ScalarFormatter
+    from scipy.stats import spearmanr
+
+    need = ('post.g_plus.std', 'post.cosi.std', 'line_snr')
+    if any(c not in okd for c in need):
+        raise KeyError('g+ / cos i sigma or line_snr missing')
+    sx = okd['post.cosi.std'].values.astype(float)
+    sy = okd['post.g_plus.std'].values.astype(float)
+    snr = okd['line_snr'].values.astype(float)
+    rho = spearmanr(sx, sy).statistic
+    fig, axes = plt.subplots(1, 2, figsize=(8.5, 3.4))
+    sc = axes[0].scatter(
+        sx, sy, c=np.log10(snr), s=12, cmap='Blues', vmin=np.log10(snr).min()
+    )
+    cb = fig.colorbar(sc, ax=axes[0])
+    cb.set_label('log10 line SNR (per roll)', fontsize=8)
+    cb.ax.tick_params(labelsize=7)
+    axes[0].set_xlabel('sigma cos i (posterior)', fontsize=8)
+    axes[0].set_ylabel('sigma g+ (posterior)', fontsize=8)
+    axes[0].set_title(f'Spearman rho {rho:.2f}', fontsize=8)
+    _style_axes(axes[0])
+    bins = _cosi_bin_index(okd['truth.cosi'])
+    for i, (lo, hi) in enumerate(COSI_BINS):
+        m = bins == i
+        if m.sum() >= 6:
+            bx, by, be = _binned_median(snr[m], sx[m], n_bins=4)
+            axes[1].errorbar(
+                bx,
+                by,
+                yerr=be,
+                fmt='o-',
+                color=C_SEQ[i],
+                ms=4,
+                lw=1.2,
+                label=f'true cos i [{lo:.1f}, {min(hi, 1.0):.1f})',
+            )
+    axes[1].set_xscale('log')
+    axes[1].xaxis.set_minor_formatter(NullFormatter())
+    axes[1].xaxis.set_major_formatter(ScalarFormatter())
+    axes[1].set_xlabel('line SNR (per roll)', fontsize=8)
+    axes[1].set_ylabel('sigma cos i, binned median', fontsize=8)
+    _style_axes(axes[1])
+    axes[1].legend(fontsize=7, frameon=False)
+    fig.tight_layout()
+    return _img_from_fig(
+        fig,
+        'Shear noise tracks the inclination noise',
+        'Left: per-fit posterior sigma of the disk-frame g+ against the posterior '
+        'sigma of cos i, coloured by per-roll line SNR. Right: sigma cos i vs line SNR '
+        'per true cos i bin. With vcirc pinned by the prior, cos i comes from '
+        'v sin i / vcirc, so its width (and the shear width) is set by the prior '
+        'width and the line SNR.',
+    )
+
+
+def _section_vcirc_prior(ok: pd.DataFrame, spec: Optional[dict]) -> str:
+    if len(ok) == 0:
+        return _na('no succeeded fits yet')
+    table = vcirc_prior_table(with_derived_shear(ok))
+    out = []
+    pop = (spec or {}).get('population', {}) or {}
+    tfr = (pop.get('paint', {}) or {}).get('tfr', {}) or {}
+    mass_err = (pop.get('priors', {}) or {}).get('logm_obs_scatter_dex')
+    if tfr and mass_err is not None:
+        s_tfr = float(tfr['scatter_dex'])
+        s_mass = float(mass_err) / float(tfr['slope'])
+        out.append(
+            f'<p>Fit prior width {np.hypot(s_tfr, s_mass):.3f} dex = TFR scatter '
+            f'{s_tfr:.3f} dex (+) mass error {float(mass_err):.2f} dex / slope '
+            f'{float(tfr["slope"]):.2f} = {s_mass:.3f} dex, the same for every galaxy.</p>'
+        )
+    allrow = table.iloc[0]
+    out.append(
+        f'<p>Median vcirc posterior/prior width ratio {allrow["ratio_med"]:.2f}; '
+        f'{100 * allrow[f"frac_ratio_lt_{VCIRC_PRIOR_INFORMATIVE}"]:.0f}% of fits '
+        f'below {VCIRC_PRIOR_INFORMATIVE}. "line SNR" here is the per-roll (single '
+        'pass) matched-filter line SNR from the manifest, not the coadded total used '
+        'for selection.</p>'
+    )
+    out.append(_table(table))
+    out.append(_guard(_plot_vcirc_ratio, ok, 'line_snr', 'line SNR (per roll)', True))
+    out.append(_guard(_plot_vcirc_ratio, ok, 'truth.cosi', 'true cos i', False))
+    out.append(_guard(_plot_gplus_vs_cosi_sigma, with_derived_shear(ok)))
+    return ''.join(out)
+
+
 def _section_notes(run_dir: Path) -> str:
     p = run_dir / 'diagnostics' / 'notes.md'
     if not p.exists():
@@ -2277,6 +2460,7 @@ _SECTIONS = (
     ('flags', 'Flags'),
     ('science', 'Early science'),
     ('headline', 'Headline science (in progress)'),
+    ('vcirc_prior', 'vcirc constraint beyond the TF prior'),
     ('plots', 'Plots'),
     ('notes', 'Notes'),
     ('glossary', 'Glossary'),
@@ -2353,6 +2537,7 @@ def build_dashboard(run_dir: Path, open_browser: bool = False) -> Path:
         'flags': _guard(_section_flags, results, status, commits, repo_url),
         'science': _guard(_section_science, ok, chain),
         'headline': _guard(_section_headline, ok),
+        'vcirc_prior': _guard(_section_vcirc_prior, ok, spec),
         'plots': _guard(_section_plots, run_dir, ok, chain),
         'notes': _guard(_section_notes, run_dir),
         'glossary': _guard(_section_glossary),

@@ -3,6 +3,7 @@
 import json
 import time
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,6 +16,7 @@ from kl_pipe.ensemble.dashboard import (
     build_dashboard,
     speed_cell_classes,
     speed_table,
+    vcirc_prior_table,
 )
 from test_bench import make_run_dir
 
@@ -24,6 +26,7 @@ SECTIONS = (
     'Failures and escalations',
     'Flags',
     'Early science',
+    'vcirc constraint beyond the TF prior',
     'Plots',
     'Notes',
     'Glossary',
@@ -257,3 +260,25 @@ def test_speed_cell_classes_relative_to_run():
     assert cls['fits_per_node_h'](8.0, rows[3]) == 'crit'
     assert cls['esc_%'](5.0, rows[1]) == 'good'
     assert cls['esc_%'](30.0, rows[3]) == 'crit'
+
+
+def test_vcirc_prior_table_ratio_and_fraction():
+    ln10 = np.log(10)
+    ok = pd.DataFrame(
+        {
+            'truth.cosi': [0.1, 0.2, 0.5, 0.8],
+            'post.vel.vcirc.mean': [200.0, 200.0, 200.0, 200.0],
+            # posterior widths of 0.05, 0.09, 0.10 and 0.10 dex against a 0.10 dex prior
+            'post.vel.vcirc.std': [200.0 * ln10 * d for d in (0.05, 0.09, 0.10, 0.10)],
+            'pop.prior_vcirc_sigma_dex': [0.1, 0.1, 0.1, 0.1],
+            'post.cosi.std': [0.04, 0.05, 0.06, 0.1],
+        }
+    )
+    t = vcirc_prior_table(ok).set_index('subset')
+    assert t.loc['all', 'n'] == 4
+    assert t.loc['all', 'ratio_med'] == pytest.approx(0.95)
+    assert t.loc['all', 'frac_ratio_lt_0.8'] == pytest.approx(0.25)
+    assert t.loc['cosi [0.0, 0.3)', 'ratio_med'] == pytest.approx(0.7)
+    assert t.loc['cosi [0.7, 1.0)', 'sigma_cosi_med'] == pytest.approx(0.1)
+    with pytest.raises(KeyError, match='vcirc'):
+        vcirc_prior_table(ok.drop(columns=['pop.prior_vcirc_sigma_dex']))
