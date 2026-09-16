@@ -68,6 +68,10 @@ td:first-child, th:first-child { text-align: left; }
 tr:hover td { background: #f6f5f2; }
 .good { background: var(--good-bg); } .warn { background: var(--warn-bg); }
 .crit { background: var(--crit-bg); font-weight: 600; }
+details > summary { cursor: pointer; list-style: none; }
+details > summary::before { content: '\\25BE'; display: inline-block; width: 1em; color: var(--ink2); }
+details:not([open]) > summary::before { content: '\\25B8'; }
+details > summary h2 { display: inline; }
 .na { color: var(--ink2); font-style: italic; }
 .bad { color: #a12b2b; font-weight: 600; }
 img { max-width: 100%; margin: 0.4em 0 0.2em; border: 1px solid var(--line); background: #fff; }
@@ -265,6 +269,15 @@ def _read_spec(run_dir: Path) -> Tuple[Optional[dict], str]:
     return None, NOT_AVAILABLE
 
 
+def _workers_per_node(spec: Optional[dict]) -> Optional[int]:
+    """dispatch.workers_per_node from the resolved spec, None when absent."""
+    try:
+        v = (spec or {}).get('dispatch', {}).get('workers_per_node')
+    except AttributeError:
+        return None
+    return int(v) if v else None
+
+
 def _expansion_commit(run_dir: Path) -> Optional[str]:
     exp = run_dir / 'provenance' / 'expansion.json'
     if not exp.exists():
@@ -381,11 +394,11 @@ _FORMAT_RULES: Tuple[Tuple[str, Callable[[float], str]], ...] = (
         lambda v: f'{v:.3f}',
     ),
     (
-        r'^(min_ess|ess_.*|first_attempt_min_ess|final_min_ess|shear_ess|min_shear_ess|num_steps_total|steps.*|n|n_.*|claimed|done|failed|unfinished|escalation_n_blocks|n_data)$',
+        r'^(min_ess|ess_.*|first_attempt_min_ess|final_min_ess|shear_ess|shear_ess_med|min_shear_ess|num_steps_total|steps.*|n|n_.*|claimed|done|failed|unfinished|escalation_n_blocks|n_data)$',
         lambda v: f'{v:.0f}',
     ),
     (
-        r'^(wall_min|wall_med_min|fit_wall_min|span_h|fits_per_node_hr)$',
+        r'^(wall_min|wall_med_min|wall_mean_min|wall_p90_min|fit_wall_min|span_h|fits_per_node_hr|fits_per_node_h|fits_per_worker_h|worker_h|steps_med_k)$',
         lambda v: f'{v:.1f}',
     ),
     (r'^(sigma_med|post\.g[12]\.std|shear_sigma.*)$', lambda v: f'{v:.3f}'),
@@ -395,6 +408,8 @@ _FORMAT_RULES: Tuple[Tuple[str, Callable[[float], str]], ...] = (
     ),
     (r'^(line_snr|.*snr.*)$', lambda v: f'{v:.0f}'),
     (r'^(divergence_rate|first_attempt_divergence_rate)$', lambda v: f'{v:.4f}'),
+    (r'^ms_per_step$', lambda v: f'{v:.2f}'),
+    (r'^esc_%$', lambda v: f'{v:.0f}'),
 )
 
 
@@ -487,6 +502,7 @@ def _table(
     df: pd.DataFrame,
     max_rows: int = 60,
     raw_html_cols: Tuple[str, ...] = (),
+    cell_classes: Optional[Dict[str, Callable]] = None,
 ) -> str:
     if df is None or len(df) == 0:
         return _na('no rows')
@@ -499,7 +515,11 @@ def _table(
             if c in raw_html_cols:
                 cells.append(f'<td>{v}</td>')
                 continue
-            cls = _cell_class(c, v, row)
+            cls = (
+                cell_classes[c](v, row)
+                if cell_classes and c in cell_classes
+                else _cell_class(c, v, row)
+            )
             attr = f' class="{cls}"' if cls else ''
             cells.append(f'<td{attr}>{_fmt(c, v)}</td>')
         body.append('<tr>' + ''.join(cells) + '</tr>')
@@ -698,6 +718,262 @@ def _with_commit(
             _commit_html(*_job_commit(commits, j), repo_url=repo_url) for j in df['job']
         ]
     return df
+
+
+SPEED_COSI_BINS = ((0.0, 0.15), (0.15, 0.3), (0.3, 0.5), (0.5, 0.7), (0.7, 1.0001))
+
+
+def speed_table(
+    ok: pd.DataFrame, workers_per_node: Optional[int] = None
+) -> pd.DataFrame:
+    """Per-class throughput of succeeded fits: one row per truth cos i bin, per
+    line-SNR tercile, per escalation state, plus the whole run.
+
+    ``fits_per_worker_h`` is the class's fit count over its summed fit
+    wallclock; ``fits_per_node_h`` multiplies by ``workers_per_node`` (the
+    rate a node running only that class would sustain). Shares are of the
+    whole run's fits and worker-hours.
+    """
+    if len(ok) == 0 or 'fit_wallclock_s' not in ok.columns:
+        return pd.DataFrame()
+    wall_h = ok['fit_wallclock_s'] / 3600.0
+    total_fits, total_wall_h = len(ok), float(wall_h.sum())
+    groups: List[Tuple[str, str, np.ndarray]] = [('all', 'all', np.ones(len(ok), bool))]
+    if 'truth.cosi' in ok.columns:
+        cosi = ok['truth.cosi'].values.astype(float)
+        for lo, hi in SPEED_COSI_BINS:
+            groups.append(
+                (
+                    'truth cos i',
+                    f'[{lo:.2f}, {min(hi, 1.0):.2f})',
+                    (cosi >= lo) & (cosi < hi),
+                )
+            )
+    snr_col = 'line_snr' if 'line_snr' in ok.columns else None
+    if snr_col is not None and ok[snr_col].notna().sum() >= 3:
+        snr = ok[snr_col].values.astype(float)
+        edges = np.nanquantile(snr, [0.0, 1 / 3, 2 / 3, 1.0])
+        for k in range(3):
+            hi_inclusive = k == 2
+            m = (snr >= edges[k]) & (
+                (snr <= edges[k + 1]) if hi_inclusive else (snr < edges[k + 1])
+            )
+            groups.append(
+                (
+                    'line SNR (per roll) tercile',
+                    f'[{edges[k]:.0f}, {edges[k + 1]:.0f}{"]" if hi_inclusive else ")"}',
+                    m,
+                )
+            )
+    if 'escalated' in ok.columns:
+        esc = ok['escalated'].fillna(False).astype(bool).values
+        groups.append(('escalation', 'first pass', ~esc))
+        groups.append(('escalation', 'escalated', esc))
+    fp_fail = None
+    if {'first_attempt_max_rhat', 'first_attempt_min_ess'} <= set(ok.columns):
+        fp_fail = (ok['first_attempt_max_rhat'] > 1.05) | (
+            ok['first_attempt_min_ess'] < 50
+        )
+    rows = []
+    for by, label, m in groups:
+        n = int(m.sum())
+        if n == 0:
+            continue
+        w = wall_h[m]
+        sub = ok[m]
+        row = {
+            'by': by,
+            'bin': label,
+            'n': n,
+            'frac_fits': n / total_fits,
+            'worker_h': float(w.sum()),
+            'frac_worker_h': (
+                float(w.sum()) / total_wall_h if total_wall_h > 0 else np.nan
+            ),
+            'fits_per_worker_h': n / float(w.sum()) if w.sum() > 0 else np.nan,
+            'fits_per_node_h': (
+                workers_per_node * n / float(w.sum())
+                if workers_per_node and w.sum() > 0
+                else np.nan
+            ),
+            'esc_%': (
+                100.0 * float(sub['escalated'].fillna(False).astype(bool).mean())
+                if 'escalated' in sub.columns
+                else np.nan
+            ),
+            'wall_med_min': float(np.median(w)) * 60.0,
+            'wall_mean_min': float(np.mean(w)) * 60.0,
+            'wall_p90_min': float(np.quantile(w, 0.9)) * 60.0,
+        }
+        if 'num_steps_total' in sub.columns:
+            steps = sub['num_steps_total'].astype(float)
+            row['steps_med_k'] = float(np.median(steps)) / 1e3
+            row['ms_per_step'] = float(np.median(1e3 * sub['fit_wallclock_s'] / steps))
+        if fp_fail is not None:
+            row['fp_fail_frac'] = float(fp_fail[m].mean())
+        if {'ess_g1', 'ess_g2'} <= set(sub.columns):
+            row['shear_ess_med'] = float(
+                np.median(np.minimum(sub['ess_g1'], sub['ess_g2']))
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _plot_speed(ok: pd.DataFrame) -> str:
+    """Wall and leapfrog steps per fit against truth cos i and line SNR, and the
+    fit share versus worker-hour share per cos i bin."""
+    import matplotlib.pyplot as plt
+
+    esc = (
+        ok['escalated'].fillna(False).astype(bool).values
+        if 'escalated' in ok
+        else np.zeros(len(ok), bool)
+    )
+    wall_min = ok['fit_wallclock_s'].values / 60.0
+    specs = [
+        (
+            wall_min,
+            'truth.cosi',
+            'truth cos i',
+            'fit wall (min)',
+            False,
+            True,
+            True,
+            None,
+        )
+    ]
+    if 'num_steps_total' in ok.columns:
+        specs.append(
+            (
+                ok['num_steps_total'].values / 1e3,
+                'truth.cosi',
+                'truth cos i',
+                'leapfrog steps (k)',
+                False,
+                True,
+                True,
+                None,
+            )
+        )
+    if 'line_snr' in ok.columns:
+        specs.append(
+            (
+                wall_min,
+                'line_snr',
+                'line SNR (per roll)',
+                'fit wall (min)',
+                True,
+                True,
+                True,
+                None,
+            )
+        )
+    fig = _small_multiples(ok, specs, esc, ncols=len(specs))
+    for ax, (y, xcol, *_rest) in zip(fig.axes, specs):
+        x = ok[xcol].values.astype(float)
+        good = (
+            np.isfinite(x)
+            & np.isfinite(np.asarray(y, float))
+            & (np.asarray(y, float) > 0)
+        )
+        if good.sum() >= 12:
+            xs, ys, es = _binned_median(x[good], np.asarray(y, float)[good])
+            ax.errorbar(
+                xs,
+                ys,
+                yerr=es,
+                color=C_INK,
+                marker='o',
+                ms=4,
+                lw=1.2,
+                zorder=5,
+                label='binned median',
+            )
+            ax.legend(fontsize=7, frameon=False)
+    html = _img_from_fig(
+        fig,
+        'Cost per fit vs galaxy properties',
+        'Wall and steps per succeeded fit (final attempt included); squares are escalated fits; black points are quantile-binned medians.',
+    )
+    if 'truth.cosi' not in ok.columns:
+        return html
+    t = speed_table(ok)
+    t = t[t['by'] == 'truth cos i']
+    if len(t) == 0:
+        return html
+    fig, ax = plt.subplots(figsize=(6.0, 3.0))
+    xs = np.arange(len(t))
+    ax.bar(xs - 0.2, t['frac_fits'], width=0.4, color=C_BLUE, label='share of fits')
+    ax.bar(
+        xs + 0.2,
+        t['frac_worker_h'],
+        width=0.4,
+        color=C_ORANGE,
+        label='share of worker-hours',
+    )
+    ax.set_xticks(xs)
+    ax.set_xticklabels(t['bin'], fontsize=8)
+    ax.set_xlabel('truth cos i bin', fontsize=8)
+    ax.set_ylabel('fraction of run', fontsize=8)
+    ax.legend(fontsize=7, frameon=False)
+    _style_axes(ax)
+    fig.tight_layout()
+    html += _img_from_fig(
+        fig,
+        'Where the worker-hours went',
+        'A bin whose worker-hour share exceeds its fit share is slower than the run average.',
+    )
+    return html
+
+
+def speed_cell_classes(t: pd.DataFrame) -> Dict[str, Callable]:
+    """Colour rules for the speed table: the fit rate green at or above 1.15x
+    the whole-run rate, red below 0.85x, yellow between; esc_% green at or
+    below the whole-run value, red above."""
+    if len(t) == 0:
+        return {}
+    ref = t[t['by'] == 'all'].iloc[0]
+
+    def rate(col):
+        def cls(v, row):
+            if row['by'] == 'all' or not np.isfinite(v) or not ref[col] > 0:
+                return ''
+            x = v / ref[col]
+            return 'good' if x >= 1.15 else ('crit' if x < 0.85 else 'warn')
+
+        return cls
+
+    def esc(v, row):
+        if row['by'] == 'all' or not np.isfinite(v) or not np.isfinite(ref['esc_%']):
+            return ''
+        return 'good' if v <= ref['esc_%'] else 'crit'
+
+    out = {'fits_per_worker_h': rate('fits_per_worker_h'), 'esc_%': esc}
+    if 'fits_per_node_h' in t.columns:
+        out['fits_per_node_h'] = rate('fits_per_node_h')
+    return out
+
+
+def _section_speed(ok: pd.DataFrame, workers_per_node: Optional[int]) -> str:
+    if len(ok) == 0 or 'fit_wallclock_s' not in ok.columns:
+        return _na('no succeeded fits with wallclock')
+    t = speed_table(ok, workers_per_node)
+    note = (
+        f'fits_per_node_h assumes {workers_per_node} packed workers per node (from the spec); '
+        if workers_per_node
+        else 'fits_per_node_h needs dispatch.workers_per_node in the spec; '
+    )
+    out = [
+        '<p>'
+        + note
+        + 'fits_per_worker_h is the class fit count over its summed fit wallclock, '
+        'so it is the rate a node would sustain on that class alone. Shares are of the whole run. '
+        'Colours: rate green at or above 1.15x the whole-run rate, red below 0.85x; '
+        'escalation % green at or below the whole-run value.</p>',
+        _table(t, max_rows=40, cell_classes=speed_cell_classes(t)),
+        _guard(_plot_speed, ok),
+    ]
+    return ''.join(out)
 
 
 def _section_failures(
@@ -1994,6 +2270,7 @@ def _section_glossary() -> str:
 
 _SECTIONS = (
     ('progress', 'Progress'),
+    ('speed', 'Speed by galaxy property'),
     ('failures', 'Failures and escalations'),
     ('gate', 'Convergence gate summary'),
     ('flags', 'Flags'),
@@ -2067,6 +2344,7 @@ def build_dashboard(run_dir: Path, open_browser: bool = False) -> Path:
         'progress': _guard(
             _section_progress, manifest, status, results, commits, repo_url
         ),
+        'speed': _guard(_section_speed, ok, _workers_per_node(spec)),
         'failures': _guard(
             _section_failures, run_dir, results, status, commits, repo_url
         ),
@@ -2087,7 +2365,10 @@ def build_dashboard(run_dir: Path, open_browser: bool = False) -> Path:
         f'commits {commit_line}<br>generated {time.strftime("%Y-%m-%d %H:%M:%S")}</p>',
     ]
     for key, title in _SECTIONS:
-        parts.append(f'<h2 id="{key}">{_esc(title)}</h2>{bodies[key]}')
+        parts.append(
+            f'<details open id="{key}"><summary><h2>{_esc(title)}</h2></summary>'
+            f'{bodies[key]}</details>'
+        )
     parts.append('</main></body></html>')
     out_dir = run_dir / 'diagnostics'
     out_dir.mkdir(exist_ok=True)

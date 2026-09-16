@@ -13,11 +13,14 @@ from kl_pipe.ensemble.dashboard import (
     _fmt,
     _repo_url,
     build_dashboard,
+    speed_cell_classes,
+    speed_table,
 )
 from tests.test_bench import make_run_dir
 
 SECTIONS = (
     'Progress',
+    'Speed by galaxy property',
     'Failures and escalations',
     'Flags',
     'Early science',
@@ -60,6 +63,7 @@ def test_dashboard_renders_minimal_run_dir(tmp_path):
     for heading in SECTIONS:
         assert f'>{heading}</h2>' in text
         assert f'href="#' in text
+    assert text.count('<details open') == text.count('</summary>')
     assert 'Escalated fits: 2 of 4' in text
     assert 'fits_per_node_hr' in text
     assert 'abcdef012' in text and '(inferred from job log)' in text
@@ -195,3 +199,61 @@ def test_chain_derived_stats_and_ranks(tmp_path):
     run2 = make_run_dir(tmp_path, name='no_chains')
     text2 = build_dashboard(run2).read_text()
     assert 'need a chains directory' in text2
+
+
+def test_speed_table_shares_and_rates():
+    ok = pd.DataFrame(
+        {
+            'fit_wallclock_s': [600.0, 600.0, 1800.0, 3600.0],
+            'truth.cosi': [0.05, 0.2, 0.4, 0.8],
+            'line_snr': [10.0, 20.0, 30.0, 40.0],
+            'escalated': [False, False, False, True],
+            'num_steps_total': [60e3, 60e3, 90e3, 180e3],
+            'first_attempt_max_rhat': [1.01, 1.02, 1.03, 1.2],
+            'first_attempt_min_ess': [200.0, 150.0, 90.0, 10.0],
+            'ess_g1': [300.0, 250.0, 100.0, 60.0],
+            'ess_g2': [280.0, 260.0, 120.0, 50.0],
+        }
+    )
+    t = speed_table(ok, workers_per_node=8).set_index(['by', 'bin'])
+    total = t.loc[('all', 'all')]
+    assert total['n'] == 4
+    assert abs(total['worker_h'] - (600 + 600 + 1800 + 3600) / 3600) < 1e-9
+    assert abs(total['fits_per_worker_h'] - 4 / total['worker_h']) < 1e-9
+    assert abs(total['fits_per_node_h'] - 8 * total['fits_per_worker_h']) < 1e-9
+    face = t.loc[('truth cos i', '[0.70, 1.00)')]
+    assert face['n'] == 1 and face['esc_%'] == 100.0 and face['fp_fail_frac'] == 1.0
+    assert (
+        list(t.columns).index('esc_%') == list(t.columns).index('fits_per_node_h') + 1
+    )
+    assert abs(face['frac_worker_h'] - 1.0 / total['worker_h']) < 1e-9
+    assert face['shear_ess_med'] == 50.0
+    cosi_rows = t.loc['truth cos i']
+    assert abs(cosi_rows['frac_fits'].sum() - 1.0) < 1e-9
+    assert abs(cosi_rows['frac_worker_h'].sum() - 1.0) < 1e-9
+    assert t.loc[('escalation', 'first pass')]['n'] == 3
+    assert speed_table(ok.iloc[:0]).empty
+    assert (
+        speed_table(ok).loc[0, 'fits_per_node_h']
+        != speed_table(ok).loc[0, 'fits_per_node_h']
+    )
+
+
+def test_speed_cell_classes_relative_to_run():
+    t = pd.DataFrame(
+        {
+            'by': ['all', 'truth cos i', 'truth cos i', 'truth cos i'],
+            'bin': ['all', 'a', 'b', 'c'],
+            'fits_per_worker_h': [2.0, 2.4, 2.0, 1.0],
+            'fits_per_node_h': [16.0, 19.2, 16.0, 8.0],
+            'esc_%': [10.0, 5.0, 10.0, 30.0],
+        }
+    )
+    cls = speed_cell_classes(t)
+    rows = [t.iloc[i] for i in range(4)]
+    assert cls['fits_per_node_h'](16.0, rows[0]) == ''
+    assert cls['fits_per_node_h'](19.2, rows[1]) == 'good'
+    assert cls['fits_per_node_h'](16.0, rows[2]) == 'warn'
+    assert cls['fits_per_node_h'](8.0, rows[3]) == 'crit'
+    assert cls['esc_%'](5.0, rows[1]) == 'good'
+    assert cls['esc_%'](30.0, rows[3]) == 'crit'
