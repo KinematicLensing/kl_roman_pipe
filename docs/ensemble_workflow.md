@@ -114,6 +114,13 @@ Key blocks:
   `map_moment_starts_ok`, `map_grad_norm`, `map_min_eigenvalue`,
   `map_polish_gain`, `precond_n_floored_eigenvalues`, `precond_eig_floor_mode`,
   `chain_init` record what the initialization did.
+- two-stage warmup knobs (`NumpyroSamplerConfig.warmup_*`, opt-in, requires
+  `precondition: laplace` + `adapt_mass: true`): `warmup_metric: adapted |
+  pooled` (default adapted = single-stage), `warmup_stage2_draws` (default 50),
+  `warmup_stage2_adapt` (default false = the pooled metric stays frozen for
+  the production draws; true re-adapts it per chain). Summary columns `warmup_metric`,
+  `warmup_stage1_steps`, `warmup_stage2_steps`,
+  `warmup_chain_metric_mismatch_max` (-1 / nan on the single-stage path).
 - `fit.escalation`: quality-gated retry. A first attempt that fails the gate
   (`max_rhat > rhat_max` = 1.05 or `min_ess < ess_min` = 50) is escalated
   once. `mode: restart` (default) reruns with `n_warmup`/`n_samples`

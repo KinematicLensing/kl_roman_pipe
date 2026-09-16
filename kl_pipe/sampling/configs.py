@@ -365,10 +365,45 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     # jittered) -- see kl_pipe.sampling.initialization.chain_inits.
     chain_init: str = 'map_jitter'
     chain_init_max_margin: float = 20.0
+    # Two-stage warmup for the adapt-mass preconditioned path (opt-in with
+    # warmup_metric='pooled'). Stage 1 is the standard adaptive warmup; the
+    # draws of its last mass-matrix window are pooled over chains into one
+    # regularized covariance (no Laplace admixture: blending the Laplace
+    # metric in lost on every prototype fit and is unsafe at prior-wall MAPs);
+    # stage 2 restarts every chain from its stage-1 position with that metric
+    # frozen, warmup_stage2_draws of step-size warmup (mass adaptation again
+    # only when warmup_stage2_adapt, which re-noises the metric per chain),
+    # then the production draws. 'adapted' is the single-stage path.
+    warmup_metric: str = 'adapted'
+    warmup_stage2_draws: int = 50
+    warmup_stage2_adapt: bool = False
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
             raise ValueError("target_accept_prob must be in (0, 1)")
+        if self.warmup_metric not in ('adapted', 'pooled'):
+            raise ValueError(
+                f"warmup_metric must be 'adapted' or 'pooled', got {self.warmup_metric!r}"
+            )
+        if self.warmup_metric == 'pooled' and not (
+            self.precondition == 'laplace' and self.precondition_adapt_mass
+        ):
+            raise ValueError(
+                "warmup_metric='pooled' requires precondition='laplace' and "
+                "precondition_adapt_mass=True (stage 1 is the adaptive warmup)"
+            )
+        if (
+            isinstance(self.warmup_stage2_draws, bool)
+            or not isinstance(self.warmup_stage2_draws, int)
+            or self.warmup_stage2_draws < 1
+        ):
+            raise ValueError(
+                f"warmup_stage2_draws must be an int >= 1, got {self.warmup_stage2_draws!r}"
+            )
+        if not isinstance(self.warmup_stage2_adapt, bool):
+            raise ValueError(
+                f"warmup_stage2_adapt must be a bool, got {self.warmup_stage2_adapt!r}"
+            )
         if self.precondition_unconstrained and self.precondition != 'laplace':
             raise ValueError(
                 "precondition_unconstrained requires precondition='laplace'"
