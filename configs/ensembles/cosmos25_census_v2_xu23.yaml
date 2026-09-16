@@ -1,0 +1,94 @@
+# Twin of cosmos25_census_v2 at the TFR assumptions of Xu et al. 2023 (MNRAS 519,
+# 2535; arXiv 2201.00739): intrinsic TFR scatter 0.049 dex (their Sec. 2.3, from
+# Reyes et al. 2011, i-band) and no photometric-mass error in the vcirc prior.
+# Xu et al. fold the scatter into a magnitude error together with a photometric
+# SNR of 40 (their Appendix B): sigma_M = sqrt((1.0857/40)^2 + (0.049/b)^2) with
+# b = 0.128 dex/mag gives 0.0491 dex, so 0.049 is the effective prior width.
+# The TFR normal is the first draw of each galaxy's paint stream, so the same
+# deviates scale to 0.049 dex: same galaxies, truths and noise draws as census
+# v2 up to a vcirc nudge below 0.03 dex. Purpose: the census at the scatter the
+# forecast paper assumed, for a like-for-like shear-noise comparison.
+run:
+  name: cosmos25_census_v2_xu23
+  version: 1
+  description: "COSMOS25 census v2 twin at the Xu et al. 2023 TFR assumptions: 0.049 dex intrinsic scatter, no photometric-mass error"
+  seed: 20260728
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    kind: cosmos25
+    download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
+    data_dir: data/cosmos2025/private
+  preprocess:
+    flux_variant: as_delivered
+    h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_total_min: 20.0
+    bulge_fraction_max: null
+    bulge_nsersic_range: null
+    min_r50_over_psf_fwhm: 1.0
+  sample:
+    n_galaxies: 200
+    replace: false
+  paint:
+    bulge: false
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.049}  # census v2: 0.061 (Ubler+2017)
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]
+    ring: {members: 2}
+  shear:
+    sigma: 0.03
+    gmax: 0.1
+  priors:
+    logm_obs_scatter_dex: 0.0      # census v2: 0.25
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  config: hlwas_medium_roman
+
+fit:
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
+  target_accept: 0.9
+  pin_z_to_truth: true
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    mode: auto
+
+dispatch:
+  backend: local
+  mode: dynamic
+  claim_order: hard_first
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gb
+  account: JPL-PUB
+  max_fit_walltime_min: 90
+
+output:
+  save_chains: all
+  save_mocks: all
