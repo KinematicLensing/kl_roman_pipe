@@ -288,3 +288,34 @@ skew into a bias. A hierarchical or population prior (equivalently the
 reweighting) removes it at the cost of the shrinkage A_ivw already corrects.
 To quantify on the full census; the paper reports the sky-frame calibration
 and states this mechanism.
+
+## 13. Orientation charts do not help face-on either
+
+The 2026-09-10 chart verdict came from a scene whose bottleneck was the
+cos i ridge. Census v2 then showed theta_int as the min-ESS parameter in
+17/55 face-on fits (posterior sigma 0.63 rad vs 0.17 edge-on), so the
+polar, spin-1 and axis-angle charts were re-run on the toy scene at true
+cos i 0.7, 0.8, 0.9 with the fit prior open to cos i = 1 (3 seeds each,
+line SNR 15, broadband 40). Polar has the lowest wall in all nine cells
+(spin-1 and axis-angle 1.1-2.6x slower at cos i 0.8-0.9), the non-polar
+charts add divergences (15 and 8 vs 1 at cos i 0.7), theta ESS is 3000-5000
+for every chart and cos i is the min-ESS parameter throughout, with
+identical posterior widths. The census face-on theta mode does not
+reproduce on this scene, so it is a property of the real galaxies (low
+v sin i at high line SNR per roll) rather than of the chart. No chart change.
+
+## 14. The vcirc prior width does not set the mid-inclination shear noise
+
+The census v2 vcirc posterior is 0.92 of its 0.092 dex TFR-implied prior, so
+the natural reading was that inclination, and hence shear, is set by the
+prior width. A twin run with the mass-error term removed (prior 0.061 dex,
+`cosmos25_census_v2_tfr_only`, same truths and noise draws) refutes it for
+cos i 0.26-0.72: on 99 matched fits sigma(vcirc) drops to 0.67x but
+sigma(g1), sigma(g2) and sigma(cos i) are unchanged to 1-2% in every cos i
+bin and line-SNR tercile, and the posterior means move by 0.06 sigma.
+sigma(cos i) tracks the broadband F158 SNR (Spearman -0.79) and the kinematic
+PA width (+0.73), not the vcirc width (-0.28): at mid inclination the
+inclination is the photometric axis ratio plus the kinematic PA, and the
+TFR prior only names vcirc. Better stellar masses or a tighter TFR buy
+nothing here; imaging depth and line SNR do. Edge-on and face-on fits are
+still to be compared (the run is easy-first).
