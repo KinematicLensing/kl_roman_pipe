@@ -300,9 +300,19 @@ line SNR 15, broadband 40). Polar has the lowest wall in all nine cells
 (spin-1 and axis-angle 1.1-2.6x slower at cos i 0.8-0.9), the non-polar
 charts add divergences (15 and 8 vs 1 at cos i 0.7), theta ESS is 3000-5000
 for every chart and cos i is the min-ESS parameter throughout, with
-identical posterior widths. The census face-on theta mode does not
-reproduce on this scene, so it is a property of the real galaxies (low
-v sin i at high line SNR per roll) rather than of the chart. No chart change.
+identical posterior widths. But the toy scene has sigma(theta) 0.07 rad,
+while the 72 census v2 face-on fits (cos i > 0.7, saved chains) have a
+circular sigma(theta) of 0.59 rad median, above 0.5 rad in 62% and above
+1 rad in 29%; their leapfrog steps track sigma(theta) with Spearman 0.71
+(median 83k steps below 0.5 rad, 137k at 0.5-1, 359k above 1 rad;
+escalation 19% / 38% / 43%), against 0.45 for the cos i = 0.95 wall
+fraction and -0.09 for sigma(cos i). That is the polar-cap regime a
+cartesian chart u = sin i (cos theta, sin theta) is designed for, and the
+toy test never entered it. The A/B also handled the cos i bound as a cliff
+in the log posterior (-1e30 outside), which by itself produces divergences
+in the non-polar charts. So the toy result says only that charts do not help
+when theta is well constrained; the census-regime test (real face-on fits,
+smooth bound handling, cos i open to 1) is still owed before any verdict.
 
 ## 14. The vcirc prior width does not set the mid-inclination shear noise
 
