@@ -620,7 +620,9 @@ def _fit_quality_columns(summary: dict, task, inputs, sampled_names) -> None:
     plain chi-squares against ``n_data`` masked pixels); ``map_postmean_max_dev``
     is the largest |MAP - posterior mean| / sigma over the sampled parameters.
     A MAP stuck in a wrong basin shows up as a chi-square far above ``n_data``
-    or a deviation of order ten sigma.
+    or a deviation of order ten sigma. Without a MAP (``precondition: none``)
+    the MAP columns are NaN and the parameter label empty; ``n_data`` and
+    ``postmean_chi2`` are always written.
     """
     n_data = 0
     for obs in list(inputs.image_obs.values()) + list(inputs.grism_obs.values()):
@@ -630,13 +632,19 @@ def _fit_quality_columns(summary: dict, task, inputs, sampled_names) -> None:
             if mask is not None
             else int(np.asarray(obs.data).size)
         )
-    theta_map = np.array([summary[f'map.{n}'] for n in sampled_names])
     theta_mean = np.array([summary[f'post.{n}.mean'] for n in sampled_names])
     summary['n_data'] = n_data
-    summary['map_chi2'] = float(-2.0 * task.log_likelihood(jnp.asarray(theta_map)))
     summary['postmean_chi2'] = float(
         -2.0 * task.log_likelihood(jnp.asarray(theta_mean))
     )
+    has_map = all(f'map.{n}' in summary for n in sampled_names)
+    if not has_map:
+        summary['map_chi2'] = np.nan
+        summary['map_postmean_max_dev'] = np.nan
+        summary['map_postmean_max_dev_param'] = ''
+        return
+    theta_map = np.array([summary[f'map.{n}'] for n in sampled_names])
+    summary['map_chi2'] = float(-2.0 * task.log_likelihood(jnp.asarray(theta_map)))
     devs = {
         n: abs(float(summary[f'map_minus_postmean_over_sigma.{n}']))
         for n in sampled_names

@@ -674,6 +674,28 @@ class TestFitQualityColumns:
         assert summary['map_postmean_max_dev'] == 12.0
         assert summary['map_postmean_max_dev_param'] == 'b'
 
+    def test_without_map_writes_nan_map_columns(self):
+        from types import SimpleNamespace
+
+        from kl_pipe.ensemble.worker import _fit_quality_columns
+
+        class _Task:
+            def log_likelihood(self, theta):
+                return -0.5 * 30.0
+
+        inputs = SimpleNamespace(
+            image_obs={'F': SimpleNamespace(data=np.zeros((4, 4)), mask=None)},
+            grism_obs={},
+        )
+        # precondition 'none': no map.* keys in the summary row
+        summary = {'post.a.mean': 1.5, 'post.b.mean': 2.0}
+        _fit_quality_columns(summary, _Task(), inputs, ['a', 'b'])
+        assert summary['n_data'] == 16
+        assert summary['postmean_chi2'] == 30.0
+        assert np.isnan(summary['map_chi2'])
+        assert np.isnan(summary['map_postmean_max_dev'])
+        assert summary['map_postmean_max_dev_param'] == ''
+
 
 class _ContinueRecorder:
     """Replaces worker._continue_fit_attempt; plays back scripted qualities,
