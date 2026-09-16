@@ -71,7 +71,8 @@ tr:hover td { background: #f6f5f2; }
 details > summary { cursor: pointer; list-style: none; }
 details > summary::before { content: '\\25BE'; display: inline-block; width: 1em; color: var(--ink2); }
 details:not([open]) > summary::before { content: '\\25B8'; }
-details > summary h2 { display: inline; }
+details > summary h2 { display: inline-block; margin: 2.2em 0 0.6em; width: calc(100% - 1.2em); }
+details > summary + * { margin-top: 0.4em; }
 .na { color: var(--ink2); font-style: italic; }
 .bad { color: #a12b2b; font-weight: 600; }
 img { max-width: 100%; margin: 0.4em 0 0.2em; border: 1px solid var(--line); background: #fff; }

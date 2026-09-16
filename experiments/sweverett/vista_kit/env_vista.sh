@@ -1,6 +1,9 @@
 # env_vista.sh -- source this on Vista to define the containerized launcher:
 #
 #   source $STOCKYARD/repos/kl_roman_pipe/experiments/sweverett/vista_kit/env_vista.sh
+# KLPIPE_REPO (default $STOCKYARD/repos/kl_roman_pipe) selects the checkout that is
+# bound into the container and put on PYTHONPATH, so a second clone can run while
+# the default one is pinned by a running campaign.
 #
 # Defines KLPIPE_PYTHON, used two ways:
 #   - directly: $KLPIPE_PYTHON -m kl_pipe.ensemble <cmd> ...  (compute nodes only)
@@ -17,6 +20,7 @@
 # any float32 work: the container nightly cannot create single-precision
 # cuFFT plans. Unset = container JAX (float64 only).
 
+KLPIPE_REPO="${KLPIPE_REPO:-$STOCKYARD/repos/kl_roman_pipe}"
 module load tacc-apptainer 2>/dev/null || true
 
 if [ -n "${KLPIPE_JAX_RELEASE:-}" ]; then
@@ -24,21 +28,21 @@ if [ -n "${KLPIPE_JAX_RELEASE:-}" ]; then
   [ -d "$_JAXREL/jax" ] || echo "[env_vista] WARNING: $_JAXREL missing; see SETUP.md release-stack section"
   _EMPTY="$SCRATCH/empty_dir"; mkdir -p "$_EMPTY"
   _JAX_BINDS="-B $WORK -B $_EMPTY:/opt/jax -B $_EMPTY:/opt/jaxlibs"
-  _PYPATH="$STOCKYARD/repos/kl_roman_pipe:$_JAXREL:$WORK/klpipe_pipdeps"
+  _PYPATH="$KLPIPE_REPO:$_JAXREL:$WORK/klpipe_pipdeps"
   _CACHE="$SCRATCH/jax_cache_rel_${KLPIPE_JAX_RELEASE}"
   _STACK="release jax ${KLPIPE_JAX_RELEASE}"
 else
   _JAX_BINDS=""
-  _PYPATH="$STOCKYARD/repos/kl_roman_pipe:$WORK/klpipe_pipdeps"
+  _PYPATH="$KLPIPE_REPO:$WORK/klpipe_pipdeps"
   _CACHE="$SCRATCH/jax_cache"
   _STACK="container jax"
 fi
 
 export KLPIPE_PYTHON="apptainer exec --nv \
-  -B $STOCKYARD/repos/kl_roman_pipe -B $WORK/klpipe_pipdeps -B $SCRATCH $_JAX_BINDS \
+  -B $KLPIPE_REPO -B $WORK/klpipe_pipdeps -B $SCRATCH $_JAX_BINDS \
   --env PYTHONPATH=$_PYPATH \
   --env LD_PRELOAD=$WORK/klpipe_pipdeps/galsim/libfftw3.so.3 \
   --env JAX_COMPILATION_CACHE_DIR=$_CACHE \
   $WORK/containers/jax_26.06-py3.sif python"
 
-echo "[env_vista] KLPIPE_PYTHON set (jax_26.06-py3.sif, $_STACK; exec on compute nodes only)"
+echo "[env_vista] KLPIPE_PYTHON set (jax_26.06-py3.sif, $_STACK, repo $KLPIPE_REPO; exec on compute nodes only)"
