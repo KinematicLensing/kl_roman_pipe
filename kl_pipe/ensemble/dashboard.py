@@ -1701,6 +1701,7 @@ def _plot_shear_bias(
 def _small_multiples(ok: pd.DataFrame, specs, esc, ncols: int = 3):
     """Scatter grid; each spec = (ycol_or_array, xcol, xlabel, ylabel, logx, logy, colour_esc, hline)."""
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import NullFormatter, ScalarFormatter
 
     n = len(specs)
     nrows = int(np.ceil(n / ncols))
@@ -1723,6 +1724,11 @@ def _small_multiples(ok: pd.DataFrame, specs, esc, ncols: int = 3):
             ax.axhline(hline, color='#999', lw=0.8, ls='--')
         if logx:
             ax.set_xscale('log')
+            pos = x[np.isfinite(x) & (x > 0)]
+            if len(pos):
+                ax.set_xlim(0.9 * pos.min(), 1.1 * pos.max())
+            ax.xaxis.set_minor_formatter(NullFormatter())
+            ax.xaxis.set_major_formatter(ScalarFormatter())
         if logy:
             ax.set_yscale('log')
         ax.set_xlabel(xlabel, fontsize=8)
