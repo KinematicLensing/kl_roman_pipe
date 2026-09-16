@@ -93,6 +93,8 @@ class TestGateAndOrder:
         order = list(man.fit_id.iloc[claim_order_index(man, 'hard_first')])
         # extremes first (0.06 pair, lower SNR member first), then 0.9, 0.3, 0.5
         assert order == ['d', 'b', 'c', 'e', 'a']
+        easy = list(man.fit_id.iloc[claim_order_index(man, 'easy_first')])
+        assert easy == order[::-1]
         with pytest.raises(ValueError, match='claim_order'):
             claim_order_index(man, 'random')
 

@@ -853,19 +853,22 @@ def claim_order_index(manifest: pd.DataFrame, claim_order: str) -> np.ndarray:
     'manifest' keeps the row order. 'hard_first' puts the predicted-slow fits
     first: truth cos i farthest from 0.5 (the cosmos25_bank32_robust arm ran
     the two fits at cos i 0.054 at 2.3x the median steps and the face-on
-    fits at 1.3x), ties broken by lower line SNR. A proxy for scheduling
+    fits at 1.3x), ties broken by lower line SNR. 'easy_first' is the exact
+    reverse (cos i nearest 0.5 first, higher line SNR first), for a short
+    job that should finish as many fits as it can. A proxy for scheduling
     only; it does not change which fits run or how they are fit.
     """
     if claim_order == 'manifest':
         return np.arange(len(manifest))
-    if claim_order == 'hard_first':
+    if claim_order in ('hard_first', 'easy_first'):
         extremity = -((manifest['truth.cosi'].to_numpy(dtype=float) - 0.5) ** 2)
         snr = (
             manifest['line_snr'].to_numpy(dtype=float)
             if 'line_snr' in manifest
             else np.zeros(len(manifest))
         )
-        return np.lexsort((snr, extremity))
+        order = np.lexsort((snr, extremity))
+        return order if claim_order == 'hard_first' else order[::-1]
     raise ValueError(f"unknown claim_order {claim_order!r}")
 
 

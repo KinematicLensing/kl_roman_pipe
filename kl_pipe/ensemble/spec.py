@@ -509,7 +509,7 @@ _POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
 # order in which dynamic workers walk the manifest when claiming fits
-_CLAIM_ORDERS = ('manifest', 'hard_first')
+_CLAIM_ORDERS = ('manifest', 'hard_first', 'easy_first')
 _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
 _MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr', 'shear_bias')
@@ -1077,8 +1077,10 @@ class EnsembleSpec:
     # dispatch
     backend: str
     mode: str
-    # 'manifest' (row order) or 'hard_first' (predicted-slow fits first, so
-    # the slow tail overlaps the rest of the job instead of ending it)
+    # 'manifest' (row order), 'hard_first' (predicted-slow fits first, so
+    # the slow tail overlaps the rest of the job instead of ending it) or
+    # 'easy_first' (its reverse, for a short job that should finish as many
+    # fits as it can)
     claim_order: str
     workers_per_node: int
     target_task_walltime_min: float

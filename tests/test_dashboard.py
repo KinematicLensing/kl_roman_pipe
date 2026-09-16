@@ -16,7 +16,7 @@ from kl_pipe.ensemble.dashboard import (
     speed_cell_classes,
     speed_table,
 )
-from tests.test_bench import make_run_dir
+from test_bench import make_run_dir
 
 SECTIONS = (
     'Progress',
