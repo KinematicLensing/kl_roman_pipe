@@ -1156,6 +1156,9 @@ class EnsembleSpec:
     warmup_metric: str = 'adapted'
     warmup_stage2_draws: int = 50
     warmup_stage2_adapt: bool = False
+    # catalog populations: multiplier on every galaxy's per-pass line SNR
+    # (mock noise only; selection and the line-flux prior use the catalog value)
+    line_snr_scale: float = 1.0
 
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
@@ -1537,6 +1540,9 @@ class EnsembleSpec:
             }
         )
         out['dispatch'] = dispatch
+        observation = dict(out.get('observation') or {})
+        observation['line_snr_scale'] = self.line_snr_scale
+        out['observation'] = observation
         model = dict(out.get('model') or {})
         render = dict(model.get('render') or {})
         render['line_window_mode'] = self.render_line_window_mode
@@ -1582,8 +1588,25 @@ class EnsembleSpec:
         population_type = str(population['type'])
 
         observation = raw['observation']
-        _reject_unknown(observation, ('config', 'snr'), f"{path}:observation")
+        _reject_unknown(
+            observation, ('config', 'snr', 'line_snr_scale'), f"{path}:observation"
+        )
         _require_keys(observation, ('config',), f"{path}:observation")
+        line_snr_scale = observation.get('line_snr_scale', 1.0)
+        if (
+            isinstance(line_snr_scale, bool)
+            or not isinstance(line_snr_scale, (int, float))
+            or line_snr_scale <= 0
+        ):
+            raise ValueError(
+                f"{path}:observation.line_snr_scale must be a positive number, "
+                f"got {line_snr_scale!r}"
+            )
+        if population_type != 'catalog' and line_snr_scale != 1.0:
+            raise ValueError(
+                f"{path}:observation.line_snr_scale applies to catalog populations "
+                f"only (sampled populations set observation.snr.line directly)"
+            )
         # catalog populations derive BOTH channels' per-fit SNR from the
         # population table (matched-filter depth anchors), so the snr block
         # is rejected outright there; sampled populations require it
@@ -1868,6 +1891,7 @@ class EnsembleSpec:
                 if population_type == 'catalog'
                 else float(snr['line']) if 'line' in snr else float(sweep_values[0])
             ),
+            line_snr_scale=float(line_snr_scale),
             n_warmup=int(fit.get('n_warmup', 500)),
             n_samples=int(fit.get('n_samples', 1000)),
             n_chains=int(fit.get('n_chains', 4)),

@@ -142,3 +142,34 @@ class TestWarmupMetric:
         d['fit']['warmup_metrics'] = 'pooled'
         with pytest.raises(ValueError):
             EnsembleSpec.from_yaml(_write(tmp_path, d))
+
+
+class TestLineSnrScale:
+    CATALOG_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'cosmos25_census_v2.yaml'
+
+    def test_default_parse_and_resolve(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(self.CATALOG_SPEC)
+        assert spec.line_snr_scale == 1.0
+        d = yaml.safe_load(self.CATALOG_SPEC.read_text())
+        d['observation']['line_snr_scale'] = 3
+        spec2 = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        assert spec2.line_snr_scale == 3.0
+        assert spec2.resolve_defaults(d)['observation']['line_snr_scale'] == 3.0
+        assert (
+            spec.resolve_defaults(yaml.safe_load(self.CATALOG_SPEC.read_text()))[
+                'observation'
+            ]['line_snr_scale']
+            == 1.0
+        )
+
+    def test_validation(self, tmp_path):
+        d = yaml.safe_load(self.CATALOG_SPEC.read_text())
+        for bad in (0, -2, True, 'x'):
+            d['observation']['line_snr_scale'] = bad
+            with pytest.raises(ValueError, match='line_snr_scale'):
+                EnsembleSpec.from_yaml(_write(tmp_path, d))
+        # sampled populations set observation.snr.line directly
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['observation']['line_snr_scale'] = 2
+        with pytest.raises(ValueError, match='catalog populations only'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))

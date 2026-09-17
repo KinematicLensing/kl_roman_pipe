@@ -485,7 +485,7 @@ def _catalog_rows(
                     # once per grism roll, so each roll gets one pass's
                     # depth. The coadded depth the fit sees, and the one the
                     # selection cut is applied to, is snr_line_total.
-                    'line_snr': float(g['snr_line_per_pass']),
+                    'line_snr': float(g['snr_line_per_pass']) * spec.line_snr_scale,
                     'save_chains': spec.save_chains == 'all',
                     'save_mocks': spec.save_mocks == 'all',
                 }
