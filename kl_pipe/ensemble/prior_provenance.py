@@ -471,7 +471,26 @@ def catalog_registry(
         'C/A ellipsoid inversions are upper bounds. A dedicated subset run '
         'samples the thickness to isolate its effect.'
     )
-    for comp in ('Halpha', 'Halpha.cont'):
+    if spec.sample_h_over_r:
+        median, scatter_dex = spec.catalog_population.paint_h_over_r
+        add(
+            PriorProvenance(
+                'h_over_r',
+                'disk scale height / scale length, shared by every component',
+                '--',
+                f'LN({median}, {scatter_dex} dex)',
+                'same LN',
+                'paint',
+                'One thickness per galaxy, shared by the bands, the line and '
+                'the continuum. Direct sech^2 z0/Rd measurements span 0.2-0.38 '
+                'in this convention. Prior equals paint, so marginalization is '
+                'exact.',
+                ('Kregel2002', 'Yu2026', 'vanAsselt2026'),
+                compact_meaning='disk thickness',
+                compact_note='shared; prior equals paint',
+            )
+        )
+    for comp in () if spec.sample_h_over_r else ('Halpha', 'Halpha.cont'):
         add(
             PriorProvenance(
                 f'{comp}.h_over_r',
@@ -487,7 +506,7 @@ def catalog_registry(
             )
         )
     disk_h_key = '{band}.disk_h_over_r' if bulge else '{band}.h_over_r'
-    for band in config.bands:
+    for band in () if spec.sample_h_over_r else config.bands:
         add(
             PriorProvenance(
                 disk_h_key.format(band=band),

@@ -558,6 +558,9 @@ def moment_estimates(
     h_over_r = [
         fixed[f'{band}.h_over_r'] for band in image_obs if f'{band}.h_over_r' in fixed
     ]
+    if not h_over_r and 'h_over_r' in task.priors.sampled_names:
+        # shared sampled thickness: the prior median stands in for the pin
+        h_over_r = [float(task.priors.get_prior('h_over_r').median)]
     q0 = _THICK_DISK_Q0_PER_H * float(np.mean(h_over_r)) if h_over_r else 0.0
     cosi = float(np.sqrt(np.clip((q**2 - q0**2) / (1.0 - q0**2), 0.0, 1.0)))
     return MomentEstimates(

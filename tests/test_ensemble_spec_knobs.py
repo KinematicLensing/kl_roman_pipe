@@ -173,3 +173,21 @@ class TestLineSnrScale:
         d['observation']['line_snr_scale'] = 2
         with pytest.raises(ValueError, match='catalog populations only'):
             EnsembleSpec.from_yaml(_write(tmp_path, d))
+
+
+class TestWallBudget:
+    def test_default_none_and_parse(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        assert spec.escalation.wall_budget_min is None
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit'].setdefault('escalation', {})['wall_budget_min'] = 90
+        spec2 = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        assert spec2.escalation.wall_budget_min == 90.0
+        assert spec2.resolve_defaults(d)['fit']['escalation']['wall_budget_min'] == 90.0
+
+    def test_validation(self):
+        with pytest.raises(ValueError, match='wall_budget_min'):
+            EscalationSpec(wall_budget_min=0.0)
+        with pytest.raises(ValueError, match='wall_budget_min'):
+            EscalationSpec(wall_budget_min=-5.0)
+        assert EscalationSpec(wall_budget_min=60.0).wall_budget_min == 60.0

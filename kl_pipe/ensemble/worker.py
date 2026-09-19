@@ -311,11 +311,30 @@ def _run_fit_escalated(
     mode = escalation_mode(summary, esc)
     reason = restart_reason(summary, esc)
     n_blocks = 0
+    budget_hit = False
     if mode == 'continue':
         # draw in blocks from the warm chains, re-checking the gate after
         # each, until it passes or the block budget is spent
         summary2, art2 = summary, art1
+        # wall estimate of the next block: the previous block's wall, or the
+        # first attempt's sampling wall scaled to the block length
+        block_est_s = (
+            float(summary['fit_wallclock_s']) - float(summary['precond_wallclock_s'])
+        ) * (esc.continue_block / spec.n_samples)
         while n_blocks < esc.continue_max_blocks:
+            elapsed_s = time.time() - t_start
+            if (
+                esc.wall_budget_min is not None
+                and elapsed_s + block_est_s > 60.0 * esc.wall_budget_min
+            ):
+                budget_hit = True
+                print(
+                    f'[fit {fit_id}] wall budget: {elapsed_s / 60:.1f} min elapsed '
+                    f'+ ~{block_est_s / 60:.1f} min per block exceeds '
+                    f'{esc.wall_budget_min:g} min -- no further continuation',
+                    flush=True,
+                )
+                break
             print(
                 f'[fit {fit_id}] attempt 1 '
                 + ('failed' if n_blocks == 0 else f'+ {n_blocks} block(s) still fails')
@@ -329,16 +348,19 @@ def _run_fit_escalated(
             summary2, art2 = _continue_fit_attempt(
                 row, spec, config, truth, art2, esc.continue_block, summary
             )
+            block_est_s = float(summary2['fit_wallclock_s'])
             n_blocks += 1
             if not needs_escalation(summary2, esc):
                 break
         if needs_escalation(summary2, esc) and reason == '':
-            reason = 'blocks_exhausted'
+            reason = 'budget_exhausted' if budget_hit else 'blocks_exhausted'
     else:
         summary2, art2 = _restart_fit_attempt(
             row, spec, config, run_dir, truth, noise_seed, sampler_seed, art1, summary
         )
-    summary2['n_attempts'] = 2
+    # a continuation the wall budget stopped before its first block ran
+    # nothing beyond attempt 1
+    summary2['n_attempts'] = 2 if (mode == 'restart' or n_blocks > 0) else 1
     summary2['escalated'] = True
     summary2['escalation_mode'] = mode
     summary2['escalation_n_blocks'] = n_blocks

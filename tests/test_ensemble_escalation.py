@@ -869,3 +869,47 @@ class TestContinuationFlow:
         )
         with pytest.raises(RuntimeError, match="warm state"):
             _continue_fit_attempt({'fit_id': 'x'}, None, None, None, art, 10, {})
+
+
+class TestWallBudget:
+    def test_budget_stops_before_the_first_block(self, tmp_path, monkeypatch):
+        # a budget far below any block estimate: the continuation never starts
+        d = _escalation_spec_dict()
+        d['fit']['escalation'].update(mode='continue', wall_budget_min=1e-9)
+        spec_path = _write_spec(tmp_path, d)
+        run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
+        spec, config, manifest = load_run(run_dir)
+        row = manifest.iloc[0]
+        rec = _AttemptRecorder([_MARGINAL])
+        cont = _ContinueRecorder(_GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert len(cont.calls) == 0
+        assert summary['escalated'] is True
+        assert summary['n_attempts'] == 1
+        assert summary['escalation_n_blocks'] == 0
+        assert summary['max_rhat'] == _MARGINAL['max_rhat']
+        assert summary['restart_reason'] == 'budget_exhausted'
+        assert summary['restart_recommended'] is True
+
+    def test_generous_budget_leaves_the_block_loop_alone(self, tmp_path, monkeypatch):
+        d = _escalation_spec_dict()
+        d['fit']['escalation'].update(mode='continue', wall_budget_min=1e6)
+        spec_path = _write_spec(tmp_path, d)
+        run_dir = expand(spec_path, REGISTRY, tmp_path / 'runs')
+        spec, config, manifest = load_run(run_dir)
+        row = manifest.iloc[0]
+        rec = _AttemptRecorder([_MARGINAL])
+        cont = _ContinueRecorder(_MARGINAL, _GOOD)
+        monkeypatch.setattr(worker, '_run_fit_attempt', rec)
+        monkeypatch.setattr(worker, '_continue_fit_attempt', cont)
+
+        summary = run_single_fit(row, spec, config, run_dir)
+
+        assert len(cont.calls) == 2
+        assert summary['n_attempts'] == 2
+        assert summary['escalation_n_blocks'] == 2
+        assert summary['restart_reason'] == ''

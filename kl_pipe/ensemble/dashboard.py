@@ -129,7 +129,8 @@ GLOSSARY: Dict[str, Tuple[str, str]] = {
         "why more draws would not (or did not) rescue the first attempt: '' "
         "(marginal), 'rhat' (above continue_rhat_max), 'divergences' (above "
         "continue_divergence_max), 'blocks_exhausted' (continued to the block cap, "
-        'still below the gate).',
+        "still below the gate), 'budget_exhausted' (continuation stopped by "
+        'escalation.wall_budget_min, still below the gate).',
     ),
     'final_gate': (
         'final gate failure',

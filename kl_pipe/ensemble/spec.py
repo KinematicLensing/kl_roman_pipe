@@ -624,6 +624,12 @@ class CatalogPopulationSpec:
     # galaxy_id across runs.
     galaxy_ids: Optional[Tuple[int, ...]] = None
 
+    # paint.h_over_r (optional): the disk thickness ratio drawn per galaxy as
+    # LN(median, scatter_dex) and shared by every component, in place of the
+    # pinned scene default. Requires fit.sample_h_over_r (the prior is this
+    # distribution). (median, scatter_dex)
+    paint_h_over_r: Optional[Tuple[float, float]] = None
+
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
@@ -719,6 +725,13 @@ class CatalogPopulationSpec:
                 f"priors.logm_obs_scatter_dex ({self.logm_obs_scatter_dex}) "
                 f"must be >= 0"
             )
+        if self.paint_h_over_r is not None:
+            median, scatter_dex = self.paint_h_over_r
+            if not (median > 0 and scatter_dex > 0):
+                raise ValueError(
+                    f"paint.h_over_r median ({median}) and scatter_dex "
+                    f"({scatter_dex}) must both be positive"
+                )
 
 
 def _parse_pair(value, context: str) -> Tuple[float, float]:
@@ -794,7 +807,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         )
 
     paint = population['paint']
-    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge'), f"{context}.paint")
+    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge', 'h_over_r'), f"{context}.paint")
     _require_keys(paint, ('tfr', 'sigma0'), f"{context}.paint")
     # paint.bulge (optional, default true): false = disk-only twin
     paint_bulge = paint.get('bulge', True)
@@ -802,6 +815,17 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         raise ValueError(
             f"{context}.paint.bulge must be a boolean (true = BulgeDisk "
             f"broadband, false = single-disk twin), got {paint_bulge!r}"
+        )
+    paint_h_over_r = paint.get('h_over_r')
+    if paint_h_over_r is not None:
+        h_context = f"{context}.paint.h_over_r"
+        if not isinstance(paint_h_over_r, dict):
+            raise ValueError(f"{h_context}: must be a mapping, got {paint_h_over_r!r}")
+        _reject_unknown(paint_h_over_r, ('median', 'scatter_dex'), h_context)
+        _require_keys(paint_h_over_r, ('median', 'scatter_dex'), h_context)
+        paint_h_over_r = (
+            float(paint_h_over_r['median']),
+            float(paint_h_over_r['scatter_dex']),
         )
     tfr = paint['tfr']
     tfr_keys = ('logv0', 'logm0', 'slope', 'scatter_dex')
@@ -870,6 +894,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         shear_gmax=float(shear['gmax']),
         logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
         paint_bulge=paint_bulge,
+        paint_h_over_r=paint_h_over_r,
     )
 
 
@@ -916,6 +941,11 @@ class EscalationSpec:
     # the per-fit shear width, whose error is 1/sqrt(2 ESS), so this floor
     # is the fidelity that matters; None = no shear-specific floor
     ess_min_shear: Optional[float] = None
+    # wall budget for continuation in minutes since the fit started: no block
+    # is started once the elapsed time plus the previous block's wall would
+    # exceed it; the fit is then recorded as-is with restart_reason
+    # 'budget_exhausted'. None = the block count is the only cap.
+    wall_budget_min: Optional[float] = None
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
@@ -958,6 +988,13 @@ class EscalationSpec:
                 f"escalation.ess_min_shear ({self.ess_min_shear!r}) must be a "
                 "positive float or null"
             )
+        if self.wall_budget_min is not None and (
+            not isinstance(self.wall_budget_min, float) or self.wall_budget_min <= 0
+        ):
+            raise ValueError(
+                f"escalation.wall_budget_min ({self.wall_budget_min!r}) must be a "
+                "positive float or null"
+            )
         for name, value in [
             ('n_warmup', self.n_warmup),
             ('n_samples', self.n_samples),
@@ -988,6 +1025,7 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         'continue_block',
         'continue_max_blocks',
         'ess_min_shear',
+        'wall_budget_min',
     )
     _reject_unknown(block, allowed, context)
     return EscalationSpec(
@@ -1005,6 +1043,11 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
             None
             if block.get('ess_min_shear') is None
             else float(block['ess_min_shear'])
+        ),
+        wall_budget_min=(
+            None
+            if block.get('wall_budget_min') is None
+            else float(block['wall_budget_min'])
         ),
     )
 
@@ -1073,6 +1116,11 @@ class EnsembleSpec:
     # bulge decomposition to loosen, since the index is degenerate with
     # bulge_frac and bulge_hlr and pinning it suppressed one leg of that.
     sample_bulge_nsersic: bool
+    # sample one disk thickness ratio shared by every component (the
+    # top-level ``h_over_r``), with the paint distribution as its prior,
+    # instead of pinning the scene default in mock and fit. Requires a
+    # disk-only catalog population with population.paint.h_over_r.
+    sample_h_over_r: bool
 
     # dispatch
     backend: str
@@ -1402,6 +1450,26 @@ class EnsembleSpec:
                     "true; with the bulge paint disabled the bands are "
                     "single-disk and there is no index to sample"
                 )
+        cp = self.catalog_population
+        if self.sample_h_over_r:
+            if cp is None or cp.paint_h_over_r is None:
+                raise ValueError(
+                    "fit.sample_h_over_r requires a catalog population with "
+                    "population.paint.h_over_r: the sampled prior is the paint "
+                    "distribution"
+                )
+            if cp.paint_bulge:
+                raise ValueError(
+                    "fit.sample_h_over_r requires population.paint.bulge: false; "
+                    "bulge-disk bands carry disk_h_over_r, which the shared "
+                    "thickness does not reach"
+                )
+        elif cp is not None and cp.paint_h_over_r is not None:
+            raise ValueError(
+                "population.paint.h_over_r scatters the truth per galaxy; without "
+                "fit.sample_h_over_r the fit would pin the scene default against "
+                "a different truth. Set fit.sample_h_over_r: true or drop the paint"
+            )
         if self.escalation.enabled:
             # the retry needs an initial metric from the Laplace path: with
             # fit.adapt_mass true it donates the first attempt's
@@ -1488,6 +1556,7 @@ class EnsembleSpec:
                 'n_map_starts': self.n_map_starts,
                 'pin_z_to_truth': self.pin_z_to_truth,
                 'sample_bulge_nsersic': self.sample_bulge_nsersic,
+                'sample_h_over_r': self.sample_h_over_r,
                 'shear_prior_sigma': self.shear_fit_prior_sigma,
                 'shear_prior_type': self.shear_fit_prior_type,
                 'shear_prior_halfwidth': self.shear_fit_prior_halfwidth,
@@ -1522,6 +1591,7 @@ class EnsembleSpec:
                     'continue_block': esc.continue_block,
                     'continue_max_blocks': esc.continue_max_blocks,
                     'ess_min_shear': esc.ess_min_shear,
+                    'wall_budget_min': esc.wall_budget_min,
                 },
             }
         )
@@ -1773,6 +1843,7 @@ class EnsembleSpec:
                 'n_map_starts',
                 'pin_z_to_truth',
                 'sample_bulge_nsersic',
+                'sample_h_over_r',
                 'shear_prior_sigma',
                 'shear_prior_type',
                 'shear_prior_halfwidth',
@@ -1902,6 +1973,7 @@ class EnsembleSpec:
             n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
             sample_bulge_nsersic=bool(fit.get('sample_bulge_nsersic', False)),
+            sample_h_over_r=bool(fit.get('sample_h_over_r', False)),
             escalation=escalation,
             backend=str(dispatch.get('backend', 'local')),
             mode=str(dispatch.get('mode', 'dynamic')),

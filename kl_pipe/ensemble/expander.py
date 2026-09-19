@@ -57,6 +57,7 @@ EXPANDER_VERSION = 2
 _GALAXY_STREAM = 1
 _NOISE_STREAM = 2
 _CENTROID_STREAM = 3
+_THICKNESS_STREAM = 4
 
 
 TRUTH_PREFIX = 'truth.'
@@ -133,6 +134,12 @@ def _galaxy_rng(spec_seed: int, cosi_bin: int, galaxy_id: int):
 def _centroid_rng(spec_seed: int, ids: tuple):
     """CENTROID-stream generator keyed on the catalog adapter's id values."""
     ss = np.random.SeedSequence([spec_seed, _CENTROID_STREAM, *(int(v) for v in ids)])
+    return np.random.default_rng(ss)
+
+
+def _thickness_rng(spec_seed: int, ids: tuple):
+    """THICKNESS-stream generator keyed on the catalog adapter's id values."""
+    ss = np.random.SeedSequence([spec_seed, _THICKNESS_STREAM, *(int(v) for v in ids)])
     return np.random.default_rng(ss)
 
 
@@ -449,6 +456,17 @@ def _catalog_rows(
                 truth['Halpha.cont.y0'] = truth['Halpha.y0'] + crng.normal(
                     0.0, CONT_CENTROID_OFFSET_ARCSEC
                 )
+                if cp.paint_h_over_r is not None:
+                    # one thickness per galaxy, shared by every component and
+                    # sampled by the fit as the top-level h_over_r
+                    median, scatter_dex = cp.paint_h_over_r
+                    trng = _thickness_rng(
+                        spec.seed, tuple(g[c] for c in adapter.id_columns)
+                    )
+                    h_over_r = float(median * 10.0 ** (scatter_dex * trng.normal()))
+                    truth['h_over_r'] = h_over_r
+                    for comp in list(config.bands) + ['Halpha', 'Halpha.cont']:
+                        truth[f'{comp}.h_over_r'] = h_over_r
                 # line flux truth: the painted flux in 1e-17 erg/s/cm2 (the
                 # scene's line-channel unit); the continuum amplitude follows
                 # from the catalog rest-frame EW in the same unit per nm:

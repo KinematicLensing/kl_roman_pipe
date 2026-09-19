@@ -498,6 +498,16 @@ def scene_priors(
             )
             prior_spec[f'{band}.h_over_r'] = truth[f'{band}.h_over_r']
 
+    if spec.sample_h_over_r:
+        # one shared thickness ratio, sampled with the paint distribution as
+        # its prior; the per-component pins give way to the top-level key
+        for comp in _geometry_components(config):
+            del prior_spec[f'{comp}.h_over_r']
+        median, scatter_dex = spec.catalog_population.paint_h_over_r
+        prior_spec['h_over_r'] = LogNormal(
+            math.log(median), scatter_dex * math.log(10.0)
+        )
+
     if is_catalog:
         cp = spec.catalog_population
         # observable-conditioned TFR prior: mu = TFR evaluated at the NOISY
