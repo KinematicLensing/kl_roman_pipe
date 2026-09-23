@@ -67,3 +67,4 @@ tests/data/validation/
 
 # ensemble run outputs
 runs/
+!docs/benchmarks/runs/

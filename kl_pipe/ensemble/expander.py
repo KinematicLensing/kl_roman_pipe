@@ -29,11 +29,13 @@ import hashlib
 import json
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
@@ -55,6 +57,7 @@ EXPANDER_VERSION = 2
 _GALAXY_STREAM = 1
 _NOISE_STREAM = 2
 _CENTROID_STREAM = 3
+_THICKNESS_STREAM = 4
 
 
 TRUTH_PREFIX = 'truth.'
@@ -131,6 +134,12 @@ def _galaxy_rng(spec_seed: int, cosi_bin: int, galaxy_id: int):
 def _centroid_rng(spec_seed: int, ids: tuple):
     """CENTROID-stream generator keyed on the catalog adapter's id values."""
     ss = np.random.SeedSequence([spec_seed, _CENTROID_STREAM, *(int(v) for v in ids)])
+    return np.random.default_rng(ss)
+
+
+def _thickness_rng(spec_seed: int, ids: tuple):
+    """THICKNESS-stream generator keyed on the catalog adapter's id values."""
+    ss = np.random.SeedSequence([spec_seed, _THICKNESS_STREAM, *(int(v) for v in ids)])
     return np.random.default_rng(ss)
 
 
@@ -447,6 +456,17 @@ def _catalog_rows(
                 truth['Halpha.cont.y0'] = truth['Halpha.y0'] + crng.normal(
                     0.0, CONT_CENTROID_OFFSET_ARCSEC
                 )
+                if cp.paint_h_over_r is not None:
+                    # one thickness per galaxy, shared by every component and
+                    # sampled by the fit as the top-level h_over_r
+                    median, scatter_dex = cp.paint_h_over_r
+                    trng = _thickness_rng(
+                        spec.seed, tuple(g[c] for c in adapter.id_columns)
+                    )
+                    h_over_r = float(median * 10.0 ** (scatter_dex * trng.normal()))
+                    truth['h_over_r'] = h_over_r
+                    for comp in list(config.bands) + ['Halpha', 'Halpha.cont']:
+                        truth[f'{comp}.h_over_r'] = h_over_r
                 # line flux truth: the painted flux in 1e-17 erg/s/cm2 (the
                 # scene's line-channel unit); the continuum amplitude follows
                 # from the catalog rest-frame EW in the same unit per nm:
@@ -483,7 +503,7 @@ def _catalog_rows(
                     # once per grism roll, so each roll gets one pass's
                     # depth. The coadded depth the fit sees, and the one the
                     # selection cut is applied to, is snr_line_total.
-                    'line_snr': float(g['snr_line_per_pass']),
+                    'line_snr': float(g['snr_line_per_pass']) * spec.line_snr_scale,
                     'save_chains': spec.save_chains == 'all',
                     'save_mocks': spec.save_mocks == 'all',
                 }
@@ -542,6 +562,29 @@ def _git_commit() -> str:
         return out.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return 'unknown'
+
+
+def git_commit_label() -> str:
+    """Short sha of the kl_pipe checkout, with ``-dirty`` when kl_pipe/ has
+    uncommitted changes; ``'unknown'`` outside a git checkout."""
+    sha = _git_commit()
+    if sha == 'unknown':
+        return sha
+    label = sha[:9]
+    try:
+        status = subprocess.run(
+            ['git', 'status', '--porcelain', '--', '.'],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return label
+    return f'{label}-dirty' if status else label
+
+
+RESOLVED_SPEC_NAME = 'ensemble_spec_resolved.yaml'
 
 
 def expand(
@@ -636,6 +679,13 @@ def expand(
     manifest.to_parquet(run_dir / 'manifest.parquet', index=False)
 
     shutil.copy2(spec_path, run_dir / 'provenance' / 'ensemble_spec.yaml')
+    # every defaulted knob written out, so a rebuild at later code (with
+    # different defaults) reproduces the fits as run
+    resolved_text = yaml.safe_dump(
+        spec.resolve_defaults(yaml.safe_load(spec_path.read_text())),
+        sort_keys=False,
+    )
+    (run_dir / 'provenance' / RESOLVED_SPEC_NAME).write_text(resolved_text)
     shutil.copy2(config_path, run_dir / 'provenance' / 'observation_config.yaml')
     expansion_record = {
         'run_name': spec.run_name,
@@ -645,6 +695,7 @@ def expand(
         'observation_config_id': config.id,
         'observation_config_hash': config.content_hash,
         'spec_hash': hashlib.sha256(spec_path.read_bytes()).hexdigest(),
+        'resolved_spec_hash': hashlib.sha256(resolved_text.encode()).hexdigest(),
         'git_commit': _git_commit(),
         **population_record,
     }
@@ -657,7 +708,18 @@ def expand(
 def load_run(run_dir: Path):
     """Load (spec, config, manifest) from a run directory's provenance."""
     run_dir = Path(run_dir)
-    spec = EnsembleSpec.from_yaml(run_dir / 'provenance' / 'ensemble_spec.yaml')
+    resolved = run_dir / 'provenance' / RESOLVED_SPEC_NAME
+    if resolved.exists():
+        spec = EnsembleSpec.from_yaml(resolved)
+    else:
+        warnings.warn(
+            f"{run_dir}: no provenance/{RESOLVED_SPEC_NAME} (expanded before "
+            "resolved specs were written); knobs absent from ensemble_spec.yaml "
+            "resolve to the CURRENT code defaults, which may differ from the "
+            "values the fits ran with",
+            stacklevel=2,
+        )
+        spec = EnsembleSpec.from_yaml(run_dir / 'provenance' / 'ensemble_spec.yaml')
     config = ObservationConfig.from_yaml(
         run_dir / 'provenance' / 'observation_config.yaml'
     )

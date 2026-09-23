@@ -62,7 +62,7 @@ kl_pipe/              # Main pipeline package
 │   ├── emcee.py      # Ensemble MCMC (gradient-free)
 │   ├── nautilus.py   # Neural nested sampling (evidence)
 │   ├── blackjax.py   # JAX-native HMC/NUTS
-│   ├── numpyro.py    # NUTS w/ Z-score reparam (recommended)
+│   ├── numpyro.py    # NUTS, Laplace-preconditioned unconstrained coords (recommended)
 │   └── diagnostics.py # Trace, corner, recovery plots
 └── tng/              # TNG50 mock data utilities
     ├── loaders.py    # Load gas, stellar, and subhalo data

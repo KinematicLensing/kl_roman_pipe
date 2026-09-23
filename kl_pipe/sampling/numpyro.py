@@ -47,6 +47,7 @@ from kl_pipe.sampling.base import Sampler, SamplerResult
 from kl_pipe.sampling.configs import NumpyroSamplerConfig, ReparamStrategy
 from kl_pipe.priors import (
     Prior,
+    CircularUniform,
     ConditionalLogNormal,
     Gaussian,
     TruncatedNormal,
@@ -139,18 +140,20 @@ def compute_reparam_scales(
         loc = float(prior.ratio_median * parent_loc)
         return loc, loc * float(prior.sigma_ratio)
 
+    elif isinstance(prior, CircularUniform):
+        # centre at the half-period; 4 sigma spans one period
+        return float(prior.period / 2), float(prior.period / 4)
+
     else:
         raise TypeError(f"Unknown prior type for '{name}': {type(prior)}")
 
 
-# Chunk size for end-of-sampling log-posterior evaluation. vmap-ing the full
-# log-posterior over ALL samples at once gives every intermediate in the
-# likelihood (notably the oversampled k-space FFT render grids) a batch
-# dimension equal to n_samples*n_chains -- a transient allocation that scales
-# with the total sample count and spikes to tens of GB at the end of a large
-# run, triggering an OOM SIGKILL ("zsh: killed" at 100%). Evaluating in fixed
-# chunks bounds the peak to ~chunk-size evaluations regardless of sample count.
-_LOG_PROB_CHUNK_SIZE = 256
+# Chunk size for the end-of-sampling log-posterior evaluation. Every
+# intermediate of the vmapped likelihood (render grids, dispersal tensors)
+# carries the chunk as a batch dimension, ~12-20 MB per sample on the
+# production fit, so the transient peak is chunk_size x that: 16 keeps it
+# under ~0.3 GiB, which packed GPU workers can always satisfy.
+_LOG_PROB_CHUNK_SIZE = 16
 
 
 def _batched_log_posterior_chunked(
@@ -184,6 +187,50 @@ def _batched_log_posterior_chunked(
         chunk = jnp.asarray(samples[start : start + chunk_size])
         out.append(np.asarray(fn(chunk)))
     return np.concatenate(out)
+
+
+def pooled_window_metric(
+    warmup_draws: np.ndarray, n_warmup: int
+) -> Tuple[np.ndarray, Tuple[int, int]]:
+    """Regularized covariance of every chain's draws in the last mass-matrix
+    window of numpyro's adaptation schedule for ``n_warmup``.
+
+    ``warmup_draws`` has shape (n_chains, n_warmup, p) in sampling coordinates.
+    The regularization is the one numpyro applies per chain (Stan: shrink the
+    sample covariance toward 1e-3 I with weight 5 / (n + 5)), so the pooled
+    matrix differs from a chain's adapted metric only by the pooling. Returns
+    the symmetric matrix and the (start, stop) window.
+    """
+    from numpyro.infer.hmc_util import build_adaptation_schedule
+
+    windows = build_adaptation_schedule(n_warmup)
+    if len(windows) < 3:
+        raise ValueError(
+            f"n_warmup={n_warmup} gives the adaptation schedule "
+            f"{[(w.start, w.end) for w in windows]} with no mass-matrix window; "
+            "the pooled warmup metric needs at least three windows"
+        )
+    lo, hi = windows[-2].start, windows[-2].end + 1
+    draws = np.asarray(warmup_draws, dtype=np.float64)
+    if draws.ndim != 3 or draws.shape[1] != n_warmup:
+        raise ValueError(
+            f"warmup_draws must have shape (n_chains, {n_warmup}, p), got {draws.shape}"
+        )
+    p = draws.shape[2]
+    pooled = draws[:, lo:hi].reshape(-1, p)
+    n = pooled.shape[0]
+    cov = np.cov(pooled, rowvar=False)
+    metric = (n / (n + 5.0)) * cov + 1e-3 * (5.0 / (n + 5.0)) * np.eye(p)
+    return 0.5 * (metric + metric.T), (lo, hi)
+
+
+def metric_mismatch(a: np.ndarray, m: np.ndarray) -> float:
+    """sqrt(max / min generalized eigenvalue) of metric ``a`` relative to ``m``
+    (1 when they agree)."""
+    ws, Vs = np.linalg.eigh(m)
+    minus_half = (Vs / np.sqrt(ws)) @ Vs.T
+    lam = np.linalg.eigvalsh(minus_half @ a @ minus_half)
+    return float(np.sqrt(lam.max() / lam.min()))
 
 
 class NumpyroSampler(Sampler):
@@ -708,6 +755,8 @@ class NumpyroSampler(Sampler):
         """
         from numpyro.infer import MCMC, NUTS
 
+        from kl_pipe.sampling.initialization import chain_inits
+
         start_time = time.time()
         seed = self.config.seed if self.config.seed is not None else int(time.time())
 
@@ -778,19 +827,22 @@ class NumpyroSampler(Sampler):
                 )
             inv_mass = jnp.asarray(donated)
 
-        # Init each chain at the MAP; jitter across chains (for n_chains > 1) by
-        # 1% of the per-dim posterior scale (sqrt of the mass-matrix diagonal).
+        # chain initial points in sampling coordinates: all at the MAP with a
+        # 1% metric-scale jitter, or one chain per competing MAP basin
         n_chains = self.config.n_chains
-        if n_chains == 1:
-            init_params = theta_map
-        else:
-            post_scale = jnp.sqrt(jnp.diag(inv_mass))
-            jit = (
-                0.01
-                * post_scale[None, :]
-                * random.normal(random.PRNGKey(seed), (n_chains, n_params))
+        init_params = jnp.asarray(
+            chain_inits(
+                pre,
+                np.asarray(inv_mass),
+                n_chains,
+                mode=self.config.chain_init,
+                seed=seed,
+                transform=transform,
+                max_margin=self.config.chain_init_max_margin,
             )
-            init_params = theta_map[None, :] + jit
+        )
+        if n_chains == 1:
+            init_params = init_params[0]
 
         kernel = NUTS(
             potential_fn=potential_fn,
@@ -814,11 +866,17 @@ class NumpyroSampler(Sampler):
             chain_method=chain_method,
             progress_bar=self.config.progress,
         )
-        mcmc.run(
-            random.PRNGKey(seed + 1),
-            init_params=init_params,
-            extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
-        )
+        two_stage: Optional[dict] = None
+        if self.config.warmup_metric == 'pooled':
+            mcmc, two_stage = self._two_stage_warmup(
+                mcmc, potential_fn, init_params, n_chains, chain_method, seed
+            )
+        else:
+            mcmc.run(
+                random.PRNGKey(seed + 1),
+                init_params=init_params,
+                extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
+            )
 
         # potential_fn samples come back as a flat array in sampled_names
         # order; back-transform to physical coordinates if the chain ran in
@@ -828,6 +886,11 @@ class NumpyroSampler(Sampler):
         if transform is not None:
             samples = np.asarray(transform.inverse(samples))
             grouped = np.asarray(transform.inverse(grouped))
+            if transform.is_periodic.any():
+                # periodic dims: one contiguous branch centred on the MAP so
+                # the linear r-hat, ESS, mean and std describe the posterior
+                samples = transform.wrap_about(samples, pre.map_point)
+                grouped = transform.wrap_about(grouped, pre.map_point)
 
         log_probs = _batched_log_posterior_chunked(
             self.task._log_posterior_jittable, samples
@@ -843,12 +906,18 @@ class NumpyroSampler(Sampler):
             'method': 'laplace',
             'condition_number': pre.condition_number,
             'n_starts_converged': pre.n_starts_converged,
+            'n_negative_eigenvalues': pre.n_negative_eigenvalues,
+            'min_eigenvalue_ratio': pre.min_eigenvalue_ratio,
         }
         if self.config.precondition_adapt_mass:
             # final warmup-adapted metric (sampling coordinates): reusable as
             # a donor mass matrix for sibling fits and escalation reruns
             diagnostics['adapted_inverse_mass_matrix'] = np.asarray(
                 mcmc.last_state.adapt_state.inverse_mass_matrix
+            )
+        if two_stage is not None:
+            diagnostics['warmup_pooled_inverse_mass_matrix'] = two_stage.pop(
+                'pooled_inverse_mass_matrix'
             )
         if transform is not None:
             diagnostics['preconditioner']['unconstrained'] = {
@@ -874,9 +943,13 @@ class NumpyroSampler(Sampler):
             'precondition': 'laplace',
             'precondition_unconstrained': transform is not None,
             'init_mass_donated': self.config.init_inverse_mass_matrix is not None,
+            'chain_init': self.config.chain_init,
             'chain_method': chain_method,
+            'warmup_metric': self.config.warmup_metric,
         }
-        return SamplerResult(
+        if two_stage is not None:
+            metadata.update(two_stage)
+        result = SamplerResult(
             samples=samples,
             log_prob=log_probs,
             param_names=self.task.sampled_names,
@@ -886,3 +959,220 @@ class NumpyroSampler(Sampler):
             diagnostics=diagnostics,
             metadata=metadata,
         )
+        # warm state kept for continue_sampling (more draws, no re-warmup)
+        self._continuation = {
+            'mcmc': mcmc,
+            'transform': transform,
+            'map_point': np.asarray(pre.map_point),
+            'grouped': grouped,
+            'result': result,
+            'n_chains': n_chains,
+            'chain_method': chain_method,
+        }
+        return result
+
+    def _two_stage_warmup(
+        self,
+        mcmc,
+        potential_fn: Callable,
+        init_params,
+        n_chains: int,
+        chain_method: str,
+        seed: int,
+    ):
+        """Pooled-metric warmup: run ``mcmc``'s adaptive warmup (stage 1),
+        pool the draws of its last mass-matrix window over chains into one
+        metric, and run a second NUTS from the stage-1 chain positions with
+        that metric
+        (``warmup_stage2_draws`` of warmup, then the production draws).
+
+        Returns the stage-2 ``MCMC`` (whose samples, extra fields and last
+        state feed the rest of the preconditioned path unchanged) and the
+        metadata of both stages.
+        """
+        from numpyro.infer import MCMC, NUTS
+
+        fields = ('diverging', 'accept_prob', 'num_steps', 'energy')
+        cfg = self.config
+        mcmc.warmup(
+            random.PRNGKey(seed + 1),
+            init_params=init_params,
+            collect_warmup=True,
+            extra_fields=fields,
+        )
+        draws = np.asarray(mcmc.get_samples(group_by_chain=True))
+        steps1 = np.asarray(mcmc.get_extra_fields(group_by_chain=True)['num_steps'])
+        state1 = mcmc.post_warmup_state
+        adapted = np.asarray(state1.adapt_state.inverse_mass_matrix)
+        if adapted.ndim == 2:
+            adapted = adapted[None]
+        metric, window = pooled_window_metric(draws, cfg.n_warmup)
+        eig_min = float(np.linalg.eigvalsh(metric).min())
+        if not np.isfinite(metric).all() or eig_min <= 0.0:
+            raise RuntimeError(
+                "pooled warmup metric is not a valid inverse mass matrix "
+                f"(min eigenvalue {eig_min:.3g})"
+            )
+        mismatch = [metric_mismatch(a, metric) for a in adapted]
+
+        kernel2 = NUTS(
+            potential_fn=potential_fn,
+            dense_mass=True,
+            inverse_mass_matrix=jnp.asarray(metric),
+            adapt_mass_matrix=cfg.warmup_stage2_adapt,
+            adapt_step_size=True,
+            max_tree_depth=cfg.max_tree_depth,
+            target_accept_prob=cfg.target_accept_prob,
+        )
+        mcmc2 = MCMC(
+            kernel2,
+            num_warmup=cfg.warmup_stage2_draws,
+            num_samples=cfg.n_samples,
+            num_chains=n_chains,
+            chain_method=chain_method,
+            progress_bar=cfg.progress,
+        )
+        # every chain resumes from where stage 1 left it
+        mcmc2.warmup(
+            random.PRNGKey(seed + 2),
+            init_params=jnp.asarray(state1.z),
+            collect_warmup=True,
+            extra_fields=fields,
+        )
+        steps2 = np.asarray(mcmc2.get_extra_fields(group_by_chain=True)['num_steps'])
+        mcmc2.run(random.PRNGKey(seed + 3), extra_fields=fields)
+        info = {
+            'warmup_metric': 'pooled',
+            'warmup_pooled_window': [int(window[0]), int(window[1])],
+            'warmup_stage1_steps': int(steps1.sum()),
+            'warmup_stage2_steps': int(steps2.sum()),
+            'warmup_stage2_draws': int(cfg.warmup_stage2_draws),
+            'warmup_stage2_adapt': bool(cfg.warmup_stage2_adapt),
+            # per-chain sqrt-kappa of the stage-1 adapted metric vs the pooled one
+            'warmup_chain_metric_mismatch': [float(m) for m in mismatch],
+            'pooled_inverse_mass_matrix': metric,
+        }
+        return mcmc2, info
+
+    def continue_sampling(self, n_samples: int) -> SamplerResult:
+        """Draw ``n_samples`` more per chain from the completed preconditioned
+        run's final state (position, step size, metric), with no warmup, and
+        return the union of all draws so far as one result.
+
+        The returned samples are chain-major (all draws of chain 0, then
+        chain 1, ...), r-hat/ESS are recomputed on the combined per-chain
+        draws, and the per-draw diagnostic arrays (divergences, acceptance,
+        leapfrog steps) are the first run's followed by the new draws'.
+        Repeatable: each call extends the same chains.
+        """
+        from numpyro.infer import MCMC
+
+        if getattr(self, '_continuation', None) is None:
+            raise RuntimeError(
+                "continue_sampling requires a completed preconditioned run "
+                "(precondition='laplace') on this sampler instance"
+            )
+        if (
+            not isinstance(n_samples, int)
+            or isinstance(n_samples, bool)
+            or n_samples < 1
+        ):
+            raise ValueError(f"n_samples must be a positive int, got {n_samples!r}")
+        c = self._continuation
+        start_time = time.time()
+        prev = c['result']
+        sampled_names = list(self.task.sampled_names)
+        n_params = len(sampled_names)
+
+        # one no-warmup MCMC object per block size, reused across blocks
+        block_mcmcs = c.setdefault('block_mcmcs', {})
+        mcmc = block_mcmcs.get(n_samples)
+        if mcmc is None:
+            mcmc = MCMC(
+                c['mcmc'].sampler,
+                num_warmup=0,
+                num_samples=n_samples,
+                num_chains=c['n_chains'],
+                chain_method=c['chain_method'],
+                progress_bar=self.config.progress,
+            )
+            block_mcmcs[n_samples] = mcmc
+        mcmc.post_warmup_state = c['mcmc'].last_state
+        mcmc.run(
+            c['mcmc'].last_state.rng_key,
+            extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
+        )
+
+        grouped_new = np.asarray(mcmc.get_samples(group_by_chain=True))
+        grouped_new = grouped_new.reshape(c['n_chains'], n_samples, n_params)
+        transform = c['transform']
+        if transform is not None:
+            grouped_new = np.asarray(transform.inverse(grouped_new))
+            if transform.is_periodic.any():
+                grouped_new = transform.wrap_about(grouped_new, c['map_point'])
+        grouped = np.concatenate([c['grouped'], grouped_new], axis=1)
+        samples = grouped.reshape(-1, n_params)
+        log_probs_new = _batched_log_posterior_chunked(
+            self.task._log_posterior_jittable, grouped_new.reshape(-1, n_params)
+        )
+        n_prev = c['grouped'].shape[1]
+        log_probs = np.concatenate(
+            [
+                np.asarray(prev.log_prob).reshape(c['n_chains'], n_prev),
+                log_probs_new.reshape(c['n_chains'], n_samples),
+            ],
+            axis=1,
+        ).reshape(-1)
+
+        samples_by_chain = {
+            name: grouped[:, :, i] for i, name in enumerate(sampled_names)
+        }
+        diagnostics = self._collect_diagnostics(
+            mcmc, reparam_scales=None, samples_by_chain=samples_by_chain
+        )
+        # per-draw arrays: first run's draws followed by the new draws
+        for key in ('diverging', 'accept_prob', 'num_steps'):
+            old = prev.diagnostics.get(key)
+            new = diagnostics.get(key)
+            if old is None or new is None:
+                raise RuntimeError(f"continue_sampling: per-draw field '{key}' missing")
+            diagnostics[key] = np.concatenate([np.asarray(old), np.asarray(new)])
+        diverging = diagnostics['diverging']
+        diagnostics['n_divergences'] = int(diverging.sum())
+        diagnostics['divergence_rate'] = (
+            float(diverging.mean()) if diverging.size else 0.0
+        )
+        diagnostics['mean_accept_prob'] = float(np.mean(diagnostics['accept_prob']))
+        diagnostics['mean_tree_depth'] = float(
+            np.log2(np.asarray(diagnostics['num_steps']) + 1).mean()
+        )
+        diagnostics['preconditioner'] = dict(prev.diagnostics['preconditioner'])
+        if self.config.precondition_adapt_mass:
+            diagnostics['adapted_inverse_mass_matrix'] = np.asarray(
+                mcmc.last_state.adapt_state.inverse_mass_matrix
+            )
+
+        r_hats = diagnostics.get('r_hat', {})
+        max_rhat = max(r_hats.values()) if r_hats else 1.0
+        converged = max_rhat < 1.1 and diagnostics['divergence_rate'] < 0.1
+        metadata = dict(prev.metadata)
+        metadata['elapsed_seconds'] = float(prev.metadata['elapsed_seconds']) + (
+            time.time() - start_time
+        )
+        metadata['n_samples_per_chain'] = int(grouped.shape[1])
+        metadata['continuations'] = int(prev.metadata.get('continuations', 0)) + 1
+        metadata['continued_draws_per_chain'] = int(
+            prev.metadata.get('continued_draws_per_chain', 0)
+        ) + int(n_samples)
+        result = SamplerResult(
+            samples=samples,
+            log_prob=log_probs,
+            param_names=self.task.sampled_names,
+            fixed_params=self.task.fixed_params,
+            acceptance_fraction=diagnostics['mean_accept_prob'],
+            converged=converged,
+            diagnostics=diagnostics,
+            metadata=metadata,
+        )
+        self._continuation = dict(c, mcmc=mcmc, grouped=grouped, result=result)
+        return result

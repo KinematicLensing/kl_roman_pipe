@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
   pull_request:
     branches:
-      # we only run CI on branches that want to merge into main, for now
-      - main  
+      # main plus the shared integration branch
+      - main
+      - se/ensemble
     types:
       # we want to only run CI on PRs that are "Ready for review", not drafts
       - opened

@@ -16,7 +16,7 @@ The goal is: **accurate shear estimates** (|m| < 0.01, |c| < 0.001). Everything 
 - 3D sech² intensity model matches GalSim to ~1e-5 (k-space path)
 - K-space pixel integration (sinc + wrap) achieves <0.02% vs GalSim; PSF fused in single FFT pass
 - Three-tier test hierarchy (noiseless three-gate likelihood slices → k-sigma optimizer recovery → MCMC)
-- NumPyro NUTS w/ Z-score reparam handles 14-dim joint posteriors robustly
+- NumPyro NUTS (Laplace-preconditioned unconstrained coords; Z-score reparam when unpreconditioned) handles 14-dim joint posteriors robustly
 
 ### Where it breaks
 | Problem | Evidence | Shear impact |

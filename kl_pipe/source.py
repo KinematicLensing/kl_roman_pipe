@@ -510,6 +510,8 @@ class SourceModel:
             continuum_trace_kernel,
             disperse_continuum_analytic,
             disperse_line_analytic,
+            disperse_line_analytic_local,
+            line_dispersion_offsets,
         )
         from kl_pipe.grism import _apply_post_dispersion_pixel_response
         from kl_pipe.utils import build_map_grid_from_image_pars
@@ -580,23 +582,32 @@ class SourceModel:
                 f'int:{int_owner}', theta_int, int_model, int_model.amplitude_param
             )
 
-            lam_obs = line.lambda_rest * (1.0 + z) * (1.0 + v_los / _C_KMS)
             disp_owner = (
                 line.dispersion_key if line.dispersion_key is not None else line_key
             )
             sigma_kms = pars[f'{disp_owner}.dispersion']
-            sigma_s = lam_obs * sigma_kms / _C_KMS / gp.dispersion * os_f
-            xi = (lam_obs - gp.lambda_ref) / gp.dispersion * os_f
+            lam_sys = line.lambda_rest * (1.0 + z)
+            xi, sigma_s = line_dispersion_offsets(
+                lam_sys, gp.lambda_ref, v_los, sigma_kms, gp.dispersion, os_f
+            )
+            lam_obs = lam_sys * (1.0 + v_los / _C_KMS)
 
+            local_window = obs.line_window_mode == 'local'
             halfwidth = obs.line_window_halfwidth
             if halfwidth is None:
                 # standalone sizing from the concrete parameter values;
                 # jitted/inference use must freeze it in RenderConfig
                 try:
-                    halfwidth = (
-                        int(float(jnp.max(jnp.abs(xi))) + 4.0 * float(jnp.max(sigma_s)))
-                        + 3
-                    )
+                    if local_window:
+                        halfwidth = int(6.0 * float(jnp.max(sigma_s))) + 3
+                    else:
+                        halfwidth = (
+                            int(
+                                float(jnp.max(jnp.abs(xi)))
+                                + 4.0 * float(jnp.max(sigma_s))
+                            )
+                            + 3
+                        )
                 except jax.errors.ConcretizationTypeError as err:
                     raise ValueError(
                         "line_window_halfwidth must be set on RenderConfig for "
@@ -611,7 +622,10 @@ class SourceModel:
                 if throughput is not None
                 else None
             )
-            dispersed = dispersed + disperse_line_analytic(
+            disperse = (
+                disperse_line_analytic_local if local_window else disperse_line_analytic
+            )
+            dispersed = dispersed + disperse(
                 I_line, xi, sigma_s, halfwidth, weight=weight
             )
 

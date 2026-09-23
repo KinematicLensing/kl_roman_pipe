@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Tuple, Optional
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -537,6 +538,50 @@ def _normal_cdf_antiderivative(z: jnp.ndarray) -> jnp.ndarray:
     return z * _normal_cdf(z) + _normal_pdf(z)
 
 
+def _bounded_cdf_antiderivative(z: jnp.ndarray) -> jnp.ndarray:
+    # Psi(z) - max(z, 0) = -|z| Phi(-|z|) + phi(z): even, bounded by phi(0);
+    # Phi(-|z|) via erfc avoids the 1 + erf cancellation in the tails
+    az = jnp.abs(z)
+    return -az * 0.5 * jax.scipy.special.erfc(az / jnp.sqrt(2.0)) + _normal_pdf(z)
+
+
+def _tent_second_difference_direct(z_taps: jnp.ndarray) -> jnp.ndarray:
+    # second difference of Psi(z) = z Phi(z) + phi(z) along the last axis
+    psi = _normal_cdf_antiderivative(z_taps)
+    return psi[..., 2:] - 2.0 * psi[..., 1:-1] + psi[..., :-2]
+
+
+def _tent_second_difference_stable(
+    z_taps: jnp.ndarray, inv_sigma: jnp.ndarray
+) -> jnp.ndarray:
+    # Psi = max(z, 0) + bounded remainder; the second difference of max(z, 0)
+    # at spacing h is exactly the tent clip(h - |z_mid|, 0, h), so no
+    # values of size |z| are ever differenced
+    bounded = _bounded_cdf_antiderivative(z_taps)
+    curved = bounded[..., 2:] - 2.0 * bounded[..., 1:-1] + bounded[..., :-2]
+    h = inv_sigma[..., None] if jnp.ndim(inv_sigma) else inv_sigma
+    tent = jnp.clip(h - jnp.abs(z_taps[..., 1:-1]), 0.0, h)
+    return curved + tent
+
+
+def _tent_second_difference(z_taps: jnp.ndarray, inv_sigma: jnp.ndarray) -> jnp.ndarray:
+    """Second difference of Psi along the last axis, dispatched on dtype.
+
+    ``z_taps[..., k]`` are consecutive tap arguments spaced ``inv_sigma``
+    apart; the result has one fewer entry at each end. Float64 inputs use
+    the direct second difference of ``Psi(z) = z Phi(z) + phi(z)``. Float32
+    inputs use the cancellation-free split ``Psi = max(z, 0) + remainder``:
+    the direct form differences values of size |z| (up to ~30) to obtain
+    O(1) results and loses float32 precision, while the split form's
+    intermediates stay bounded. The two agree to 1e-14 in float64; the
+    stable form moves about a quarter more memory in the backward pass,
+    which is why float64 keeps the direct form.
+    """
+    if jnp.dtype(z_taps.dtype) == jnp.dtype(jnp.float64):
+        return _tent_second_difference_direct(z_taps)
+    return _tent_second_difference_stable(z_taps, inv_sigma)
+
+
 def gaussian_tent_profile(u: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
     """Closed form of (normalized Gaussian_sigma convolved with unit tent)(u).
 
@@ -548,11 +593,58 @@ def gaussian_tent_profile(u: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
     line width in fine pixels. Both broadcast. Dimensionless; integrates
     to 1 over u.
     """
-    return sigma * (
-        _normal_cdf_antiderivative((u + 1.0) / sigma)
-        - 2.0 * _normal_cdf_antiderivative(u / sigma)
-        + _normal_cdf_antiderivative((u - 1.0) / sigma)
+    u = jnp.asarray(u)
+    sigma = jnp.asarray(sigma)
+    inv_sigma = 1.0 / sigma
+    z_taps = jnp.stack(
+        [(u - 1.0) * inv_sigma, u * inv_sigma, (u + 1.0) * inv_sigma], axis=-1
     )
+    return sigma * _tent_second_difference(z_taps, inv_sigma)[..., 0]
+
+
+def line_dispersion_offsets(
+    lambda_sys: jnp.ndarray,
+    lambda_ref: float,
+    v_los: jnp.ndarray,
+    sigma_kms: jnp.ndarray,
+    dispersion: float,
+    oversample: int,
+) -> tuple:
+    """Per-spaxel footprint centre ``xi`` and width ``sigma_s`` in fine pixels.
+
+    ``xi = (lambda_obs - lambda_ref) / dispersion * oversample`` with
+    ``lambda_obs = lambda_sys * (1 + v_los / c)``, evaluated as the systemic
+    offset ``lambda_sys - lambda_ref`` (one scalar) plus the small Doppler
+    term ``lambda_sys * v_los / c`` per spaxel, so no per-spaxel absolute
+    wavelength (~1e3 nm) is ever differenced. In float32 that keeps ``xi``
+    to ~1e-6 fine pixels instead of ~1e-3 (one float32 ulp of 1300 nm is
+    28 km/s / 1000); in float64 the reordering is round-off level.
+
+    Parameters
+    ----------
+    lambda_sys : scalar
+        Systemic line wavelength ``lambda_rest * (1 + z)`` (nm).
+    lambda_ref : float
+        Grism zero-offset wavelength (nm).
+    v_los : array
+        Line-of-sight velocity per spaxel (km/s).
+    sigma_kms : scalar
+        Velocity dispersion (km/s).
+    dispersion : float
+        nm per coarse pixel.
+    oversample : int
+        Fine pixels per coarse pixel.
+
+    Returns
+    -------
+    (xi, sigma_s)
+        Fine-pixel footprint centre offset and Gaussian width per spaxel.
+    """
+    scale = oversample / dispersion  # fine pixels per nm
+    doppler_nm = lambda_sys * (v_los / C_KMS)
+    xi = ((lambda_sys - lambda_ref) + doppler_nm) * scale
+    sigma_s = (lambda_sys + doppler_nm) * (sigma_kms / C_KMS) * scale
+    return xi, sigma_s
 
 
 def disperse_line_analytic(
@@ -562,7 +654,7 @@ def disperse_line_analytic(
     halfwidth: int,
     weight: jnp.ndarray = None,
 ) -> jnp.ndarray:
-    """Disperse one emission line in closed form, one spaxel at a time.
+    """Disperse one emission line in closed form, all spaxels and taps at once.
 
     Each source spaxel (r, j) contributes its line flux
     ``I_line[r, j] * weight[r, j]`` to the dispersed image, spread along
@@ -602,25 +694,64 @@ def disperse_line_analytic(
         raise ValueError(f"halfwidth must be >= 1, got {halfwidth}")
     amp = I_line if weight is None else I_line * weight
     n = I_line.shape[1]
-    out = jnp.zeros_like(I_line)
-    # consecutive taps share Psi evaluations: the profile at tap w is
-    # sigma * (Psi_{w+1} - 2 Psi_w + Psi_{w-1}), so a rolling second
-    # difference needs one new Psi (erf + exp) per tap instead of three
+    # all taps at once: a (row, col, tap) tensor of tap arguments, second
+    # difference along taps gives each spaxel's deposit at offset w, then one gather
+    # collects the deposits landing on each output column (out-of-stamp
+    # sources masked, matching the constant-mode pull semantics)
+    taps = jnp.arange(-halfwidth - 1, halfwidth + 2, dtype=I_line.dtype)
     inv_sigma = 1.0 / sigma_s
-    amp_sigma = amp * sigma_s
-    P_prev = _normal_cdf_antiderivative((-halfwidth - 1 - xi) * inv_sigma)
-    P_cur = _normal_cdf_antiderivative((-halfwidth - xi) * inv_sigma)
-    for w in range(-halfwidth, halfwidth + 1):
-        P_next = _normal_cdf_antiderivative((w + 1 - xi) * inv_sigma)
-        term = amp_sigma * (P_next - 2.0 * P_cur + P_prev)
-        if w == 0:
-            out = out + term
-        elif w > 0:
-            out = out.at[:, w:].add(term[:, : n - w])
-        else:
-            out = out.at[:, :w].add(term[:, -w:])
-        P_prev, P_cur = P_cur, P_next
-    return out
+    z_taps = (taps[None, None, :] - xi[..., None]) * inv_sigma[..., None]
+    deposit = (amp * sigma_s)[..., None] * _tent_second_difference(z_taps, inv_sigma)
+    col = jnp.arange(n)
+    tap = jnp.arange(2 * halfwidth + 1)
+    src_col = col[:, None] - tap[None, :] + halfwidth
+    valid = (src_col >= 0) & (src_col < n)
+    gathered = deposit[:, jnp.clip(src_col, 0, n - 1), tap[None, :]]
+    return jnp.sum(jnp.where(valid[None], gathered, 0.0), axis=-1)
+
+
+def disperse_line_analytic_local(
+    I_line: jnp.ndarray,
+    xi: jnp.ndarray,
+    sigma_s: jnp.ndarray,
+    halfwidth: int,
+    weight: jnp.ndarray = None,
+) -> jnp.ndarray:
+    """Closed-form line dispersal with a per-spaxel window (scatter-add).
+
+    Same model as ``disperse_line_analytic``: spaxel (r, j) spreads
+    ``I_line * weight`` along +x as ``gaussian_tent_profile`` centred
+    ``xi[r, j]`` fine pixels from its column. Here the ``2 * halfwidth + 1``
+    taps are centred on ``round(xi)`` for each spaxel instead of on the
+    source column, so ``halfwidth`` only has to cover the profile width
+    (see ``render.local_line_window_halfwidth_for_priors``). Deposits land
+    by scatter-add; flux beyond the stamp edge is dropped. The tap set
+    changes when ``xi`` crosses a half-integer, by the size of the tail
+    outside the window (below 1e-9 of the peak for a six-sigma window).
+    """
+    if halfwidth < 1:
+        raise ValueError(f"halfwidth must be >= 1, got {halfwidth}")
+    amp = I_line if weight is None else I_line * weight
+    nrow, n = I_line.shape
+    xi_round = jnp.round(xi)
+    frac = xi - xi_round
+    taps = jnp.arange(-halfwidth - 1, halfwidth + 2, dtype=I_line.dtype)
+    inv_sigma = 1.0 / sigma_s
+    z_taps = (taps[None, None, :] - frac[..., None]) * inv_sigma[..., None]
+    deposit = (amp * sigma_s)[..., None] * _tent_second_difference(z_taps, inv_sigma)
+    offsets = jnp.arange(-halfwidth, halfwidth + 1)
+    dest = (
+        jnp.arange(n)[None, :, None]
+        + xi_round[..., None].astype(jnp.int32)
+        + offsets[None, None, :]
+    )
+    valid = (dest >= 0) & (dest < n)
+    rows = jnp.broadcast_to(jnp.arange(nrow)[:, None, None], dest.shape)
+    return (
+        jnp.zeros((nrow, n), I_line.dtype)
+        .at[rows, jnp.clip(dest, 0, n - 1)]
+        .add(jnp.where(valid, deposit, 0.0))
+    )
 
 
 def _tent_running_integral(t: np.ndarray) -> np.ndarray:

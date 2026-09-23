@@ -315,8 +315,16 @@ class TestRomanKernel:
         )
         kernel_fft = np.asarray(psf_data.kernel_fft)
         assert np.all(np.isfinite(kernel_fft))
-        # unit-sum kernel: DC component of its FFT is exactly the sum
-        assert kernel_fft[0, 0].real == pytest.approx(1.0, abs=1e-12)
+        # the DC component is the padded kernel's sum: the unit-normalized
+        # drawn kernel's flux within half-width N - 1 of the stamp (the only
+        # part that can reach the retained crop); the Roman wings put a few
+        # percent beyond 31 coarse pixels
+        full = psf.drawImage(nx=pin, ny=pin, scale=PIXEL_SCALE).array.astype(float)
+        full /= full.sum()
+        center = pin // 2
+        reachable = full[center - 31 : center + 32, center - 31 : center + 32].sum()
+        assert reachable < 1.0
+        assert kernel_fft[0, 0].real == pytest.approx(reachable, abs=1e-12)
         assert kernel_fft[0, 0].imag == pytest.approx(0.0, abs=1e-12)
 
     def test_pinned_shape_constant_across_z(self):

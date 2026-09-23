@@ -19,6 +19,7 @@ Unknown YAML keys raise. Every enum-like field is validated at construction.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 from dataclasses import dataclass
@@ -507,6 +508,8 @@ _DRAW_DISTS = ('uniform', 'lognormal_tf')
 _POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
+# order in which dynamic workers walk the manifest when claiming fits
+_CLAIM_ORDERS = ('manifest', 'hard_first', 'easy_first')
 _DISPATCH_BACKENDS = ('local', 'slurm')
 _SAVE_POLICIES = ('none', 'subset', 'all')
 _MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr', 'shear_bias')
@@ -621,6 +624,12 @@ class CatalogPopulationSpec:
     # galaxy_id across runs.
     galaxy_ids: Optional[Tuple[int, ...]] = None
 
+    # paint.h_over_r (optional): the disk thickness ratio drawn per galaxy as
+    # LN(median, scatter_dex) and shared by every component, in place of the
+    # pinned scene default. Requires fit.sample_h_over_r (the prior is this
+    # distribution). (median, scatter_dex)
+    paint_h_over_r: Optional[Tuple[float, float]] = None
+
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
@@ -716,6 +725,13 @@ class CatalogPopulationSpec:
                 f"priors.logm_obs_scatter_dex ({self.logm_obs_scatter_dex}) "
                 f"must be >= 0"
             )
+        if self.paint_h_over_r is not None:
+            median, scatter_dex = self.paint_h_over_r
+            if not (median > 0 and scatter_dex > 0):
+                raise ValueError(
+                    f"paint.h_over_r median ({median}) and scatter_dex "
+                    f"({scatter_dex}) must both be positive"
+                )
 
 
 def _parse_pair(value, context: str) -> Tuple[float, float]:
@@ -791,7 +807,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         )
 
     paint = population['paint']
-    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge'), f"{context}.paint")
+    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge', 'h_over_r'), f"{context}.paint")
     _require_keys(paint, ('tfr', 'sigma0'), f"{context}.paint")
     # paint.bulge (optional, default true): false = disk-only twin
     paint_bulge = paint.get('bulge', True)
@@ -799,6 +815,17 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         raise ValueError(
             f"{context}.paint.bulge must be a boolean (true = BulgeDisk "
             f"broadband, false = single-disk twin), got {paint_bulge!r}"
+        )
+    paint_h_over_r = paint.get('h_over_r')
+    if paint_h_over_r is not None:
+        h_context = f"{context}.paint.h_over_r"
+        if not isinstance(paint_h_over_r, dict):
+            raise ValueError(f"{h_context}: must be a mapping, got {paint_h_over_r!r}")
+        _reject_unknown(paint_h_over_r, ('median', 'scatter_dex'), h_context)
+        _require_keys(paint_h_over_r, ('median', 'scatter_dex'), h_context)
+        paint_h_over_r = (
+            float(paint_h_over_r['median']),
+            float(paint_h_over_r['scatter_dex']),
         )
     tfr = paint['tfr']
     tfr_keys = ('logv0', 'logm0', 'slope', 'scatter_dex')
@@ -867,6 +894,7 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         shear_gmax=float(shear['gmax']),
         logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
         paint_bulge=paint_bulge,
+        paint_h_over_r=paint_h_over_r,
     )
 
 
@@ -894,11 +922,56 @@ class EscalationSpec:
     ess_min: float = 50.0
     n_warmup: int = 800
     n_samples: int = 1000
+    # retry mode: 'restart' (fresh warmup with the donated metric),
+    # 'continue' (more draws from the warmed chains in blocks of
+    # continue_block per chain, gate re-checked after each block, at most
+    # continue_max_blocks blocks, no re-warmup, first-attempt draws kept) or
+    # 'auto' (continue when the first attempt is marginal -- max_rhat <=
+    # continue_rhat_max and divergence_rate <= continue_divergence_max --
+    # restart otherwise, since chains sitting in different basins need a new
+    # start, not more draws)
+    mode: str = 'restart'
+    continue_rhat_max: float = 1.2
+    continue_divergence_max: float = 0.05
+    # block size matches the production first-attempt draw count; four blocks
+    # cap the continuation at ~the restart draw budget (n_samples 1000)
+    continue_block: int = 300
+    continue_max_blocks: int = 4
+    # extra gate on the shear ESS (min of ess_g1, ess_g2): the science uses
+    # the per-fit shear width, whose error is 1/sqrt(2 ESS), so this floor
+    # is the fidelity that matters; None = no shear-specific floor
+    ess_min_shear: Optional[float] = None
+    # wall budget for continuation in minutes since the fit started: no block
+    # is started once the elapsed time plus the previous block's wall would
+    # exceed it; the fit is then recorded as-is with restart_reason
+    # 'budget_exhausted'. None = the block count is the only cap.
+    wall_budget_min: Optional[float] = None
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
             raise ValueError(
                 f"escalation.enabled must be a boolean, got {self.enabled!r}"
+            )
+        if self.mode not in ('restart', 'continue', 'auto'):
+            raise ValueError(
+                "escalation.mode must be 'restart', 'continue' or 'auto', got "
+                f"{self.mode!r}"
+            )
+        if (
+            not isinstance(self.continue_rhat_max, float)
+            or self.continue_rhat_max <= 1.0
+        ):
+            raise ValueError(
+                f"escalation.continue_rhat_max ({self.continue_rhat_max!r}) must be "
+                "a float > 1.0"
+            )
+        if (
+            not isinstance(self.continue_divergence_max, float)
+            or not 0.0 <= self.continue_divergence_max <= 1.0
+        ):
+            raise ValueError(
+                f"escalation.continue_divergence_max ({self.continue_divergence_max!r}) "
+                "must be a float in [0, 1]"
             )
         if not isinstance(self.rhat_max, float) or self.rhat_max <= 1.0:
             raise ValueError(
@@ -908,9 +981,25 @@ class EscalationSpec:
             raise ValueError(
                 f"escalation.ess_min ({self.ess_min!r}) must be a positive float"
             )
+        if self.ess_min_shear is not None and (
+            not isinstance(self.ess_min_shear, float) or self.ess_min_shear <= 0
+        ):
+            raise ValueError(
+                f"escalation.ess_min_shear ({self.ess_min_shear!r}) must be a "
+                "positive float or null"
+            )
+        if self.wall_budget_min is not None and (
+            not isinstance(self.wall_budget_min, float) or self.wall_budget_min <= 0
+        ):
+            raise ValueError(
+                f"escalation.wall_budget_min ({self.wall_budget_min!r}) must be a "
+                "positive float or null"
+            )
         for name, value in [
             ('n_warmup', self.n_warmup),
             ('n_samples', self.n_samples),
+            ('continue_block', self.continue_block),
+            ('continue_max_blocks', self.continue_max_blocks),
         ]:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(
@@ -924,7 +1013,20 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         return EscalationSpec()
     if not isinstance(block, dict):
         raise ValueError(f"{context}: must be a mapping, got {block!r}")
-    allowed = ('enabled', 'rhat_max', 'ess_min', 'n_warmup', 'n_samples')
+    allowed = (
+        'enabled',
+        'rhat_max',
+        'ess_min',
+        'n_warmup',
+        'n_samples',
+        'mode',
+        'continue_rhat_max',
+        'continue_divergence_max',
+        'continue_block',
+        'continue_max_blocks',
+        'ess_min_shear',
+        'wall_budget_min',
+    )
     _reject_unknown(block, allowed, context)
     return EscalationSpec(
         enabled=block.get('enabled', False),
@@ -932,6 +1034,21 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         ess_min=float(block.get('ess_min', 50.0)),
         n_warmup=_require_yaml_int(block, 'n_warmup', 800, context),
         n_samples=_require_yaml_int(block, 'n_samples', 1000, context),
+        mode=str(block.get('mode', 'restart')),
+        continue_rhat_max=float(block.get('continue_rhat_max', 1.2)),
+        continue_divergence_max=float(block.get('continue_divergence_max', 0.05)),
+        continue_block=_require_yaml_int(block, 'continue_block', 300, context),
+        continue_max_blocks=_require_yaml_int(block, 'continue_max_blocks', 4, context),
+        ess_min_shear=(
+            None
+            if block.get('ess_min_shear') is None
+            else float(block['ess_min_shear'])
+        ),
+        wall_budget_min=(
+            None
+            if block.get('wall_budget_min') is None
+            else float(block['wall_budget_min'])
+        ),
     )
 
 
@@ -999,10 +1116,20 @@ class EnsembleSpec:
     # bulge decomposition to loosen, since the index is degenerate with
     # bulge_frac and bulge_hlr and pinning it suppressed one leg of that.
     sample_bulge_nsersic: bool
+    # sample one disk thickness ratio shared by every component (the
+    # top-level ``h_over_r``), with the paint distribution as its prior,
+    # instead of pinning the scene default in mock and fit. Requires a
+    # disk-only catalog population with population.paint.h_over_r.
+    sample_h_over_r: bool
 
     # dispatch
     backend: str
     mode: str
+    # 'manifest' (row order), 'hard_first' (predicted-slow fits first, so
+    # the slow tail overlaps the rest of the job instead of ending it) or
+    # 'easy_first' (its reverse, for a short job that should finish as many
+    # fits as it can)
+    claim_order: str
     workers_per_node: int
     target_task_walltime_min: float
     queue: str
@@ -1017,6 +1144,69 @@ class EnsembleSpec:
     # data-driven sigma_eps (less prior floor). Defaults to 0.2, matching the
     # published Roman KL prior half-width (Xu+ 2023) as an isotropic Gaussian.
     shear_fit_prior_sigma: float = 0.2
+    # 'gaussian' (default, N(0, sigma)) or 'uniform' (flat on
+    # [-halfwidth, halfwidth]); the flat prior removes prior shrinkage of
+    # the per-galaxy shear posterior, so the ensemble estimator needs no
+    # width-dependent shrinkage correction
+    shear_fit_prior_type: str = 'gaussian'
+    shear_fit_prior_halfwidth: float = 0.3
+
+    # fit prior on the intrinsic position angle: 'full_circle' (uniform on
+    # the circle, period 2 pi: both rotation directions, no support walls) or
+    # 'half_turn' (Uniform(0, pi): one rotation direction, walls at 0 and pi)
+    pa_fit_prior: str = 'full_circle'
+
+    # fit prior on cos i as a [lo, hi] pair, or None for the generating range
+    # (catalog orientation.cosi_range, the stratify range, or the uniform
+    # draw). A fit prior wider than the generating range keeps the truth away
+    # from a support wall: fits whose truth sits within ~2 sigma of a wall
+    # bias the posterior mean inward and put the MAP on the wall.
+    cosi_fit_prior_range: Optional[Tuple[float, float]] = None
+
+    # analytic-dispersal deposit window for the FIT observations ('global' |
+    # 'local'); mock data are always rendered with the global window
+    render_line_window_mode: str = 'global'
+
+    # Laplace-preconditioner Hessian: 'fd' (central differences of the
+    # compiled gradient; float64 only) or 'ad' (second-order autodiff; the
+    # only option under KLPIPE_FP32)
+    hessian_method: str = 'fd'
+
+    # NUTS tree-depth cap (at most 2**depth - 1 leapfrog steps per draw)
+    max_tree_depth: int = 10
+
+    # fit-initialization knobs (kl_pipe.sampling.initialization.InitConfig
+    # carries the same names; defaults = the robust procedure measured on
+    # cosmos25_bank32, jobs 988356 / 988824 / 990891):
+    # add image-moment optimizer starts (centroid, flux, size, inclination,
+    # position angle read off the broadband stamps) to the prior-draw and
+    # position-angle-stratified starts
+    map_moment_starts: bool = False
+    # hand the prior support bounds to the MAP optimizer (projected L-BFGS-B)
+    map_bounded: bool = True
+    # regularized Newton polish steps after L-BFGS on the best map_polish_basins
+    # basins (0 = off)
+    map_polish_steps: int = 8
+    map_polish_basins: int = 3
+    # eigenvalue floor of the Laplace metric: 'prior' (absolute, in
+    # prior-width units; default value 0.5) or 'relative' (below
+    # eig_floor * max eigenvalue; default value 1e-4). None = the mode's default.
+    eig_floor_mode: str = 'prior'
+    eig_floor: Optional[float] = None
+    # chain initial points: 'map_jitter' (all chains at the MAP, 1% jitter)
+    # or 'map_basins' (one chain per competing optimizer basin within
+    # chain_init_max_margin nats of the MAP)
+    chain_init: str = 'map_jitter'
+    chain_init_max_margin: float = 20.0
+    # two-stage warmup (NumpyroSamplerConfig.warmup_*): 'adapted' is the
+    # single-stage path; 'pooled' pools the last mass-matrix window over
+    # chains and restarts every chain from that one metric
+    warmup_metric: str = 'adapted'
+    warmup_stage2_draws: int = 50
+    warmup_stage2_adapt: bool = False
+    # catalog populations: multiplier on every galaxy's per-pass line SNR
+    # (mock noise only; selection and the line-flux prior use the catalog value)
+    line_snr_scale: float = 1.0
 
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
@@ -1031,6 +1221,97 @@ class EnsembleSpec:
             raise ValueError(
                 f"population type '{self.population_type}'; supported: "
                 f"{_POPULATION_TYPES}"
+            )
+        if self.hessian_method not in ('fd', 'ad'):
+            raise ValueError(
+                f"fit.hessian_method must be 'fd' or 'ad', got {self.hessian_method!r}"
+            )
+        if self.eig_floor_mode not in ('relative', 'prior'):
+            raise ValueError(
+                "fit.eig_floor_mode must be 'relative' or 'prior', got "
+                f"{self.eig_floor_mode!r}"
+            )
+        if self.eig_floor is not None and not (
+            isinstance(self.eig_floor, float) and self.eig_floor > 0
+        ):
+            raise ValueError(
+                f"fit.eig_floor must be a positive float or absent, got {self.eig_floor!r}"
+            )
+        if self.chain_init not in ('map_jitter', 'map_basins'):
+            raise ValueError(
+                "fit.chain_init must be 'map_jitter' or 'map_basins', got "
+                f"{self.chain_init!r}"
+            )
+        if not (
+            isinstance(self.chain_init_max_margin, float)
+            and self.chain_init_max_margin > 0
+        ):
+            raise ValueError(
+                "fit.chain_init_max_margin must be a positive float, got "
+                f"{self.chain_init_max_margin!r}"
+            )
+        if not isinstance(self.map_moment_starts, bool):
+            raise ValueError(
+                f"fit.map_moment_starts must be a boolean, got {self.map_moment_starts!r}"
+            )
+        if self.warmup_metric not in ('adapted', 'pooled'):
+            raise ValueError(
+                "fit.warmup_metric must be 'adapted' or 'pooled', got "
+                f"{self.warmup_metric!r}"
+            )
+        if self.warmup_metric == 'pooled' and not (
+            self.precondition == 'laplace' and self.adapt_mass
+        ):
+            raise ValueError(
+                "fit.warmup_metric: pooled requires fit.precondition: laplace and "
+                "fit.adapt_mass: true"
+            )
+        if not isinstance(self.warmup_stage2_adapt, bool):
+            raise ValueError(
+                f"fit.warmup_stage2_adapt must be a boolean, got {self.warmup_stage2_adapt!r}"
+            )
+        if not isinstance(self.map_bounded, bool):
+            raise ValueError(
+                f"fit.map_bounded must be a boolean, got {self.map_bounded!r}"
+            )
+        for name, value, low in (
+            ('map_polish_steps', self.map_polish_steps, 0),
+            ('map_polish_basins', self.map_polish_basins, 1),
+            ('warmup_stage2_draws', self.warmup_stage2_draws, 1),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < low:
+                raise ValueError(f"fit.{name} must be an int >= {low}, got {value!r}")
+        if self.pa_fit_prior not in ('half_turn', 'full_circle'):
+            raise ValueError(
+                "fit.pa_prior must be 'half_turn' or 'full_circle', got "
+                f"{self.pa_fit_prior!r}"
+            )
+        if self.cosi_fit_prior_range is not None:
+            lo, hi = self.cosi_fit_prior_range
+            if not 0.0 < lo < hi <= 1.0:
+                raise ValueError(
+                    f"fit.cosi_prior_range {self.cosi_fit_prior_range} must "
+                    "satisfy 0 < lo < hi <= 1"
+                )
+            gen = self.generating_cosi_range()
+            if gen is not None and not (lo <= gen[0] and gen[1] <= hi):
+                raise ValueError(
+                    f"fit.cosi_prior_range {self.cosi_fit_prior_range} must "
+                    f"contain the generating cos i range {gen}"
+                )
+        if (
+            isinstance(self.max_tree_depth, bool)
+            or not isinstance(self.max_tree_depth, int)
+            or not 1 <= self.max_tree_depth <= 12
+        ):
+            raise ValueError(
+                f"fit.max_tree_depth must be an int in [1, 12], got "
+                f"{self.max_tree_depth!r}"
+            )
+        if self.render_line_window_mode not in ('global', 'local'):
+            raise ValueError(
+                f"model.render.line_window_mode must be 'global' or 'local', got "
+                f"{self.render_line_window_mode!r}"
             )
         if not isinstance(self.render_oversample, int) or self.render_oversample <= 0:
             raise ValueError(
@@ -1135,6 +1416,11 @@ class EnsembleSpec:
             raise ValueError(
                 f"dispatch mode '{self.mode}'; supported: {_DISPATCH_MODES}"
             )
+        if self.claim_order not in _CLAIM_ORDERS:
+            raise ValueError(
+                f"dispatch.claim_order must be one of {_CLAIM_ORDERS}, got "
+                f"{self.claim_order!r}"
+            )
         if self.workers_per_node < 1:
             raise ValueError(f"workers_per_node ({self.workers_per_node}) must be >= 1")
         for name, value in [
@@ -1164,6 +1450,26 @@ class EnsembleSpec:
                     "true; with the bulge paint disabled the bands are "
                     "single-disk and there is no index to sample"
                 )
+        cp = self.catalog_population
+        if self.sample_h_over_r:
+            if cp is None or cp.paint_h_over_r is None:
+                raise ValueError(
+                    "fit.sample_h_over_r requires a catalog population with "
+                    "population.paint.h_over_r: the sampled prior is the paint "
+                    "distribution"
+                )
+            if cp.paint_bulge:
+                raise ValueError(
+                    "fit.sample_h_over_r requires population.paint.bulge: false; "
+                    "bulge-disk bands carry disk_h_over_r, which the shared "
+                    "thickness does not reach"
+                )
+        elif cp is not None and cp.paint_h_over_r is not None:
+            raise ValueError(
+                "population.paint.h_over_r scatters the truth per galaxy; without "
+                "fit.sample_h_over_r the fit would pin the scene default against "
+                "a different truth. Set fit.sample_h_over_r: true or drop the paint"
+            )
         if self.escalation.enabled:
             # the retry needs an initial metric from the Laplace path: with
             # fit.adapt_mass true it donates the first attempt's
@@ -1212,6 +1518,108 @@ class EnsembleSpec:
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
 
+    def generating_cosi_range(self) -> Optional[Tuple[float, float]]:
+        """Range of the generating cos i distribution, None if not bounded."""
+        if self.catalog_population is not None:
+            return tuple(self.catalog_population.cosi_range)
+        if self.stratify_param == 'cosi':
+            return tuple(self.stratify_range)
+        draw = self.draw.get('cosi')
+        if draw is not None and draw.dist == 'uniform':
+            return (float(draw.params['low']), float(draw.params['high']))
+        return None
+
+    def resolve_defaults(self, raw: dict) -> dict:
+        """
+        Return a copy of the raw spec mapping with every defaulted knob written
+        out at the value this spec resolved it to.
+
+        The fit block, its escalation sub-block, the dispatch block and
+        model.render.line_window_mode are the optional keys with code defaults. A run
+        directory stores this resolved form so a later rebuild reads the values
+        the fits actually ran with, not the defaults of whatever code does the
+        rebuilding.
+        """
+        out = copy.deepcopy(raw)
+        esc = self.escalation
+        fit = dict(out.get('fit') or {})
+        fit.update(
+            {
+                'sampler': 'numpyro',
+                'n_warmup': self.n_warmup,
+                'n_samples': self.n_samples,
+                'n_chains': self.n_chains,
+                'precondition': self.precondition,
+                'unconstrained': self.unconstrained,
+                'adapt_mass': self.adapt_mass,
+                'target_accept': self.target_accept,
+                'n_map_starts': self.n_map_starts,
+                'pin_z_to_truth': self.pin_z_to_truth,
+                'sample_bulge_nsersic': self.sample_bulge_nsersic,
+                'sample_h_over_r': self.sample_h_over_r,
+                'shear_prior_sigma': self.shear_fit_prior_sigma,
+                'shear_prior_type': self.shear_fit_prior_type,
+                'shear_prior_halfwidth': self.shear_fit_prior_halfwidth,
+                'pa_prior': self.pa_fit_prior,
+                'cosi_prior_range': (
+                    None
+                    if self.cosi_fit_prior_range is None
+                    else list(self.cosi_fit_prior_range)
+                ),
+                'hessian_method': self.hessian_method,
+                'max_tree_depth': self.max_tree_depth,
+                'map_moment_starts': self.map_moment_starts,
+                'map_bounded': self.map_bounded,
+                'map_polish_steps': self.map_polish_steps,
+                'map_polish_basins': self.map_polish_basins,
+                'eig_floor_mode': self.eig_floor_mode,
+                'eig_floor': self.eig_floor,
+                'chain_init': self.chain_init,
+                'chain_init_max_margin': self.chain_init_max_margin,
+                'warmup_metric': self.warmup_metric,
+                'warmup_stage2_draws': self.warmup_stage2_draws,
+                'warmup_stage2_adapt': self.warmup_stage2_adapt,
+                'escalation': {
+                    'enabled': esc.enabled,
+                    'rhat_max': esc.rhat_max,
+                    'ess_min': esc.ess_min,
+                    'n_warmup': esc.n_warmup,
+                    'n_samples': esc.n_samples,
+                    'mode': esc.mode,
+                    'continue_rhat_max': esc.continue_rhat_max,
+                    'continue_divergence_max': esc.continue_divergence_max,
+                    'continue_block': esc.continue_block,
+                    'continue_max_blocks': esc.continue_max_blocks,
+                    'ess_min_shear': esc.ess_min_shear,
+                    'wall_budget_min': esc.wall_budget_min,
+                },
+            }
+        )
+        out['fit'] = fit
+        dispatch = dict(out.get('dispatch') or {})
+        dispatch.update(
+            {
+                'backend': self.backend,
+                'mode': self.mode,
+                'claim_order': self.claim_order,
+                'workers_per_node': self.workers_per_node,
+                'target_task_walltime_min': self.target_task_walltime_min,
+                'queue': self.queue,
+                'account': self.account,
+                'max_fit_walltime_min': self.max_fit_walltime_min,
+            }
+        )
+        out['dispatch'] = dispatch
+        observation = dict(out.get('observation') or {})
+        observation['line_snr_scale'] = self.line_snr_scale
+        out['observation'] = observation
+        model = dict(out.get('model') or {})
+        render = dict(model.get('render') or {})
+        render['line_window_mode'] = self.render_line_window_mode
+        model['render'] = render
+        out['model'] = model
+        return out
+
     @classmethod
     def from_yaml(cls, path: Path) -> 'EnsembleSpec':
         path = Path(path)
@@ -1250,8 +1658,25 @@ class EnsembleSpec:
         population_type = str(population['type'])
 
         observation = raw['observation']
-        _reject_unknown(observation, ('config', 'snr'), f"{path}:observation")
+        _reject_unknown(
+            observation, ('config', 'snr', 'line_snr_scale'), f"{path}:observation"
+        )
         _require_keys(observation, ('config',), f"{path}:observation")
+        line_snr_scale = observation.get('line_snr_scale', 1.0)
+        if (
+            isinstance(line_snr_scale, bool)
+            or not isinstance(line_snr_scale, (int, float))
+            or line_snr_scale <= 0
+        ):
+            raise ValueError(
+                f"{path}:observation.line_snr_scale must be a positive number, "
+                f"got {line_snr_scale!r}"
+            )
+        if population_type != 'catalog' and line_snr_scale != 1.0:
+            raise ValueError(
+                f"{path}:observation.line_snr_scale applies to catalog populations "
+                f"only (sampled populations set observation.snr.line directly)"
+            )
         # catalog populations derive BOTH channels' per-fit SNR from the
         # population table (matched-filter depth anchors), so the snr block
         # is rejected outright there; sampled populations require it
@@ -1396,7 +1821,9 @@ class EnsembleSpec:
         model = raw.get('model', {})
         _reject_unknown(model, ('render',), f"{path}:model")
         render = model.get('render', {})
-        _reject_unknown(render, ('oversample',), f"{path}:model.render")
+        _reject_unknown(
+            render, ('oversample', 'line_window_mode'), f"{path}:model.render"
+        )
         render_oversample = _require_yaml_int(
             render, 'oversample', 3, f"{path}:model.render"
         )
@@ -1416,7 +1843,25 @@ class EnsembleSpec:
                 'n_map_starts',
                 'pin_z_to_truth',
                 'sample_bulge_nsersic',
+                'sample_h_over_r',
                 'shear_prior_sigma',
+                'shear_prior_type',
+                'shear_prior_halfwidth',
+                'pa_prior',
+                'cosi_prior_range',
+                'hessian_method',
+                'max_tree_depth',
+                'map_moment_starts',
+                'map_bounded',
+                'map_polish_steps',
+                'map_polish_basins',
+                'eig_floor_mode',
+                'eig_floor',
+                'chain_init',
+                'chain_init_max_margin',
+                'warmup_metric',
+                'warmup_stage2_draws',
+                'warmup_stage2_adapt',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1433,6 +1878,7 @@ class EnsembleSpec:
             (
                 'backend',
                 'mode',
+                'claim_order',
                 'workers_per_node',
                 'target_task_walltime_min',
                 'queue',
@@ -1466,9 +1912,41 @@ class EnsembleSpec:
             shear_grid=shear_grid,
             shear_component=shear_component,
             shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
+            shear_fit_prior_type=str(fit.get('shear_prior_type', 'gaussian')),
+            shear_fit_prior_halfwidth=float(fit.get('shear_prior_halfwidth', 0.3)),
+            pa_fit_prior=str(fit.get('pa_prior', 'full_circle')),
+            cosi_fit_prior_range=(
+                None
+                if fit.get('cosi_prior_range') is None
+                else _parse_pair(
+                    fit['cosi_prior_range'], f"{path}:fit.cosi_prior_range"
+                )
+            ),
+            hessian_method=str(fit.get('hessian_method', 'fd')),
+            max_tree_depth=_require_yaml_int(fit, 'max_tree_depth', 10, f"{path}:fit"),
+            map_moment_starts=fit.get('map_moment_starts', False),
+            map_bounded=fit.get('map_bounded', True),
+            map_polish_steps=_require_yaml_int(
+                fit, 'map_polish_steps', 8, f"{path}:fit"
+            ),
+            map_polish_basins=_require_yaml_int(
+                fit, 'map_polish_basins', 3, f"{path}:fit"
+            ),
+            eig_floor_mode=str(fit.get('eig_floor_mode', 'prior')),
+            eig_floor=(
+                None if fit.get('eig_floor') is None else float(fit['eig_floor'])
+            ),
+            chain_init=str(fit.get('chain_init', 'map_jitter')),
+            chain_init_max_margin=float(fit.get('chain_init_max_margin', 20.0)),
+            warmup_metric=str(fit.get('warmup_metric', 'adapted')),
+            warmup_stage2_draws=_require_yaml_int(
+                fit, 'warmup_stage2_draws', 50, f"{path}:fit"
+            ),
+            warmup_stage2_adapt=fit.get('warmup_stage2_adapt', False),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,
+            render_line_window_mode=str(render.get('line_window_mode', 'global')),
             observed_config=str(observation['config']),
             # catalog populations carry per-galaxy SNRs (both channels) in
             # the population table; the scalar fields get -1 sentinels so any
@@ -1484,6 +1962,7 @@ class EnsembleSpec:
                 if population_type == 'catalog'
                 else float(snr['line']) if 'line' in snr else float(sweep_values[0])
             ),
+            line_snr_scale=float(line_snr_scale),
             n_warmup=int(fit.get('n_warmup', 500)),
             n_samples=int(fit.get('n_samples', 1000)),
             n_chains=int(fit.get('n_chains', 4)),
@@ -1494,9 +1973,11 @@ class EnsembleSpec:
             n_map_starts=int(fit.get('n_map_starts', 4)),
             pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
             sample_bulge_nsersic=bool(fit.get('sample_bulge_nsersic', False)),
+            sample_h_over_r=bool(fit.get('sample_h_over_r', False)),
             escalation=escalation,
             backend=str(dispatch.get('backend', 'local')),
             mode=str(dispatch.get('mode', 'dynamic')),
+            claim_order=str(dispatch.get('claim_order', 'manifest')),
             workers_per_node=int(dispatch.get('workers_per_node', 1)),
             target_task_walltime_min=float(
                 dispatch.get('target_task_walltime_min', 90.0)

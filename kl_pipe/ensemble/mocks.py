@@ -569,6 +569,7 @@ def _make_roll_obs(
     noise_model='matched_filter',
     sigma_bkg=None,
     electrons_per_f17=None,
+    line_window_mode='global',
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
@@ -609,7 +610,9 @@ def _make_roll_obs(
         grism_pars,
         z=z,
         psf=psf_fit,
-        render_config=RenderConfig(oversample=oversample),
+        render_config=RenderConfig(
+            oversample=oversample, line_window_mode=line_window_mode
+        ),
         data=jnp.asarray(data_noisy),
         variance=variance,
         psf_kernel_size=kernel_size_fit,
@@ -763,6 +766,7 @@ def build_fit_inputs(
                 '1e-17 erg/s/cm2 (integrated line flux)' if is_catalog else None
             ),
             noise_model=config.noise_model,
+            line_window_mode=spec.render_line_window_mode,
             sigma_bkg=grism_sigma_bkg,
             electrons_per_f17=electrons_per_f17,
         )

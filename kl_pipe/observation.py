@@ -367,6 +367,15 @@ class GrismObs:
         )
 
     @property
+    def line_window_mode(self) -> str:
+        """Analytic deposit window placement; canonical source is render_config."""
+        return (
+            self.render_config.line_window_mode
+            if self.render_config is not None
+            else 'global'
+        )
+
+    @property
     def continuum_fills_stamp(self) -> bool:
         """Continuum trace extent; canonical source is render_config."""
         return (

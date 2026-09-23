@@ -423,7 +423,72 @@ plt.show()
 
 The plain dense-mass path (`precondition='none'`, the default) is the stable
 anchor; switch to `'laplace'` with a short warmup for the joint phot+grism
-configuration. `tests/test_flagship.py` runs the full production version.
+configuration. Production also sets `precondition_adapt_mass=True`, which lets
+warmup re-adapt the dense metric starting from the Laplace one instead of
+freezing it. `tests/test_flagship.py` runs the full production version.
+
+With `precondition_adapt_mass=True` each chain estimates its own dense metric
+from the last adaptation window (50 draws at `n_warmup=200`), so four chains
+end warmup with four noisy metrics and the slowest chain sets the fit's cost.
+`warmup_metric='pooled'` (opt-in) adds a second stage: the draws of that last
+window are pooled over chains into one regularized covariance, and every
+chain restarts from its warmup position with that one
+metric frozen for `warmup_stage2_draws` of step-size warmup before the
+production draws (`warmup_stage2_adapt=True` re-adapts the mass matrix in
+stage 2, which re-noises it per chain). The
+result's metadata records both stages' leapfrog steps and each chain's
+metric mismatch against the pooled one; `continue_sampling` extends the
+stage-2 chains.
+
+### Initialization
+
+Everything before the first NUTS step (optimizer starts, MAP, Laplace metric,
+chain initial points) is one call:
+
+```python
+from kl_pipe.sampling.initialization import InitConfig, Initializer
+
+init = Initializer(task, InitConfig(), seed=0).run()
+print(init.map.format_summary())          # where every start went, basins, margin
+sampler = NumpyroSampler(task, config, preconditioner=init.preconditioner)
+```
+
+`InitConfig` carries the same knobs as the ensemble spec's `fit.*` block. Its
+defaults are the settings that won their A/B on the 32-fit benchmark bank:
+the MAP search is bounded L-BFGS-B (the unbounded search stalled at prior
+walls with a large gradient and, once, left a counter-rotating posterior that
+passed the convergence gate), followed by 8 regularized Newton steps on the 3
+leading basins so the MAP is certified stationary; the metric's eigenvalue
+floor is 0.5 in prior units (a direction is never made stiffer than sqrt(2)
+prior widths), which unlike the old relative floor never clips a direction the
+data constrain. Image-moment starts stay opt-in (they did not change the
+basin reached) and chains start jittered about the MAP. `laplace_preconditioner`
+is the same procedure behind keywords, with the same defaults;
+`InitConfig(map_bounded=False, map_polish_steps=0, eig_floor_mode='relative')`
+is the pre-2026-09 procedure. See `docs/fit_initialization.md`.
+
+### Continuing a run instead of restarting it
+
+NUTS runs a fixed number of draws; there is no early exit when r-hat and ESS
+look fine, and no way to ask for more draws mid-run. A preconditioned
+`NumpyroSampler` keeps its warm state (positions, step size, adapted metric)
+after `run()`, so a run that comes back marginal can be extended without paying
+warmup again:
+
+```{code-cell} python
+sampler_pg = build_sampler('numpyro', task_pg, config_laplace)
+result_pg = sampler_pg.run()
+if max(result_pg.get_rhat().values()) > 1.01 or min(result_pg.get_ess().values()) < 400:
+    result_pg = sampler_pg.continue_sampling(config_laplace.n_samples)   # one more block
+print(result_pg.metadata['continuations'], result_pg.metadata['n_samples_per_chain'])
+```
+
+The result is the union of all draws (chain-major), with r-hat/ESS recomputed on
+the union. Repeat in blocks until the gate passes, up to a budget. This rescues
+slow mixing; it cannot rescue chains sitting in different modes (r-hat well
+above 1.2), which need a fresh start. The ensemble pipeline exposes exactly this
+policy as `fit.escalation.mode: restart | continue | auto` (see
+`docs/ensemble_workflow.md`).
 
 ---
 

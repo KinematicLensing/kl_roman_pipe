@@ -7,7 +7,8 @@ Provides JAX-compatible log-likelihood functions for:
 - Combined velocity + intensity observations
 
 All functions are designed to be JIT-compilable and support automatic differentiation.
-The likelihood functions include proper normalization constants for model comparison.
+The Gaussian likelihoods return -0.5 * chi^2, dropping the data-only normalization
+constant (see ``_gaussian_log_likelihood``).
 
 Examples
 --------
@@ -71,37 +72,28 @@ def _gaussian_log_likelihood(
     variance,
     mask=None,
 ) -> float:
-    """Gaussian log-likelihood with normalization constants.
+    """Gaussian log-likelihood up to its data constant: ``-0.5 * chi^2``.
 
-    ``log L = -0.5 * [N*log(2pi) + sum log(sigma^2) + chi^2]``.
+    The full Gaussian log-likelihood is ``-0.5 * [N*log(2pi) + sum log(sigma^2)
+    + chi^2]``; the first two terms depend only on the data's variance map,
+    so they are dropped here. Posteriors, MAP points, Hessians and any
+    same-data model comparison are unchanged (the constant cancels in
+    evidence ratios); absolute evidences from nested samplers carry this
+    offset. Leaving the O(1e4-1e5) constant out also keeps the returned
+    value resolvable in float32 (``KLPIPE_FP32``): the chi-squared
+    differences that samplers and slice scans consume are O(1).
 
     Factored out so the SourceModel-channel likelihoods share one shape.
     The ``mask is not None`` branch resolves at JIT trace time (mask is
     static aux from the obs pytree).
-
-    Precision of the chi-squared reduction
-    --------------------------------------
-    Under the default float64 mode the sums below accumulate in float64.
-    Under ``KLPIPE_FP32`` they run in float32 -- JAX canonicalizes any
-    float64 request back to float32 when x64 is off, so a mixed-precision
-    sum is not available. This is safe in practice: XLA reduces in a
-    blocked/pairwise order, keeping the measured relative error near 1e-8
-    for our array sizes, orders of magnitude below what sampling can
-    resolve. If float32 sampling ever shows likelihood-resolution
-    artifacts, this reduction is the first place to look.
     """
     residuals = data - model
     variance = jnp.broadcast_to(jnp.asarray(variance), data.shape)
     if mask is not None:
         chi2 = jnp.sum(jnp.where(mask, residuals**2 / variance, 0.0))
-        n_data = jnp.sum(mask).astype(float)
-        log_det = jnp.sum(jnp.where(mask, jnp.log(variance), 0.0))
     else:
         chi2 = jnp.sum(residuals**2 / variance)
-        n_data = float(data.size)
-        log_det = jnp.sum(jnp.log(variance))
-    normalization = -0.5 * n_data * jnp.log(2.0 * jnp.pi) - 0.5 * log_det
-    return normalization - 0.5 * chi2
+    return -0.5 * chi2
 
 
 def _log_likelihood_broadband_source(

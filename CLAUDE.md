@@ -50,7 +50,7 @@ kl_pipe/
 │   ├── emcee.py       # Ensemble MCMC (gradient-free)
 │   ├── nautilus.py    # Neural nested sampling (provides evidence)
 │   ├── blackjax.py    # JAX-native HMC/NUTS (known issues w/ joint models)
-│   ├── numpyro.py     # NUTS w/ Z-score reparam — RECOMMENDED for production
+│   ├── numpyro.py     # NUTS; Laplace-preconditioned unconstrained coords in production — RECOMMENDED
 │   ├── ultranest.py   # Placeholder — NOT IMPLEMENTED
 │   └── diagnostics.py # Trace, corner, recovery, convergence plots
 └── tng/               # TNG50 mock data (see tng/README.md)
@@ -284,7 +284,7 @@ return 0.0  # could silently corrupt a likelihood calculation
 
 ### Recommended Sampler: NumPyro
 
-Use `numpyro` for production. Handles multi-scale gradients (intensity ~10^4x larger than velocity) via Z-score reparameterization with dense mass matrix adaptation.
+Use `numpyro` for production. Two coordinate paths: with `precondition='laplace'` (the ensemble production setting) sampling runs in `UnconstrainingTransform` coordinates with the MAP-Hessian Laplace metric as the initial dense mass matrix (re-adapted during warmup when `adapt_mass=True`); without preconditioning it falls back to a Z-score reparameterization (prior loc/scale) with dense mass adaptation. Both handle the multi-scale gradients (intensity ~10^4x larger than velocity).
 
 | Sampler | Gradients | Evidence | Multi-chain | Status |
 |---------|-----------|----------|-------------|--------|

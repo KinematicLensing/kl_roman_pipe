@@ -17,9 +17,10 @@ The transform per parameter is chosen from the prior's support bounds:
 - ``(None, b)``: reflected log, ``eta = log(b - theta)``
 - ``(None, None)``: identity
 
-Periodic parameters (e.g. a position angle on ``[0, 2pi)``) are treated as
-plain bounded intervals; that is only appropriate while their posterior mass
-stays far from the wrap point.
+Periodic parameters (``CircularUniform`` priors) are unbounded, so their
+sampling coordinate is the identity; ``periods`` records their period and
+``wrap_about`` maps samples onto the branch centred on a reference point (the
+MAP) so linear summaries and convergence statistics stay meaningful.
 """
 
 from __future__ import annotations
@@ -62,12 +63,16 @@ class UnconstrainingTransform:
         finite).
     names : tuple of str
         Sampled parameter names (diagnostics only).
+    periods : np.ndarray
+        Per-dimension period for periodic (identity-kind) parameters, 0 where
+        the parameter is not periodic.
     """
 
     kinds: np.ndarray
     lows: np.ndarray
     highs: np.ndarray
     names: Tuple[str, ...] = field(default=())
+    periods: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     @classmethod
     def from_priors(cls, priors: 'PriorDict') -> 'UnconstrainingTransform':
@@ -92,11 +97,45 @@ class UnconstrainingTransform:
                 highs[i] = high
             else:
                 kinds[i] = _IDENTITY
-        return cls(kinds=kinds, lows=lows, highs=highs, names=names)
+        periods = np.array(
+            [0.0 if p is None else float(p) for p in priors.get_periods()]
+        )
+        if ((periods > 0) & (kinds != _IDENTITY)).any():
+            raise ValueError("periodic priors must be unbounded (identity kind)")
+        return cls(kinds=kinds, lows=lows, highs=highs, names=names, periods=periods)
 
     @property
     def kind_names(self) -> Tuple[str, ...]:
-        return tuple(_KIND_NAMES[int(k)] for k in self.kinds)
+        return tuple(
+            'periodic' if p > 0 else _KIND_NAMES[int(k)]
+            for k, p in zip(self.kinds, self._periods_full)
+        )
+
+    @property
+    def _periods_full(self) -> np.ndarray:
+        if self.periods.shape != self.kinds.shape:
+            return np.zeros(self.kinds.shape)
+        return self.periods
+
+    @property
+    def is_periodic(self) -> np.ndarray:
+        """Boolean mask of periodic dimensions."""
+        return self._periods_full > 0
+
+    def wrap_about(self, theta: np.ndarray, center: np.ndarray) -> np.ndarray:
+        """Wrap periodic dims onto the branch centred on ``center``.
+
+        Periodic entries land in ``[c - P/2, c + P/2)``; all other dims pass
+        through unchanged. Host-side numpy; ``center`` has one entry per
+        sampled dimension (physical coordinates).
+        """
+        theta = np.asarray(theta, dtype=np.float64).copy()
+        m = self.is_periodic
+        if m.any():
+            p = self._periods_full[m]
+            c = np.asarray(center, dtype=np.float64)[m]
+            theta[..., m] = c + np.mod(theta[..., m] - c + 0.5 * p, p) - 0.5 * p
+        return theta
 
     @property
     def is_identity(self) -> bool:
