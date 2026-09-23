@@ -321,8 +321,12 @@ cartesian chart u = sin i (cos theta, sin theta) is designed for, and the
 toy test never entered it. The A/B also handled the cos i bound as a cliff
 in the log posterior (-1e30 outside), which by itself produces divergences
 in the non-polar charts. So the toy result says only that charts do not help
-when theta is well constrained; the census-regime test (real face-on fits,
-smooth bound handling, cos i open to 1) is still owed before any verdict.
+when theta is well constrained. The census-regime test followed (job
+1003205: the ten widest-theta face-on census galaxies with the cos i prior
+open to 1, chains scored offline): the native (cos i, theta) chart wins
+14/20 fits and every fit with sigma(theta) above 1 rad, and opening the
+wall costs 1.31x steps with unchanged widths. Charts are parked; the face-on
+cost is the cos i, size, g+ ridge, which no chart touches.
 
 ## 14. The vcirc prior width does not set the mid-inclination shear noise
 
@@ -339,3 +343,62 @@ inclination is the photometric axis ratio plus the kinematic PA, and the
 TFR prior only names vcirc. Better stellar masses or a tighter TFR buy
 nothing here; imaging depth and line SNR do. Edge-on and face-on fits are
 still to be compared (the run is easy-first).
+
+## 15. Pinned disk thickness was doing work, most where the kinematics turn on
+
+Every census fit before 2026-09-19 pinned the disk thickness ratio at its
+generating value 0.25. A thicker disk projects rounder, exactly as a more
+face-on disk or a shear along the major axis does, so the pin was a truth
+leak along the cos i, g+ ridge. Sampling one shared thickness per galaxy
+with a lognormal prior equal to the paint (0.25, 0.14 dex; jobs 1008456 and
+1008458) costs 6% in sigma(g+) at census depth (15% edge-on, 3% above cos i
+0.5) and leaves every other width within 5%; the thickness posterior is 0.91x
+its prior, so the census data do not measure it. At ten times the line SNR
+the same change widens sigma(g+) by 1.46x against the pinned arm (2.28x
+edge-on) and halves the kinematic gain (x10 over x1: 0.75x instead of 0.48x).
+Rank histograms over the population are uniform for shear and cos i in both
+arms (KS p 0.12-0.72), so the posteriors are calibrated; the 0.58 shear
+coverage of the x10 arm is within the 100-galaxy scatter. Sampled thickness
+is the baseline for every paper number; pinned arms are comparison arms.
+
+## 16. Escalations that fail are systemic-velocity splits, and restart is what cures them
+
+The continue-only escalation twin (job 1008457, the 56 census v2 galaxies
+with an escalated fit, never restart, 8 blocks, 90-minute budget) lost 8 fits
+at rhat above 1.1 where census v2 lost 3, at 0.78x the steps. All 8 have
+max rhat on vel.v0: per-chain v0 means 30-100 km/s apart, within-chain sd
+15-100 km/s, identical log-posterior per chain, total line SNR 20-48. That is
+slow mixing along a flat nuisance direction at low line SNR, not competing
+modes, and four of the eight ran zero continuation blocks because the
+continue path declines chains that are already broken. Census v2's restart
+cured 21 of 24 such first attempts. Two consequences: continue for marginal
+fits and restart above rhat 1.1 (what census v2 did), and gate the escalation
+on the parameters we report. On the first 300 draws per chain of 315 census
+chains, an all-parameter gate fails 13%, dropping v0 gives 11%, gating on
+g1, g2 and cos i alone gives 10% (theta_int and v0 are the top two triggers);
+the fits rescued have science rhat about 1.03 and shear ESS about 150. The
+face-on cost itself is not escalation: face-on first attempts take 2.3x the
+steps, and cos i above 0.7 is 18% of fits and 40% of wall.
+
+## 17. Nothing about the grism data layout is a lever; only line SNR is
+
+Four tests close the geometric levers. Dithered grism pairs at the same total
+line SNR change sigma(v0), sigma(vcirc) and sigma(v sin i) by under 2% at any
+offset (Fisher on a binned 4x render, validated against the AD Hessian): a
+Nyquist-sampled line image's Fisher sum does not depend on grid phase. A true
+2x finer detector buys 3-10%. The real HLWAS medium-tier roll geometry (four
+passes as two opposite-orientation pairs 13 degrees apart, ROTAC 2505.10574
+Sect. 5) against the idealised 0/45/90/135 used in every spec gives sigma(g+)
+ratios 0.82-1.02 (better face-on at x3-x10), and the disk position angle
+relative to the dispersion axes moves widths by at most 15%. Removing the
+grism entirely (line SNR x0.01) costs 2% edge-on, 20% mid and 15-25% face-on
+in sigma(g+) at census depth, and nothing in v sin i, whose relative width is
+the TF prior. The physical reason is that a slitless line image is shifted
+along dispersion by velocity, so the velocity information is the flux
+gradient along dispersion: a 45 km/s shift is worth chi2 16 for the line
+image at half its size, 3.5 at the true size and 0.5 at twice the size, at
+fixed flux and fixed noise. A 24% change in rotation speed, one TF sigma, is
+worth chi2 1.3 edge-on, 0.2 mid and 0.03 face-on at per-pass line SNR 10,
+before marginalising over the line size whose signal map has nearly the same
+shape. The census sample sits at per-pass line SNR 10-30; the x3 regime is
+0.5% of it and x10 does not exist in the medium tier.
