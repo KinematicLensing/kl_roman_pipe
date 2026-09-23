@@ -207,7 +207,7 @@ test-cosmohub:
 .PHONY: test-roman-ensemble
 test-roman-ensemble:
 	@echo "Running Roman ensemble-campaign tests..."
-	@conda run -n klpipe pytest tests/ -v -m "roman_ensemble and not slow and not cosmohub"
+	@conda run -n klpipe --no-capture-output pytest tests/ -v -m "roman_ensemble and not slow and not cosmohub"
 
 .PHONY: test-sampling
 test-sampling:
@@ -242,7 +242,7 @@ test-flagship-production-long:
 .PHONY: test-basic
 test-basic:
 	@echo "Running fast tests (excluding TNG50, slow, and the Roman ensemble tier; no download required)..."
-	@conda run -n klpipe pytest tests/ -v -m "not tng50 and not slow and not cosmohub and not roman_ensemble"
+	@conda run -n klpipe --no-capture-output pytest tests/ -v -m "not tng50 and not slow and not cosmohub and not roman_ensemble"
 
 .PHONY: test-coverage
 test-coverage: $(CYVERSE_DATA_MARKER)
