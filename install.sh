@@ -23,9 +23,20 @@ fi
 
 eval "$(conda shell.bash hook)"
 
-# check if the environment already exists
-if conda info --envs | grep -q "$ENVNAME"; then
-    echo "Environment '$ENVNAME' already exists. Removing it first..."
+# an existing environment is replaced only on explicit confirmation
+# (interactive prompt, or KLPIPE_REINSTALL=1 when there is no terminal)
+if conda env list | awk '{print $1}' | grep -qx "$ENVNAME"; then
+    if [ -t 0 ]; then
+        read -r -p "Environment '$ENVNAME' exists and will be removed and reinstalled. Continue? [y/N] " reply
+        if [ "$reply" != "y" ] && [ "$reply" != "Y" ]; then
+            echo "Aborted; '$ENVNAME' left unchanged."
+            exit 1
+        fi
+    elif [ "${KLPIPE_REINSTALL:-0}" != "1" ]; then
+        echo "ERROR: environment '$ENVNAME' exists. Set KLPIPE_REINSTALL=1 to replace it non-interactively." >&2
+        exit 1
+    fi
+    echo "Removing existing environment '$ENVNAME'..."
     conda deactivate || true
     conda env remove -n "$ENVNAME" --yes
 fi

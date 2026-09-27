@@ -441,6 +441,7 @@ class TestNumpyroBasicSampling:
         expected_samples = 100 * 2  # n_samples * n_chains
         assert result.n_samples == expected_samples
         assert result.samples.shape == (expected_samples, task.n_params)
+        assert result.metadata['backend'] == 'numpyro'
 
     def test_finite_log_prob(self, simple_velocity_task):
         """All samples have finite log probability."""
@@ -1467,6 +1468,7 @@ class TestPooledWarmupMetric:
         n = len(task.sampled_names)
         assert res.samples.shape == (2 * 200, n)
         meta = res.metadata
+        assert meta['backend'] == 'numpyro'
         assert meta['warmup_metric'] == 'pooled'
         # n_warmup 150: windows (0, 74) (75, 99) (100, 149); the last mass window is [75, 100)
         assert meta['warmup_pooled_window'] == [75, 100]

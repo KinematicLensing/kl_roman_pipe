@@ -719,6 +719,7 @@ class NumpyroSampler(Sampler):
         # Build metadata
         elapsed = time.time() - start_time
         metadata = {
+            'backend': 'numpyro',
             'sampler': 'numpyro',
             'algorithm': 'nuts',
             'elapsed_seconds': elapsed,
@@ -932,6 +933,7 @@ class NumpyroSampler(Sampler):
 
         elapsed = time.time() - start_time
         metadata = {
+            'backend': 'numpyro',
             'sampler': 'numpyro',
             'algorithm': 'nuts',
             'elapsed_seconds': elapsed,

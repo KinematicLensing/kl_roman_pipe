@@ -7,7 +7,6 @@ name = "kl_pipe"
 version = "0.1.0"
 description = "Test repo for a roman KL pipeline"
 readme = "README.md"
-license = { file = "LICENSE" }
 authors = [
     { name = "Spencer Everett", email = "severett@caltech.edu" }
 ]
@@ -23,8 +22,8 @@ dependencies = [
 Homepage = "https://github.com/KinematicLensing/kl_roman_pipe/"
 Repository = "https://github.com/KinematicLensing/kl_roman_pipe/"
 
-[tool.setuptools]
-packages = ["kl_pipe"]
+[tool.setuptools.packages.find]
+include = ["kl_pipe*"]
 
 [tool.pytest.ini_options]
 markers = [
