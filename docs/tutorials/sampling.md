@@ -120,6 +120,11 @@ theta0 = task.sample_prior(key, 1)[0]
 print(f"log-posterior at a prior draw: {float(task.log_posterior(theta0)):.2f}")
 ```
 
+The true `theta_int` (0.785) sits well inside the `Uniform(0, pi)` prior, so its
+edges never matter here. On real data the angle is not known in advance and can
+land near an edge, where a hard boundary biases the fit; there, use the
+edge-free `CircularUniform(2 * np.pi)` (see `quickstart.md`, Example 5).
+
 ### Configure and run emcee
 
 ```{code-cell} python
@@ -393,12 +398,13 @@ print(f"joint phot+grism task: {task_pg.n_params} sampled params")
 
 ### The Laplace preconditioner
 
-This joint posterior is correlated and the gradient is dominated by the grism
-`build_cube` cost, so NUTS warmup (climbing from an identity mass matrix) is the
-bottleneck. The **Laplace preconditioner** starts NUTS at the MAP with a fixed
-inverse-Hessian mass matrix, so warmup only tunes the step size. On the flagship
-test this is ~5x faster (8.5 vs ~42 min) with equal recovery and better
-convergence. Enable it with `precondition='laplace'` and a short warmup:
+This joint posterior is correlated and each gradient pays for the grism
+`build_cube`, so NUTS warmup (climbing from an identity mass matrix) dominates
+the cost. The **Laplace preconditioner** starts NUTS at the MAP with the inverse
+Hessian there as the mass matrix, so warmup mostly tunes the step size. On the
+full-size joint fit in `tests/test_flagship.py` this is ~5x faster than a plain
+dense-mass warmup (8.5 vs ~42 min) with equal recovery. Enable it with
+`precondition='laplace'` and a short warmup:
 
 ```{code-cell} python
 config_laplace = NumpyroSamplerConfig(
@@ -421,51 +427,55 @@ fig = plot_corner(result_pg, params=['g1', 'g2', 'cosi', 'vel.vcirc', 'Halpha.di
 plt.show()
 ```
 
-The plain dense-mass path (`precondition='none'`, the default) is the stable
-anchor; switch to `'laplace'` with a short warmup for the joint phot+grism
-configuration. Production also sets `precondition_adapt_mass=True`, which lets
-warmup re-adapt the dense metric starting from the Laplace one instead of
-freezing it. `tests/test_flagship.py` runs the full production version.
+The plain dense-mass path (`precondition='none'`, the default) needs no MAP
+and is the simplest choice; use `'laplace'` with a short warmup for joint
+phot+grism fits. `precondition_adapt_mass=True` (recommended) lets warmup
+re-adapt the dense metric starting from the Laplace one instead of freezing it.
 
-With `precondition_adapt_mass=True` each chain estimates its own dense metric
-from the last adaptation window (50 draws at `n_warmup=200`), so four chains
-end warmup with four noisy metrics and the slowest chain sets the fit's cost.
-`warmup_metric='pooled'` (opt-in) adds a second stage: the draws of that last
-window are pooled over chains into one regularized covariance, and every
-chain restarts from its warmup position with that one
-metric frozen for `warmup_stage2_draws` of step-size warmup before the
-production draws (`warmup_stage2_adapt=True` re-adapts the mass matrix in
-stage 2, which re-noises it per chain). The
-result's metadata records both stages' leapfrog steps and each chain's
-metric mismatch against the pooled one; `continue_sampling` extends the
-stage-2 chains.
+Each chain then estimates its own metric from a short warmup window, and the
+slowest chain sets the wall time. `warmup_metric='pooled'` (opt-in; requires
+the two settings above) pools the last warmup window over chains into one
+regularized covariance and restarts every chain from its warmup position with
+that metric frozen for `warmup_stage2_draws` of step-size tuning.
 
 ### Initialization
 
-Everything before the first NUTS step (optimizer starts, MAP, Laplace metric,
-chain initial points) is one call:
+Everything before the first NUTS step (optimizer starts, MAP, Laplace metric)
+is one call to `Initializer`, which returns an `InitResult`. Pass its
+`preconditioner` to `NumpyroSampler` to reuse it (and inspect it) instead of
+letting `precondition='laplace'` recompute it inside `run()`. Here on the
+velocity-only task from Section 1:
 
-```python
+```{code-cell} python
+from kl_pipe.sampling import NumpyroSampler
 from kl_pipe.sampling.initialization import InitConfig, Initializer
 
-init = Initializer(task, InitConfig(), seed=0).run()
-print(init.map.format_summary())          # where every start went, basins, margin
-sampler = NumpyroSampler(task, config, preconditioner=init.preconditioner)
+init = Initializer(task, InitConfig(n_map_starts=4, n_pa_starts=2), seed=0).run()
+print(init.map.format_summary())    # every start's endpoint, basins, margin
+
+config_init = NumpyroSamplerConfig(
+    n_samples=200 if CI_MODE else 1000,
+    n_warmup=50 if CI_MODE else 200,
+    n_chains=1 if CI_MODE else 4,
+    precondition='laplace',
+    seed=0, progress=not CI_MODE,
+)
+result_init = NumpyroSampler(task, config_init, preconditioner=init.preconditioner).run()
+print_summary(result_init, true_values=true_vel)
 ```
 
-`InitConfig` carries the same knobs as the ensemble spec's `fit.*` block. Its
-defaults are the settings that won their A/B on the 32-fit benchmark bank:
-the MAP search is bounded L-BFGS-B (the unbounded search stalled at prior
-walls with a large gradient and, once, left a counter-rotating posterior that
-passed the convergence gate), followed by 8 regularized Newton steps on the 3
-leading basins so the MAP is certified stationary; the metric's eigenvalue
-floor is 0.5 in prior units (a direction is never made stiffer than sqrt(2)
-prior widths), which unlike the old relative floor never clips a direction the
-data constrain. Image-moment starts stay opt-in (they did not change the
-basin reached) and chains start jittered about the MAP. `laplace_preconditioner`
-is the same procedure behind keywords, with the same defaults;
-`InitConfig(map_bounded=False, map_polish_steps=0, eig_floor_mode='relative')`
-is the pre-2026-09 procedure. See `docs/fit_initialization.md`.
+`InitConfig` defaults: 4 prior-draw starts plus position-angle-stratified
+starts; a bounded L-BFGS-B search on the prior support; 8 regularized Newton
+steps from the best point of each of the 3 leading basins, so the reported MAP
+is stationary; and a Laplace-metric eigenvalue floor of 0.5 in prior units (no
+direction of the metric is wider than sqrt(2) prior widths; directions the data
+constrain are untouched). `map_moment_starts=True` adds starts read off the
+broadband images with adaptive moments. Check the summary table first when a
+fit lands in the wrong place: a second basin within a few nats of the MAP
+means the posterior is multimodal.
+`InferenceTask.laplace_preconditioner` runs the same procedure through
+keywords. See `docs/fit_initialization.md` for the individual pieces
+(`find_map`, `laplace_metric`, `chain_inits`).
 
 ### Continuing a run instead of restarting it
 
@@ -486,68 +496,16 @@ print(result_pg.metadata['continuations'], result_pg.metadata['n_samples_per_cha
 The result is the union of all draws (chain-major), with r-hat/ESS recomputed on
 the union. Repeat in blocks until the gate passes, up to a budget. This rescues
 slow mixing; it cannot rescue chains sitting in different modes (r-hat well
-above 1.2), which need a fresh start. The ensemble pipeline exposes exactly this
-policy as `fit.escalation.mode: restart | continue | auto` (see
-`docs/ensemble_workflow.md`).
+above 1.1), which need a fresh start from a new initialization.
 
 ---
 
-## Section 7: TNG data-vector integration
+## Section 7: TNG50 mock galaxies
 
-TNG50 galaxies provide realistic morphologies and kinematics that the analytic
-models cannot perfectly describe, which tests inference under model mismatch.
-The cell below is tagged skip-execution (it needs the CyVerse TNG data, absent in
-CI); run it locally after `make download-cyverse-data`. The data-vector pipeline
-itself is covered in `tng50_data.md`.
-
-```{code-cell} python
-:tags: [skip-execution]
-
-from kl_pipe.tng import TNG50MockData, TNGDataVectorGenerator, TNGRenderConfig
-
-galaxy = TNG50MockData().get_galaxy(subhalo_id=8)
-gen = TNGDataVectorGenerator(galaxy)
-ip_tng = ImagePars(shape=(32, 32), pixel_scale=0.2, indexing='ij')
-rcfg = TNGRenderConfig(image_pars=ip_tng, band='r', use_native_orientation=True,
-                       target_redshift=0.3, use_cic_gridding=True)
-vel_map, v_var = gen.generate_velocity_map(rcfg, snr=30.0, seed=42)
-int_map, i_var = gen.generate_intensity_map(rcfg, snr=30.0, seed=43)
-flux_est = float(np.sum(int_map))
-int_norm = int_map / flux_est
-
-src_tng = SourceModel(velocity_model=CenteredVelocityModel(),
-                      broadband_models={'r': InclinedExponentialModel()})
-rmodel = src_tng.broadband_models['r']
-priors_tng = PriorDict({
-    'cosi': TruncatedNormal(gen.native_cosi, 0.2, 0.05, 0.99),
-    'theta_int': Uniform(0.0, np.pi),
-    'g1': Uniform(-0.1, 0.1),
-    'g2': Uniform(-0.1, 0.1),
-    'vel.v0': Gaussian(0.0, 20.0),
-    'vel.vcirc': Uniform(50.0, 400.0),
-    'vel.rscale': Uniform(0.5, 15.0),
-    'r.flux': Uniform(0.01, 10.0),
-    'r.rscale': Uniform(0.2, 10.0),
-    'r.h_over_r': 0.1,
-    'r.x0': 0.0,
-    'r.y0': 0.0,
-})
-obs_vel_t = build_velocity_obs(ip_tng, data=jnp.asarray(vel_map), variance=v_var)
-obs_int_t = build_image_obs(ip_tng, broadband_key='r', int_model=rmodel,
-                            data=jnp.asarray(int_norm), variance=i_var / flux_est**2)
-task_tng = InferenceTask.from_obs(src_tng, priors_tng,
-                                  velocity_obs=obs_vel_t, image_obs={'r': obs_int_t})
-cfg_tng = NumpyroSamplerConfig(n_samples=1250, n_warmup=625, n_chains=4,
-                               dense_mass=True, seed=42, progress=True)
-result_tng = build_sampler('numpyro', task_tng, cfg_tng).run()
-print_summary(result_tng)
-print(f"max R-hat: {max(result_tng.get_rhat().values()):.4f}")
-```
-
-With TNG data there is no single "true" parameter set; the analytic model is an
-approximation, so the posterior is shifted from the catalog orientation by model
-mismatch. The science question is whether the shear constraint stays unbiased
-despite it. See `tng50_data.md` for the data-vector pipeline.
+TNG50 galaxies have realistic structure that the analytic models only
+approximate, which makes them a test of inference under model mismatch.
+`tng50_data.md` renders TNG50 galaxies into data vectors and fits them with the
+same `InferenceTask` and samplers shown here.
 
 ---
 
@@ -603,7 +561,7 @@ Decision shortcuts: need evidence -> nautilus; joint / production -> numpyro
 |---|---|
 | `make test-sampling` | sampling diagnostics (excludes nautilus) |
 | `make test-sampling-all` | all sampling tests including nautilus |
-| `pytest tests/test_flagship.py` | the full joint phot+grism Laplace run |
+| `pytest tests/test_flagship.py` | full-size joint phot+grism Laplace run |
 
 - **Config reference**: `kl_pipe/sampling/README.md`.
 - **Test examples**: `tests/test_numpyro.py`, `tests/test_sampling.py`.

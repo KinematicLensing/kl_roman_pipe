@@ -18,11 +18,16 @@ CYVERSE_CONFIG = $(CYVERSE_DATA_DIR)/cyverse_data.conf
 CYVERSE_DOWNLOAD_SCRIPT = scripts/download_cyverse_data.sh
 CYVERSE_DATA_MARKER = $(CYVERSE_DATA_DIR)/.cyverse_data_downloaded
 
+# marker filter shared by `make test` and `make test-fast`
+FAST_TEST_MARKERS = not slow and not tng_diagnostics and not grism_validation and not cosmohub and not roman_ensemble
+
 # CosmoHub (Euclid Flagship2) data configuration
 COSMOHUB_DATA_DIR = $(DATA_DIR)/cosmohub
 COSMOS2025_DATA_DIR = $(DATA_DIR)/cosmos2025
 
-TNG50_DATA_DIR = $(DATA_DIR)/tng50
+TNG50_DATA_DIR ?= $(DATA_DIR)/tng50
+TNG50_REQUIRED_FILES = gas_data_analysis.npz stellar_data_analysis.npz subhalo_data_analysis.npz \
+	SDSS_hr_stelib_stellar_photometrics.hdf5 u_SDSS.res g_SDSS.res r_SDSS.res i_SDSS.res z_SDSS.res
 
 DIAGNOSTICS_DIR = $(TEST_DIR)/out/diagnostics
 
@@ -75,11 +80,22 @@ tutorials:
 	@conda run -n klpipe jupytext --to ipynb docs/tutorials/*.md
 	@echo "Notebooks created in docs/tutorials/"
 
-# Execute all tutorials (TNG sections skip gracefully if data unavailable)
+# Execute all tutorials; tng50_data runs on a generated synthetic TNG fixture
+# when $(TNG50_DATA_DIR) lacks any of the TNG50 files
 .PHONY: test-tutorials
 test-tutorials:
 	@echo "Converting and executing tutorials..."
-	@conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg \
+	@set -e; tng_dir="$(abspath $(TNG50_DATA_DIR))"; \
+	for f in $(TNG50_REQUIRED_FILES); do \
+		if [ ! -f "$$tng_dir/$$f" ]; then \
+			tmp_dir=$$(mktemp -d); trap 'rm -rf "$$tmp_dir"' EXIT; \
+			tng_dir="$$tmp_dir/tng50"; \
+			echo "$(TNG50_DATA_DIR)/$$f missing: tng50_data tutorial uses synthetic TNG data ($$tng_dir)"; \
+			conda run -n klpipe python tests/fixtures/tng_synthetic.py "$$tng_dir" > /dev/null; \
+			break; \
+		fi; \
+	done; \
+	conda run -n klpipe env KL_PIPE_CI=1 MPLBACKEND=Agg KLPIPE_TNG_DATA_DIR="$$tng_dir" \
 		bash -c 'jupytext --to ipynb docs/tutorials/quickstart.md docs/tutorials/intensity_models.md docs/tutorials/grism.md docs/tutorials/sampling.md docs/tutorials/tng50_data.md && \
 		jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=600 \
 			docs/tutorials/quickstart.ipynb \
@@ -102,6 +118,8 @@ download-cyverse-data:
 
 # Target for checking if CyVerse data has been downloaded
 $(CYVERSE_DATA_MARKER): $(CYVERSE_CONFIG)
+	@echo "WARNING: TNG50 data not found; downloading from CyVerse before running tests."
+	@echo "         This first run will be slow. Use 'make test-basic' to test without downloads."
 	@$(MAKE) download-cyverse-data
 
 .PHONY: clean-cyverse-data
@@ -163,7 +181,7 @@ test-data: $(UNIT_TEST_FILES)
 .PHONY: test
 test: $(CYVERSE_DATA_MARKER)
 	@echo "Running fast tests (excluding slow samplers, TNG diagnostics, and the Roman ensemble tier)..."
-	@conda run -n klpipe pytest tests/ -v -m "not slow and not tng_diagnostics and not grism_validation and not cosmohub and not roman_ensemble"
+	@conda run -n klpipe pytest tests/ -v -m "$(FAST_TEST_MARKERS)"
 
 .PHONY: test-extended
 test-extended: $(CYVERSE_DATA_MARKER)
@@ -251,7 +269,8 @@ test-coverage: $(CYVERSE_DATA_MARKER)
 
 .PHONY: test-fast
 test-fast: $(CYVERSE_DATA_MARKER)
-	@conda run -n klpipe pytest tests/ -v -x
+	@echo "Running fast tests, stopping on first failure..."
+	@conda run -n klpipe pytest tests/ -v -x -m "$(FAST_TEST_MARKERS)"
 
 .PHONY: test-verbose
 test-verbose: $(CYVERSE_DATA_MARKER)
