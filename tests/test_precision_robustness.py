@@ -15,6 +15,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
+from kl_pipe.lines import LINE_LAMBDAS
 from kl_pipe.constants import C_KMS
 from kl_pipe.dispersion import (
     _normal_cdf_antiderivative,
@@ -145,7 +146,13 @@ def test_line_image_float32_precision(spaxel_fields):
 def test_dispersion_offsets_float32_precision():
     rng = np.random.default_rng(1)
     v_los = rng.uniform(-220.0, 220.0, (ROWS, COLS)) + 10.0
-    lam_rest, z, dispersion, oversample, sigma_kms = 656.28, 1.0, 1.1, 3, 50.0
+    lam_rest, z, dispersion, oversample, sigma_kms = (
+        LINE_LAMBDAS['Halpha'],
+        1.0,
+        1.1,
+        3,
+        50.0,
+    )
     lam_sys = lam_rest * (1.0 + z)
     lam_ref = lam_sys  # production: reference at the systemic line centre
 

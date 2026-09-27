@@ -27,6 +27,7 @@ from kl_pipe.dispersion import (
     gaussian_tent_profile,
 )
 from kl_pipe.intensity import InclinedExponentialModel
+from kl_pipe.lines import LINE_LAMBDAS
 from kl_pipe.observation import build_grism_obs
 from kl_pipe.parameters import ImagePars
 from kl_pipe.render import RenderConfig
@@ -69,7 +70,9 @@ FLUX_TOL = 1e-4
 @pytest.fixture(scope='module')
 def scene():
     ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='ij')
-    gp = build_grism_pars_for_line(656.28, redshift=1.0, image_pars=ip, dispersion=1.1)
+    gp = build_grism_pars_for_line(
+        LINE_LAMBDAS['Halpha'], redshift=1.0, image_pars=ip, dispersion=1.1
+    )
     psf = galsim.Gaussian(fwhm=0.18)
     source = SourceModel(
         velocity_model=CenteredVelocityModel(),
@@ -299,7 +302,7 @@ class TestLineWindowMode:
             }
         )
         hw_local = local_line_window_halfwidth_for_priors(source, priors, gp, 3)
-        sigma_s_max = 656.28 * 2.0 * 150.0 / C_KMS / gp.dispersion * 3
+        sigma_s_max = LINE_LAMBDAS['Halpha'] * 2.0 * 150.0 / C_KMS / gp.dispersion * 3
         assert hw_local == int(np.ceil(6 * sigma_s_max)) + 2
         # the local window only carries the profile width; the global one
         # also carries the largest centre offset, so it is wider
@@ -431,7 +434,7 @@ class TestRenderEquivalence:
         wcs.wcs.set()
         ip_rot = ImagePars(shape=shape, wcs=wcs)
         gp_rot = build_grism_pars_for_line(
-            656.28, redshift=1.0, image_pars=ip_rot, dispersion=1.1
+            LINE_LAMBDAS['Halpha'], redshift=1.0, image_pars=ip_rot, dispersion=1.1
         )
         ref = np.asarray(
             source.render_grism(
@@ -518,7 +521,7 @@ def _rolled_grism_obs(
     gp = GrismPars(
         image_pars=ImagePars(shape=shape, wcs=wcs, indexing='ij'),
         dispersion=dispersion,
-        lambda_ref=656.28 * (1.0 + z),
+        lambda_ref=LINE_LAMBDAS['Halpha'] * (1.0 + z),
         dispersion_angle_detector=0.0,
     )
     rc = RenderConfig(
@@ -839,7 +842,7 @@ class TestHalfwidthAutoSizing:
         )
         # independent arithmetic: v_max = (|mu| + 6 sd for the Gaussian v0)
         # + vcirc upper bound; sigma_v_max = dispersion upper bound
-        lam_line = 656.28 * 2.0
+        lam_line = LINE_LAMBDAS['Halpha'] * 2.0
         scale = oversample / gp.dispersion
         v_max = (10.0 + 6.0 * 10.0) + 400.0
         expected = (
@@ -910,7 +913,7 @@ class TestHalfwidthAutoSizing:
         hw = line_window_halfwidth_for_priors(
             source, PriorDict(spec), gp, oversample=oversample
         )
-        lam_line = 656.28 * 2.0
+        lam_line = LINE_LAMBDAS['Halpha'] * 2.0
         scale = oversample / gp.dispersion
         v_max = (10.0 + 6.0 * 10.0) + np.exp(mu + 6.0 * sigma)
         expected = (

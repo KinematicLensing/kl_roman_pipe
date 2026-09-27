@@ -1,5 +1,5 @@
 """
-Tests for datacube construction: CubePars, SpectralModel.build_cube, correctness.
+Tests for datacube construction: CubePars, SourceModel.build_cube, correctness.
 
 Diagnostic plots saved to tests/out/datacube/.
 """
@@ -195,7 +195,7 @@ class TestCubePars:
 
 
 # =============================================================================
-# SpectralModel cube tests
+# SourceModel cube tests
 # =============================================================================
 
 
@@ -362,7 +362,7 @@ class TestBuildCube:
             [
                 LINE_LAMBDAS['Halpha'] * (1 + z),
                 LINE_LAMBDAS['NII6584'] * (1 + z),
-                654.80 * (1 + z),  # NII_6548
+                LINE_LAMBDAS['NII6548'] * (1 + z),
             ]
         )
         assert len(peaks) >= 3, f"Expected 3 peaks, found {len(peaks)}: {peaks}"

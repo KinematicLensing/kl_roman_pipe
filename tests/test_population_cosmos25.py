@@ -27,6 +27,7 @@ from kl_pipe.ensemble.catalogs.cosmos25 import (
     F150W_PIVOT_A,
     F150W_RED_EDGE_A,
     F277W_PIVOT_A,
+    PAINT_HALPHA_REST_AIR_A,
 )
 from kl_pipe.ensemble.population import build_population
 from kl_pipe.photometry import (
@@ -52,7 +53,7 @@ def fake_cosmos25_rows(n: int = 400, seed: int = 4321) -> pd.DataFrame:
 
     Sentinel structure mirrors the real join: non-galaxies (``type != 0``)
     carry zfinal = 0 and NaN painted fluxes; a few percent of galaxies get
-    warn flags; painted wavelengths are exactly 6562.8 * (1 + zfinal); ebv
+    warn flags; painted wavelengths are exactly PAINT_HALPHA_REST_AIR_A * (1 + zfinal); ebv
     sits on a 0.1-step grid like the LePhare output.
     """
     rng = np.random.default_rng(seed)
@@ -106,7 +107,7 @@ def fake_cosmos25_rows(n: int = 400, seed: int = 4321) -> pd.DataFrame:
             'F_Ha': f_ha,
             'F_OII': f_ha * 0.3,
             'F_OIII': f_ha * 0.1,
-            'lambda_Ha_obs': HALPHA_REST_A * (1.0 + z),
+            'lambda_Ha_obs': PAINT_HALPHA_REST_AIR_A * (1.0 + z),
             'lambda_OII_obs': 3727.5 * (1.0 + z),
             'lambda_OIII_obs': 5006.8 * (1.0 + z),
             'redshift': z,
@@ -338,7 +339,7 @@ class TestContinuum:
         df = fake_cosmos25_rows(n=8, seed=11)
         df['zfinal'] = z
         df['redshift'] = z
-        df['lambda_Ha_obs'] = HALPHA_REST_A * (1.0 + z)
+        df['lambda_Ha_obs'] = PAINT_HALPHA_REST_AIR_A * (1.0 + z)
         df['lambda_OII_obs'] = 3727.5 * (1.0 + z)
         df['lambda_OIII_obs'] = 5006.8 * (1.0 + z)
         df['type'] = 0

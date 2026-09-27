@@ -93,7 +93,7 @@ class GrismPars:
             ``build_grism_obs``).
         line_lambdas_rest : tuple of float, optional
             Rest-frame wavelengths (nm) of lines to cover. If None, uses
-            H-alpha (656.28 nm).
+            H-alpha (``LINE_LAMBDAS['Halpha']``, vacuum).
         slice_width_kms : float, optional
             Wavelength slice width in velocity units (km/s). Mutually
             exclusive with ``n_lambda``; see ``build_grism_obs`` for the
@@ -102,7 +102,9 @@ class GrismPars:
         from kl_pipe.spectral import CubePars
 
         if line_lambdas_rest is None:
-            line_lambdas_rest = (656.28,)
+            from kl_pipe.lines import LINE_LAMBDAS
+
+            line_lambdas_rest = (LINE_LAMBDAS['Halpha'],)
 
         # observed wavelength range covering all lines + velocity window
         lam_obs = [(lam * (1.0 + z)) for lam in line_lambdas_rest]

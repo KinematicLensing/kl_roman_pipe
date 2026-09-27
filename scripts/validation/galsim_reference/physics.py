@@ -64,7 +64,7 @@ class GalaxyParams:
     vel_rscale: float  # arcsec, velocity arctan scale radius
     sigma_v: float  # km/s, intrinsic Gaussian velocity dispersion
     z: float  # redshift
-    lambda_rest: float = 656.28  # nm, Halpha vacuum rest wavelength
+    lambda_rest: float = 656.461  # nm, Halpha vacuum rest wavelength (SDSS)
     g1: float = 0.0  # reduced shear component
     g2: float = 0.0  # reduced shear component
 
