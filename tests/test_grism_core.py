@@ -1,5 +1,5 @@
 """
-Tests for grism forward model: SpectralModel params, dispersion, KLModel integration.
+Tests for grism forward model: SourceModel line parameters, dispersion, render_grism.
 
 Datacube-specific tests live in test_datacube.py.
 Diagnostic plots saved to tests/out/grism/.
@@ -169,7 +169,7 @@ def _make_grism_obs_no_psf(grism_pars, cube_pars, oversample=1):
 
 
 # =============================================================================
-# SpectralModel parameter tests
+# SourceModel line parameter tests
 # =============================================================================
 
 
@@ -538,7 +538,7 @@ class TestDispersion:
 
 
 # =============================================================================
-# KLModel integration tests
+# SourceModel grism integration tests
 # =============================================================================
 
 

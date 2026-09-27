@@ -1,5 +1,7 @@
 # Phase 3 — SourceModel refactor
 
+**Status: complete.** Steps 9-10 landed (`KLModel` / `SpectralModel` deleted in `03c4449`). Kept as a historical record; API names below may refer to removed code.
+
 Self-contained execution plan for the `se/source-model` branch. Replaces `KLModel(velocity_model, intensity_model, spectral_model)` with `SourceModel(velocity_model, broadband_models, emission_lines)` and unifies the inference factories into a single `InferenceTask.from_obs(...)`.
 
 ## Context

@@ -18,44 +18,59 @@ JAX-based kinematic lensing pipeline for Roman Space Telescope weak lensing of r
 
 ```
 kl_pipe/
-├── model.py           # Model ABCs: Model, VelocityModel, IntensityModel, KLModel
-├── velocity.py        # CenteredVelocityModel, OffsetVelocityModel, factories
-├── intensity.py       # Inclined{Exponential,Spergel,DeVaucouleurs,Sersic}Model, factories
-├── likelihood.py      # JAX log-likelihoods, JIT helper constructors
+├── source.py          # SourceModel: velocity + broadband + emission-line components, dotted-key routing, render_* methods
+├── model.py           # Model ABCs: Model, VelocityModel, IntensityModel; ContinuumModel
+├── velocity.py        # CenteredVelocityModel, OffsetVelocityModel, factory
+├── intensity.py       # Inclined{Exponential,Spergel,DeVaucouleurs,Sersic}Model, CompositeIntensityModel, BulgeDiskModel, factory
+├── lines.py           # EmissionLine, LINE_LAMBDAS rest-wavelength registry
+├── observation.py     # ImageObs, VelocityObs, GrismObs + build_*_obs factories
+├── likelihood.py      # JAX log-likelihoods; create_jitted_likelihood_from_obs
 ├── transformation.py  # 5-plane coordinate transforms (obs→cen→source→gal→disk)
-├── parameters.py      # Pars, SampledPars, MetaPars, MCMCPars, ImagePars
-├── priors.py          # Prior ABC, Uniform, Gaussian, LogUniform, TruncatedNormal, PriorDict
-├── observation.py     # Observation types: ImageObs, VelocityObs, GrismObs + factory functions
+├── coordinates.py     # Celestial/detector frame: WCS rotation, shear/position rotation
+├── parameters.py      # ImagePars (grid shape, pixel scale, WCS)
+├── priors.py          # Prior ABC, Uniform, CircularUniform, Gaussian, LogUniform, TruncatedNormal(Mixture), (Truncated/Conditional)LogNormal, PriorDict
 ├── psf.py             # PSF convolution: FFT pipeline, PSFData, oversampled rendering
-├── spectral.py        # Datacube assembly (x,y,λ): CubePars, SpectralModel, emission lines
-├── dispersion.py      # Grism dispersion: GrismPars, 3D→2D spectral projection
+├── spectral.py        # CubePars: datacube grid (x, y, λ); cube assembly is SourceModel.build_cube
+├── dispersion.py      # GrismPars, 3D→2D dispersion (disperse_cube, precomputed operators)
+├── grism.py           # Post-dispersion detector-stage helpers (pixel response, SB→flux/pixel)
 ├── pixel.py           # Pixel response: PixelResponse ABC, BoxPixel (sinc FT)
 ├── render.py          # RenderConfig: k-space grid sizing (oversample, pad_factor, maxk/stepk)
 ├── synthetic.py       # Independent synthetic data generators (NOT using model.py)
 ├── noise.py           # SNR-based noise + matched-filter compactness (detection math)
 ├── photometry.py      # Unit conversions: AB mag<->uJy, f_nu->f_lambda, depth->flux limit, power-law SED interpolation
-├── surveys/           # Published survey parameters, one module per survey
-│   └── roman.py       # HLWAS medium depths, line limits, band wavelengths, depth-referenced SNR helpers
+├── optimization.py    # multi_start_minimize (gradient-based optimizer wrapper)
+├── constants.py       # Physical constants in pipeline units (e.g. C_KMS)
+├── profiling.py       # Opt-in instrumentation (active only when KLPIPE_PROFILE_DIR is set)
+├── _precision.py      # JAX float precision switch (KLPIPE_FP32)
+├── _devices.py        # JAX host-device count configuration
 ├── utils.py           # Grid builders, path getters
 ├── plotting.py        # Velocity/intensity map visualization
+├── surveys/           # Published survey parameters, one module per survey
+│   └── roman.py       # HLWAS medium depths, line limits, band wavelengths, depth-referenced SNR helpers
 ├── diagnostics/       # Diagnostic plotting subpackage
 │   ├── imaging.py     # Parameter recovery plots, joint Nsigma, data comparison panels
 │   ├── datacube.py    # Datacube diagnostic plots
-│   └── grism.py       # Grism diagnostic plots
+│   ├── grism.py       # Grism diagnostic plots
+│   └── posterior_slices.py # Posterior-surface slices of a saved ensemble fit
 ├── sampling/          # MCMC infrastructure (see sampling/README.md)
 │   ├── base.py        # Sampler ABC, SamplerResult dataclass
 │   ├── configs.py     # Config dataclasses per sampler type, YAML loader
-│   ├── task.py        # InferenceTask: model+likelihood+priors+data bundle
+│   ├── task.py        # InferenceTask: source + likelihood + priors + observations
 │   ├── factory.py     # build_sampler() registry pattern
+│   ├── initialization.py # Optimizer starts, find_map, Laplace metric, chain_inits
+│   ├── transforms.py  # UnconstrainingTransform: bounded supports → unconstrained coords
 │   ├── emcee.py       # Ensemble MCMC (gradient-free)
 │   ├── nautilus.py    # Neural nested sampling (provides evidence)
 │   ├── blackjax.py    # JAX-native HMC/NUTS (known issues w/ joint models)
 │   ├── numpyro.py     # NUTS; Laplace-preconditioned unconstrained coords in production — RECOMMENDED
 │   ├── ultranest.py   # Placeholder — NOT IMPLEMENTED
 │   └── diagnostics.py # Trace, corner, recovery, convergence plots
+├── ensemble/          # Internal: spec-driven multi-galaxy fit campaigns (see ensemble/README.md)
+│   └── catalogs/      # Catalog adapters (COSMOS25, Flagship2)
 └── tng/               # TNG50 mock data (see tng/README.md)
-    ├── loaders.py     # Load gas/stellar/subhalo data from CyVerse
-    └── data_vectors.py # 3D particle→2D map rendering, Rodrigues rotations
+    ├── loaders.py     # TNG50MockData: load gas/stellar/subhalo data (data/tng50/)
+    ├── data_vectors.py # 3D particle→2D map rendering, Rodrigues rotations
+    └── tng_dust.py    # Numba kernels for dust attenuation and SPH projection
 ```
 
 ### 5-Plane Coordinate System (Critical)
@@ -78,14 +93,26 @@ Model (ABC)
 ├── VelocityModel → evaluate_circular_velocity() → LOS projection
 │   ├── CenteredVelocityModel
 │   └── OffsetVelocityModel
-├── IntensityModel → evaluate_in_disk_plane() + render_image() (k-space FFT)
-│   ├── InclinedExponentialModel      (n=1 analytic, default)
-│   ├── InclinedSpergelModel          (Spergel profile, adds nu param)
-│   ├── InclinedDeVaucouleursModel    (fixed nu=-0.6, Sersic n=4)
-│   ├── InclinedSersicModel           (Miller & Pasha emulator, adds n_sersic + int_hlr)
-│   └── CompositeIntensityModel       (stub — future disk+bulge)
-└── KLModel → combines velocity + intensity with shared geometric params
+└── IntensityModel → evaluate_in_disk_plane() + render_image() (k-space FFT)
+    ├── InclinedExponentialModel      (n=1 analytic, default)
+    ├── InclinedSpergelModel          (Spergel profile, adds nu param)
+    ├── InclinedDeVaucouleursModel    (fixed nu=-0.6, Sersic n=4)
+    ├── InclinedSersicModel           (Miller & Pasha emulator; hlr + h_over_hlr, adds n_sersic)
+    └── CompositeIntensityModel       (sum of components with total flux + fractions)
+        └── BulgeDiskModel            (exponential disk + Sersic bulge)
 ```
+
+### SourceModel
+
+`SourceModel` (`source.py`) is the object passed to inference. It holds any subset of three slots:
+
+- `velocity_model`: one `VelocityModel` (parameters keyed `vel.<name>`)
+- `broadband_models`: `{band: IntensityModel}` (keys like `F158.flux`)
+- `emission_lines`: `{line: EmissionLine}` from `lines.py` (keys like `Halpha.flux`)
+
+Parameters are a flat dotted-key dict. Each component resolves `<prefix>.<name>` first, then bare `<name>` (shared geometry: `cosi`, `theta_int`, `g1`, `g2`). Band and line keys must be disjoint. Render methods: `render_broadband`, `render_grism`, `render_grism_group`, `render_velocity`, `build_cube`.
+
+Key-routing rules, observation types, and the checklist for adding an observation type: `docs/models.md`.
 
 All models are **stateless pure functions**: parameters passed as `theta` array, never stored as instance attributes. `PARAMETER_NAMES` class tuple defines canonical ordering; enforced at subclass creation via `__init_subclass__`. Models carry no PSF or instrument state — that lives in observation objects (`ImageObs`, `VelocityObs`, `GrismObs`) from `observation.py`.
 
@@ -112,7 +139,7 @@ For k-space intensity models: the rendering chain is `profile_FT × pixel_FT × 
 
 Three registries with case-insensitive `build_*()` functions:
 - `build_velocity_model(name)` — 'centered', 'offset', 'default'
-- `build_intensity_model(name)` — 'default', 'inclined_exp', 'inclined_spergel', 'spergel', 'de_vaucouleurs', 'inclined_sersic', 'sersic'
+- `build_intensity_model(name)` — 'default', 'inclined_exp', 'inclined_spergel', 'spergel', 'de_vaucouleurs', 'inclined_sersic', 'sersic', 'bulge_disk'
 - `build_sampler(name, task, config)` — 'emcee', 'nautilus', 'blackjax', 'numpyro', 'ultranest'; aliases 'nuts' and 'hmc' → numpyro
 
 All raise `ValueError` on unknown names.
@@ -174,9 +201,9 @@ All raise `ValueError` on unknown names.
 
 2. **JIT via partial application** (freeze static args, trace only theta):
    ```python
-   log_like = jax.jit(partial(_log_likelihood_velocity_only,
-                               X_vel=X, Y_vel=Y, variance_vel=var,
-                               vel_model=model))
+   log_like = jax.jit(partial(_log_likelihood_velocity_source,
+                               source=source, obs=obs_vel,
+                               sampled_names=names, fixed_pars=fixed))
    ```
 
 3. **No Python conditionals on traced values** — use `jnp.where()`:
@@ -248,6 +275,8 @@ return 0.0  # could silently corrupt a likelihood calculation
 | `slow` | Significant runtime | `pytest -m slow` |
 | `diagnostic_plots` | Diagnostic-figure tests (also marked `slow`) | `pytest -m diagnostic_plots` |
 | `grism_validation` | Cross-code grism validation (requires reference data) | `make test-grism-validation` |
+| `galsim_reference` | Cross-check against the GalSim-chromatic reference render (self-contained) | `make test-galsim-reference` |
+| `cosmohub` | Requires downloaded CosmoHub/Q1 catalog data | `make test-cosmohub` |
 | `roman_ensemble` | Roman ensemble-campaign tests (ensemble machinery, catalog adapters, prior provenance, Roman PSF, shear calibration); excluded from `make test` | `make test-roman-ensemble` |
 
 ### Key Test Patterns
@@ -296,15 +325,19 @@ Use `numpyro` for production. Two coordinate paths: with `precondition='laplace'
 
 ### InferenceTask
 
-Bundles model + likelihood + priors + data. Preferred factory methods (obs-based):
-- `InferenceTask.from_velocity_obs(model, priors, obs)`
-- `InferenceTask.from_intensity_obs(model, priors, obs)`
-- `InferenceTask.from_joint_obs(model, priors, obs_vel, obs_int)`
+Bundles source + likelihood + priors + observations. Single factory:
 
-Legacy wrappers (construct obs internally, backward-compatible):
-- `InferenceTask.from_velocity_model(model, priors, data_vel, variance_vel, image_pars, ...)`
-- `InferenceTask.from_intensity_model(model, priors, data_int, variance_int, image_pars, ...)`
-- `InferenceTask.from_joint_model(model, priors, data_vel, data_int, variance_vel, variance_int, image_pars_vel, image_pars_int, ...)`
+```python
+InferenceTask.from_obs(
+    source, priors, *,
+    image_obs={band: ImageObs},      # keys must be in source.broadband_models
+    grism_obs={key: GrismObs},       # requires emission_lines + velocity_model
+    velocity_obs=VelocityObs,        # requires velocity_model
+    ...                              # spectral/PSF/cube modes, render config
+)
+```
+
+At least one observation is required; the likelihood sums over all supplied observations.
 
 ### PriorDict
 
@@ -312,9 +345,9 @@ Separates sampled (Prior objects) vs fixed (numeric) params. Sampled names sorte
 
 ```python
 priors = PriorDict({
-    'vcirc': Uniform(100, 300),     # sampled
+    'vel.vcirc': Uniform(100, 300), # sampled
     'cosi': TruncatedNormal(...),   # sampled
-    'v0': 10.0,                      # fixed
+    'vel.v0': 10.0,                 # fixed
 })
 ```
 
@@ -324,7 +357,7 @@ priors = PriorDict({
 
 ### Key Concepts
 
-- **5 galaxies**: SubhaloIDs 8, 17, 19, 20, 29 (download via `make download-cyverse-data`)
+- **17 galaxies**: SubhaloIDs 184941, 229935, 294869, 485056, 490815, 507293, 520311, 554798, 561676, 574615, 583256, 595887, 627128, 636848, 657568, 687075, 715911 (`TNG50MockData`; ~2.4 GB in `data/tng50/` via `make download-cyverse-data`)
 - **3D rotations** via Rodrigues formula (NOT 2D projections) — preserves disk thickness
 - **Gas-stellar offset**: ~30-40 deg misalignment is real physics. `preserve_gas_stellar_offset=True` (default) keeps it; `False` forces alignment (synthetic tests only)
 - **Redshift scaling**: TNG native z~0.01 spans ~1300". Always use `target_redshift=0.5-1.0` for Roman-like sub-arcsec observations
@@ -351,12 +384,12 @@ make tutorials            # convert tutorial md → ipynb
 make test-tutorials       # convert + execute all tutorials
 
 # Testing
-make test                 # fast generic tests (excludes slow, tng_diagnostics, grism_validation, roman_ensemble)
-make test-basic           # no TNG data required (also excludes roman_ensemble)
+make test                 # fast generic tests (excludes slow, tng_diagnostics, grism_validation, cosmohub, roman_ensemble); downloads TNG50 on first run
+make test-basic           # fast tests with no downloads (also excludes tng50); start here
 make test-roman-ensemble  # Roman ensemble-campaign tier (fast, no-download subset)
-make test-extended        # excludes tng_diagnostics + grism_validation only (includes roman_ensemble)
+make test-extended        # excludes tng_diagnostics, grism_validation, cosmohub (includes roman_ensemble)
 make test-all             # full suite including TNG diagnostics
-make test-fast            # fast tests, stop on first failure (-x)
+make test-fast            # same marker filter as `make test`, plus -x (stop at first failure)
 make test-verbose         # verbose with stdout (-v -s)
 make test-coverage        # coverage report (html + terminal)
 make test-sampling        # MCMC tests (excl. nautilus)
@@ -364,6 +397,8 @@ make test-sampling-all    # all MCMC tests (incl. nautilus)
 make test-tng             # TNG50 tests only
 make test-tng-unit        # TNG50 unit tests (excl. slow diagnostics)
 make test-tng-diagnostics # slow TNG diagnostic plots
+make test-cosmohub        # real-catalog tests (needs make download-cosmohub-dev)
+make test-galsim-reference # GalSim-chromatic reference cross-check
 make clean-test           # remove tests/out/ and .coverage
 
 # Diagnostics

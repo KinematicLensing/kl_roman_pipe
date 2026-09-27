@@ -1,6 +1,7 @@
 # COSMOS2025 downloads (COSMOS-Web master catalog)
 
-Input catalog for the planned `cosmos25` catalog adapter: the real
+Input catalog for the `cosmos25` catalog adapter
+(`kl_pipe/ensemble/catalogs/cosmos25.py`): the real
 COSMOS-Web master catalog (784,016 sources, 0.43 deg^2 effective;
 Shuntov et al. 2025, arXiv:2506.03243) plus a private row-matched
 emission-line mock painted by Jiachuan Xu. All data files are local-only

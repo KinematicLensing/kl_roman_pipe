@@ -1,5 +1,8 @@
 # kl_pipe.ensemble
 
+**Status:** internal campaign tooling, not yet supported for general use.
+For single-source fitting use `InferenceTask.from_obs` (see `docs/tutorials/`).
+
 Config-driven MCMC fit campaigns: declare an ensemble in one spec YAML,
 expand it into a per-fit manifest, dispatch it (locally or as a SLURM array),
 collate results, and diagnose the run.

@@ -4,8 +4,8 @@
 before its first step: optimizer starts, the MAP, the Laplace metric and the
 chain initial points. One call runs the whole procedure and returns one
 record; the pieces stay public for refining it one at a time. This page is
-the user pathway: the one-call API, the pieces behind it, the ensemble spec
-knobs (same names) and the summary columns that tell you what happened.
+the user pathway: the one-call API, the pieces behind it, the equivalent
+ensemble settings, and the summary columns that tell you what happened.
 
 ## One call
 
@@ -37,12 +37,11 @@ procedure behind a keyword interface with the same defaults.
 
 | knob | default | why |
 |---|---|---|
-| `map_bounded` | `true` | Unbounded L-BFGS stalls where its first line-search trial crosses a prior wall: the endpoint reports convergence with a scaled gradient norm of 150-3000 and sits thousands of nats below the truth basin. On the cosmos25 bank the bounded search alone reached the truth basin on every flagged fit; A/B 988356 vs 986080 cured a wrong-mode posterior the reference had passed. |
-| `map_polish_steps` / `map_polish_basins` | 8 / 3 | Regularized Newton descent certifies stationarity (`map_grad_norm` < 1e-3, positive Hessian) and descends through saddles the L-BFGS stall left; 3 basins so a runner-up basin is polished before the margin is read. Costs `2 n_params + 1` gradients per step taken. |
-| `eig_floor_mode` / `eig_floor` | `prior` / 0.5 | The relative floor (1e-4 x max) pegged the condition number at 1e4 in 20/32 bank fits and clipped 1-9 real posterior directions by up to 2x in variance. In prior units the softest true eigenvalue is 0.6-1.1 in every healthy fit, so a floor at 0.5 never touches a direction the data constrain. A/B 988824 vs 986080: 0/32 first-pass fails, sum wall -9%, posteriors unchanged. |
-| both together | | 990891 `cosmos25_bank32_robust`: posteriors identical to 988356, cost neutral outside the two fits whose truth sits on the cosi prior wall. |
-| `map_moment_starts` | `false` | Image-moment starts landed near the truth but did not change the basin reached once the search was bounded; kept opt-in. |
-| `chain_init` | `map_jitter` | `map_basins` on the legacy search (988826) started chains at optimizer stall points and was refuted; its retest on the bounded search is arm 990892. |
+| `map_bounded` | `true` | Unbounded L-BFGS can stall where a line-search step crosses a prior boundary: it reports convergence with a large gradient, thousands of nats below the best basin. The bounded search slides along the boundary instead, and on a 32-galaxy benchmark it reached the best basin in every case the unbounded search missed, including one that had produced a converged-looking posterior in the wrong mode. |
+| `map_polish_steps` / `map_polish_basins` | 8 / 3 | Regularized Newton steps certify that the MAP is stationary (`map_grad_norm` < 1e-3, positive-definite Hessian) and move off saddle points left by L-BFGS. Polishing the 3 best basins means the margin to the runner-up is measured between polished points. Costs `2 n_params + 1` gradients per step. |
+| `eig_floor_mode` / `eig_floor` | `prior` / 0.5 | A relative floor (1e-4 x largest eigenvalue) caps the condition number at 1e4, and in 20 of 32 benchmark fits it hit that cap and shrank 1-9 genuinely constrained directions by up to 2x in variance. In prior units the smallest data-constrained eigenvalue was 0.6-1.1 in every healthy fit, so a floor of 0.5 leaves those directions untouched. On the benchmark it gave no first-pass convergence failures (0/32), cut total wall time by 9%, and left the posteriors unchanged. |
+| `map_moment_starts` | `false` | Image-moment starts land near the truth but did not change which basin the bounded search reached; kept optional. |
+| `chain_init` | `map_jitter` | Starting chains at competing basins (`map_basins`) with the unbounded search placed chains at optimizer stall points and hurt convergence; with the bounded search it is still under test. |
 
 The historical procedure is reproduced by `InitConfig(map_bounded=False,
 map_polish_steps=0, eig_floor_mode='relative')` (relative floor default
@@ -84,7 +83,7 @@ inits = chain_inits(pre, inv_mass, n_chains=4, mode='map_basins', seed=seed, tra
 | `pa_stratified` | prior draws with `theta_int` on a grid: `2 n_pa` points over the circle (periodic prior) or `n_pa` over the bounds | `PRNGKey(seed + 2)` |
 | `moments` | adaptive elliptical-Gaussian moments of each broadband stamp, PSF-deconvolved (PSF second moments measured through the galaxy's own weight) and pixel-corrected: centroid for every component, band pixel sums for fluxes, size for every `rscale` (matched-Gaussian sigma / 1.164 for an exponential), inclination from the axis ratio with the sech^2 thickness correction `cosi^2 = (q^2 - q0^2) / (1 - q0^2)`, `q0 = 1.15 h_over_r`, position angle for `theta_int` at PA and PA + pi; shear 0; everything else at the prior median | none |
 
-Moment accuracy on the 32 noisy cosmos25 bank stamps (SNR 40-50 per band):
+Moment accuracy on 32 noisy Roman-like mock stamps (SNR 40-50 per band):
 size within 10-25% (Roman PSF wings bias it high), cosi within 0.1, PA within
 0.15 rad, centroid within 1-1.5 pixels, flux within 20%. A stamp with no
 usable object raises `MomentsError`; `Initializer` warns, goes on with the
@@ -124,8 +123,9 @@ r-hat cannot see a basin disagreement.
 
 ## Ensemble spec knobs
 
-Same names as `InitConfig`; each can be A/B'd alone on the benchmark bank
-(`docs/benchmarks/README.md`).
+For batch fits through `kl_pipe.ensemble` (internal tooling), the same
+knobs appear under the spec's `fit:` block with the same names as
+`InitConfig`.
 
 ```yaml
 fit:
