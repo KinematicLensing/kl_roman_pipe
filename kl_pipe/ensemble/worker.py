@@ -580,6 +580,7 @@ def _run_fit_attempt(
         warmup_metric=spec.warmup_metric,
         warmup_stage2_draws=spec.warmup_stage2_draws,
         warmup_stage2_adapt=spec.warmup_stage2_adapt,
+        record_warmup=spec.record_warmup,
         seed=sampler_seed,
     )
 
@@ -739,7 +740,29 @@ def _summary_row(
             max(result.metadata.get('warmup_chain_metric_mismatch', [np.nan]))
         ),
         'converged': bool(result.converged),
-        'chain_method': str(diag.get('chain_method', '')),
+        'chain_method': str(result.metadata.get('chain_method', '')),
+        # sampler-efficiency columns (nan where the path does not record them)
+        'mean_tree_depth': (
+            float(diag['mean_tree_depth'])
+            if diag.get('mean_tree_depth') is not None
+            else np.nan
+        ),
+        **_per_chain_columns('step_size', diag.get('step_size')),
+        **_per_chain_columns('e_bfmi', diag.get('e_bfmi')),
+        'nuts_wallclock_s': float(result.metadata.get('nuts_wallclock_s', np.nan)),
+        'logprob_wallclock_s': float(
+            result.metadata.get('logprob_wallclock_s', np.nan)
+        ),
+        'continue_wallclock_s': float(result.metadata.get('continue_wallclock_s', 0.0)),
+        'warmup_wallclock_s': float(result.metadata.get('warmup_wallclock_s', np.nan)),
+        'sampling_wallclock_s': float(
+            result.metadata.get('sampling_wallclock_s', np.nan)
+        ),
+        'warmup_num_steps_total': (
+            float(np.sum(diag['warmup_num_steps']))
+            if 'warmup_num_steps' in diag
+            else np.nan
+        ),
         'n_map_starts_converged': (
             int(preconditioner.n_starts_converged) if preconditioner is not None else -1
         ),
@@ -813,6 +836,18 @@ def _summary_row(
     return out
 
 
+def _per_chain_columns(name: str, values) -> dict:
+    """min / median / max over chains of a per-chain diagnostic."""
+    if values is None:
+        return {f'{name}_min': np.nan, f'{name}_median': np.nan, f'{name}_max': np.nan}
+    v = np.atleast_1d(np.asarray(values, dtype=np.float64))
+    return {
+        f'{name}_min': float(v.min()),
+        f'{name}_median': float(np.median(v)),
+        f'{name}_max': float(v.max()),
+    }
+
+
 def failed_summary_row(row: Dict, message: str) -> dict:
     return {
         'fit_id': str(row['fit_id']),
@@ -831,9 +866,22 @@ def _save_chains(run_dir: Path, fit_id: str, result, sampled_names) -> None:
     }
     if result.chains is not None:
         arrays['chains'] = np.asarray(result.chains)
-    num_steps = result.diagnostics.get('num_steps')
-    if num_steps is not None:
-        arrays['num_steps'] = np.asarray(num_steps)
+    # per-draw sampler records, chain-major like the samples
+    for key, dtype in (
+        ('num_steps', None),
+        ('accept_prob', np.float32),
+        ('diverging', bool),
+        ('energy', np.float64),
+        ('step_size', np.float64),
+        ('e_bfmi', np.float64),
+        ('warmup_num_steps', None),
+        ('warmup_accept_prob', np.float32),
+        ('warmup_diverging', bool),
+        ('warmup_step_size', np.float64),
+    ):
+        value = result.diagnostics.get(key)
+        if value is not None:
+            arrays[key] = np.asarray(value, dtype=dtype)
     # warmup-adapted inverse mass matrix (sampling coordinates), per chain
     adapted = result.diagnostics.get('adapted_inverse_mass_matrix')
     if adapted is not None:

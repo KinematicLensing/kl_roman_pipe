@@ -377,10 +377,26 @@ class NumpyroSamplerConfig(BaseSamplerConfig):
     warmup_metric: str = 'adapted'
     warmup_stage2_draws: int = 50
     warmup_stage2_adapt: bool = False
+    # laplace single-stage path only: run warmup and sampling as two calls so
+    # per-draw warmup steps / accept / step size and the warmup vs sampling
+    # wall split are recorded. Same algorithm, different RNG stream than the
+    # one-call default, so off unless a run asks for it.
+    record_warmup: bool = False
 
     def __post_init__(self):
         if not 0 < self.target_accept_prob < 1:
             raise ValueError("target_accept_prob must be in (0, 1)")
+        if not isinstance(self.record_warmup, bool):
+            raise ValueError(
+                f"record_warmup must be a bool, got {self.record_warmup!r}"
+            )
+        if self.record_warmup and not (
+            self.precondition == 'laplace' and self.warmup_metric == 'adapted'
+        ):
+            raise ValueError(
+                "record_warmup requires precondition='laplace' and "
+                "warmup_metric='adapted' (the pooled path records its own stages)"
+            )
         if self.warmup_metric not in ('adapted', 'pooled'):
             raise ValueError(
                 f"warmup_metric must be 'adapted' or 'pooled', got {self.warmup_metric!r}"

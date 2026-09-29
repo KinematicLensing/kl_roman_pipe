@@ -1,0 +1,27 @@
+# hlwas_medium_roman with the HLWAS medium-tier grism roll geometry: four
+# passes as two nearly opposed pairs, two in the leading and two in the
+# trailing season (ROTAC 2025, arXiv 2505.10574 Sect. 5: "4 passes, each
+# paired to give opposite orientations"; nearly opposed dispersion breaks the
+# line-centroid / redshift degeneracy). Neither ROTAC nor the STScI HLWAS page
+# gives the grism angles; the opposition uses the imaging passes' 167 deg
+# relative roll and a 10 deg offset within each season. Everything else is
+# identical to hlwas_medium_roman.
+id: hlwas_medium_roman_rotac_rolls
+bands: [F129, F158]
+grism:
+  rolls_deg: [0.0, 10.0, 167.0, 177.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}

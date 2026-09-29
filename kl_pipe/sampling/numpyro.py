@@ -233,6 +233,26 @@ def metric_mismatch(a: np.ndarray, m: np.ndarray) -> float:
     return float(np.sqrt(lam.max() / lam.min()))
 
 
+def _e_bfmi(energy: np.ndarray, n_chains: int) -> np.ndarray:
+    """Energy Bayesian fraction of missing information per chain.
+
+    ``energy`` is the per-draw Hamiltonian energy, chain-major and flat
+    (n_chains * n_draws,). Values below ~0.3 flag momentum resampling that
+    cannot traverse the marginal energy distribution (heavy tails, funnels).
+    """
+    e = np.asarray(energy, dtype=np.float64)
+    if e.size % n_chains != 0:
+        raise ValueError(
+            f"energy has {e.size} draws, not divisible by n_chains={n_chains}"
+        )
+    e = e.reshape(n_chains, -1)
+    if e.shape[1] < 2:
+        raise ValueError("E-BFMI needs at least 2 draws per chain")
+    num = np.sum(np.diff(e, axis=1) ** 2, axis=1)
+    den = np.sum((e - e.mean(axis=1, keepdims=True)) ** 2, axis=1)
+    return num / den
+
+
 class NumpyroSampler(Sampler):
     """
     NumPyro gradient-based sampler with Z-score reparameterization.
@@ -522,10 +542,19 @@ class NumpyroSampler(Sampler):
         else:
             mean_tree_depth = None
 
-        # Step size from last state
+        # Hamiltonian energy per draw (chain-major) -> E-BFMI per chain
+        energy = extra_fields.get('energy', None)
+        e_bfmi = None
+        if energy is not None:
+            energy = np.asarray(energy)
+            e_bfmi = _e_bfmi(energy, self.config.n_chains)
+
+        # adapted step size, one entry per chain
         try:
-            step_size = float(mcmc.last_state.adapt_state.step_size)
-        except (AttributeError, TypeError):
+            step_size = np.atleast_1d(
+                np.asarray(mcmc.last_state.adapt_state.step_size, dtype=np.float64)
+            )
+        except AttributeError:
             step_size = None
 
         diagnostics = {
@@ -541,7 +570,9 @@ class NumpyroSampler(Sampler):
             # Tree depth / steps
             'num_steps': num_steps,
             'mean_tree_depth': mean_tree_depth,
-            # Adaptation
+            # energy / adaptation
+            'energy': energy,
+            'e_bfmi': e_bfmi,
             'step_size': step_size,
             # Convergence diagnostics
             'r_hat': r_hat,
@@ -868,9 +899,15 @@ class NumpyroSampler(Sampler):
             progress_bar=self.config.progress,
         )
         two_stage: Optional[dict] = None
+        warmup_record: Optional[dict] = None
+        t_nuts = time.time()
         if self.config.warmup_metric == 'pooled':
             mcmc, two_stage = self._two_stage_warmup(
                 mcmc, potential_fn, init_params, n_chains, chain_method, seed
+            )
+        elif self.config.record_warmup:
+            mcmc, warmup_record = self._recorded_warmup_run(
+                mcmc, init_params, n_chains, seed
             )
         else:
             mcmc.run(
@@ -878,11 +915,13 @@ class NumpyroSampler(Sampler):
                 init_params=init_params,
                 extra_fields=('diverging', 'accept_prob', 'num_steps', 'energy'),
             )
+        # get_samples blocks on the device, so this closes the NUTS wall
+        samples = np.asarray(mcmc.get_samples())
+        nuts_wallclock_s = time.time() - t_nuts
 
         # potential_fn samples come back as a flat array in sampled_names
         # order; back-transform to physical coordinates if the chain ran in
         # unconstrained space.
-        samples = np.asarray(mcmc.get_samples())
         grouped = np.asarray(mcmc.get_samples(group_by_chain=True))
         if transform is not None:
             samples = np.asarray(transform.inverse(samples))
@@ -893,9 +932,11 @@ class NumpyroSampler(Sampler):
                 samples = transform.wrap_about(samples, pre.map_point)
                 grouped = transform.wrap_about(grouped, pre.map_point)
 
+        t_lp = time.time()
         log_probs = _batched_log_posterior_chunked(
             self.task._log_posterior_jittable, samples
         )
+        logprob_wallclock_s = time.time() - t_lp
 
         samples_by_chain = {
             name: grouped[:, :, i] for i, name in enumerate(sampled_names)
@@ -948,9 +989,16 @@ class NumpyroSampler(Sampler):
             'chain_init': self.config.chain_init,
             'chain_method': chain_method,
             'warmup_metric': self.config.warmup_metric,
+            # NUTS = compile + warmup + sampling; log_prob = post-run batch
+            'nuts_wallclock_s': float(nuts_wallclock_s),
+            'logprob_wallclock_s': float(logprob_wallclock_s),
         }
         if two_stage is not None:
             metadata.update(two_stage)
+        if warmup_record is not None:
+            metadata['warmup_wallclock_s'] = warmup_record.pop('warmup_wallclock_s')
+            metadata['sampling_wallclock_s'] = warmup_record.pop('sampling_wallclock_s')
+            diagnostics.update(warmup_record)
         result = SamplerResult(
             samples=samples,
             log_prob=log_probs,
@@ -1056,6 +1104,38 @@ class NumpyroSampler(Sampler):
         }
         return mcmc2, info
 
+    def _recorded_warmup_run(self, mcmc, init_params, n_chains: int, seed: int):
+        """Single-stage adaptive warmup and sampling as two calls on one
+        ``MCMC``, recording the warmup trajectory and the wall split.
+
+        Returns ``mcmc`` (sampling draws and extra fields as in the one-call
+        path) and a dict of per-draw warmup arrays (chain-major, flat) plus
+        ``warmup_wallclock_s`` / ``sampling_wallclock_s``. The first call
+        also carries the JIT compile of the NUTS kernel.
+        """
+        fields = ('diverging', 'accept_prob', 'num_steps', 'energy')
+        t0 = time.time()
+        mcmc.warmup(
+            random.PRNGKey(seed + 1),
+            init_params=init_params,
+            collect_warmup=True,
+            extra_fields=fields + ('adapt_state.step_size',),
+        )
+        warm = mcmc.get_extra_fields()
+        warm = {k: np.asarray(v) for k, v in warm.items()}
+        t1 = time.time()
+        mcmc.run(random.PRNGKey(seed + 2), extra_fields=fields)
+        jax.block_until_ready(mcmc.last_state)
+        t2 = time.time()
+        return mcmc, {
+            'warmup_num_steps': warm['num_steps'],
+            'warmup_accept_prob': warm['accept_prob'],
+            'warmup_diverging': warm['diverging'],
+            'warmup_step_size': warm['adapt_state.step_size'],
+            'warmup_wallclock_s': float(t1 - t0),
+            'sampling_wallclock_s': float(t2 - t1),
+        }
+
     def continue_sampling(self, n_samples: int) -> SamplerResult:
         """Draw ``n_samples`` more per chain from the completed preconditioned
         run's final state (position, step size, metric), with no warmup, and
@@ -1133,12 +1213,28 @@ class NumpyroSampler(Sampler):
             mcmc, reparam_scales=None, samples_by_chain=samples_by_chain
         )
         # per-draw arrays: first run's draws followed by the new draws
-        for key in ('diverging', 'accept_prob', 'num_steps'):
+        for key in ('diverging', 'accept_prob', 'num_steps', 'energy'):
             old = prev.diagnostics.get(key)
             new = diagnostics.get(key)
             if old is None or new is None:
                 raise RuntimeError(f"continue_sampling: per-draw field '{key}' missing")
-            diagnostics[key] = np.concatenate([np.asarray(old), np.asarray(new)])
+            # chain-major on both sides: interleave per chain, not end to end
+            diagnostics[key] = np.concatenate(
+                [
+                    np.asarray(old).reshape(c['n_chains'], -1),
+                    np.asarray(new).reshape(c['n_chains'], -1),
+                ],
+                axis=1,
+            ).reshape(-1)
+        diagnostics['e_bfmi'] = _e_bfmi(diagnostics['energy'], c['n_chains'])
+        for key in (
+            'warmup_num_steps',
+            'warmup_accept_prob',
+            'warmup_diverging',
+            'warmup_step_size',
+        ):
+            if key in prev.diagnostics:
+                diagnostics[key] = prev.diagnostics[key]
         diverging = diagnostics['diverging']
         diagnostics['n_divergences'] = int(diverging.sum())
         diagnostics['divergence_rate'] = (
@@ -1163,6 +1259,10 @@ class NumpyroSampler(Sampler):
         )
         metadata['n_samples_per_chain'] = int(grouped.shape[1])
         metadata['continuations'] = int(prev.metadata.get('continuations', 0)) + 1
+        # nuts_wallclock_s stays the first run's; continuation blocks add here
+        metadata['continue_wallclock_s'] = float(
+            prev.metadata.get('continue_wallclock_s', 0.0)
+        ) + (time.time() - start_time)
         metadata['continued_draws_per_chain'] = int(
             prev.metadata.get('continued_draws_per_chain', 0)
         ) + int(n_samples)

@@ -144,6 +144,28 @@ class TestWarmupMetric:
             EnsembleSpec.from_yaml(_write(tmp_path, d))
 
 
+class TestRecordWarmup:
+    def test_default_and_parse(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        assert spec.record_warmup is False
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit'].update({'precondition': 'laplace', 'record_warmup': True})
+        spec2 = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        assert spec2.record_warmup is True
+        assert spec2.resolve_defaults(d)['fit']['record_warmup'] is True
+        resolved_default = spec.resolve_defaults(yaml.safe_load(DEV_SPEC.read_text()))
+        assert resolved_default['fit']['record_warmup'] is False
+
+    def test_validation(self):
+        spec = dataclasses.replace(
+            EnsembleSpec.from_yaml(DEV_SPEC), precondition='laplace', adapt_mass=True
+        )
+        with pytest.raises(ValueError, match='record_warmup'):
+            dataclasses.replace(spec, record_warmup='yes')
+        with pytest.raises(ValueError, match='record_warmup'):
+            dataclasses.replace(spec, record_warmup=True, warmup_metric='pooled')
+
+
 class TestLineSnrScale:
     CATALOG_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'cosmos25_census_v2.yaml'
 

@@ -1539,16 +1539,25 @@ class TestContinueSampling:
             lp_check, np.asarray(second.log_prob).reshape(2, 400)[0, 200:205]
         )
         # the warm state carried over: no warmup, same adapted step size
-        assert second.diagnostics['step_size'] == first.diagnostics['step_size']
+        assert second.diagnostics['step_size'].shape == (2,)
+        assert np.array_equal(
+            second.diagnostics['step_size'], first.diagnostics['step_size']
+        )
         assert second.metadata['continuations'] == 1
         assert second.metadata['continued_draws_per_chain'] == 200
         assert second.metadata['n_samples_per_chain'] == 400
         # per-draw arrays cover every draw; convergence stats on the union
         assert second.diagnostics['num_steps'].shape == (800,)
         assert second.diagnostics['diverging'].shape == (800,)
-        assert np.array_equal(
-            second.diagnostics['num_steps'][:400], first.diagnostics['num_steps']
-        )
+        assert second.diagnostics['energy'].shape == (800,)
+        # per-draw arrays are chain-major like the samples
+        for key in ('num_steps', 'accept_prob', 'diverging', 'energy'):
+            assert np.array_equal(
+                np.asarray(second.diagnostics[key]).reshape(2, 400)[:, :200],
+                np.asarray(first.diagnostics[key]).reshape(2, 200),
+            ), key
+        assert second.diagnostics['e_bfmi'].shape == (2,)
+        assert np.all(second.diagnostics['e_bfmi'] > 0)
         assert 0.0 <= second.diagnostics['divergence_rate'] < 0.1
         assert max(second.get_rhat().values()) < 1.1
         ess1 = np.array(list(first.diagnostics['ess'].values()))
@@ -1590,3 +1599,73 @@ class TestContinueSampling:
         sampler = build_sampler('numpyro', task, config)
         with pytest.raises(RuntimeError, match="completed preconditioned run"):
             sampler.continue_sampling(10)
+
+
+class TestRecordedWarmup:
+    def test_record_warmup_splits_wall_and_keeps_warmup_trajectory(
+        self, simple_velocity_task
+    ):
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=100,
+            n_warmup=120,
+            n_chains=2,
+            chain_method='vectorized',
+            seed=7,
+            progress=False,
+            precondition='laplace',
+            precondition_unconstrained=True,
+            precondition_adapt_mass=True,
+            n_map_starts=3,
+            record_warmup=True,
+        )
+        sampler = build_sampler('numpyro', task, config)
+        res = sampler.run()
+        n = len(task.sampled_names)
+        assert res.samples.shape == (2 * 100, n)
+        d = res.diagnostics
+        for key in ('warmup_num_steps', 'warmup_accept_prob', 'warmup_diverging'):
+            assert d[key].shape == (2 * 120,), key
+        assert d['warmup_step_size'].shape == (2 * 120,)
+        assert np.all(d['warmup_step_size'] > 0)
+        assert np.all(d['warmup_num_steps'] >= 1)
+        assert d['num_steps'].shape == (2 * 100,)
+        assert d['e_bfmi'].shape == (2,)
+        md = res.metadata
+        assert md['warmup_wallclock_s'] > 0 and md['sampling_wallclock_s'] > 0
+        assert md['nuts_wallclock_s'] >= md['sampling_wallclock_s']
+        assert max(res.get_rhat().values()) < 1.1
+        # the warmup record survives continuation
+        more = sampler.continue_sampling(20)
+        assert more.diagnostics['warmup_num_steps'].shape == (2 * 120,)
+
+    def test_default_path_times_nuts_without_warmup_record(self, simple_velocity_task):
+        task, _ = simple_velocity_task
+        config = NumpyroSamplerConfig(
+            n_samples=50,
+            n_warmup=50,
+            n_chains=1,
+            seed=3,
+            progress=False,
+            precondition='laplace',
+            n_map_starts=2,
+        )
+        res = build_sampler('numpyro', task, config).run()
+        assert res.metadata['nuts_wallclock_s'] > 0
+        assert res.metadata['logprob_wallclock_s'] >= 0
+        assert 'warmup_wallclock_s' not in res.metadata
+        assert 'warmup_num_steps' not in res.diagnostics
+        assert res.diagnostics['step_size'].shape == (1,)
+
+    def test_record_warmup_rejects_pooled_and_non_laplace(self):
+        with pytest.raises(ValueError, match="record_warmup requires"):
+            NumpyroSamplerConfig(record_warmup=True)
+        with pytest.raises(ValueError, match="record_warmup requires"):
+            NumpyroSamplerConfig(
+                precondition='laplace',
+                precondition_adapt_mass=True,
+                warmup_metric='pooled',
+                record_warmup=True,
+            )
+        with pytest.raises(ValueError, match="must be a bool"):
+            NumpyroSamplerConfig(precondition='laplace', record_warmup=1)

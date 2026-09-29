@@ -1204,6 +1204,9 @@ class EnsembleSpec:
     warmup_metric: str = 'adapted'
     warmup_stage2_draws: int = 50
     warmup_stage2_adapt: bool = False
+    # NumpyroSamplerConfig.record_warmup: per-draw warmup records and the
+    # warmup / sampling wall split (two-call warmup, own RNG stream)
+    record_warmup: bool = False
     # catalog populations: multiplier on every galaxy's per-pass line SNR
     # (mock noise only; selection and the line-flux prior use the catalog value)
     line_snr_scale: float = 1.0
@@ -1269,6 +1272,17 @@ class EnsembleSpec:
         if not isinstance(self.warmup_stage2_adapt, bool):
             raise ValueError(
                 f"fit.warmup_stage2_adapt must be a boolean, got {self.warmup_stage2_adapt!r}"
+            )
+        if not isinstance(self.record_warmup, bool):
+            raise ValueError(
+                f"fit.record_warmup must be a boolean, got {self.record_warmup!r}"
+            )
+        if self.record_warmup and not (
+            self.precondition == 'laplace' and self.warmup_metric == 'adapted'
+        ):
+            raise ValueError(
+                "fit.record_warmup requires fit.precondition: laplace and "
+                "fit.warmup_metric: adapted"
             )
         if not isinstance(self.map_bounded, bool):
             raise ValueError(
@@ -1579,6 +1593,7 @@ class EnsembleSpec:
                 'warmup_metric': self.warmup_metric,
                 'warmup_stage2_draws': self.warmup_stage2_draws,
                 'warmup_stage2_adapt': self.warmup_stage2_adapt,
+                'record_warmup': self.record_warmup,
                 'escalation': {
                     'enabled': esc.enabled,
                     'rhat_max': esc.rhat_max,
@@ -1862,6 +1877,7 @@ class EnsembleSpec:
                 'warmup_metric',
                 'warmup_stage2_draws',
                 'warmup_stage2_adapt',
+                'record_warmup',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1943,6 +1959,7 @@ class EnsembleSpec:
                 fit, 'warmup_stage2_draws', 50, f"{path}:fit"
             ),
             warmup_stage2_adapt=fit.get('warmup_stage2_adapt', False),
+            record_warmup=fit.get('record_warmup', False),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,
