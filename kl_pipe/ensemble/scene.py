@@ -32,10 +32,7 @@ from kl_pipe.ensemble.population import (
     BULGE_SIZE_RATIO_MEDIAN,
     CENTROID_SCATTER_ARCSEC,
     CONT_CENTROID_OFFSET_ARCSEC,
-    HALPHA_RSCALE_RATIO_DEX,
-    HALPHA_RSCALE_RATIO_MEDIAN,
-    VEL_RSCALE_RATIO_DEX,
-    VEL_RSCALE_RATIO_MEDIAN,
+    scale_ratio_paints,
 )
 from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE
 from kl_pipe.priors import (
@@ -563,17 +560,18 @@ def scene_priors(
             )
         if not bulge_bands:
             parent = f'{config.bands[0]}.rscale'
+        (vel_median, vel_dex), (line_median, line_dex) = scale_ratio_paints(cp)
         prior_spec['vel.rscale'] = ConditionalLogNormal(
             parent,
-            math.log(VEL_RSCALE_RATIO_MEDIAN),
-            VEL_RSCALE_RATIO_DEX * ln10,
+            math.log(vel_median),
+            vel_dex * ln10,
             rscale_low,
             rscale_high,
         )
         prior_spec['Halpha.rscale'] = ConditionalLogNormal(
             parent,
-            math.log(HALPHA_RSCALE_RATIO_MEDIAN),
-            HALPHA_RSCALE_RATIO_DEX * ln10,
+            math.log(line_median),
+            line_dex * ln10,
             rscale_low,
             rscale_high,
         )
@@ -667,6 +665,28 @@ def scene_priors(
         raise ValueError(
             "spec population.draw must include vcirc (Tully-Fisher population)"
         )
+
+    # fit.pin_to_truth: fix the listed sampled parameters at the manifest
+    # truth; a bare name broadcasts to every sampled '<component>.<name>'
+    for name in spec.pin_to_truth:
+        if name in prior_spec:
+            targets = [name]
+        else:
+            targets = [
+                key
+                for key, value in prior_spec.items()
+                if key.endswith(f'.{name}') and isinstance(value, Prior)
+            ]
+            if not targets:
+                raise ValueError(
+                    f"fit.pin_to_truth '{name}' matches no sampled scene parameter"
+                )
+        for key in targets:
+            if not isinstance(prior_spec[key], Prior):
+                raise ValueError(
+                    f"fit.pin_to_truth '{key}' is already fixed in this scene"
+                )
+            prior_spec[key] = truth[key]
 
     return PriorDict(prior_spec)
 

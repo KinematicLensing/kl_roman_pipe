@@ -1030,3 +1030,92 @@ class TestSampledThicknessRun:
             row=row,
         )
         assert 'h_over_r' in inputs.priors.sampled_names
+
+
+class TestPinToTruthScene:
+    """fit.pin_to_truth fixes sampled scene parameters at the manifest truth."""
+
+    def test_pins_and_broadcasts(self, run_parts):
+        import dataclasses
+
+        from kl_pipe.ensemble.expander import truth_from_row
+
+        spec, config, manifest, _ = run_parts
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        base = scene_priors(truth, config, spec, row=row)
+        pinned_spec = dataclasses.replace(
+            spec, pin_to_truth=('x0', 'y0', 'vel.v0', 'Halpha.cont.flux_per_nm')
+        )
+        priors = scene_priors(truth, config, pinned_spec, row=row)
+        centroid_keys = [
+            k for k in base.sampled_names if k.endswith('.x0') or k.endswith('.y0')
+        ]
+        assert centroid_keys  # broadcast has something to hit
+        expected_fixed = set(centroid_keys) | {'vel.v0', 'Halpha.cont.flux_per_nm'}
+        assert set(base.sampled_names) - set(priors.sampled_names) == expected_fixed
+        for key in expected_fixed:
+            assert priors.fixed_values[key] == truth[key]
+        # every other prior is untouched
+        for key in priors.sampled_names:
+            assert type(priors.get_prior(key)) is type(base.get_prior(key))
+
+    def test_unknown_and_already_fixed_raise(self, run_parts):
+        import dataclasses
+
+        from kl_pipe.ensemble.expander import truth_from_row
+
+        spec, config, manifest, _ = run_parts
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        with pytest.raises(ValueError, match='matches no sampled'):
+            scene_priors(
+                truth,
+                config,
+                dataclasses.replace(spec, pin_to_truth=('nope',)),
+                row=row,
+            )
+        with pytest.raises(ValueError, match='already fixed'):
+            scene_priors(
+                truth, config, dataclasses.replace(spec, pin_to_truth=('z',)), row=row
+            )
+
+
+class TestPaintScaleRatioKnobs:
+    """population.paint.{vel,halpha}_rscale_ratio drive the paint and the priors."""
+
+    def test_paint_and_prior_follow_the_spec(self, run_parts):
+        import dataclasses
+
+        from kl_pipe.ensemble.expander import truth_from_row
+        from kl_pipe.ensemble.population import (
+            HALPHA_RSCALE_RATIO_MEDIAN,
+            VEL_RSCALE_RATIO_MEDIAN,
+            _paint_structure,
+        )
+
+        spec, config, manifest, _ = run_parts
+        cp = spec.catalog_population
+        cp2 = dataclasses.replace(
+            cp,
+            paint_vel_rscale_ratio=(0.28, 0.3),
+            paint_halpha_rscale_ratio=(1.0, 0.2),
+        )
+        ids = np.arange(400).reshape(-1, 1)
+        vel, line, v0 = _paint_structure(spec.seed, ids, cp)
+        vel2, line2, v02 = _paint_structure(spec.seed, ids, cp2)
+        # same seeded normals, rescaled medians; v0 untouched
+        np.testing.assert_allclose(
+            vel2 / vel, 0.28 / VEL_RSCALE_RATIO_MEDIAN, rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            line2 / line, 1.0 / HALPHA_RSCALE_RATIO_MEDIAN, rtol=1e-12
+        )
+        np.testing.assert_array_equal(v0, v02)
+
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        spec2 = dataclasses.replace(spec, catalog_population=cp2)
+        priors = scene_priors(truth, config, spec2, row=row)
+        assert priors.get_prior('vel.rscale').mu_ratio == pytest.approx(np.log(0.28))
+        assert priors.get_prior('Halpha.rscale').mu_ratio == pytest.approx(0.0)

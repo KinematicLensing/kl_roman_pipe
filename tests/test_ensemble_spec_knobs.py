@@ -213,3 +213,79 @@ class TestWallBudget:
         with pytest.raises(ValueError, match='wall_budget_min'):
             EscalationSpec(wall_budget_min=-5.0)
         assert EscalationSpec(wall_budget_min=60.0).wall_budget_min == 60.0
+
+
+class TestPinToTruth:
+    CATALOG_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'cosmos25_census_v2.yaml'
+
+    def test_default_parse_and_resolve(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        assert spec.pin_to_truth == ()
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit']['pin_to_truth'] = ['x0', 'y0', 'vel.v0']
+        spec2 = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        assert spec2.pin_to_truth == ('x0', 'y0', 'vel.v0')
+        assert spec2.resolve_defaults(d)['fit']['pin_to_truth'] == [
+            'x0',
+            'y0',
+            'vel.v0',
+        ]
+        assert (
+            spec.resolve_defaults(yaml.safe_load(DEV_SPEC.read_text()))['fit'][
+                'pin_to_truth'
+            ]
+            == []
+        )
+
+    def test_validation(self, tmp_path):
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit']['pin_to_truth'] = 'x0'
+        with pytest.raises(ValueError, match='pin_to_truth'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['fit']['pin_to_truth'] = ['x0', 'x0']
+        with pytest.raises(ValueError, match='duplicates'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        with pytest.raises(ValueError, match='pin_to_truth'):
+            dataclasses.replace(spec, pin_to_truth=('x0', ''))
+
+
+class TestPaintScaleRatios:
+    CATALOG_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'cosmos25_census_v2.yaml'
+
+    def test_default_none_and_parse(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(self.CATALOG_SPEC)
+        cp = spec.catalog_population
+        assert cp.paint_vel_rscale_ratio is None
+        assert cp.paint_halpha_rscale_ratio is None
+        d = yaml.safe_load(self.CATALOG_SPEC.read_text())
+        d['population']['paint']['vel_rscale_ratio'] = {
+            'median': 0.28,
+            'scatter_dex': 0.3,
+        }
+        d['population']['paint']['halpha_rscale_ratio'] = {
+            'median': 1.0,
+            'scatter_dex': 0.2,
+        }
+        cp2 = EnsembleSpec.from_yaml(_write(tmp_path, d)).catalog_population
+        assert cp2.paint_vel_rscale_ratio == (0.28, 0.3)
+        assert cp2.paint_halpha_rscale_ratio == (1.0, 0.2)
+
+    def test_validation(self, tmp_path):
+        d = yaml.safe_load(self.CATALOG_SPEC.read_text())
+        d['population']['paint']['vel_rscale_ratio'] = {'median': 0.28}
+        with pytest.raises(ValueError, match='vel_rscale_ratio'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['population']['paint']['vel_rscale_ratio'] = {
+            'median': 0.28,
+            'scatter_dex': 0.0,
+        }
+        with pytest.raises(ValueError, match='must both be positive'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['population']['paint']['vel_rscale_ratio'] = {
+            'median': 0.28,
+            'scatter_dex': 0.3,
+            'x': 1,
+        }
+        with pytest.raises(ValueError, match='vel_rscale_ratio'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))

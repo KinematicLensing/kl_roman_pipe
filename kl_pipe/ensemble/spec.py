@@ -630,9 +630,25 @@ class CatalogPopulationSpec:
     # distribution). (median, scatter_dex)
     paint_h_over_r: Optional[Tuple[float, float]] = None
 
+    # paint.vel_rscale_ratio / paint.halpha_rscale_ratio (optional): the
+    # LN(median, scatter_dex) ratio of the rotation-curve / line scale length
+    # to the catalog disk scale length, painted per galaxy and used as the
+    # conditional fit prior. None = the population module defaults.
+    paint_vel_rscale_ratio: Optional[Tuple[float, float]] = None
+    paint_halpha_rscale_ratio: Optional[Tuple[float, float]] = None
+
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
+        for label, pair in (
+            ('paint.vel_rscale_ratio', self.paint_vel_rscale_ratio),
+            ('paint.halpha_rscale_ratio', self.paint_halpha_rscale_ratio),
+        ):
+            if pair is not None and not (pair[0] > 0 and pair[1] > 0):
+                raise ValueError(
+                    f"{label} median ({pair[0]}) and scatter_dex ({pair[1]}) "
+                    f"must both be positive"
+                )
         # local import: the registry imports nothing from this module at
         # module level, so the lookup is cycle-free
         from kl_pipe.ensemble.catalogs import get_catalog_adapter
@@ -807,7 +823,18 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         )
 
     paint = population['paint']
-    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge', 'h_over_r'), f"{context}.paint")
+    _reject_unknown(
+        paint,
+        (
+            'tfr',
+            'sigma0',
+            'bulge',
+            'h_over_r',
+            'vel_rscale_ratio',
+            'halpha_rscale_ratio',
+        ),
+        f"{context}.paint",
+    )
     _require_keys(paint, ('tfr', 'sigma0'), f"{context}.paint")
     # paint.bulge (optional, default true): false = disk-only twin
     paint_bulge = paint.get('bulge', True)
@@ -816,17 +843,21 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
             f"{context}.paint.bulge must be a boolean (true = BulgeDisk "
             f"broadband, false = single-disk twin), got {paint_bulge!r}"
         )
-    paint_h_over_r = paint.get('h_over_r')
-    if paint_h_over_r is not None:
-        h_context = f"{context}.paint.h_over_r"
-        if not isinstance(paint_h_over_r, dict):
-            raise ValueError(f"{h_context}: must be a mapping, got {paint_h_over_r!r}")
-        _reject_unknown(paint_h_over_r, ('median', 'scatter_dex'), h_context)
-        _require_keys(paint_h_over_r, ('median', 'scatter_dex'), h_context)
-        paint_h_over_r = (
-            float(paint_h_over_r['median']),
-            float(paint_h_over_r['scatter_dex']),
-        )
+
+    def _parse_median_dex(key: str) -> Optional[Tuple[float, float]]:
+        block = paint.get(key)
+        if block is None:
+            return None
+        block_context = f"{context}.paint.{key}"
+        if not isinstance(block, dict):
+            raise ValueError(f"{block_context}: must be a mapping, got {block!r}")
+        _reject_unknown(block, ('median', 'scatter_dex'), block_context)
+        _require_keys(block, ('median', 'scatter_dex'), block_context)
+        return (float(block['median']), float(block['scatter_dex']))
+
+    paint_h_over_r = _parse_median_dex('h_over_r')
+    paint_vel_rscale_ratio = _parse_median_dex('vel_rscale_ratio')
+    paint_halpha_rscale_ratio = _parse_median_dex('halpha_rscale_ratio')
     tfr = paint['tfr']
     tfr_keys = ('logv0', 'logm0', 'slope', 'scatter_dex')
     _reject_unknown(tfr, tfr_keys, f"{context}.paint.tfr")
@@ -895,6 +926,8 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
         logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
         paint_bulge=paint_bulge,
         paint_h_over_r=paint_h_over_r,
+        paint_vel_rscale_ratio=paint_vel_rscale_ratio,
+        paint_halpha_rscale_ratio=paint_halpha_rscale_ratio,
     )
 
 
@@ -1207,6 +1240,10 @@ class EnsembleSpec:
     # NumpyroSamplerConfig.record_warmup: per-draw warmup records and the
     # warmup / sampling wall split (two-call warmup, own RNG stream)
     record_warmup: bool = False
+    # fit.pin_to_truth: sampled scene parameters fixed at the manifest truth
+    # instead of sampled. Dotted names address one parameter; a bare name
+    # ('x0', 'y0', ...) addresses every sampled '<component>.<name>'.
+    pin_to_truth: Tuple[str, ...] = ()
     # catalog populations: multiplier on every galaxy's per-pass line SNR
     # (mock noise only; selection and the line-flux prior use the catalog value)
     line_snr_scale: float = 1.0
@@ -1284,6 +1321,15 @@ class EnsembleSpec:
                 "fit.record_warmup requires fit.precondition: laplace and "
                 "fit.warmup_metric: adapted"
             )
+        if not isinstance(self.pin_to_truth, tuple) or not all(
+            isinstance(name, str) and name for name in self.pin_to_truth
+        ):
+            raise ValueError(
+                f"fit.pin_to_truth must be a list of parameter names, got "
+                f"{self.pin_to_truth!r}"
+            )
+        if len(set(self.pin_to_truth)) != len(self.pin_to_truth):
+            raise ValueError(f"fit.pin_to_truth has duplicates: {self.pin_to_truth!r}")
         if not isinstance(self.map_bounded, bool):
             raise ValueError(
                 f"fit.map_bounded must be a boolean, got {self.map_bounded!r}"
@@ -1594,6 +1640,7 @@ class EnsembleSpec:
                 'warmup_stage2_draws': self.warmup_stage2_draws,
                 'warmup_stage2_adapt': self.warmup_stage2_adapt,
                 'record_warmup': self.record_warmup,
+                'pin_to_truth': list(self.pin_to_truth),
                 'escalation': {
                     'enabled': esc.enabled,
                     'rhat_max': esc.rhat_max,
@@ -1878,6 +1925,7 @@ class EnsembleSpec:
                 'warmup_stage2_draws',
                 'warmup_stage2_adapt',
                 'record_warmup',
+                'pin_to_truth',
                 'escalation',
             ),
             f"{path}:fit",
@@ -1960,6 +2008,9 @@ class EnsembleSpec:
             ),
             warmup_stage2_adapt=fit.get('warmup_stage2_adapt', False),
             record_warmup=fit.get('record_warmup', False),
+            pin_to_truth=_parse_pin_to_truth(
+                fit.get('pin_to_truth', ()), f"{path}:fit"
+            ),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,
@@ -2005,6 +2056,17 @@ class EnsembleSpec:
             save_chains=str(output.get('save_chains', 'none')),
             save_mocks=str(output.get('save_mocks', 'none')),
         )
+
+
+def _parse_pin_to_truth(raw, context: str) -> Tuple[str, ...]:
+    """Parse ``fit.pin_to_truth`` (a YAML list of parameter names)."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            f"{context}.pin_to_truth must be a list of parameter names, got {raw!r}"
+        )
+    return tuple(str(name) for name in raw)
 
 
 def _resolve_fixed_block(fixed_raw: dict, context: str) -> Dict[str, float]:
