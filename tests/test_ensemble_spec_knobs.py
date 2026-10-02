@@ -157,16 +157,34 @@ class TestPreconditionPathKnobs:
         assert plain.precondition == "none"
 
     def test_rollgrid_j_specs_build_sampler_config(self):
-        from kl_pipe.sampling.configs import NumpyroSamplerConfig
+        from kl_pipe.ensemble.worker import build_sampler_config
 
         for name in ("rollgrid_j_isnr47", "rollgrid_j_isnr224"):
             spec = EnsembleSpec.from_yaml(DEV_SPEC.parent / f"{name}.yaml")
             assert spec.precondition == "none"
-            NumpyroSamplerConfig(
-                precondition=spec.precondition,
-                precondition_adapt_mass=spec.adapt_mass,
-                precondition_unconstrained=spec.unconstrained,
-            )
+            cfg = build_sampler_config(spec)
+            assert cfg.precondition == "none"
+            assert cfg.n_warmup == spec.n_warmup
+            # the escalation retry's overrides go through the same mapping
+            cfg2 = build_sampler_config(spec, n_warmup=800, n_samples=1000)
+            assert (cfg2.n_warmup, cfg2.n_samples) == (800, 1000)
+
+    def test_expand_preflights_sampler_config(self, tmp_path, monkeypatch):
+        from kl_pipe.ensemble import expander, worker
+
+        calls = []
+
+        def boom(spec, **kw):
+            calls.append(spec.run_name)
+            raise ValueError("sampler rejects this fit block")
+
+        monkeypatch.setattr(worker, "build_sampler_config", boom)
+        registry = DEV_SPEC.parent.parent / "observation"
+        with pytest.raises(ValueError, match="sampler rejects"):
+            expander.expand(DEV_SPEC, registry, tmp_path)
+        run_name = EnsembleSpec.from_yaml(DEV_SPEC).run_name
+        assert calls == [run_name]
+        assert not (tmp_path / run_name).exists()
 
 
 class TestRecordWarmup:
