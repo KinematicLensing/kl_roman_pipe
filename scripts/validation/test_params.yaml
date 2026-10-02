@@ -33,7 +33,7 @@ observation:
   psf_fwhm: null            # PSF FWHM, arcsec; null = no PSF
   psf_type: gaussian         # PSF model type
   lines:                     # emission lines to include
-    - {name: Ha, lambda_rest: 656.28}  # nm
+    - {name: Ha, lambda_rest: 656.461}  # nm, vacuum (kl_pipe LINE_LAMBDAS)
 
 # ---- Rendering parameters (for fair cross-code comparison) ----
 rendering:

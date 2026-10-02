@@ -260,6 +260,62 @@ class TestGrismOnly:
         grad = jax.grad(task.log_likelihood)(theta)
         assert jnp.all(jnp.isfinite(grad))
 
+    def test_local_line_window_auto_sized_from_priors(self, image_pars, rng):
+        # from_obs fills line_window_halfwidth from the priors with the sizing
+        # rule that matches line_window_mode; the local-mode likelihood equals
+        # the global-mode one to the dropped six-sigma tail
+        import dataclasses
+
+        from kl_pipe.render import local_line_window_halfwidth_for_priors
+
+        src = SourceModel(
+            velocity_model=CenteredVelocityModel(),
+            emission_lines={
+                'Halpha': EmissionLine(intensity=InclinedExponentialModel())
+            },
+        )
+        priors = PriorDict(
+            {
+                **_shared_geo_priors(),
+                **_velocity_priors(),
+                **_emission_priors('Halpha'),
+                'z': 1.0,
+            }
+        )
+        gp = GrismPars(
+            image_pars=image_pars,
+            dispersion=1.1,
+            lambda_ref=1300.0,
+            dispersion_angle_detector=0.0,
+        )
+        data = _toy_image_data(rng)
+        rc_local = RenderConfig(oversample=3, line_window_mode='local')
+
+        def task_for(rc):
+            obs = build_grism_obs(
+                gp,
+                z=1.0,
+                psf=galsim.Gaussian(fwhm=0.18),
+                render_config=rc,
+                data=data,
+                variance=0.25,
+            )
+            return InferenceTask.from_obs(src, priors, grism_obs={'roll0': obs})
+
+        theta = _midpoint_theta(priors)
+        ll_global = float(task_for(RenderConfig(oversample=3)).log_likelihood(theta))
+        ll_local = float(task_for(rc_local).log_likelihood(theta))
+        hw = local_line_window_halfwidth_for_priors(src, priors, gp, 3)
+        ll_explicit = float(
+            task_for(
+                dataclasses.replace(rc_local, line_window_halfwidth=hw)
+            ).log_likelihood(theta)
+        )
+        assert ll_local == ll_explicit  # auto-fill used the local sizing rule
+        assert abs(ll_local - ll_global) / abs(ll_global) < 1e-10
+        grad = jax.grad(task_for(rc_local).log_likelihood)(theta)
+        assert jnp.all(jnp.isfinite(grad))
+
 
 # ===========================================================================
 # Pattern 5: joint photometry + grism

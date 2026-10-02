@@ -1,0 +1,96 @@
+# Line-SNR sweep arm of census v2 at the census v2 TFR assumptions (0.061 dex
+# intrinsic + 0.25 dex photometric-mass error = 0.092 dex vcirc prior): every
+# galaxy's per-pass line SNR multiplied by 10 (mock noise only). Same 60
+# cos i-stratified galaxies, ring members, truths and noise seeds as census v2 and
+# the x10 arm at 0.049 dex (cosmos25_census_v2_xu23_lsnr10x). Purpose: whether the
+# TF prior width matters once the kinematic channel is on. Fisher at truth predicts
+# face-on sigma(g+) 0.035 here vs 0.027 at 0.049 dex and sigma(cos i) 0.088 vs 0.06;
+# no difference for cos i < 0.5. Read (job 1003245, 120/120): per-fit sigma(g+)
+# ratio 0.049/0.092 = 0.98 / 0.96 / 0.89 / 0.93 / 0.91 per cos i bin, so the TF
+# width buys 2-11% for cos i > 0.5 and nothing below, less than Fisher.
+run:
+  name: cosmos25_census_v2_lsnr10x
+  version: 1
+  description: "census v2 line-SNR sweep, per-pass line SNR x10, census v2 TFR (0.092 dex), 60 stratified galaxies x ring pair"
+  seed: 20260728
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    kind: cosmos25
+    download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
+    data_dir: data/cosmos2025/private
+  preprocess:
+    flux_variant: as_delivered
+    h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_total_min: 20.0
+    bulge_fraction_max: null
+    bulge_nsersic_range: null
+    min_r50_over_psf_fwhm: 1.0
+  sample:
+    n_galaxies: 200
+    replace: false
+    galaxy_ids: [6, 8, 12, 15, 17, 19, 25, 27, 29, 31, 34, 40, 43, 46, 50, 52, 55, 57, 59, 65, 69, 70, 74, 76, 80, 89, 93, 100, 101, 104, 106, 107, 109, 110, 118, 119, 121, 122, 126, 133, 134, 143, 144, 148, 149, 160, 162, 163, 165, 167, 171, 173, 178, 182, 191, 193, 194, 196, 198, 199]
+  paint:
+    bulge: false
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]
+    ring: {members: 2}
+  shear:
+    sigma: 0.03
+    gmax: 0.1
+  priors:
+    logm_obs_scatter_dex: 0.25
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  line_snr_scale: 10
+  config: hlwas_medium_roman
+
+fit:
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
+  target_accept: 0.9
+  pin_z_to_truth: true
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    mode: auto
+
+dispatch:
+  backend: local
+  mode: dynamic
+  claim_order: hard_first
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gb
+  account: JPL-PUB
+  max_fit_walltime_min: 90
+
+output:
+  save_chains: all
+  save_mocks: all

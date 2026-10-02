@@ -12,9 +12,10 @@ kernelspec:
 # Roman Reference: a full-complexity mock + fit
 
 A terse, reference-quality template for a realistic Roman kinematic-lensing fit:
-the two HLWAS medium-tier bands (F129 + F158, each a coadd of several
+the two medium-tier bands of the Roman High Latitude Wide Area Survey
+(HLWAS; F129 + F158, each a coadd of several
 exposures), two grism roll angles for one emission line, WCS-aware geometry,
-the production Roman WFI PSF (`galsim.roman.getPSF`), a bulge + disk composite
+the Roman WFI PSF (`galsim.roman.getPSF`), a bulge + disk composite
 shared across the broadbands and the line continuum, and a separate disk for
 the emission line. It builds the data vector, shows its components, runs an
 optimizer, and leaves the sampler call commented.
@@ -83,8 +84,7 @@ img_pars = ImagePars(shape=SHAPE, wcs=make_wcs(SHAPE, PIXEL_SCALE, pa_deg=20.0))
 
 # Production Roman WFI PSFs: monochromatic at each band's effective
 # wavelength, and at the observed Halpha wavelength for the grism. Each
-# takes a few seconds to construct; this is the same PSF the ensemble
-# pipeline uses.
+# takes a few seconds to construct.
 psf_band = {
     band: galsim.roman.getPSF(
         10,                                                    # SCA
@@ -353,9 +353,7 @@ the noise come from the mission itself. The conventions
 - published depths, flux limits, and throughput tables live in
   `kl_pipe.surveys.roman`.
 
-There are three noise pathways, named as in the ensemble's `noise_model`
-knob and its comparison diagnostic
-(`tests/test_ensemble_noise.py::TestNoiseModelComparisonFigure`):
+There are three noise pathways:
 
 - **bkg** -- a flat per-pixel background solved from the published survey
   depth; no source term. The realized SNR is whatever the survey delivers
@@ -373,7 +371,7 @@ about one specific reference source -- "a point source at f_lim reaches
 and is never a choice you make. Turning that statement into a per-pixel
 sigma does require the instrument model (how the PSF and pixel scale spread
 the reference's flux), so the anchor is a property of survey + instrument.
-For the production instrument model -- the WFI PSFs used throughout this
+For the default instrument model -- the WFI PSFs used throughout this
 notebook -- the anchors are pinned and importable:
 `roman.SIGMA_BKG_DEFAULT_UJY` (bands) and
 `roman.GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17` (grism). Re-anchoring through
@@ -404,8 +402,8 @@ obs_render = build_image_obs(ip, psf=psf_band['F129'], int_model=disk)
 clean_ujy = np.asarray(disk.render_image(theta, obs=obs_render))  # uJy/pixel
 ```
 
-**Pathway 1, bkg.** The production anchor is one import. The re-derivation
-below it is only needed off the production instrument model; here it agrees
+**Pathway 1, bkg.** The default anchor is one import. The re-derivation
+below it is only needed off the default instrument model; here it agrees
 because this notebook uses the same PSF:
 
 ```{code-cell} python
@@ -462,7 +460,7 @@ print(f'matched-filter path at target {snr_realized:.1f}: uniform sigma = '
 **The grism channel follows the same recipe with two changes.** First, its
 published limit refers to the extended reference source described above, so
 the pinned anchor was derived by dispersing that 0.25" disk through the
-production grism model. Second, a grism SNR should normalize on the
+default grism model. Second, a grism SNR should normalize on the
 emission line alone: the continuum dominates the dispersed power but
 carries no kinematic signal (`kl_pipe.noise.grism_line_noise` implements
 the declared-SNR version of this convention).
@@ -530,7 +528,7 @@ def grism_render(pars):
 
 # The pinned per-pass anchor, and its re-derivation: render the reference
 # disk at the per-pass limit and demand matched-filter SNR = 5. They agree
-# here because this notebook matches the production grism setup (stamp,
+# here because this notebook matches the default grism setup (stamp,
 # dispersion, pixel scale, PSF).
 sigma_bkg_grism = roman.GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17
 
@@ -571,8 +569,7 @@ print(f'realized per-pass line SNR = {snr_line:.1f} '
 ```
 
 All of these observations run through `InferenceTask` identically --
-per-pixel variance maps are supported everywhere. In the ensemble machinery
-the pathways are the `noise_model: matched_filter | poisson` knob on the
-observation config (bkg is the poisson pathway without its shot term), which
-automates the anchoring above and records the realized `snr_effective` per
-channel for every fit.
+per-pixel variance maps are supported everywhere. For batches of galaxies,
+`kl_pipe.ensemble` automates this anchoring through its `noise_model` setting
+(`matched_filter` | `poisson`) and records the realized SNR per channel for
+every fit (`docs/ensemble_workflow.md`).

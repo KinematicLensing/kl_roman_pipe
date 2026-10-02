@@ -109,6 +109,16 @@ class RenderConfig:
         None, standalone renders size it from the concrete parameter
         values at call time; jitted/inference use must set it
         explicitly.
+    line_window_mode : str
+        ``'global'`` (default): every spaxel deposits over the same
+        ``+/- line_window_halfwidth`` taps around its own column and the
+        deposits are collected by a fixed gather. ``'local'``: each spaxel
+        deposits over ``+/- line_window_halfwidth`` taps around
+        ``round(xi)``, its own footprint centre, via scatter-add; the
+        half-width then only has to cover the profile width (six sigma plus
+        the tent support), not the centre offset, so it is about half the
+        global one at production settings. Both modes agree to the size of
+        the dropped tail (below 1e-9 of the peak). Analytic path only.
     continuum_fills_stamp : bool
         Spectral extent of the flat stellar continuum trace. ``True``
         (default) disperses the continuum over a window wide enough to
@@ -139,6 +149,7 @@ class RenderConfig:
     cube_mode: str = 'shared'
     dispersal_method: str = 'analytic'
     line_window_halfwidth: Optional[int] = None
+    line_window_mode: str = 'global'
     continuum_fills_stamp: bool = True
     effective_maxk: Optional[float] = None
     stepk: Optional[float] = None
@@ -175,6 +186,11 @@ class RenderConfig:
             raise ValueError(
                 f"dispersal_method must be 'slice' or 'analytic', got "
                 f"{self.dispersal_method!r}"
+            )
+        if self.line_window_mode not in ('global', 'local'):
+            raise ValueError(
+                f"line_window_mode must be 'global' or 'local', got "
+                f"{self.line_window_mode!r}"
             )
         if self.line_window_halfwidth is not None and (
             not isinstance(self.line_window_halfwidth, (int, np.integer))
@@ -425,6 +441,8 @@ class RenderConfig:
             parts.append(f'dispersal_method={self.dispersal_method}')
         if self.line_window_halfwidth is not None:
             parts.append(f'line_window_halfwidth={self.line_window_halfwidth}')
+        if self.line_window_mode != 'global':
+            parts.append(f'line_window_mode={self.line_window_mode!r}')
         if self.effective_maxk is not None:
             parts.append(f'effective_maxk={self.effective_maxk:.1f}')
         if self.stepk is not None:
@@ -450,6 +468,8 @@ def _render_config_flatten(rc):
         rc.cube_mode,
         rc.dispersal_method,
         rc.line_window_halfwidth,
+        rc.line_window_mode,
+        rc.continuum_fills_stamp,
         rc.effective_maxk,
         rc.stepk,
     )
@@ -467,8 +487,10 @@ def _render_config_unflatten(aux, children):
         cube_mode=aux[7],
         dispersal_method=aux[8],
         line_window_halfwidth=aux[9],
-        effective_maxk=aux[10],
-        stepk=aux[11],
+        line_window_mode=aux[10],
+        continuum_fills_stamp=aux[11],
+        effective_maxk=aux[12],
+        stepk=aux[13],
     )
 
 
@@ -1136,3 +1158,55 @@ def line_window_halfwidth_for_priors(
         width_px = n_sigma * lam_line * sigma_v_max / C_KMS * scale
         worst = max(worst, offset_px + vel_px + width_px)
     return int(np.ceil(worst)) + 2
+
+
+def local_line_window_halfwidth_for_priors(
+    source: 'SourceModel',
+    priors: 'PriorDict',
+    grism_pars: 'GrismPars',
+    oversample: int,
+    *,
+    n_sigma: float = 6.0,
+    n_sd_unbounded: float = 6.0,
+) -> int:
+    """Prior-safe ``line_window_halfwidth`` for ``line_window_mode='local'``.
+
+    The local window is centred on each spaxel's own footprint centre, so it
+    only has to cover the profile width: ``ceil(n_sigma * max sigma_s) + 2``
+    with ``sigma_s = lambda_line * sigma_v_max / c / D * os`` at the prior
+    extremes (worst case over emission lines, redshift at its prior upper
+    bound). Beyond six sigma the Gaussian-tent kernel is below 1e-9 of its
+    peak; the two extra taps cover the tent support and the centre rounding.
+    Raises ``KeyError`` if ``z`` or a line's ``<disp_owner>.dispersion``
+    prior is missing.
+    """
+    from kl_pipe.constants import C_KMS
+
+    spec = priors._param_spec
+    if 'z' not in spec:
+        raise KeyError(
+            "local_line_window_halfwidth_for_priors requires prior key 'z'; "
+            f"available: {sorted(spec)}"
+        )
+    if not source.emission_lines:
+        raise ValueError(
+            "local_line_window_halfwidth_for_priors requires non-empty "
+            "source.emission_lines"
+        )
+    z_max = _prior_upper(spec['z'], n_sd_unbounded)
+    scale = oversample / grism_pars.dispersion  # fine px per nm
+    sigma_s_max = 0.0
+    for line_key, line in source.emission_lines.items():
+        disp_owner = (
+            line.dispersion_key if line.dispersion_key is not None else line_key
+        )
+        disp_key = f'{disp_owner}.dispersion'
+        if disp_key not in spec:
+            raise KeyError(
+                f"emission line '{line_key}' requires prior key '{disp_key}'; "
+                f"available: {sorted(spec)}"
+            )
+        sigma_v_max = _prior_upper(spec[disp_key], n_sd_unbounded)
+        lam_line = line.lambda_rest * (1.0 + z_max)
+        sigma_s_max = max(sigma_s_max, lam_line * sigma_v_max / C_KMS * scale)
+    return int(np.ceil(n_sigma * sigma_s_max)) + 2

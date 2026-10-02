@@ -19,9 +19,10 @@ Unknown YAML keys raise. Every enum-like field is validated at construction.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -46,7 +47,7 @@ def _reject_unknown(d: dict, allowed: Tuple[str, ...], context: str) -> None:
 # Observation-config registry
 # =============================================================================
 
-_PSF_TYPES = ('gaussian', 'roman_wfi')
+_PSF_TYPES = ("gaussian", "roman_wfi")
 _ROMAN_WFI_DEFAULT_SCA = 10
 _ROMAN_WFI_DEFAULT_PUPIL_BIN = 4
 _GALSIM_DEFAULT_FOLDING_THRESHOLD = 5e-3
@@ -68,7 +69,7 @@ class FoldingThresholdTier:
 
 
 def _validate_folding_tiers(
-    tiers: Tuple['FoldingThresholdTier', ...], context: str
+    tiers: Tuple["FoldingThresholdTier", ...], context: str
 ) -> None:
     """Validate a fit-kernel folding_threshold tier schedule.
 
@@ -151,7 +152,7 @@ class PSFSpec:
     folding_threshold_tiers: Optional[Tuple[FoldingThresholdTier, ...]] = None
 
     def __post_init__(self):
-        if self.psf_type == 'gaussian':
+        if self.psf_type == "gaussian":
             if self.fwhm_arcsec is None or self.fwhm_arcsec <= 0:
                 raise ValueError(
                     f"gaussian psf needs a positive fwhm_arcsec, got "
@@ -168,7 +169,7 @@ class PSFSpec:
                     "folding_threshold/mock_folding_threshold/"
                     "folding_threshold_tiers are roman_wfi-only psf fields"
                 )
-        elif self.psf_type == 'roman_wfi':
+        elif self.psf_type == "roman_wfi":
             if self.fwhm_arcsec is not None:
                 raise ValueError("fwhm_arcsec is a gaussian-only psf field")
             if not isinstance(self.sca, int) or not (1 <= self.sca <= 18):
@@ -285,7 +286,7 @@ def _parse_folding_tiers(
     open tier). Returns None when the key is absent. Structural validation
     (ordering, open-final, ft range) happens in the PSFSpec constructor.
     """
-    tiers_raw = block.get('folding_threshold_tiers')
+    tiers_raw = block.get("folding_threshold_tiers")
     if tiers_raw is None:
         return None
     if not isinstance(tiers_raw, list) or not tiers_raw:
@@ -301,13 +302,13 @@ def _parse_folding_tiers(
                 f"{entry_ctx}: each tier must be a {{z_max, ft}} mapping, got "
                 f"{entry!r}"
             )
-        _reject_unknown(entry, ('z_max', 'ft'), entry_ctx)
-        _require_keys(entry, ('z_max', 'ft'), entry_ctx)
-        z_max = entry['z_max']
+        _reject_unknown(entry, ("z_max", "ft"), entry_ctx)
+        _require_keys(entry, ("z_max", "ft"), entry_ctx)
+        z_max = entry["z_max"]
         parsed.append(
             FoldingThresholdTier(
                 z_max=float(z_max) if z_max is not None else None,
-                ft=float(entry['ft']),
+                ft=float(entry["ft"]),
             )
         )
     return tuple(parsed)
@@ -317,24 +318,24 @@ def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
     _reject_unknown(
         block,
         (
-            'type',
-            'sca',
-            'pupil_bin',
-            'folding_threshold',
-            'mock_folding_threshold',
-            'folding_threshold_tiers',
+            "type",
+            "sca",
+            "pupil_bin",
+            "folding_threshold",
+            "mock_folding_threshold",
+            "folding_threshold_tiers",
         ),
         context,
     )
     thresholds = {}
-    for key in ('folding_threshold', 'mock_folding_threshold'):
+    for key in ("folding_threshold", "mock_folding_threshold"):
         value = block.get(key)
         thresholds[key] = float(value) if value is not None else None
     return PSFSpec(
-        psf_type='roman_wfi',
-        sca=_require_yaml_int(block, 'sca', _ROMAN_WFI_DEFAULT_SCA, context),
+        psf_type="roman_wfi",
+        sca=_require_yaml_int(block, "sca", _ROMAN_WFI_DEFAULT_SCA, context),
         pupil_bin=_require_yaml_int(
-            block, 'pupil_bin', _ROMAN_WFI_DEFAULT_PUPIL_BIN, context
+            block, "pupil_bin", _ROMAN_WFI_DEFAULT_PUPIL_BIN, context
         ),
         folding_threshold_tiers=_parse_folding_tiers(block, context),
         **thresholds,
@@ -344,21 +345,21 @@ def _parse_roman_wfi_psf(block: dict, context: str) -> PSFSpec:
 def _parse_broadband_psf(
     block: dict, bands: Tuple[str, ...], context: str
 ) -> Dict[str, PSFSpec]:
-    psf_type = block.get('type')
-    if psf_type == 'gaussian':
-        _reject_unknown(block, ('type', 'fwhm_arcsec'), context)
-        _require_keys(block, ('type', 'fwhm_arcsec'), context)
-        fwhm = block['fwhm_arcsec']
+    psf_type = block.get("type")
+    if psf_type == "gaussian":
+        _reject_unknown(block, ("type", "fwhm_arcsec"), context)
+        _require_keys(block, ("type", "fwhm_arcsec"), context)
+        fwhm = block["fwhm_arcsec"]
         if not isinstance(fwhm, dict):
             raise ValueError(
                 f"{context}: broadband gaussian fwhm_arcsec must be a "
                 f"band -> arcsec mapping, got {fwhm!r}"
             )
         return {
-            band: PSFSpec(psf_type='gaussian', fwhm_arcsec=float(value))
+            band: PSFSpec(psf_type="gaussian", fwhm_arcsec=float(value))
             for band, value in fwhm.items()
         }
-    if psf_type == 'roman_wfi':
+    if psf_type == "roman_wfi":
         spec = _parse_roman_wfi_psf(block, context)
         return {band: spec for band in bands}
     raise NotImplementedError(
@@ -368,18 +369,18 @@ def _parse_broadband_psf(
 
 
 def _parse_grism_psf(block: dict, context: str) -> PSFSpec:
-    psf_type = block.get('type')
-    if psf_type == 'gaussian':
-        _reject_unknown(block, ('type', 'fwhm_arcsec'), context)
-        _require_keys(block, ('type', 'fwhm_arcsec'), context)
-        fwhm = block['fwhm_arcsec']
+    psf_type = block.get("type")
+    if psf_type == "gaussian":
+        _reject_unknown(block, ("type", "fwhm_arcsec"), context)
+        _require_keys(block, ("type", "fwhm_arcsec"), context)
+        fwhm = block["fwhm_arcsec"]
         if isinstance(fwhm, dict):
             raise ValueError(
                 f"{context}: grism gaussian fwhm_arcsec must be a scalar, "
                 f"got {fwhm!r}"
             )
-        return PSFSpec(psf_type='gaussian', fwhm_arcsec=float(fwhm))
-    if psf_type == 'roman_wfi':
+        return PSFSpec(psf_type="gaussian", fwhm_arcsec=float(fwhm))
+    if psf_type == "roman_wfi":
         return _parse_roman_wfi_psf(block, context)
     raise NotImplementedError(
         f"{context}: psf type {psf_type!r} not supported; supported types: "
@@ -408,8 +409,8 @@ class ObservationConfig:
     #       survey depths plus the source's own shot noise (catalog mode
     #       only; the labeled SNR stays the selection/plot axis and the
     #       realized snr_effective columns report the actual depth).
-    noise_model: str = 'matched_filter'
-    content_hash: str = ''  # sha256 of the source YAML file bytes
+    noise_model: str = "matched_filter"
+    content_hash: str = ""  # sha256 of the source YAML file bytes
 
     def __post_init__(self):
         if not self.bands:
@@ -423,19 +424,19 @@ class ObservationConfig:
             raise ValueError("grism_psf must be a PSFSpec")
         if not self.grism_rolls_deg:
             raise ValueError("observation config needs at least one grism roll")
-        if tuple(self.lines) != ('Halpha',):
+        if tuple(self.lines) != ("Halpha",):
             raise NotImplementedError(
                 f"v1 supports the single-Halpha line config only, got {self.lines}"
             )
         for name, value in [
-            ('grism_dispersion_nm_per_pix', self.grism_dispersion_nm_per_pix),
-            ('pixel_scale_arcsec', self.pixel_scale_arcsec),
+            ("grism_dispersion_nm_per_pix", self.grism_dispersion_nm_per_pix),
+            ("pixel_scale_arcsec", self.pixel_scale_arcsec),
         ]:
             if value <= 0:
                 raise ValueError(f"{name} ({value}) must be positive")
         for name, value in [
-            ('stamp_broadband_pix', self.stamp_broadband_pix),
-            ('stamp_grism_pix', self.stamp_grism_pix),
+            ("stamp_broadband_pix", self.stamp_broadband_pix),
+            ("stamp_grism_pix", self.stamp_grism_pix),
         ]:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} ({value}) must be a positive int")
@@ -446,54 +447,54 @@ class ObservationConfig:
             )
 
     @classmethod
-    def from_yaml(cls, path: Path) -> 'ObservationConfig':
+    def from_yaml(cls, path: Path) -> "ObservationConfig":
         path = Path(path)
         raw_bytes = path.read_bytes()
         raw = yaml.safe_load(raw_bytes)
         if not isinstance(raw, dict):
             raise ValueError(f"{path}: observation config must be a mapping")
         required = (
-            'id',
-            'bands',
-            'grism',
-            'lines',
-            'psf',
-            'pixel_scale_arcsec',
-            'stamp',
+            "id",
+            "bands",
+            "grism",
+            "lines",
+            "psf",
+            "pixel_scale_arcsec",
+            "stamp",
         )
         # noise_model is optional: absent means the matched_filter baseline,
         # so existing configs keep their meaning
-        _reject_unknown(raw, required + ('noise_model',), str(path))
+        _reject_unknown(raw, required + ("noise_model",), str(path))
         _require_keys(raw, required, str(path))
 
-        grism = raw['grism']
-        _reject_unknown(grism, ('rolls_deg', 'dispersion_nm_per_pix'), f"{path}:grism")
-        _require_keys(grism, ('rolls_deg', 'dispersion_nm_per_pix'), f"{path}:grism")
+        grism = raw["grism"]
+        _reject_unknown(grism, ("rolls_deg", "dispersion_nm_per_pix"), f"{path}:grism")
+        _require_keys(grism, ("rolls_deg", "dispersion_nm_per_pix"), f"{path}:grism")
 
-        psf = raw['psf']
-        _reject_unknown(psf, ('broadband', 'grism'), f"{path}:psf")
-        _require_keys(psf, ('broadband', 'grism'), f"{path}:psf")
+        psf = raw["psf"]
+        _reject_unknown(psf, ("broadband", "grism"), f"{path}:psf")
+        _require_keys(psf, ("broadband", "grism"), f"{path}:psf")
         band_psf = _parse_broadband_psf(
-            psf['broadband'], tuple(raw['bands']), f"{path}:psf.broadband"
+            psf["broadband"], tuple(raw["bands"]), f"{path}:psf.broadband"
         )
-        grism_psf = _parse_grism_psf(psf['grism'], f"{path}:psf.grism")
+        grism_psf = _parse_grism_psf(psf["grism"], f"{path}:psf.grism")
 
-        stamp = raw['stamp']
-        _reject_unknown(stamp, ('broadband_pix', 'grism_pix'), f"{path}:stamp")
-        _require_keys(stamp, ('broadband_pix', 'grism_pix'), f"{path}:stamp")
+        stamp = raw["stamp"]
+        _reject_unknown(stamp, ("broadband_pix", "grism_pix"), f"{path}:stamp")
+        _require_keys(stamp, ("broadband_pix", "grism_pix"), f"{path}:stamp")
 
         return cls(
-            id=str(raw['id']),
-            bands=tuple(raw['bands']),
+            id=str(raw["id"]),
+            bands=tuple(raw["bands"]),
             band_psf=band_psf,
-            grism_rolls_deg=tuple(float(a) for a in grism['rolls_deg']),
-            grism_dispersion_nm_per_pix=float(grism['dispersion_nm_per_pix']),
+            grism_rolls_deg=tuple(float(a) for a in grism["rolls_deg"]),
+            grism_dispersion_nm_per_pix=float(grism["dispersion_nm_per_pix"]),
             grism_psf=grism_psf,
-            lines=tuple(raw['lines']),
-            pixel_scale_arcsec=float(raw['pixel_scale_arcsec']),
-            stamp_broadband_pix=int(stamp['broadband_pix']),
-            stamp_grism_pix=int(stamp['grism_pix']),
-            noise_model=str(raw.get('noise_model', 'matched_filter')),
+            lines=tuple(raw["lines"]),
+            pixel_scale_arcsec=float(raw["pixel_scale_arcsec"]),
+            stamp_broadband_pix=int(stamp["broadband_pix"]),
+            stamp_grism_pix=int(stamp["grism_pix"]),
+            noise_model=str(raw.get("noise_model", "matched_filter")),
             content_hash=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
@@ -502,23 +503,31 @@ class ObservationConfig:
 # Ensemble spec
 # =============================================================================
 
-_NOISE_MODELS = ('matched_filter', 'poisson')
-_DRAW_DISTS = ('uniform', 'lognormal_tf')
-_POPULATION_TYPES = ('sampled', 'catalog')
-_SHEAR_SCHEMES = ('fixed', 'grid')
-_DISPATCH_MODES = ('static', 'dynamic')
-_DISPATCH_BACKENDS = ('local', 'slurm')
-_SAVE_POLICIES = ('none', 'subset', 'all')
-_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr', 'shear_bias')
-_SAMPLED_MEASUREMENTS = ('sigma_eps_vs_cosi', 'sigma_eps_vs_line_snr')
-_CATALOG_DEFAULT_KIND = 'flagship2'
-_CATALOG_DEFAULT_DATA_DIR = 'data/cosmohub'
+_NOISE_MODELS = ("matched_filter", "poisson")
+_DRAW_DISTS = ("uniform", "lognormal_tf", "lognormal", "grid")
+# fit.prior_overrides distributions
+_OVERRIDE_DISTS = ("uniform", "uniform_relative", "gaussian", "lognormal")
+# sampled-mode config-sweep axes: the per-pass line SNR label directly, or a
+# physical line flux [erg/s/cm2] converted per fit to the label through the
+# published-depth compactness scaling (kl_pipe.surveys.roman)
+_SWEEP_PARAMS = ("line_snr", "line_flux_cgs")
+_POPULATION_TYPES = ("sampled", "catalog")
+_SHEAR_SCHEMES = ("fixed", "grid")
+_DISPATCH_MODES = ("static", "dynamic")
+# order in which dynamic workers walk the manifest when claiming fits
+_CLAIM_ORDERS = ("manifest", "hard_first", "easy_first")
+_DISPATCH_BACKENDS = ("local", "slurm")
+_SAVE_POLICIES = ("none", "subset", "all")
+_MEASUREMENTS = ("sigma_eps_vs_cosi", "sigma_eps_vs_line_snr", "shear_bias")
+_SAMPLED_MEASUREMENTS = ("sigma_eps_vs_cosi", "sigma_eps_vs_line_snr")
+_CATALOG_DEFAULT_KIND = "flagship2"
+_CATALOG_DEFAULT_DATA_DIR = "data/cosmohub"
 
 # spec draw/fixed keys may be shared top-level params, aliased short names, or
 # fully-dotted source-model params; aliases resolve here
-_PARAM_ALIASES = {'vcirc': 'vel.vcirc'}
+_PARAM_ALIASES = {"vcirc": "vel.vcirc"}
 # short fixed keys broadcast to every scene component carrying that suffix
-_BROADCAST_FIXED = ('h_over_r', 'x0', 'y0')
+_BROADCAST_FIXED = ("h_over_r", "x0", "y0")
 
 
 @dataclass(frozen=True)
@@ -533,17 +542,92 @@ class DrawSpec:
             raise ValueError(
                 f"unknown draw dist '{self.dist}'; supported: {_DRAW_DISTS}"
             )
-        if self.dist == 'uniform':
-            _require_keys(self.params, ('low', 'high'), 'draw:uniform')
-            if self.params['high'] <= self.params['low']:
+        if self.dist == "uniform":
+            _require_keys(self.params, ("low", "high"), "draw:uniform")
+            if self.params["high"] <= self.params["low"]:
                 raise ValueError(
                     f"uniform draw: high ({self.params['high']}) must be > "
                     f"low ({self.params['low']})"
                 )
-        elif self.dist == 'lognormal_tf':
+        elif self.dist == "lognormal_tf":
             _require_keys(
-                self.params, ('center_kms', 'sigma_tf_dex'), 'draw:lognormal_tf'
+                self.params, ("center_kms", "sigma_tf_dex"), "draw:lognormal_tf"
             )
+            _reject_unknown(
+                self.params,
+                ("center_kms", "sigma_tf_dex", "truth_sigma_tf_dex"),
+                "draw:lognormal_tf",
+            )
+            # truth scatter defaults to the prior width; 0 draws every galaxy
+            # at center_kms while the fit prior keeps sigma_tf_dex
+            truth_dex = self.params.get(
+                "truth_sigma_tf_dex", self.params["sigma_tf_dex"]
+            )
+            if truth_dex < 0 or self.params["sigma_tf_dex"] <= 0:
+                raise ValueError(
+                    "lognormal_tf draw: sigma_tf_dex must be > 0 and "
+                    f"truth_sigma_tf_dex >= 0, got {self.params}"
+                )
+        elif self.dist == "lognormal":
+            _require_keys(self.params, ("median", "sigma_dex"), "draw:lognormal")
+            _reject_unknown(self.params, ("median", "sigma_dex"), "draw:lognormal")
+            if self.params["median"] <= 0 or self.params["sigma_dex"] <= 0:
+                raise ValueError(
+                    f"lognormal draw: median and sigma_dex must be > 0, got {self.params}"
+                )
+        elif self.dist == "grid":
+            # deterministic cycle through the listed values by galaxy index
+            _require_keys(self.params, ("values",), "draw:grid")
+            _reject_unknown(self.params, ("values",), "draw:grid")
+            values = self.params["values"]
+            if not isinstance(values, (list, tuple)) or len(values) == 0:
+                raise ValueError(
+                    f"grid draw: values must be a non-empty list, got {values!r}"
+                )
+            if len(set(float(v) for v in values)) != len(values):
+                raise ValueError(f"grid draw: values must be unique, got {values!r}")
+
+
+@dataclass(frozen=True)
+class PriorOverrideSpec:
+    """One ``fit.prior_overrides`` entry: a replacement fit prior for a sampled parameter."""
+
+    dist: str
+    params: Dict[str, float]
+
+    def __post_init__(self):
+        if self.dist not in _OVERRIDE_DISTS:
+            raise ValueError(
+                f"unknown prior override dist '{self.dist}'; supported: {_OVERRIDE_DISTS}"
+            )
+        ctx = f"prior_overrides:{self.dist}"
+        if self.dist in ("uniform", "uniform_relative"):
+            _require_keys(self.params, ("low", "high"), ctx)
+            _reject_unknown(self.params, ("low", "high"), ctx)
+            if self.params["high"] <= self.params["low"]:
+                raise ValueError(
+                    f"{ctx}: high ({self.params['high']}) must be > low ({self.params['low']})"
+                )
+            if self.dist == "uniform_relative" and self.params["low"] <= 0:
+                raise ValueError(
+                    f"{ctx}: bounds are multiples of the truth and must be > 0"
+                )
+        elif self.dist == "gaussian":
+            _require_keys(self.params, ("loc", "scale"), ctx)
+            _reject_unknown(self.params, ("loc", "scale"), ctx)
+            if self.params["scale"] <= 0:
+                raise ValueError(
+                    f"{ctx}: scale must be > 0, got {self.params['scale']}"
+                )
+        elif self.dist == "lognormal":
+            _require_keys(self.params, ("median", "sigma_dex"), ctx)
+            _reject_unknown(self.params, ("median", "sigma_dex", "clip_sigmas"), ctx)
+            if self.params["median"] <= 0 or self.params["sigma_dex"] <= 0:
+                raise ValueError(
+                    f"{ctx}: median and sigma_dex must be > 0, got {self.params}"
+                )
+            if "clip_sigmas" in self.params and self.params["clip_sigmas"] <= 0:
+                raise ValueError(f"{ctx}: clip_sigmas must be > 0")
 
 
 @dataclass(frozen=True)
@@ -621,9 +705,31 @@ class CatalogPopulationSpec:
     # galaxy_id across runs.
     galaxy_ids: Optional[Tuple[int, ...]] = None
 
+    # paint.h_over_r (optional): the disk thickness ratio drawn per galaxy as
+    # LN(median, scatter_dex) and shared by every component, in place of the
+    # pinned scene default. Requires fit.sample_h_over_r (the prior is this
+    # distribution). (median, scatter_dex)
+    paint_h_over_r: Optional[Tuple[float, float]] = None
+
+    # paint.vel_rscale_ratio / paint.halpha_rscale_ratio (optional): the
+    # LN(median, scatter_dex) ratio of the rotation-curve / line scale length
+    # to the catalog disk scale length, painted per galaxy and used as the
+    # conditional fit prior. None = the population module defaults.
+    paint_vel_rscale_ratio: Optional[Tuple[float, float]] = None
+    paint_halpha_rscale_ratio: Optional[Tuple[float, float]] = None
+
     def __post_init__(self):
         if not self.catalog_download:
             raise ValueError("catalog.download must be a non-empty name")
+        for label, pair in (
+            ("paint.vel_rscale_ratio", self.paint_vel_rscale_ratio),
+            ("paint.halpha_rscale_ratio", self.paint_halpha_rscale_ratio),
+        ):
+            if pair is not None and not (pair[0] > 0 and pair[1] > 0):
+                raise ValueError(
+                    f"{label} median ({pair[0]}) and scatter_dex ({pair[1]}) "
+                    f"must both be positive"
+                )
         # local import: the registry imports nothing from this module at
         # module level, so the lookup is cycle-free
         from kl_pipe.ensemble.catalogs import get_catalog_adapter
@@ -716,6 +822,13 @@ class CatalogPopulationSpec:
                 f"priors.logm_obs_scatter_dex ({self.logm_obs_scatter_dex}) "
                 f"must be >= 0"
             )
+        if self.paint_h_over_r is not None:
+            median, scatter_dex = self.paint_h_over_r
+            if not (median > 0 and scatter_dex > 0):
+                raise ValueError(
+                    f"paint.h_over_r median ({median}) and scatter_dex "
+                    f"({scatter_dex}) must both be positive"
+                )
 
 
 def _parse_pair(value, context: str) -> Tuple[float, float]:
@@ -732,29 +845,29 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
     stated (catalog.data_dir).
     """
     allowed = (
-        'type',
-        'catalog',
-        'preprocess',
-        'selection',
-        'sample',
-        'paint',
-        'orientation',
-        'shear',
-        'priors',
+        "type",
+        "catalog",
+        "preprocess",
+        "selection",
+        "sample",
+        "paint",
+        "orientation",
+        "shear",
+        "priors",
     )
     _reject_unknown(population, allowed, context)
     _require_keys(population, allowed, context)
 
-    catalog = population['catalog']
-    _reject_unknown(catalog, ('kind', 'download', 'data_dir'), f"{context}.catalog")
-    _require_keys(catalog, ('download',), f"{context}.catalog")
+    catalog = population["catalog"]
+    _reject_unknown(catalog, ("kind", "download", "data_dir"), f"{context}.catalog")
+    _require_keys(catalog, ("download",), f"{context}.catalog")
 
-    pre = population['preprocess']
-    _reject_unknown(pre, ('flux_variant', 'h'), f"{context}.preprocess")
-    _require_keys(pre, ('flux_variant', 'h'), f"{context}.preprocess")
+    pre = population["preprocess"]
+    _reject_unknown(pre, ("flux_variant", "h"), f"{context}.preprocess")
+    _require_keys(pre, ("flux_variant", "h"), f"{context}.preprocess")
 
-    sel = population['selection']
-    if 'snr_line_min' in sel:
+    sel = population["selection"]
+    if "snr_line_min" in sel:
         raise ValueError(
             f"{context}.selection.snr_line_min is the PER-PASS line SNR but "
             f"was applied as though it were the total, so a cut written as "
@@ -762,21 +875,21 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
             f"the SNR coadded over every grism pass (per-pass x sqrt(passes))"
         )
     sel_keys = (
-        'z_range',
-        'snr_line_total_min',
-        'bulge_fraction_max',
-        'bulge_nsersic_range',
-        'min_r50_over_psf_fwhm',
+        "z_range",
+        "snr_line_total_min",
+        "bulge_fraction_max",
+        "bulge_nsersic_range",
+        "min_r50_over_psf_fwhm",
     )
     _reject_unknown(sel, sel_keys, f"{context}.selection")
     _require_keys(sel, sel_keys, f"{context}.selection")
 
-    sample = population['sample']
+    sample = population["sample"]
     _reject_unknown(
-        sample, ('n_galaxies', 'replace', 'galaxy_ids'), f"{context}.sample"
+        sample, ("n_galaxies", "replace", "galaxy_ids"), f"{context}.sample"
     )
-    _require_keys(sample, ('n_galaxies', 'replace'), f"{context}.sample")
-    galaxy_ids = sample.get('galaxy_ids')
+    _require_keys(sample, ("n_galaxies", "replace"), f"{context}.sample")
+    galaxy_ids = sample.get("galaxy_ids")
     if galaxy_ids is not None:
         if not isinstance(galaxy_ids, list):
             raise ValueError(
@@ -784,59 +897,85 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
                 f"{type(galaxy_ids).__name__}"
             )
         galaxy_ids = tuple(galaxy_ids)
-    if sample['replace']:
+    if sample["replace"]:
         raise NotImplementedError(
             f"{context}.sample: replace: true (bootstrap resampling) is not "
             f"implemented; set replace: false"
         )
 
-    paint = population['paint']
-    _reject_unknown(paint, ('tfr', 'sigma0', 'bulge'), f"{context}.paint")
-    _require_keys(paint, ('tfr', 'sigma0'), f"{context}.paint")
+    paint = population["paint"]
+    _reject_unknown(
+        paint,
+        (
+            "tfr",
+            "sigma0",
+            "bulge",
+            "h_over_r",
+            "vel_rscale_ratio",
+            "halpha_rscale_ratio",
+        ),
+        f"{context}.paint",
+    )
+    _require_keys(paint, ("tfr", "sigma0"), f"{context}.paint")
     # paint.bulge (optional, default true): false = disk-only twin
-    paint_bulge = paint.get('bulge', True)
+    paint_bulge = paint.get("bulge", True)
     if not isinstance(paint_bulge, bool):
         raise ValueError(
             f"{context}.paint.bulge must be a boolean (true = BulgeDisk "
             f"broadband, false = single-disk twin), got {paint_bulge!r}"
         )
-    tfr = paint['tfr']
-    tfr_keys = ('logv0', 'logm0', 'slope', 'scatter_dex')
+
+    def _parse_median_dex(key: str) -> Optional[Tuple[float, float]]:
+        block = paint.get(key)
+        if block is None:
+            return None
+        block_context = f"{context}.paint.{key}"
+        if not isinstance(block, dict):
+            raise ValueError(f"{block_context}: must be a mapping, got {block!r}")
+        _reject_unknown(block, ("median", "scatter_dex"), block_context)
+        _require_keys(block, ("median", "scatter_dex"), block_context)
+        return (float(block["median"]), float(block["scatter_dex"]))
+
+    paint_h_over_r = _parse_median_dex("h_over_r")
+    paint_vel_rscale_ratio = _parse_median_dex("vel_rscale_ratio")
+    paint_halpha_rscale_ratio = _parse_median_dex("halpha_rscale_ratio")
+    tfr = paint["tfr"]
+    tfr_keys = ("logv0", "logm0", "slope", "scatter_dex")
     _reject_unknown(tfr, tfr_keys, f"{context}.paint.tfr")
     _require_keys(tfr, tfr_keys, f"{context}.paint.tfr")
-    sigma0 = paint['sigma0']
-    sigma0_keys = ('intercept_kms', 'slope_kms', 'scatter_kms', 'min_kms')
+    sigma0 = paint["sigma0"]
+    sigma0_keys = ("intercept_kms", "slope_kms", "scatter_kms", "min_kms")
     _reject_unknown(sigma0, sigma0_keys, f"{context}.paint.sigma0")
     _require_keys(sigma0, sigma0_keys, f"{context}.paint.sigma0")
 
-    orientation = population['orientation']
-    _reject_unknown(orientation, ('cosi_range', 'ring'), f"{context}.orientation")
-    _require_keys(orientation, ('cosi_range', 'ring'), f"{context}.orientation")
-    ring = orientation['ring']
-    _reject_unknown(ring, ('members',), f"{context}.orientation.ring")
-    _require_keys(ring, ('members',), f"{context}.orientation.ring")
+    orientation = population["orientation"]
+    _reject_unknown(orientation, ("cosi_range", "ring"), f"{context}.orientation")
+    _require_keys(orientation, ("cosi_range", "ring"), f"{context}.orientation")
+    ring = orientation["ring"]
+    _reject_unknown(ring, ("members",), f"{context}.orientation.ring")
+    _require_keys(ring, ("members",), f"{context}.orientation.ring")
 
-    shear = population['shear']
-    _reject_unknown(shear, ('sigma', 'gmax'), f"{context}.shear")
-    _require_keys(shear, ('sigma', 'gmax'), f"{context}.shear")
+    shear = population["shear"]
+    _reject_unknown(shear, ("sigma", "gmax"), f"{context}.shear")
+    _require_keys(shear, ("sigma", "gmax"), f"{context}.shear")
 
-    priors = population['priors']
-    _reject_unknown(priors, ('logm_obs_scatter_dex',), f"{context}.priors")
-    _require_keys(priors, ('logm_obs_scatter_dex',), f"{context}.priors")
+    priors = population["priors"]
+    _reject_unknown(priors, ("logm_obs_scatter_dex",), f"{context}.priors")
+    _require_keys(priors, ("logm_obs_scatter_dex",), f"{context}.priors")
 
-    bulge_fraction_max = sel['bulge_fraction_max']
-    bulge_nsersic_range = sel['bulge_nsersic_range']
+    bulge_fraction_max = sel["bulge_fraction_max"]
+    bulge_nsersic_range = sel["bulge_nsersic_range"]
     return CatalogPopulationSpec(
-        catalog_kind=str(catalog.get('kind', _CATALOG_DEFAULT_KIND)),
-        catalog_download=str(catalog['download']),
-        catalog_data_dir=str(catalog.get('data_dir', _CATALOG_DEFAULT_DATA_DIR)),
-        flux_variant=str(pre['flux_variant']),
-        h=float(pre['h']),
-        z_range=_parse_pair(sel['z_range'], f"{context}.selection.z_range"),
-        snr_line_total_min=float(sel['snr_line_total_min']),
+        catalog_kind=str(catalog.get("kind", _CATALOG_DEFAULT_KIND)),
+        catalog_download=str(catalog["download"]),
+        catalog_data_dir=str(catalog.get("data_dir", _CATALOG_DEFAULT_DATA_DIR)),
+        flux_variant=str(pre["flux_variant"]),
+        h=float(pre["h"]),
+        z_range=_parse_pair(sel["z_range"], f"{context}.selection.z_range"),
+        snr_line_total_min=float(sel["snr_line_total_min"]),
         min_r50_over_psf_fwhm=(
-            float(sel['min_r50_over_psf_fwhm'])
-            if sel['min_r50_over_psf_fwhm'] is not None
+            float(sel["min_r50_over_psf_fwhm"])
+            if sel["min_r50_over_psf_fwhm"] is not None
             else None
         ),
         bulge_fraction_max=(
@@ -847,26 +986,29 @@ def _parse_catalog_population(population: dict, context: str) -> CatalogPopulati
             if bulge_nsersic_range is not None
             else None
         ),
-        n_galaxies=_require_yaml_int(sample, 'n_galaxies', 0, f"{context}.sample"),
+        n_galaxies=_require_yaml_int(sample, "n_galaxies", 0, f"{context}.sample"),
         galaxy_ids=galaxy_ids,
-        tfr_logv0=float(tfr['logv0']),
-        tfr_logm0=float(tfr['logm0']),
-        tfr_slope=float(tfr['slope']),
-        tfr_scatter_dex=float(tfr['scatter_dex']),
-        sigma0_intercept_kms=float(sigma0['intercept_kms']),
-        sigma0_slope_kms=float(sigma0['slope_kms']),
-        sigma0_scatter_kms=float(sigma0['scatter_kms']),
-        sigma0_min_kms=float(sigma0['min_kms']),
+        tfr_logv0=float(tfr["logv0"]),
+        tfr_logm0=float(tfr["logm0"]),
+        tfr_slope=float(tfr["slope"]),
+        tfr_scatter_dex=float(tfr["scatter_dex"]),
+        sigma0_intercept_kms=float(sigma0["intercept_kms"]),
+        sigma0_slope_kms=float(sigma0["slope_kms"]),
+        sigma0_scatter_kms=float(sigma0["scatter_kms"]),
+        sigma0_min_kms=float(sigma0["min_kms"]),
         cosi_range=_parse_pair(
-            orientation['cosi_range'], f"{context}.orientation.cosi_range"
+            orientation["cosi_range"], f"{context}.orientation.cosi_range"
         ),
         ring_members=_require_yaml_int(
-            ring, 'members', 0, f"{context}.orientation.ring"
+            ring, "members", 0, f"{context}.orientation.ring"
         ),
-        shear_sigma=float(shear['sigma']),
-        shear_gmax=float(shear['gmax']),
-        logm_obs_scatter_dex=float(priors['logm_obs_scatter_dex']),
+        shear_sigma=float(shear["sigma"]),
+        shear_gmax=float(shear["gmax"]),
+        logm_obs_scatter_dex=float(priors["logm_obs_scatter_dex"]),
         paint_bulge=paint_bulge,
+        paint_h_over_r=paint_h_over_r,
+        paint_vel_rscale_ratio=paint_vel_rscale_ratio,
+        paint_halpha_rscale_ratio=paint_halpha_rscale_ratio,
     )
 
 
@@ -894,11 +1036,56 @@ class EscalationSpec:
     ess_min: float = 50.0
     n_warmup: int = 800
     n_samples: int = 1000
+    # retry mode: 'restart' (fresh warmup with the donated metric),
+    # 'continue' (more draws from the warmed chains in blocks of
+    # continue_block per chain, gate re-checked after each block, at most
+    # continue_max_blocks blocks, no re-warmup, first-attempt draws kept) or
+    # 'auto' (continue when the first attempt is marginal -- max_rhat <=
+    # continue_rhat_max and divergence_rate <= continue_divergence_max --
+    # restart otherwise, since chains sitting in different basins need a new
+    # start, not more draws)
+    mode: str = "restart"
+    continue_rhat_max: float = 1.2
+    continue_divergence_max: float = 0.05
+    # block size matches the production first-attempt draw count; four blocks
+    # cap the continuation at ~the restart draw budget (n_samples 1000)
+    continue_block: int = 300
+    continue_max_blocks: int = 4
+    # extra gate on the shear ESS (min of ess_g1, ess_g2): the science uses
+    # the per-fit shear width, whose error is 1/sqrt(2 ESS), so this floor
+    # is the fidelity that matters; None = no shear-specific floor
+    ess_min_shear: Optional[float] = None
+    # wall budget for continuation in minutes since the fit started: no block
+    # is started once the elapsed time plus the previous block's wall would
+    # exceed it; the fit is then recorded as-is with restart_reason
+    # 'budget_exhausted'. None = the block count is the only cap.
+    wall_budget_min: Optional[float] = None
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
             raise ValueError(
                 f"escalation.enabled must be a boolean, got {self.enabled!r}"
+            )
+        if self.mode not in ("restart", "continue", "auto"):
+            raise ValueError(
+                "escalation.mode must be 'restart', 'continue' or 'auto', got "
+                f"{self.mode!r}"
+            )
+        if (
+            not isinstance(self.continue_rhat_max, float)
+            or self.continue_rhat_max <= 1.0
+        ):
+            raise ValueError(
+                f"escalation.continue_rhat_max ({self.continue_rhat_max!r}) must be "
+                "a float > 1.0"
+            )
+        if (
+            not isinstance(self.continue_divergence_max, float)
+            or not 0.0 <= self.continue_divergence_max <= 1.0
+        ):
+            raise ValueError(
+                f"escalation.continue_divergence_max ({self.continue_divergence_max!r}) "
+                "must be a float in [0, 1]"
             )
         if not isinstance(self.rhat_max, float) or self.rhat_max <= 1.0:
             raise ValueError(
@@ -908,9 +1095,25 @@ class EscalationSpec:
             raise ValueError(
                 f"escalation.ess_min ({self.ess_min!r}) must be a positive float"
             )
+        if self.ess_min_shear is not None and (
+            not isinstance(self.ess_min_shear, float) or self.ess_min_shear <= 0
+        ):
+            raise ValueError(
+                f"escalation.ess_min_shear ({self.ess_min_shear!r}) must be a "
+                "positive float or null"
+            )
+        if self.wall_budget_min is not None and (
+            not isinstance(self.wall_budget_min, float) or self.wall_budget_min <= 0
+        ):
+            raise ValueError(
+                f"escalation.wall_budget_min ({self.wall_budget_min!r}) must be a "
+                "positive float or null"
+            )
         for name, value in [
-            ('n_warmup', self.n_warmup),
-            ('n_samples', self.n_samples),
+            ("n_warmup", self.n_warmup),
+            ("n_samples", self.n_samples),
+            ("continue_block", self.continue_block),
+            ("continue_max_blocks", self.continue_max_blocks),
         ]:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(
@@ -924,14 +1127,42 @@ def _parse_escalation(block, context: str) -> EscalationSpec:
         return EscalationSpec()
     if not isinstance(block, dict):
         raise ValueError(f"{context}: must be a mapping, got {block!r}")
-    allowed = ('enabled', 'rhat_max', 'ess_min', 'n_warmup', 'n_samples')
+    allowed = (
+        "enabled",
+        "rhat_max",
+        "ess_min",
+        "n_warmup",
+        "n_samples",
+        "mode",
+        "continue_rhat_max",
+        "continue_divergence_max",
+        "continue_block",
+        "continue_max_blocks",
+        "ess_min_shear",
+        "wall_budget_min",
+    )
     _reject_unknown(block, allowed, context)
     return EscalationSpec(
-        enabled=block.get('enabled', False),
-        rhat_max=float(block.get('rhat_max', 1.05)),
-        ess_min=float(block.get('ess_min', 50.0)),
-        n_warmup=_require_yaml_int(block, 'n_warmup', 800, context),
-        n_samples=_require_yaml_int(block, 'n_samples', 1000, context),
+        enabled=block.get("enabled", False),
+        rhat_max=float(block.get("rhat_max", 1.05)),
+        ess_min=float(block.get("ess_min", 50.0)),
+        n_warmup=_require_yaml_int(block, "n_warmup", 800, context),
+        n_samples=_require_yaml_int(block, "n_samples", 1000, context),
+        mode=str(block.get("mode", "restart")),
+        continue_rhat_max=float(block.get("continue_rhat_max", 1.2)),
+        continue_divergence_max=float(block.get("continue_divergence_max", 0.05)),
+        continue_block=_require_yaml_int(block, "continue_block", 300, context),
+        continue_max_blocks=_require_yaml_int(block, "continue_max_blocks", 4, context),
+        ess_min_shear=(
+            None
+            if block.get("ess_min_shear") is None
+            else float(block["ess_min_shear"])
+        ),
+        wall_budget_min=(
+            None
+            if block.get("wall_budget_min") is None
+            else float(block["wall_budget_min"])
+        ),
     )
 
 
@@ -951,7 +1182,7 @@ class EnsembleSpec:
     # the stratify/draw machinery is unused (catalog_population carries the
     # whole population definition).
     population_type: str  # 'sampled' | 'catalog'
-    stratify_param: str  # 'cosi' | 'line_snr'
+    stratify_param: str  # 'cosi' | 'line_snr' | 'line_flux_cgs'
     stratify_n_bins: int  # cosi axis only; 0 for a config sweep
     stratify_range: Tuple[float, float]  # cosi axis only; (0, 0) for a sweep
     sweep_values: Tuple[float, ...]  # config-sweep axis only; () for cosi
@@ -999,10 +1230,20 @@ class EnsembleSpec:
     # bulge decomposition to loosen, since the index is degenerate with
     # bulge_frac and bulge_hlr and pinning it suppressed one leg of that.
     sample_bulge_nsersic: bool
+    # sample one disk thickness ratio shared by every component (the
+    # top-level ``h_over_r``), with the paint distribution as its prior,
+    # instead of pinning the scene default in mock and fit. Requires a
+    # disk-only catalog population with population.paint.h_over_r.
+    sample_h_over_r: bool
 
     # dispatch
     backend: str
     mode: str
+    # 'manifest' (row order), 'hard_first' (predicted-slow fits first, so
+    # the slow tail overlaps the rest of the job instead of ending it) or
+    # 'easy_first' (its reverse, for a short job that should finish as many
+    # fits as it can)
+    claim_order: str
     workers_per_node: int
     target_task_walltime_min: float
     queue: str
@@ -1017,6 +1258,79 @@ class EnsembleSpec:
     # data-driven sigma_eps (less prior floor). Defaults to 0.2, matching the
     # published Roman KL prior half-width (Xu+ 2023) as an isotropic Gaussian.
     shear_fit_prior_sigma: float = 0.2
+    # 'gaussian' (default, N(0, sigma)) or 'uniform' (flat on
+    # [-halfwidth, halfwidth]); the flat prior removes prior shrinkage of
+    # the per-galaxy shear posterior, so the ensemble estimator needs no
+    # width-dependent shrinkage correction
+    shear_fit_prior_type: str = "gaussian"
+    shear_fit_prior_halfwidth: float = 0.3
+
+    # fit prior on the intrinsic position angle: 'full_circle' (uniform on
+    # the circle, period 2 pi: both rotation directions, no support walls) or
+    # 'half_turn' (Uniform(0, pi): one rotation direction, walls at 0 and pi)
+    pa_fit_prior: str = "full_circle"
+
+    # fit prior on cos i as a [lo, hi] pair, or None for the generating range
+    # (catalog orientation.cosi_range, the stratify range, or the uniform
+    # draw). A fit prior wider than the generating range keeps the truth away
+    # from a support wall: fits whose truth sits within ~2 sigma of a wall
+    # bias the posterior mean inward and put the MAP on the wall.
+    cosi_fit_prior_range: Optional[Tuple[float, float]] = None
+
+    # analytic-dispersal deposit window for the FIT observations ('global' |
+    # 'local'); mock data are always rendered with the global window
+    render_line_window_mode: str = "global"
+
+    # Laplace-preconditioner Hessian: 'fd' (central differences of the
+    # compiled gradient; float64 only) or 'ad' (second-order autodiff; the
+    # only option under KLPIPE_FP32)
+    hessian_method: str = "fd"
+
+    # NUTS tree-depth cap (at most 2**depth - 1 leapfrog steps per draw)
+    max_tree_depth: int = 10
+
+    # fit-initialization knobs (kl_pipe.sampling.initialization.InitConfig
+    # carries the same names; defaults = the robust procedure measured on
+    # cosmos25_bank32, jobs 988356 / 988824 / 990891):
+    # add image-moment optimizer starts (centroid, flux, size, inclination,
+    # position angle read off the broadband stamps) to the prior-draw and
+    # position-angle-stratified starts
+    map_moment_starts: bool = False
+    # hand the prior support bounds to the MAP optimizer (projected L-BFGS-B)
+    map_bounded: bool = True
+    # regularized Newton polish steps after L-BFGS on the best map_polish_basins
+    # basins (0 = off)
+    map_polish_steps: int = 8
+    map_polish_basins: int = 3
+    # eigenvalue floor of the Laplace metric: 'prior' (absolute, in
+    # prior-width units; default value 0.5) or 'relative' (below
+    # eig_floor * max eigenvalue; default value 1e-4). None = the mode's default.
+    eig_floor_mode: str = "prior"
+    eig_floor: Optional[float] = None
+    # chain initial points: 'map_jitter' (all chains at the MAP, 1% jitter)
+    # or 'map_basins' (one chain per competing optimizer basin within
+    # chain_init_max_margin nats of the MAP)
+    chain_init: str = "map_jitter"
+    chain_init_max_margin: float = 20.0
+    # two-stage warmup (NumpyroSamplerConfig.warmup_*): 'adapted' is the
+    # single-stage path; 'pooled' pools the last mass-matrix window over
+    # chains and restarts every chain from that one metric
+    warmup_metric: str = "adapted"
+    warmup_stage2_draws: int = 50
+    warmup_stage2_adapt: bool = False
+    # NumpyroSamplerConfig.record_warmup: per-draw warmup records and the
+    # warmup / sampling wall split (two-call warmup, own RNG stream)
+    record_warmup: bool = False
+    # fit.pin_to_truth: sampled scene parameters fixed at the manifest truth
+    # instead of sampled. Dotted names address one parameter; a bare name
+    # ('x0', 'y0', ...) addresses every sampled '<component>.<name>'.
+    pin_to_truth: Tuple[str, ...] = ()
+    # fit.prior_overrides: replacement fit priors for sampled scene
+    # parameters, by dotted name (applied before pin_to_truth)
+    prior_overrides: Dict[str, PriorOverrideSpec] = field(default_factory=dict)
+    # catalog populations: multiplier on every galaxy's per-pass line SNR
+    # (mock noise only; selection and the line-flux prior use the catalog value)
+    line_snr_scale: float = 1.0
 
     # catalog-backed population definition (population.type: catalog only;
     # None for sampled populations)
@@ -1032,6 +1346,135 @@ class EnsembleSpec:
                 f"population type '{self.population_type}'; supported: "
                 f"{_POPULATION_TYPES}"
             )
+        if self.hessian_method not in ("fd", "ad"):
+            raise ValueError(
+                f"fit.hessian_method must be 'fd' or 'ad', got {self.hessian_method!r}"
+            )
+        if self.eig_floor_mode not in ("relative", "prior"):
+            raise ValueError(
+                "fit.eig_floor_mode must be 'relative' or 'prior', got "
+                f"{self.eig_floor_mode!r}"
+            )
+        if self.eig_floor is not None and not (
+            isinstance(self.eig_floor, float) and self.eig_floor > 0
+        ):
+            raise ValueError(
+                f"fit.eig_floor must be a positive float or absent, got {self.eig_floor!r}"
+            )
+        if self.chain_init not in ("map_jitter", "map_basins"):
+            raise ValueError(
+                "fit.chain_init must be 'map_jitter' or 'map_basins', got "
+                f"{self.chain_init!r}"
+            )
+        if not (
+            isinstance(self.chain_init_max_margin, float)
+            and self.chain_init_max_margin > 0
+        ):
+            raise ValueError(
+                "fit.chain_init_max_margin must be a positive float, got "
+                f"{self.chain_init_max_margin!r}"
+            )
+        if not isinstance(self.map_moment_starts, bool):
+            raise ValueError(
+                f"fit.map_moment_starts must be a boolean, got {self.map_moment_starts!r}"
+            )
+        if self.warmup_metric not in ("adapted", "pooled"):
+            raise ValueError(
+                "fit.warmup_metric must be 'adapted' or 'pooled', got "
+                f"{self.warmup_metric!r}"
+            )
+        if self.precondition != "laplace" and (self.adapt_mass or self.unconstrained):
+            raise ValueError(
+                "fit.adapt_mass and fit.unconstrained require fit.precondition: laplace"
+            )
+        if self.warmup_metric == "pooled" and not (
+            self.precondition == "laplace" and self.adapt_mass
+        ):
+            raise ValueError(
+                "fit.warmup_metric: pooled requires fit.precondition: laplace and "
+                "fit.adapt_mass: true"
+            )
+        if not isinstance(self.warmup_stage2_adapt, bool):
+            raise ValueError(
+                f"fit.warmup_stage2_adapt must be a boolean, got {self.warmup_stage2_adapt!r}"
+            )
+        if not isinstance(self.record_warmup, bool):
+            raise ValueError(
+                f"fit.record_warmup must be a boolean, got {self.record_warmup!r}"
+            )
+        if self.record_warmup and not (
+            self.precondition == "laplace" and self.warmup_metric == "adapted"
+        ):
+            raise ValueError(
+                "fit.record_warmup requires fit.precondition: laplace and "
+                "fit.warmup_metric: adapted"
+            )
+        if not isinstance(self.pin_to_truth, tuple) or not all(
+            isinstance(name, str) and name for name in self.pin_to_truth
+        ):
+            raise ValueError(
+                f"fit.pin_to_truth must be a list of parameter names, got "
+                f"{self.pin_to_truth!r}"
+            )
+        if len(set(self.pin_to_truth)) != len(self.pin_to_truth):
+            raise ValueError(f"fit.pin_to_truth has duplicates: {self.pin_to_truth!r}")
+        for name, ov in self.prior_overrides.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(ov, PriorOverrideSpec)
+            ):
+                raise ValueError(
+                    f"fit.prior_overrides must map parameter names to override "
+                    f"specs, got {name!r}: {ov!r}"
+                )
+            if name in self.pin_to_truth:
+                raise ValueError(
+                    f"fit.prior_overrides['{name}'] conflicts with fit.pin_to_truth"
+                )
+        if not isinstance(self.map_bounded, bool):
+            raise ValueError(
+                f"fit.map_bounded must be a boolean, got {self.map_bounded!r}"
+            )
+        for name, value, low in (
+            ("map_polish_steps", self.map_polish_steps, 0),
+            ("map_polish_basins", self.map_polish_basins, 1),
+            ("warmup_stage2_draws", self.warmup_stage2_draws, 1),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < low:
+                raise ValueError(f"fit.{name} must be an int >= {low}, got {value!r}")
+        if self.pa_fit_prior not in ("half_turn", "full_circle"):
+            raise ValueError(
+                "fit.pa_prior must be 'half_turn' or 'full_circle', got "
+                f"{self.pa_fit_prior!r}"
+            )
+        if self.cosi_fit_prior_range is not None:
+            lo, hi = self.cosi_fit_prior_range
+            if not 0.0 < lo < hi <= 1.0:
+                raise ValueError(
+                    f"fit.cosi_prior_range {self.cosi_fit_prior_range} must "
+                    "satisfy 0 < lo < hi <= 1"
+                )
+            gen = self.generating_cosi_range()
+            if gen is not None and not (lo <= gen[0] and gen[1] <= hi):
+                raise ValueError(
+                    f"fit.cosi_prior_range {self.cosi_fit_prior_range} must "
+                    f"contain the generating cos i range {gen}"
+                )
+        if (
+            isinstance(self.max_tree_depth, bool)
+            or not isinstance(self.max_tree_depth, int)
+            or not 1 <= self.max_tree_depth <= 12
+        ):
+            raise ValueError(
+                f"fit.max_tree_depth must be an int in [1, 12], got "
+                f"{self.max_tree_depth!r}"
+            )
+        if self.render_line_window_mode not in ("global", "local"):
+            raise ValueError(
+                f"model.render.line_window_mode must be 'global' or 'local', got "
+                f"{self.render_line_window_mode!r}"
+            )
         if not isinstance(self.render_oversample, int) or self.render_oversample <= 0:
             raise ValueError(
                 f"render_oversample ({self.render_oversample}) must be a "
@@ -1042,12 +1485,12 @@ class EnsembleSpec:
                 f"measurement '{self.measurement}' not supported; "
                 f"available: {_MEASUREMENTS}"
             )
-        if self.population_type == 'catalog':
+        if self.population_type == "catalog":
             if self.catalog_population is None:
                 raise ValueError(
                     "population type 'catalog' requires a catalog_population " "block"
                 )
-            if self.measurement != 'shear_bias':
+            if self.measurement != "shear_bias":
                 raise ValueError(
                     f"catalog populations require run.measurement: "
                     f"shear_bias, got '{self.measurement}'"
@@ -1063,8 +1506,8 @@ class EnsembleSpec:
                     f"population.type: catalog; sampled populations support "
                     f"{_SAMPLED_MEASUREMENTS}"
                 )
-        if self.measurement == 'sigma_eps_vs_cosi':
-            if self.stratify_param != 'cosi':
+        if self.measurement == "sigma_eps_vs_cosi":
+            if self.stratify_param != "cosi":
                 raise ValueError(
                     f"measurement sigma_eps_vs_cosi stratifies cosi, got "
                     f"'{self.stratify_param}'"
@@ -1077,11 +1520,11 @@ class EnsembleSpec:
                     f"cosi stratify range ({lo}, {hi}) must satisfy "
                     f"0 < lo < hi <= 1"
                 )
-        elif self.measurement == 'sigma_eps_vs_line_snr':
-            if self.stratify_param != 'line_snr':
+        elif self.measurement == "sigma_eps_vs_line_snr":
+            if self.stratify_param not in _SWEEP_PARAMS:
                 raise ValueError(
-                    f"measurement sigma_eps_vs_line_snr sweeps line_snr, "
-                    f"got '{self.stratify_param}'"
+                    f"measurement sigma_eps_vs_line_snr sweeps one of "
+                    f"{_SWEEP_PARAMS}, got '{self.stratify_param}'"
                 )
             if len(self.sweep_values) < 2:
                 raise ValueError(
@@ -1095,7 +1538,7 @@ class EnsembleSpec:
                 )
             if len(set(self.sweep_values)) != len(self.sweep_values):
                 raise ValueError("line_snr sweep values must be unique")
-            if 'cosi' not in self.draw:
+            if "cosi" not in self.draw:
                 raise ValueError(
                     "sigma_eps_vs_line_snr requires cosi in population.draw "
                     "(cosi is a drawn population truth on this axis)"
@@ -1106,10 +1549,10 @@ class EnsembleSpec:
             raise ValueError(
                 f"shear scheme '{self.shear_scheme}'; supported: {_SHEAR_SCHEMES}"
             )
-        if self.shear_scheme == 'grid':
+        if self.shear_scheme == "grid":
             if len(self.shear_grid) < 3:
                 raise ValueError("shear grid needs >= 3 steps for a bias fit")
-            if self.shear_component not in ('g1', 'g2'):
+            if self.shear_component not in ("g1", "g2"):
                 raise ValueError(
                     f"shear grid component must be 'g1' or 'g2', got "
                     f"'{self.shear_component}'"
@@ -1119,7 +1562,7 @@ class EnsembleSpec:
         # catalog mode: both SNR scalars are -1 sentinels (per-galaxy values
         # come from the population table), so positivity checks are
         # sampled-only
-        if self.population_type != 'catalog':
+        if self.population_type != "catalog":
             if self.broadband_snr <= 0:
                 raise ValueError(
                     f"broadband SNR ({self.broadband_snr}) must be positive"
@@ -1135,11 +1578,16 @@ class EnsembleSpec:
             raise ValueError(
                 f"dispatch mode '{self.mode}'; supported: {_DISPATCH_MODES}"
             )
+        if self.claim_order not in _CLAIM_ORDERS:
+            raise ValueError(
+                f"dispatch.claim_order must be one of {_CLAIM_ORDERS}, got "
+                f"{self.claim_order!r}"
+            )
         if self.workers_per_node < 1:
             raise ValueError(f"workers_per_node ({self.workers_per_node}) must be >= 1")
         for name, value in [
-            ('save_chains', self.save_chains),
-            ('save_mocks', self.save_mocks),
+            ("save_chains", self.save_chains),
+            ("save_mocks", self.save_mocks),
         ]:
             if value not in _SAVE_POLICIES:
                 raise ValueError(f"{name} '{value}'; supported: {_SAVE_POLICIES}")
@@ -1164,13 +1612,33 @@ class EnsembleSpec:
                     "true; with the bulge paint disabled the bands are "
                     "single-disk and there is no index to sample"
                 )
+        cp = self.catalog_population
+        if self.sample_h_over_r:
+            if cp is None or cp.paint_h_over_r is None:
+                raise ValueError(
+                    "fit.sample_h_over_r requires a catalog population with "
+                    "population.paint.h_over_r: the sampled prior is the paint "
+                    "distribution"
+                )
+            if cp.paint_bulge:
+                raise ValueError(
+                    "fit.sample_h_over_r requires population.paint.bulge: false; "
+                    "bulge-disk bands carry disk_h_over_r, which the shared "
+                    "thickness does not reach"
+                )
+        elif cp is not None and cp.paint_h_over_r is not None:
+            raise ValueError(
+                "population.paint.h_over_r scatters the truth per galaxy; without "
+                "fit.sample_h_over_r the fit would pin the scene default against "
+                "a different truth. Set fit.sample_h_over_r: true or drop the paint"
+            )
         if self.escalation.enabled:
             # the retry needs an initial metric from the Laplace path: with
             # fit.adapt_mass true it donates the first attempt's
             # warmup-adapted inverse mass matrix; with adapt_mass false
             # (frozen first-pass metric) the retry re-enables mass
             # adaptation on top of the Laplace preconditioner instead
-            if self.precondition != 'laplace':
+            if self.precondition != "laplace":
                 raise ValueError(
                     "fit.escalation.enabled requires fit.precondition: "
                     "laplace (the escalation retry starts from the "
@@ -1192,7 +1660,7 @@ class EnsembleSpec:
     @property
     def n_axis_steps(self) -> int:
         """Number of steps along the plot axis (cosi bins or sweep values)."""
-        if self.population_type == 'catalog':
+        if self.population_type == "catalog":
             raise ValueError(
                 "n_axis_steps is a sampled-population concept; catalog "
                 "populations carry no stratification axis"
@@ -1204,59 +1672,187 @@ class EnsembleSpec:
     @property
     def n_fits(self) -> int:
         """Total fits this spec expands to."""
-        if self.population_type == 'catalog':
+        if self.population_type == "catalog":
             cp = self.catalog_population
             n_gal = len(cp.galaxy_ids) if cp.galaxy_ids is not None else cp.n_galaxies
             return n_gal * cp.ring_members * self.m_noise
-        n_shear = len(self.shear_grid) if self.shear_scheme == 'grid' else 1
+        n_shear = len(self.shear_grid) if self.shear_scheme == "grid" else 1
         n_ring = 2 if self.ring_enabled else 1
         return self.n_axis_steps * self.n_gal_per_bin * self.m_noise * n_shear * n_ring
 
+    def generating_cosi_range(self) -> Optional[Tuple[float, float]]:
+        """Range of the generating cos i distribution, None if not bounded."""
+        if self.catalog_population is not None:
+            return tuple(self.catalog_population.cosi_range)
+        if self.stratify_param == "cosi":
+            return tuple(self.stratify_range)
+        draw = self.draw.get("cosi")
+        if draw is not None and draw.dist == "uniform":
+            return (float(draw.params["low"]), float(draw.params["high"]))
+        if draw is not None and draw.dist == "grid":
+            values = [float(v) for v in draw.params["values"]]
+            return (min(values), max(values))
+        return None
+
+    def resolve_defaults(self, raw: dict) -> dict:
+        """
+        Return a copy of the raw spec mapping with every defaulted knob written
+        out at the value this spec resolved it to.
+
+        The fit block, its escalation sub-block, the dispatch block and
+        model.render.line_window_mode are the optional keys with code defaults. A run
+        directory stores this resolved form so a later rebuild reads the values
+        the fits actually ran with, not the defaults of whatever code does the
+        rebuilding.
+        """
+        out = copy.deepcopy(raw)
+        esc = self.escalation
+        fit = dict(out.get("fit") or {})
+        fit.update(
+            {
+                "sampler": "numpyro",
+                "n_warmup": self.n_warmup,
+                "n_samples": self.n_samples,
+                "n_chains": self.n_chains,
+                "precondition": self.precondition,
+                "unconstrained": self.unconstrained,
+                "adapt_mass": self.adapt_mass,
+                "target_accept": self.target_accept,
+                "n_map_starts": self.n_map_starts,
+                "pin_z_to_truth": self.pin_z_to_truth,
+                "sample_bulge_nsersic": self.sample_bulge_nsersic,
+                "sample_h_over_r": self.sample_h_over_r,
+                "shear_prior_sigma": self.shear_fit_prior_sigma,
+                "shear_prior_type": self.shear_fit_prior_type,
+                "shear_prior_halfwidth": self.shear_fit_prior_halfwidth,
+                "pa_prior": self.pa_fit_prior,
+                "cosi_prior_range": (
+                    None
+                    if self.cosi_fit_prior_range is None
+                    else list(self.cosi_fit_prior_range)
+                ),
+                "hessian_method": self.hessian_method,
+                "max_tree_depth": self.max_tree_depth,
+                "map_moment_starts": self.map_moment_starts,
+                "map_bounded": self.map_bounded,
+                "map_polish_steps": self.map_polish_steps,
+                "map_polish_basins": self.map_polish_basins,
+                "eig_floor_mode": self.eig_floor_mode,
+                "eig_floor": self.eig_floor,
+                "chain_init": self.chain_init,
+                "chain_init_max_margin": self.chain_init_max_margin,
+                "warmup_metric": self.warmup_metric,
+                "warmup_stage2_draws": self.warmup_stage2_draws,
+                "warmup_stage2_adapt": self.warmup_stage2_adapt,
+                "record_warmup": self.record_warmup,
+                "pin_to_truth": list(self.pin_to_truth),
+                "prior_overrides": {
+                    name: {"dist": ov.dist, **ov.params}
+                    for name, ov in self.prior_overrides.items()
+                },
+                "escalation": {
+                    "enabled": esc.enabled,
+                    "rhat_max": esc.rhat_max,
+                    "ess_min": esc.ess_min,
+                    "n_warmup": esc.n_warmup,
+                    "n_samples": esc.n_samples,
+                    "mode": esc.mode,
+                    "continue_rhat_max": esc.continue_rhat_max,
+                    "continue_divergence_max": esc.continue_divergence_max,
+                    "continue_block": esc.continue_block,
+                    "continue_max_blocks": esc.continue_max_blocks,
+                    "ess_min_shear": esc.ess_min_shear,
+                    "wall_budget_min": esc.wall_budget_min,
+                },
+            }
+        )
+        out["fit"] = fit
+        dispatch = dict(out.get("dispatch") or {})
+        dispatch.update(
+            {
+                "backend": self.backend,
+                "mode": self.mode,
+                "claim_order": self.claim_order,
+                "workers_per_node": self.workers_per_node,
+                "target_task_walltime_min": self.target_task_walltime_min,
+                "queue": self.queue,
+                "account": self.account,
+                "max_fit_walltime_min": self.max_fit_walltime_min,
+            }
+        )
+        out["dispatch"] = dispatch
+        observation = dict(out.get("observation") or {})
+        observation["line_snr_scale"] = self.line_snr_scale
+        out["observation"] = observation
+        model = dict(out.get("model") or {})
+        render = dict(model.get("render") or {})
+        render["line_window_mode"] = self.render_line_window_mode
+        model["render"] = render
+        out["model"] = model
+        return out
+
     @classmethod
-    def from_yaml(cls, path: Path) -> 'EnsembleSpec':
+    def from_yaml(cls, path: Path) -> "EnsembleSpec":
         path = Path(path)
         raw = yaml.safe_load(path.read_text())
         if not isinstance(raw, dict):
             raise ValueError(f"{path}: ensemble spec must be a mapping")
 
         allowed = (
-            'run',
-            'population',
-            'model',
-            'observation',
-            'fit',
-            'dispatch',
-            'output',
+            "run",
+            "population",
+            "model",
+            "observation",
+            "fit",
+            "dispatch",
+            "output",
         )
         _reject_unknown(raw, allowed, str(path))
         # the model block is optional (render defaults apply)
-        _require_keys(raw, tuple(k for k in allowed if k != 'model'), str(path))
+        _require_keys(raw, tuple(k for k in allowed if k != "model"), str(path))
 
-        run = raw['run']
+        run = raw["run"]
         _reject_unknown(
             run,
-            ('name', 'version', 'description', 'seed', 'measurement', 'noise_reps'),
+            ("name", "version", "description", "seed", "measurement", "noise_reps"),
             f"{path}:run",
         )
         _require_keys(
             run,
-            ('name', 'version', 'description', 'seed', 'measurement'),
+            ("name", "version", "description", "seed", "measurement"),
             f"{path}:run",
         )
 
-        population = raw['population']
-        if 'type' not in population:
+        population = raw["population"]
+        if "type" not in population:
             raise ValueError(f"{path}:population: missing required keys ['type']")
-        population_type = str(population['type'])
+        population_type = str(population["type"])
 
-        observation = raw['observation']
-        _reject_unknown(observation, ('config', 'snr'), f"{path}:observation")
-        _require_keys(observation, ('config',), f"{path}:observation")
+        observation = raw["observation"]
+        _reject_unknown(
+            observation, ("config", "snr", "line_snr_scale"), f"{path}:observation"
+        )
+        _require_keys(observation, ("config",), f"{path}:observation")
+        line_snr_scale = observation.get("line_snr_scale", 1.0)
+        if (
+            isinstance(line_snr_scale, bool)
+            or not isinstance(line_snr_scale, (int, float))
+            or line_snr_scale <= 0
+        ):
+            raise ValueError(
+                f"{path}:observation.line_snr_scale must be a positive number, "
+                f"got {line_snr_scale!r}"
+            )
+        if population_type != "catalog" and line_snr_scale != 1.0:
+            raise ValueError(
+                f"{path}:observation.line_snr_scale applies to catalog populations "
+                f"only (sampled populations set observation.snr.line directly)"
+            )
         # catalog populations derive BOTH channels' per-fit SNR from the
         # population table (matched-filter depth anchors), so the snr block
         # is rejected outright there; sampled populations require it
-        if population_type == 'catalog':
-            if 'snr' in observation:
+        if population_type == "catalog":
+            if "snr" in observation:
                 raise ValueError(
                     f"{path}:observation.snr is not valid for catalog "
                     f"populations: per-fit broadband and line SNRs come from "
@@ -1265,30 +1861,30 @@ class EnsembleSpec:
                 )
             snr = {}
         else:
-            _require_keys(observation, ('snr',), f"{path}:observation")
-            snr = observation['snr']
+            _require_keys(observation, ("snr",), f"{path}:observation")
+            snr = observation["snr"]
             # observation.snr.line is required as a scalar UNLESS it is the
             # swept axis
-            _reject_unknown(snr, ('broadband', 'line'), f"{path}:observation.snr")
-            _require_keys(snr, ('broadband',), f"{path}:observation.snr")
+            _reject_unknown(snr, ("broadband", "line"), f"{path}:observation.snr")
+            _require_keys(snr, ("broadband",), f"{path}:observation.snr")
 
         # sampled-mode placeholders (overwritten in the sampled branch)
         catalog_population: Optional[CatalogPopulationSpec] = None
-        strat_param = ''
+        strat_param = ""
         strat_n_bins = 0
         strat_range = (0.0, 0.0)
         sweep_values: Tuple[float, ...] = ()
         n_gal_per_bin = 1
         draw: Dict[str, DrawSpec] = {}
         fixed: Dict[str, float] = {}
-        scheme = 'fixed'
+        scheme = "fixed"
         shear_g1 = 0.0
         shear_g2 = 0.0
         shear_grid: Tuple[float, ...] = ()
-        shear_component = ''
+        shear_component = ""
         ring_enabled = False
 
-        if population_type == 'catalog':
+        if population_type == "catalog":
             catalog_population = _parse_catalog_population(
                 population, f"{path}:population"
             )
@@ -1297,167 +1893,191 @@ class EnsembleSpec:
             _reject_unknown(
                 population,
                 (
-                    'type',
-                    'stratify',
-                    'n_gal_per_bin',
-                    'draw',
-                    'fixed',
-                    'shear',
-                    'ring',
+                    "type",
+                    "stratify",
+                    "n_gal_per_bin",
+                    "draw",
+                    "fixed",
+                    "shear",
+                    "ring",
                 ),
                 f"{path}:population",
             )
             _require_keys(
                 population,
-                ('type', 'stratify', 'n_gal_per_bin', 'draw', 'shear', 'ring'),
+                ("type", "stratify", "n_gal_per_bin", "draw", "shear", "ring"),
                 f"{path}:population",
             )
-            n_gal_per_bin = int(population['n_gal_per_bin'])
+            n_gal_per_bin = int(population["n_gal_per_bin"])
 
-            stratify = population['stratify']
+            stratify = population["stratify"]
             if len(stratify) != 1:
                 raise ValueError(
                     f"{path}:population.stratify must contain exactly one "
                     f"parameter, got {list(stratify)}"
                 )
             strat_param, strat_cfg = next(iter(stratify.items()))
-            if strat_param == 'line_snr':
+            if strat_param in _SWEEP_PARAMS:
                 _reject_unknown(
-                    strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
+                    strat_cfg, ("values",), f"{path}:population.stratify.{strat_param}"
                 )
                 _require_keys(
-                    strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
+                    strat_cfg, ("values",), f"{path}:population.stratify.{strat_param}"
                 )
-                sweep_values = tuple(float(v) for v in strat_cfg['values'])
-                if 'line' in snr:
+                sweep_values = tuple(float(v) for v in strat_cfg["values"])
+                if "line" in snr:
                     raise ValueError(
                         f"{path}: observation.snr.line conflicts with the "
-                        f"line_snr sweep axis; remove it (per-fit values come "
-                        f"from population.stratify.line_snr.values)"
+                        f"{strat_param} sweep axis; remove it (per-fit values "
+                        f"come from population.stratify.{strat_param}.values)"
                     )
             else:
-                if 'line' not in snr:
+                if "line" not in snr:
                     raise ValueError(
                         f"{path}:observation.snr: missing required keys ['line']"
                     )
                 _reject_unknown(
                     strat_cfg,
-                    ('n_bins', 'range'),
+                    ("n_bins", "range"),
                     f"{path}:population.stratify.{strat_param}",
                 )
                 _require_keys(
                     strat_cfg,
-                    ('n_bins', 'range'),
+                    ("n_bins", "range"),
                     f"{path}:population.stratify.{strat_param}",
                 )
-                strat_n_bins = int(strat_cfg['n_bins'])
+                strat_n_bins = int(strat_cfg["n_bins"])
                 strat_range = (
-                    float(strat_cfg['range'][0]),
-                    float(strat_cfg['range'][1]),
+                    float(strat_cfg["range"][0]),
+                    float(strat_cfg["range"][1]),
                 )
 
-            for name, dcfg in population['draw'].items():
+            for name, dcfg in population["draw"].items():
                 dcfg = dict(dcfg)
-                dist = dcfg.pop('dist', None)
+                dist = dcfg.pop("dist", None)
                 if dist is None:
                     raise ValueError(f"{path}:population.draw.{name}: missing 'dist'")
-                if dist == 'uniform' and 'range' in dcfg:
-                    lo, hi = dcfg.pop('range')
+                if dist == "uniform" and "range" in dcfg:
+                    lo, hi = dcfg.pop("range")
                     dcfg.update(low=lo, high=hi)
                 resolved = _PARAM_ALIASES.get(name, name)
                 draw[resolved] = DrawSpec(dist=dist, params=dcfg)
 
-            fixed = _resolve_fixed_block(population.get('fixed', {}), context=f"{path}")
+            fixed = _resolve_fixed_block(population.get("fixed", {}), context=f"{path}")
 
-            shear = population['shear']
+            shear = population["shear"]
             _reject_unknown(
                 shear,
-                ('scheme', 'g1', 'g2', 'grid', 'component'),
+                ("scheme", "g1", "g2", "grid", "component"),
                 f"{path}:population.shear",
             )
-            scheme = shear.get('scheme', 'fixed')
-            shear_g1 = float(shear.get('g1', 0.0))
-            shear_g2 = float(shear.get('g2', 0.0))
-            if scheme == 'grid':
-                _require_keys(shear, ('grid', 'component'), f"{path}:population.shear")
-                shear_grid = tuple(float(g) for g in shear['grid'])
-                shear_component = shear['component']
+            scheme = shear.get("scheme", "fixed")
+            shear_g1 = float(shear.get("g1", 0.0))
+            shear_g2 = float(shear.get("g2", 0.0))
+            if scheme == "grid":
+                _require_keys(shear, ("grid", "component"), f"{path}:population.shear")
+                shear_grid = tuple(float(g) for g in shear["grid"])
+                shear_component = shear["component"]
 
-            ring = population['ring']
+            ring = population["ring"]
             _reject_unknown(
-                ring, ('enabled', 'antithetic_g'), f"{path}:population.ring"
+                ring, ("enabled", "antithetic_g"), f"{path}:population.ring"
             )
-            if ring.get('antithetic_g', False):
+            if ring.get("antithetic_g", False):
                 raise NotImplementedError(
                     "antithetic_g (+/-g pairs) is scoped out of v1"
                 )
-            ring_enabled = bool(ring.get('enabled', False))
+            ring_enabled = bool(ring.get("enabled", False))
 
-        model = raw.get('model', {})
-        _reject_unknown(model, ('render',), f"{path}:model")
-        render = model.get('render', {})
-        _reject_unknown(render, ('oversample',), f"{path}:model.render")
+        model = raw.get("model", {})
+        _reject_unknown(model, ("render",), f"{path}:model")
+        render = model.get("render", {})
+        _reject_unknown(
+            render, ("oversample", "line_window_mode"), f"{path}:model.render"
+        )
         render_oversample = _require_yaml_int(
-            render, 'oversample', 3, f"{path}:model.render"
+            render, "oversample", 3, f"{path}:model.render"
         )
 
-        fit = raw['fit']
+        fit = raw["fit"]
         _reject_unknown(
             fit,
             (
-                'sampler',
-                'n_warmup',
-                'n_samples',
-                'n_chains',
-                'precondition',
-                'unconstrained',
-                'adapt_mass',
-                'target_accept',
-                'n_map_starts',
-                'pin_z_to_truth',
-                'sample_bulge_nsersic',
-                'shear_prior_sigma',
-                'escalation',
+                "sampler",
+                "n_warmup",
+                "n_samples",
+                "n_chains",
+                "precondition",
+                "unconstrained",
+                "adapt_mass",
+                "target_accept",
+                "n_map_starts",
+                "pin_z_to_truth",
+                "sample_bulge_nsersic",
+                "sample_h_over_r",
+                "shear_prior_sigma",
+                "shear_prior_type",
+                "shear_prior_halfwidth",
+                "pa_prior",
+                "cosi_prior_range",
+                "hessian_method",
+                "max_tree_depth",
+                "map_moment_starts",
+                "map_bounded",
+                "map_polish_steps",
+                "map_polish_basins",
+                "eig_floor_mode",
+                "eig_floor",
+                "chain_init",
+                "chain_init_max_margin",
+                "warmup_metric",
+                "warmup_stage2_draws",
+                "warmup_stage2_adapt",
+                "record_warmup",
+                "pin_to_truth",
+                "prior_overrides",
+                "escalation",
             ),
             f"{path}:fit",
         )
-        if fit.get('sampler', 'numpyro') != 'numpyro':
+        if fit.get("sampler", "numpyro") != "numpyro":
             raise NotImplementedError(
                 f"v1 supports the numpyro sampler only, got " f"{fit.get('sampler')!r}"
             )
-        escalation = _parse_escalation(fit.get('escalation'), f"{path}:fit.escalation")
+        escalation = _parse_escalation(fit.get("escalation"), f"{path}:fit.escalation")
 
-        dispatch = raw['dispatch']
+        dispatch = raw["dispatch"]
         _reject_unknown(
             dispatch,
             (
-                'backend',
-                'mode',
-                'workers_per_node',
-                'target_task_walltime_min',
-                'queue',
-                'account',
-                'max_fit_walltime_min',
+                "backend",
+                "mode",
+                "claim_order",
+                "workers_per_node",
+                "target_task_walltime_min",
+                "queue",
+                "account",
+                "max_fit_walltime_min",
             ),
             f"{path}:dispatch",
         )
 
-        output = raw.get('output', {})
-        _reject_unknown(output, ('save_chains', 'save_mocks'), f"{path}:output")
+        output = raw.get("output", {})
+        _reject_unknown(output, ("save_chains", "save_mocks"), f"{path}:output")
 
         return cls(
-            run_name=str(run['name']),
-            version=int(run['version']),
-            description=str(run['description']),
-            seed=int(run['seed']),
-            measurement=str(run['measurement']),
+            run_name=str(run["name"]),
+            version=int(run["version"]),
+            description=str(run["description"]),
+            seed=int(run["seed"]),
+            measurement=str(run["measurement"]),
             population_type=population_type,
             stratify_param=strat_param,
             stratify_n_bins=strat_n_bins,
             stratify_range=strat_range,
             sweep_values=sweep_values,
             n_gal_per_bin=n_gal_per_bin,
-            m_noise=int(run.get('noise_reps', 1)),
+            m_noise=int(run.get("noise_reps", 1)),
             draw=draw,
             fixed=fixed,
             shear_scheme=scheme,
@@ -1465,11 +2085,50 @@ class EnsembleSpec:
             g2=shear_g2,
             shear_grid=shear_grid,
             shear_component=shear_component,
-            shear_fit_prior_sigma=float(fit.get('shear_prior_sigma', 0.2)),
+            shear_fit_prior_sigma=float(fit.get("shear_prior_sigma", 0.2)),
+            shear_fit_prior_type=str(fit.get("shear_prior_type", "gaussian")),
+            shear_fit_prior_halfwidth=float(fit.get("shear_prior_halfwidth", 0.3)),
+            pa_fit_prior=str(fit.get("pa_prior", "full_circle")),
+            cosi_fit_prior_range=(
+                None
+                if fit.get("cosi_prior_range") is None
+                else _parse_pair(
+                    fit["cosi_prior_range"], f"{path}:fit.cosi_prior_range"
+                )
+            ),
+            hessian_method=str(fit.get("hessian_method", "fd")),
+            max_tree_depth=_require_yaml_int(fit, "max_tree_depth", 10, f"{path}:fit"),
+            map_moment_starts=fit.get("map_moment_starts", False),
+            map_bounded=fit.get("map_bounded", True),
+            map_polish_steps=_require_yaml_int(
+                fit, "map_polish_steps", 8, f"{path}:fit"
+            ),
+            map_polish_basins=_require_yaml_int(
+                fit, "map_polish_basins", 3, f"{path}:fit"
+            ),
+            eig_floor_mode=str(fit.get("eig_floor_mode", "prior")),
+            eig_floor=(
+                None if fit.get("eig_floor") is None else float(fit["eig_floor"])
+            ),
+            chain_init=str(fit.get("chain_init", "map_jitter")),
+            chain_init_max_margin=float(fit.get("chain_init_max_margin", 20.0)),
+            warmup_metric=str(fit.get("warmup_metric", "adapted")),
+            warmup_stage2_draws=_require_yaml_int(
+                fit, "warmup_stage2_draws", 50, f"{path}:fit"
+            ),
+            warmup_stage2_adapt=fit.get("warmup_stage2_adapt", False),
+            record_warmup=fit.get("record_warmup", False),
+            pin_to_truth=_parse_pin_to_truth(
+                fit.get("pin_to_truth", ()), f"{path}:fit"
+            ),
+            prior_overrides=_parse_prior_overrides(
+                fit.get("prior_overrides"), f"{path}:fit"
+            ),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,
-            observed_config=str(observation['config']),
+            render_line_window_mode=str(render.get("line_window_mode", "global")),
+            observed_config=str(observation["config"]),
             # catalog populations carry per-galaxy SNRs (both channels) in
             # the population table; the scalar fields get -1 sentinels so any
             # accidental use fails the positive-SNR checks loudly. Swept
@@ -1477,36 +2136,78 @@ class EnsembleSpec:
             # unused (set to the first sweep value as a placeholder that
             # keeps validation simple)
             broadband_snr=(
-                -1.0 if population_type == 'catalog' else float(snr['broadband'])
+                -1.0 if population_type == "catalog" else float(snr["broadband"])
             ),
             line_snr=(
                 -1.0
-                if population_type == 'catalog'
-                else float(snr['line']) if 'line' in snr else float(sweep_values[0])
+                if population_type == "catalog"
+                else float(snr["line"]) if "line" in snr else float(sweep_values[0])
             ),
-            n_warmup=int(fit.get('n_warmup', 500)),
-            n_samples=int(fit.get('n_samples', 1000)),
-            n_chains=int(fit.get('n_chains', 4)),
-            precondition=str(fit.get('precondition', 'laplace')),
-            unconstrained=bool(fit.get('unconstrained', False)),
-            adapt_mass=bool(fit.get('adapt_mass', False)),
-            target_accept=float(fit.get('target_accept', 0.8)),
-            n_map_starts=int(fit.get('n_map_starts', 4)),
-            pin_z_to_truth=bool(fit.get('pin_z_to_truth', True)),
-            sample_bulge_nsersic=bool(fit.get('sample_bulge_nsersic', False)),
+            line_snr_scale=float(line_snr_scale),
+            n_warmup=int(fit.get("n_warmup", 500)),
+            n_samples=int(fit.get("n_samples", 1000)),
+            n_chains=int(fit.get("n_chains", 4)),
+            precondition=str(fit.get("precondition", "laplace")),
+            unconstrained=bool(fit.get("unconstrained", False)),
+            adapt_mass=bool(fit.get("adapt_mass", False)),
+            target_accept=float(fit.get("target_accept", 0.8)),
+            n_map_starts=int(fit.get("n_map_starts", 4)),
+            pin_z_to_truth=bool(fit.get("pin_z_to_truth", True)),
+            sample_bulge_nsersic=bool(fit.get("sample_bulge_nsersic", False)),
+            sample_h_over_r=bool(fit.get("sample_h_over_r", False)),
             escalation=escalation,
-            backend=str(dispatch.get('backend', 'local')),
-            mode=str(dispatch.get('mode', 'dynamic')),
-            workers_per_node=int(dispatch.get('workers_per_node', 1)),
+            backend=str(dispatch.get("backend", "local")),
+            mode=str(dispatch.get("mode", "dynamic")),
+            claim_order=str(dispatch.get("claim_order", "manifest")),
+            workers_per_node=int(dispatch.get("workers_per_node", 1)),
             target_task_walltime_min=float(
-                dispatch.get('target_task_walltime_min', 90.0)
+                dispatch.get("target_task_walltime_min", 90.0)
             ),
-            queue=str(dispatch.get('queue', 'gh-dev')),
-            account=str(dispatch.get('account', '')),
-            max_fit_walltime_min=float(dispatch.get('max_fit_walltime_min', 30.0)),
-            save_chains=str(output.get('save_chains', 'none')),
-            save_mocks=str(output.get('save_mocks', 'none')),
+            queue=str(dispatch.get("queue", "gh-dev")),
+            account=str(dispatch.get("account", "")),
+            max_fit_walltime_min=float(dispatch.get("max_fit_walltime_min", 30.0)),
+            save_chains=str(output.get("save_chains", "none")),
+            save_mocks=str(output.get("save_mocks", "none")),
         )
+
+
+def _parse_pin_to_truth(raw, context: str) -> Tuple[str, ...]:
+    """Parse ``fit.pin_to_truth`` (a YAML list of parameter names)."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            f"{context}.pin_to_truth must be a list of parameter names, got {raw!r}"
+        )
+    return tuple(str(name) for name in raw)
+
+
+def _parse_prior_overrides(raw, context: str) -> Dict[str, PriorOverrideSpec]:
+    """Parse ``fit.prior_overrides`` ({dotted name: {dist, ...params}})."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{context}.prior_overrides must be a mapping of parameter names "
+            f"to prior definitions, got {raw!r}"
+        )
+    out: Dict[str, PriorOverrideSpec] = {}
+    for name, cfg in raw.items():
+        if not isinstance(cfg, dict) or "dist" not in cfg:
+            raise ValueError(
+                f"{context}.prior_overrides.{name}: expected a mapping with a "
+                f"'dist' key, got {cfg!r}"
+            )
+        cfg = dict(cfg)
+        dist = str(cfg.pop("dist"))
+        params = {
+            k: (list(v) if isinstance(v, (list, tuple)) else float(v))
+            for k, v in cfg.items()
+        }
+        out[_PARAM_ALIASES.get(str(name), str(name))] = PriorOverrideSpec(
+            dist=dist, params=params
+        )
+    return out
 
 
 def _resolve_fixed_block(fixed_raw: dict, context: str) -> Dict[str, float]:
@@ -1518,7 +2219,7 @@ def _resolve_fixed_block(fixed_raw: dict, context: str) -> Dict[str, float]:
     """
     fixed: Dict[str, float] = {}
     for name, value in fixed_raw.items():
-        if name == 'flux':
+        if name == "flux":
             raise ValueError(
                 f"{context}:population.fixed: 'flux' is ambiguous across "
                 f"components (band flux vs line flux vs continuum "

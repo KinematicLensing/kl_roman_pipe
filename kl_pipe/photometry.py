@@ -16,6 +16,8 @@ from typing import Union
 
 import numpy as np
 
+from kl_pipe.lines import LINE_LAMBDAS
+
 ArrayLike = Union[float, np.ndarray]
 
 # AB magnitude <-> microjansky: m_AB = 23.9 - 2.5 log10(f_nu / uJy)
@@ -35,9 +37,8 @@ CGS_TO_F17 = 1e17
 # f_lambda = f_nu * c / lambda^2 [erg/cm2/s/A]
 C_A_PER_S = 2.998e18
 
-# Halpha rest wavelength [Angstrom] (air; standard line-list value).
-# kl_pipe/lines.py carries the same air value as 656.28 nm.
-HALPHA_REST_A = 6562.8
+# Halpha vacuum rest wavelength [Angstrom]; nm -> A factor 10
+HALPHA_REST_A = 10.0 * LINE_LAMBDAS['Halpha']
 
 # exponential-disk half-light-to-scale-length ratio, r50 = EXP_R50_OVER_RSCALE
 # * rscale: the exact root of 1 - (1 + x) exp(-x) = 1/2 (enclosed-flux

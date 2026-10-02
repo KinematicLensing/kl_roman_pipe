@@ -30,7 +30,7 @@ from kl_pipe.ensemble.population import (
     build_population,
     write_population,
 )
-from kl_pipe.photometry import EXP_R50_OVER_RSCALE
+from kl_pipe.photometry import EXP_R50_OVER_RSCALE, HALPHA_REST_A
 from kl_pipe.ensemble.spec import CatalogPopulationSpec, EnsembleSpec
 
 pytestmark = pytest.mark.roman_ensemble
@@ -383,7 +383,7 @@ class TestPreprocess:
         pre = FLAGSHIP2.preprocess(df, _cp())
         # recompute expected from the float32-stored inputs
         z = float(np.float32(1.0))
-        lam = 6562.8 * (1.0 + z)
+        lam = HALPHA_REST_A * (1.0 + z)
         f_line = 10.0 ** float(np.float32(np.log10(2e-16)))
         f_nu = float(np.float32(1e-28))
         f_lambda = f_nu * 2.998e18 / lam**2

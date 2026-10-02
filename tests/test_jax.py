@@ -360,7 +360,7 @@ def test_recompilation_with_same_shapes(
 
 
 # ----------------------------------------------------------------------
-# KLModel JIT compilation tests
+# SourceModel JIT compilation tests
 
 
 def test_source_model_jit_compilation(source_setup, kl_pars, test_grid):
@@ -428,7 +428,7 @@ def test_source_model_parameter_extraction_jit(source_setup, kl_pars):
 
 
 # ----------------------------------------------------------------------
-# KLModel gradient tests
+# SourceModel gradient tests
 
 
 def test_source_model_velocity_gradient(source_setup, kl_pars, test_grid):
@@ -542,7 +542,7 @@ def test_source_model_render_gradient(source_setup, kl_pars, test_image_pars):
 
 
 # ----------------------------------------------------------------------
-# KLModel vmap tests
+# SourceModel vmap tests
 
 
 def test_source_model_vmap_over_samples(source_setup, kl_pars, test_grid):
@@ -597,7 +597,7 @@ def test_source_model_vmap_render(source_setup, kl_pars):
 
 
 # ----------------------------------------------------------------------
-# Combined JAX transformation tests for KLModel
+# Combined JAX transformation tests for SourceModel
 
 
 def test_source_model_jit_grad_composition(source_setup, kl_pars, test_grid):

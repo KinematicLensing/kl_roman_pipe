@@ -51,12 +51,14 @@ import pytest
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts' / 'validation'
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from kl_pipe.lines import LINE_LAMBDAS
+
 from galsim_reference.kl_pipe_scene import build_kl_pipe_scene, render_kl_pipe_grism
 from galsim_reference.physics import GalaxyParams
 from galsim_reference.render import GalSimReferenceConfig, render_galsim_reference
 
 Z = 1.0
-LAMBDA_REST_HALPHA = 656.28  # nm, Halpha vacuum rest wavelength
+LAMBDA_REST_HALPHA = LINE_LAMBDAS['Halpha']  # nm, vacuum
 LAMBDA_REF = LAMBDA_REST_HALPHA * (1.0 + Z)
 PIXEL_SCALE = 0.11  # arcsec, Roman-like
 SHAPE = (32, 32)

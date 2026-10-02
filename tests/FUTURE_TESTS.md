@@ -24,7 +24,7 @@ shear-PSF coupling that drives our science.
 - Parametrize over shear values: `(0.05, 0)`, `(0, 0.05)`, `(0.05, 0.03)`
 - GalSim path: `Convolve(sheared_source, psf).drawImage()`
 - Pipeline path: `precompute_psf_fft` + `convolve_fft` on sheared source, OR
-  full `model.render_image()` with nonzero g1/g2 + PSF configured
+  full `model.render_image()` with nonzero g1/g2 + PSF on the obs
 - Use `oversample_image_pars` (150x200) for boundary safety
 
 **Practical notes:**
@@ -88,7 +88,7 @@ currently center at (0,0).
 **Implementation approach:**
 - Use `oversample_image_pars` (150x200, 0.3"/pix = 45"x60" FOV)
 - GalSim: `Exponential(hlr=3).shift(dx, dy)` convolved with PSF
-- Pipeline: `model.render_image()` with nonzero x0, y0 + PSF configured
+- Pipeline: `model.render_image()` with nonzero x0, y0 + PSF on the obs
 
 **Practical notes:**
 - FFT padding should handle moderate offsets. Danger is source extending past
@@ -137,32 +137,11 @@ scale is 0.11"/pix. PSF FWHM/pixel_scale ratio determines sampling --- at
 
 ## E. Joint Model PSF Path Consistency
 
-**Science motivation:** `configure_joint_psf()` configures velocity+intensity PSFs
-in one call, setting `velocity_model._psf_flux_model = intensity_model`. No test
-verifies this joint path matches separately configured models.
-
-**What to test:**
-- Configure PSF via `configure_joint_psf()` on KLModel
-- Separately configure on velocity_model and intensity_model
-- Render both maps from both configurations, verify match
-
-**Implementation approach:**
-- KLModel with CenteredVelocityModel + InclinedExponentialModel
-- Path A: `kl_model.configure_joint_psf(psf_vel=psf, psf_int=psf, ...)`
-- Path B: `vel_model.configure_velocity_psf(psf, ..., flux_model=int_model, ...)`
-  and `int_model.configure_psf(psf, ...)`
-- Compare `PSFData` objects and render outputs
-
-**Practical notes:**
-- Joint config sets `_psf_flux_theta` to None (overridden at likelihood eval time);
-  separate config uses fixed `flux_theta`. Comparison needs to account for this.
-- Simplest: verify PSFData objects identical + `_psf_flux_model is intensity_model`.
-
-**Assertions:**
-- `PSFData` objects identical between joint and separate configuration
-- `velocity_model._psf_flux_model is intensity_model` after joint config
-
-**Difficulty:** Low
+**Obsolete.** PSF state now lives on observation objects (`build_image_obs`,
+`build_velocity_obs`, `build_grism_obs`), and flux-weighted velocity PSF
+convolution weights by the `SourceModel` emission line named by
+`VelocityObs.flux_weight_key`. There is no separate joint-configuration path
+to compare.
 
 ---
 
@@ -176,11 +155,11 @@ is a systematic error budget question.
 - Generate data with PSF_true (Gaussian FWHM=0.65")
 - Fit with PSF_wrong (FWHM=0.60" or 0.70" --- 8% error)
 - Measure bias as function of PSF error magnitude
-- Key params: g1, g2, int_rscale, cosi
+- Key params: g1, g2, `<band>.rscale`, cosi
 
 **Implementation approach:**
 - Reuse `test_optimizer_recovery` infrastructure
-- Generate data with one PSF, configure model with different PSF
+- Generate data with one PSF, fit with an obs built on a different PSF
 - Parametrize over PSF error: 0%, 2%, 5%, 10% FWHM error
 - Separate file: `test_psf_systematics.py`, mark `@pytest.mark.slow`
 

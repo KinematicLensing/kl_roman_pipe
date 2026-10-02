@@ -90,6 +90,7 @@ This avoids negative cos(i) in projection math.
 - Xu et al. (2022): arXiv:2201.00739 (kinematic lensing formalism)
 """
 
+import warnings
 from typing import Dict, Optional, Tuple
 import numpy as np
 from dataclasses import dataclass
@@ -274,7 +275,12 @@ class TNGDataVectorGenerator:
     2. Transform to new orientation (use_native_orientation=False, provide pars)
     """
 
-    def __init__(self, galaxy_data: Dict[str, Dict], data_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        galaxy_data: Dict[str, Dict],
+        data_dir: Optional[Path] = None,
+        verbose: bool = False,
+    ):
         """
         Initialize generator for a specific galaxy.
 
@@ -285,8 +291,12 @@ class TNGDataVectorGenerator:
             the TNG data for one galaxy (from TNG50MockData.get_galaxy())
         data_dir : Path, optional
             Directory containing auxiliary data files (e.g., BC03 models).
+        verbose : bool, default=False
+            Print per-chunk progress and luminosity totals during dust
+            recomputation.
         """
         self.galaxy_data = galaxy_data
+        self.verbose = verbose
         self.stellar = galaxy_data.get('stellar')
         self.gas = galaxy_data.get('gas')
         self.subhalo = galaxy_data.get('subhalo')
@@ -496,8 +506,9 @@ class TNGDataVectorGenerator:
         )[0]
 
         if len(n_out_of_bounds) > 0:
-            print(
-                f'Warning: {len(n_out_of_bounds)} stellar particles out of {len(metallicities_org)} have metallicities out of the galaxev model bounds. They will be set to the nearest bound.'
+            warnings.warn(
+                f'{len(n_out_of_bounds)} stellar particles out of {len(metallicities_org)} have metallicities out of the galaxev model bounds. They will be set to the nearest bound.',
+                stacklevel=2,
             )
             metallicities = np.clip(
                 metallicities_org,
@@ -633,9 +644,10 @@ class TNGDataVectorGenerator:
             age_chunk = ages[start_idx:end_idx]
             mass_chunk = initial_masses[start_idx:end_idx]
 
-            print(
-                f'Processing particles {start_idx} to {end_idx} for galaxy ID {self.subhalo["SubhaloID"]}'
-            )
+            if self.verbose:
+                print(
+                    f'Processing particles {start_idx} to {end_idx} for galaxy ID {self.subhalo["SubhaloID"]}'
+                )
 
             lum_chunk = (
                 numba_bilinear_3d(
@@ -745,14 +757,15 @@ class TNGDataVectorGenerator:
             )
         )
 
-        print(f'Total raw luminosity in band {band}: {total_raw} erg/s')
-        print(f'Total dusted luminosity in band {band}: {total_dusted} erg/s')
-        print(
-            f'Dusted absolute magnitude in band {band}: {self.subhalo["Dusted_Absolute_Magnitude_rotate_" + band]} mag'
-        )
-        print(
-            f'Raw absolute magnitude in band {band}: {self.subhalo["Absolute_Magnitude_rotate_" + band]} mag'
-        )
+        if self.verbose:
+            print(f'Total raw luminosity in band {band}: {total_raw} erg/s')
+            print(f'Total dusted luminosity in band {band}: {total_dusted} erg/s')
+            print(
+                f'Dusted absolute magnitude in band {band}: {self.subhalo["Dusted_Absolute_Magnitude_rotate_" + band]} mag'
+            )
+            print(
+                f'Raw absolute magnitude in band {band}: {self.subhalo["Absolute_Magnitude_rotate_" + band]} mag'
+            )
 
     def hydrogen_column_density(
         self,
@@ -808,7 +821,7 @@ class TNGDataVectorGenerator:
         )
 
         if gas_particles['Coordinates'] is None:
-            print(f'This galaxy has no gas particles.')
+            warnings.warn('This galaxy has no gas particles.', stacklevel=2)
             N_H_cm2 = np.zeros((Ngrid, Ngrid))
             metallicity_sph = np.zeros((Ngrid, Ngrid))
         else:
@@ -871,8 +884,9 @@ class TNGDataVectorGenerator:
             # SPH does not necessarily conserve mass in each pixel, but it should be close to the total input mass when summed over the whole grid.
             # We can check this and print a warning if it's not the case, which may indicate an issue with the SPH projection or the choice of grid parameters.
             if not np.isclose(total_input, total_projected, rtol=5e-2):
-                print(
-                    f'Warning: Mass conserved roughly. Input: {total_input}, Output: {total_projected}'
+                warnings.warn(
+                    f'Mass conserved roughly. Input: {total_input}, Output: {total_projected}',
+                    stacklevel=2,
                 )
 
             # --- compute per-pixel hydrogen mass in grams ---
@@ -1731,8 +1745,6 @@ class TNGDataVectorGenerator:
             from ..psf import gsobj_to_kernel, convolve_flux_weighted_numpy
 
             if intensity_map is None:
-                import warnings
-
                 warnings.warn(
                     'PSF set but no intensity_map provided to generate_velocity_map. '
                     'Generating intensity internally (less efficient).',

@@ -14,66 +14,77 @@ conda install -n base conda-lock  # If not already installed
 make install
 ```
 
+If a `klpipe` environment already exists, `make install` asks before replacing it (without a terminal, set `KLPIPE_REINSTALL=1`).
+
 **Note for HPC Users:** If you do not have write access to your base environment, install conda-lock into a custom environment (e.g., `mybase`) and run: `BASE_ENV=mybase make install`
 
-**Option 1: Run all tests (recommended, requires ~340 MB download)**
+**First test run (no download required):**
 ```bash
-make test  # Downloads TNG50 data automatically on first run
+make test-basic  # Skips TNG50 and other data-dependent tests
 ```
 
-**Option 2: Run only basic tests (no download required)**
+**Full fast suite (downloads ~2.6 GB of TNG50 data on first run):**
 ```bash
-make test-basic  # Skips TNG50 tests
+make test
 ```
+
+Then work through the [tutorials](#tutorials).
+
+**Scope:** single-source fitting (locally or on HPC) is the supported path. The ensemble/GPU/HPC campaign tooling (`kl_pipe/ensemble/`, `configs/ensembles/`, `experiments/`) is internal and not yet supported for general use.
 
 ## Repository Structure
 
 ```
 kl_pipe/              # Main pipeline package
-├── model.py          # Model base classes (Model, VelocityModel, IntensityModel)
 ├── source.py         # SourceModel: composes velocity + broadband + emission-line components
+├── model.py          # Model base classes (Model, VelocityModel, IntensityModel)
+├── velocity.py       # Velocity field models (CenteredVelocityModel, OffsetVelocityModel)
+├── intensity.py      # Surface brightness models (exponential, Spergel, Sersic, bulge+disk)
 ├── lines.py          # EmissionLine + LINE_LAMBDAS registry
-├── coordinates.py    # WCS-derived celestial-to-detector rotation, shear rotation
-├── velocity.py       # Velocity field models (e.g., CenteredVelocityModel)
-├── intensity.py      # Surface brightness models (e.g., InclinedExponentialModel)
 ├── observation.py    # Observation types (ImageObs, VelocityObs, GrismObs) + factories
-├── likelihood.py     # Likelihood construction and optimization
+├── likelihood.py     # JAX log-likelihoods (create_jitted_likelihood_from_obs)
+├── coordinates.py    # WCS-derived celestial-to-detector rotation, shear rotation
+├── transformation.py # Multi-plane coordinate transformations
+├── parameters.py     # ImagePars (image grid, pixel scale, WCS)
+├── priors.py         # Prior distributions (Uniform, Gaussian, TruncatedNormal, etc.) + PriorDict
+├── psf.py            # PSF convolution (PSFData, oversampled rendering, FFT pipeline)
+├── pixel.py          # PixelResponse (BoxPixel sinc k-space pixel integration)
+├── render.py         # RenderConfig: k-space grid sizing + render defaults
 ├── spectral.py       # Datacube grid (CubePars)
 ├── dispersion.py     # Grism dispersion (GrismPars, 3D->2D projection)
-├── render.py         # RenderConfig: k-space grid sizing + render defaults (analytic dispersal, erf, post-dispersion PSF)
 ├── grism.py          # Post-dispersion pixel response
-├── pixel.py          # PixelResponse (BoxPixel sinc k-space pixel integration)
-├── transformation.py # Multi-plane coordinate transformations
-├── parameters.py     # Parameter and coordinate handling (ImagePars, Pars, etc.)
-├── priors.py         # Prior distributions (Uniform, Gaussian, TruncatedNormal, etc.)
-├── psf.py            # PSF convolution (PSFData, oversampled rendering, FFT pipeline)
-├── synthetic.py      # Synthetic data generation
+├── synthetic.py      # Independent synthetic data generation
 ├── noise.py          # SNR-based noise utilities
+├── photometry.py     # AB mag / flux-density unit conversions
 ├── optimization.py   # Gradient-based recovery (multi_start_minimize)
 ├── constants.py      # Physical constants (C_KMS, etc.)
 ├── utils.py          # Grid builders, path helpers
 ├── plotting.py       # Velocity/intensity map visualization
+├── surveys/          # Published survey parameters (roman.py: HLWAS depths, line limits)
 ├── diagnostics/      # Diagnostic plotting subpackage (imaging, datacube, grism)
 ├── sampling/         # MCMC sampling infrastructure
 │   ├── base.py       # Sampler ABC, SamplerResult
 │   ├── configs.py    # Config dataclasses per sampler type
-│   ├── task.py       # InferenceTask: model+likelihood+priors+data
+│   ├── task.py       # InferenceTask.from_obs: source + likelihood + priors + observations
 │   ├── factory.py    # build_sampler() registry
+│   ├── initialization.py # Optimizer starts, MAP finder, Laplace metric
+│   ├── transforms.py # Bounded-to-unconstrained parameter transforms
 │   ├── emcee.py      # Ensemble MCMC (gradient-free)
 │   ├── nautilus.py   # Neural nested sampling (evidence)
 │   ├── blackjax.py   # JAX-native HMC/NUTS
-│   ├── numpyro.py    # NUTS w/ Z-score reparam (recommended)
+│   ├── numpyro.py    # NUTS, Laplace-preconditioned unconstrained coords (recommended)
 │   └── diagnostics.py # Trace, corner, recovery plots
+├── ensemble/         # Internal multi-galaxy campaign tooling (not yet supported)
 └── tng/              # TNG50 mock data utilities
-    ├── loaders.py    # Load gas, stellar, and subhalo data
-    └── data_vectors.py # 3D particle-to-2D map rendering
+    ├── loaders.py    # TNG50MockData: gas, stellar, and subhalo data
+    ├── data_vectors.py # 3D particle-to-2D map rendering
+    └── tng_dust.py   # Dust attenuation kernels
 
 tests/                # Unit tests (pytest)
 docs/
-├── tutorials/        # Interactive Jupyter tutorials
-│   ├── quickstart.md
-│   ├── sampling.md
-│   └── tng50_data.md
+├── tutorials/        # Tutorials (markdown sources, converted to notebooks)
+├── models.md         # Model, SourceModel, and observation reference
+└── README.md         # Index of reference and internal docs
 data/
 ├── cyverse/          # CyVerse data configuration
 └── tng50/            # Downloaded TNG50 mock data (gitignored)
@@ -93,20 +104,16 @@ This installs the package in editable mode with all dependencies via `conda-lock
 ## Makefile Targets
 
 ### Testing
-- `make test` - Run the generic-pipeline tests (downloads TNG50 data if needed, ~340 MB; excludes the Roman ensemble tier)
-- `make test-basic` - Run only basic tests (no download required)
+- `make test-basic` - Fast tests with no data download (start here)
+- `make test` - Fast generic-pipeline tests (downloads TNG50 data if needed, ~2.6 GB; excludes slow tests and the Roman ensemble tier)
 - `make test-roman-ensemble` - Run the Roman ensemble-campaign tests (ensemble machinery, catalog adapters, prior provenance, Roman PSF, shear calibration)
 - `make test-tng` - Run only TNG50-specific tests
 - `make test-sampling` - Run MCMC sampling tests (excludes nautilus)
-- `make test-fast` - Stop on first failure
+- `make test-fast` - Same marker filter as `make test`, plus `-x` (stop at first failure)
 - `make test-coverage` - Generate coverage report
 - `make test-tutorials` - Execute all tutorials end-to-end (CI mode)
 
-**To run tests without downloading data:**
-```bash
-conda run -n klpipe pytest tests/ -v -m "not tng50"
-# Or use: make test-basic
-```
+See [`tests/README.md`](tests/README.md) for markers and all test targets.
 
 ### Data Management
 - `make download-cyverse-data` - Download TNG50 mock data from CyVerse
@@ -122,7 +129,7 @@ conda run -n klpipe pytest tests/ -v -m "not tng50"
 
 ## Working with TNG50 Data
 
-The pipeline includes utilities for working with TNG50 mock observations (~340 MB):
+The pipeline includes utilities for working with TNG50 mock observations (17 galaxies, ~2.6 GB):
 
 ```python
 from kl_pipe.tng import TNG50MockData
@@ -140,9 +147,15 @@ See [`docs/tutorials/tng50_data.md`](docs/tutorials/tng50_data.md) for details.
 
 ## Tutorials
 
-Interactive tutorials are available in [`docs/tutorials/`](docs/tutorials/):
-- **quickstart.md** - Pipeline basics: models, likelihoods, optimization
-- **sampling.md** - Bayesian inference with MCMC sampling (emcee, nautilus, numpyro)
+Tutorials live in [`docs/tutorials/`](docs/tutorials/). Suggested order:
+
+1. **quickstart.md** - Describe a source, render it, build a likelihood, run an inference
+2. **intensity_models.md** - Intensity profiles, bulge + disk composites, and RenderConfig grid sizing
+3. **grism.md** - Grism datacube and dispersion forward modeling
+4. **sampling.md** - Bayesian inference with MCMC (numpyro recommended)
+
+As needed:
+- **roman_reference.md** - Worked template for a full-complexity Roman mock + fit (two bands, two grism rolls, Roman PSF, bulge + disk)
 - **tng50_data.md** - Working with TNG50 mock observations
 
 Convert to Jupyter notebooks:
@@ -168,7 +181,8 @@ Then open the `.ipynb` files in Jupyter Lab or VS Code.
 
 ```bash
 # Run tests during development
-make test-fast              # Stop on first failure
+make test-basic             # No downloads
+make test-fast              # Same filter as make test, stop at first failure
 
 # Format code before committing
 make format
@@ -177,7 +191,7 @@ make format
 make test-coverage
 ```
 
-See [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for detailed development guidelines and architecture notes.
+See [`CLAUDE.md`](CLAUDE.md) for architecture, coding conventions, and testing rules (written for AI agents, useful for anyone).
 
 ## Citation
 

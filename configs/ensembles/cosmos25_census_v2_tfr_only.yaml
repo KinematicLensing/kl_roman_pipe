@@ -1,0 +1,92 @@
+# One-off twin of cosmos25_census_v2 with the simulated photometric-mass error
+# removed from the vcirc prior (priors.logm_obs_scatter_dex 0): the fit prior
+# is centred on the TFR at the true mass with the intrinsic TFR scatter
+# (0.061 dex) as its width, against 0.092 dex in census v2. Same galaxies,
+# truths and noise draws (the mass-error stream is independent of the other
+# population draws). Easy-first claim order: a short job finishes the
+# mid-cos i, high line-SNR fits first. Purpose: how much of the census v2
+# shear noise is the mass-error term of the vcirc prior.
+run:
+  name: cosmos25_census_v2_tfr_only
+  version: 1
+  description: "COSMOS25 census v2 twin without the photometric-mass error in the TFR vcirc prior (0.061 dex); one-off, easy-first"
+  seed: 20260728
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    kind: cosmos25
+    download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
+    data_dir: data/cosmos2025/private
+  preprocess:
+    flux_variant: as_delivered
+    h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_total_min: 20.0
+    bulge_fraction_max: null
+    bulge_nsersic_range: null
+    min_r50_over_psf_fwhm: 1.0
+  sample:
+    n_galaxies: 200
+    replace: false
+  paint:
+    bulge: false
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]
+    ring: {members: 2}
+  shear:
+    sigma: 0.03
+    gmax: 0.1
+  priors:
+    logm_obs_scatter_dex: 0.0      # census v2: 0.25
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  config: hlwas_medium_roman
+
+fit:
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
+  target_accept: 0.9
+  pin_z_to_truth: true
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    mode: auto
+
+dispatch:
+  backend: local
+  mode: dynamic
+  claim_order: easy_first
+  workers_per_node: 8
+  target_task_walltime_min: 120
+  queue: gh-dev
+  account: JPL-PUB
+  max_fit_walltime_min: 90
+
+output:
+  save_chains: all
+  save_mocks: all

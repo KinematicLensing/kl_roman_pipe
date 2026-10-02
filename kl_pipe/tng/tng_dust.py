@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 from numba import njit, prange
 from scipy.interpolate import interp1d
@@ -313,8 +315,9 @@ def ccm89_av_ratio(wavelength_microns: np.ndarray, Rv: float = 3.1):
     b = np.zeros_like(x)
 
     if np.any((x < 0.3) | (x > 10)):
-        print(
-            'Warning: Wavelength out of range for CCM89 extinction law (0.1 - 3.3 microns^-1).'
+        warnings.warn(
+            'Wavelength out of range for CCM89 extinction law (0.1 - 3.3 microns^-1).',
+            stacklevel=2,
         )
 
     # --- Infrared (0.3 ≤ x < 1.1 μm⁻¹) ---
@@ -478,8 +481,9 @@ def CSK1994_scatter(
     # Table of omega_lambda from Natta & Panagia 1984 for wavelength between 0.7 to 4.48 microns
 
     if np.any((wavelength_angstroms > 7000) & (wavelength_angstroms <= 44800)):
-        print(
-            'Warning: Wavelength out of range for CSK1994 scattering model (0.1 - 0.7 microns). Using Natta & Panagia 1984 table values for longer wavelengths.'
+        warnings.warn(
+            'Wavelength out of range for CSK1994 scattering model (0.1 - 0.7 microns). Using Natta & Panagia 1984 table values for longer wavelengths.',
+            stacklevel=2,
         )
         omega_table_wavelengths = np.array(
             [0.7, 0.9, 1.25, 1.65, 2.2, 3.6, 4.48]
@@ -499,8 +503,9 @@ def CSK1994_scatter(
             wavelength_angstroms[mask4] / 1e4
         )  # Convert back to microns for interpolation
     elif np.any((wavelength_angstroms > 44800) | (wavelength_angstroms < 1000)):
-        print(
-            'Warning: No valid model for wavelength > 4.48 microns or < 0.1 microns in CSK1994 scattering model. Setting albedo to zero.'
+        warnings.warn(
+            'No valid model for wavelength > 4.48 microns or < 0.1 microns in CSK1994 scattering model. Setting albedo to zero.',
+            stacklevel=2,
         )
 
     # Calculating the weighting factor h(λ) that accounts for the anistropy in scattering
@@ -509,22 +514,25 @@ def CSK1994_scatter(
     h_Lambda[mask3] = 1.0 - 0.561 * np.exp(-(np.abs(y - 3.3112) ** 2.2) / 0.17)
 
     if np.any((wavelength_angstroms > 7000) & (wavelength_angstroms <= 18000)):
-        print(
-            'Warning: Applying extrapolation for h(λ) beyond 0.7 microns. Bruzual et al 1988 has a table for g(λ) up to 1.8 microns, the functional form seems to hold approximately.'
+        warnings.warn(
+            'Applying extrapolation for h(λ) beyond 0.7 microns. Bruzual et al 1988 has a table for g(λ) up to 1.8 microns, the functional form seems to hold approximately.',
+            stacklevel=2,
         )
 
         mask5 = (wavelength_angstroms > 7000) & (wavelength_angstroms <= 18000)
         y = np.log10(wavelength_angstroms[mask5])
         h_Lambda[mask5] = 1.0 - 0.561 * np.exp(-(np.abs(y - 3.3112) ** 2.2) / 0.17)
     elif np.any(wavelength_angstroms > 18000):
-        print(
-            'Warning: No valid model for h(λ) beyond 1.8 microns in CSK1994 scattering model. Setting h(λ) to one.'
+        warnings.warn(
+            'No valid model for h(λ) beyond 1.8 microns in CSK1994 scattering model. Setting h(λ) to one.',
+            stacklevel=2,
         )
         mask6 = wavelength_angstroms > 18000
         h_Lambda[mask6] = 1.0
     elif np.any(wavelength_angstroms < 1200):
-        print(
-            'Warning: No valid model for h(λ) below 0.12 microns in CSK1994 scattering model. Setting h(λ) to zero.'
+        warnings.warn(
+            'No valid model for h(λ) below 0.12 microns in CSK1994 scattering model. Setting h(λ) to zero.',
+            stacklevel=2,
         )
 
     # Correcting the optical depth for scattering effects

@@ -1,0 +1,118 @@
+# Honest-disk twin of census v2 at 10x the per-pass line SNR (mock noise only,
+# as in cosmos25_census_v2_lsnr10x): the disk thickness ratio painted per galaxy
+# as LN(0.25, 0.14 dex) and sampled by the fit as one shared parameter with the
+# paint distribution as its prior. Same 100 galaxies, truths and noise streams
+# as cosmos25_census_v2_hfree. Purpose: whether the kinematic channel, once on,
+# breaks the thickness / inclination degeneracy the imaging cannot. Fisher
+# (2026-09-16, h free): sigma(g+) 0.06 face / 0.10 mid / 0.12 edge at x10 vs
+# 0.03 / 0.05 / 0.04 for the round pinned disk.
+run:
+  name: cosmos25_census_v2_hfree_lsnr10x
+  version: 1
+  description: "census v2 honest-disk twin at per-pass line SNR x10: shared sampled disk thickness LN(0.25, 0.14 dex), 100 galaxies x ring pair"
+  seed: 20260728
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    kind: cosmos25
+    download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
+    data_dir: data/cosmos2025/private
+  preprocess:
+    # regenerated painting used verbatim; the dust/IMF correction variants
+    # were retired when the fixes moved upstream into the notebook (see the
+    # adapter module docstring)
+    flux_variant: as_delivered
+    h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
+  selection:
+    z_range: [0.55, 1.9]
+    # coadded 4-pass matched-filter line SNR (same rationale as flagship)
+    snr_line_total_min: 20.0
+    bulge_fraction_max: null       # no bulge columns in this catalog
+    bulge_nsersic_range: null
+    # same resolvability floor as the flagship census specs: the disk
+    # half-light radius must reach the diffraction PSF FWHM at observed
+    # Halpha for a measurable velocity gradient
+    min_r50_over_psf_fwhm: 1.0
+  sample:
+    n_galaxies: 200
+    replace: false
+    # the 60 sweep galaxies plus 40 weighted to cos i > 0.5 (see cosmos25_census_v2_hfree)
+    galaxy_ids: [0, 3, 6, 8, 12, 14, 15, 16, 17, 19, 21, 25, 27, 29, 31, 34, 37, 39, 40, 42, 43, 46, 47, 50, 52, 55, 57, 59, 64, 65, 66, 69, 70, 74, 76, 80, 83, 84, 88, 89, 92, 93, 96, 97, 100, 101, 104, 105, 106, 107, 109, 110, 112, 113, 115, 117, 118, 119, 121, 122, 126, 127, 133, 134, 137, 138, 140, 143, 144, 145, 146, 148, 149, 150, 151, 152, 154, 156, 160, 162, 163, 165, 167, 171, 172, 173, 175, 177, 178, 182, 184, 186, 191, 193, 194, 195, 196, 197, 198, 199]
+  paint:
+    bulge: false                   # disk-only twin (catalog has no bulge)
+    # per-galaxy thickness, shared by every component; the fit prior is this LN
+    h_over_r: {median: 0.25, scatter_dex: 0.14}
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.061}
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]       # isotropic redraw; catalog axis ratio kept for validation
+    ring: {members: 2}             # theta and theta + pi/2 partner
+  shear:
+    sigma: 0.03                    # per-component iid Gaussian, shared within pair
+    gmax: 0.1                      # redraw until |g| < gmax
+  priors:
+    logm_obs_scatter_dex: 0.25     # simulated photometric-mass error
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  # HLWAS Medium band pair with the realistic Roman WFI PSF (the flagship
+  # census specs still reference the Gaussian canonical_P; the Roman PSF
+  # configuration remains subject to the pre-production review)
+  line_snr_scale: 10
+  config: hlwas_medium_roman
+
+fit:
+  # baseline sampler config inherited from the flagship dev spec (see its
+  # comments for the measurements behind these numbers)
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  # fit-initialization toolkit (docs/fit_initialization.md): bounded MAP +
+  # polish and the prior-unit eigenvalue floor
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
+  # cos i fit prior = generating range: widening the lower bound (arm
+  # 990979) cost 1.14x per step for every fit and moved the wall, not the
+  # bias; a face-on-only widening [0.05, 1.0] is untested
+  target_accept: 0.9
+  pin_z_to_truth: true
+  sample_h_over_r: true
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    # continue marginal first attempts from the warm chains (A/B 985582)
+    mode: auto
+
+dispatch:
+  backend: local
+  mode: dynamic
+  # slow fits (cos i near the walls, low line SNR) claimed first so the
+  # tail overlaps the job instead of ending it
+  claim_order: hard_first
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gb
+  account: JPL-PUB
+  max_fit_walltime_min: 90
+
+output:
+  save_chains: all
+  save_mocks: all

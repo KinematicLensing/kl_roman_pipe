@@ -306,12 +306,15 @@ def _grism_psf_kernel_size(
                 "kernel size can be pinned at the ensemble's largest observed "
                 "wavelength"
             )
-        if z_draw.dist != 'uniform':
+        if z_draw.dist == 'uniform':
+            z_max = z_draw.params['high']
+        elif z_draw.dist == 'grid':
+            z_max = max(float(v) for v in z_draw.params['values'])
+        else:
             raise NotImplementedError(
-                f"grism kernel-size pinning knows the z range for uniform "
-                f"draws only, got dist '{z_draw.dist}'"
+                f"grism kernel-size pinning knows the z range for uniform and "
+                f"grid draws only, got dist '{z_draw.dist}'"
             )
-        z_max = z_draw.params['high']
     psf_max = _build_grism_psf(config.grism_psf, z_max, mock=mock)
     fine_ps = config.pixel_scale_arcsec / spec.render_oversample
     size = int(psf_max.getGoodImageSize(fine_ps))
@@ -569,6 +572,7 @@ def _make_roll_obs(
     noise_model='matched_filter',
     sigma_bkg=None,
     electrons_per_f17=None,
+    line_window_mode='global',
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
@@ -609,7 +613,9 @@ def _make_roll_obs(
         grism_pars,
         z=z,
         psf=psf_fit,
-        render_config=RenderConfig(oversample=oversample),
+        render_config=RenderConfig(
+            oversample=oversample, line_window_mode=line_window_mode
+        ),
         data=jnp.asarray(data_noisy),
         variance=variance,
         psf_kernel_size=kernel_size_fit,
@@ -763,6 +769,7 @@ def build_fit_inputs(
                 '1e-17 erg/s/cm2 (integrated line flux)' if is_catalog else None
             ),
             noise_model=config.noise_model,
+            line_window_mode=spec.render_line_window_mode,
             sigma_bkg=grism_sigma_bkg,
             electrons_per_f17=electrons_per_f17,
         )

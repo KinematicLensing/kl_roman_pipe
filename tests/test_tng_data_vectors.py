@@ -13,6 +13,9 @@ from kl_pipe.tng.data_vectors import TNGDataVectorGenerator, TNGRenderConfig
 from kl_pipe.parameters import ImagePars
 from kl_pipe.plotting import MidpointNormalize
 
+# galaxy used by the showcase figures (glamour shot, orientation sweeps)
+SHOWCASE_SUBHALO_ID = 561676
+
 
 pytestmark = pytest.mark.tng50
 
@@ -1873,17 +1876,15 @@ class TestDiagnosticPlots:
 
     def test_glamour_shot(self, output_dir):
         """
-        Create a glamour shot figure for SubhaloID=8 showing:
+        Create a glamour shot figure for SHOWCASE_SUBHALO_ID showing:
         Top row: r-band flux (high-res), Hα flux (from SFR), LoS velocity (high-res)
         Bottom row: r-band (half-res + noise), Hα (half-res + noise), velocity (half-res + noise)
         """
         import matplotlib.pyplot as plt
         import matplotlib.gridspec as gridspec
 
-        # Load SubhaloID=8
         tng_data = TNG50MockData()
-        # galaxy = tng_data.get_galaxy(subhalo_id=8)
-        galaxy = tng_data.get_galaxy(index=0)
+        galaxy = tng_data.get_galaxy(subhalo_id=SHOWCASE_SUBHALO_ID)
         gen = TNGDataVectorGenerator(galaxy)
 
         # High resolution for truth (top row) - zoom to ±2" at 0.025"/pix
@@ -2119,17 +2120,25 @@ class TestDiagnosticPlots:
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
         )
 
-        fig.suptitle(f'TNG50 Galaxy (SubhaloID=8, z={target_z})', fontsize=14, y=0.98)
+        fig.suptitle(
+            f'TNG50 Galaxy (SubhaloID={SHOWCASE_SUBHALO_ID}, z={target_z})',
+            fontsize=14,
+            y=0.98,
+        )
         plt.savefig(
-            output_dir / 'glamour_shot_subhalo8.png', dpi=150, bbox_inches='tight'
+            output_dir / f'glamour_shot_subhalo{SHOWCASE_SUBHALO_ID}.png',
+            dpi=150,
+            bbox_inches='tight',
         )
         plt.close()
 
-        print(f'✓ Saved glamour shot: {output_dir / "glamour_shot_subhalo8.png"}')
+        print(
+            f'✓ Saved glamour shot: {output_dir / f"glamour_shot_subhalo{SHOWCASE_SUBHALO_ID}.png"}'
+        )
 
     def test_orientation_sweep_inclination(self, output_dir):
         """
-        Show SubhaloID=8 at fixed resolution/SNR across inclination sweep.
+        Show SHOWCASE_SUBHALO_ID at fixed resolution/SNR across inclination sweep.
 
         Generates TWO plots:
         1. preserve_gas_stellar_offset=True (default): Gas keeps intrinsic misalignment
@@ -2146,10 +2155,8 @@ class TestDiagnosticPlots:
         import matplotlib.pyplot as plt
         from mpl_toolkits.axes_grid1 import ImageGrid
 
-        # Load SubhaloID=8
         tng_data = TNG50MockData()
-        # galaxy = tng_data.get_galaxy(subhalo_id=8)
-        galaxy = tng_data.get_galaxy(index=0)
+        galaxy = tng_data.get_galaxy(subhalo_id=SHOWCASE_SUBHALO_ID)
         gen = TNGDataVectorGenerator(galaxy)
 
         # Zoomed out view: larger FOV
@@ -2311,7 +2318,7 @@ class TestDiagnosticPlots:
             # Add info about gas-stellar offset
             offset_angle = gen._gas_stellar_L_angle_deg
             fig.suptitle(
-                f'TNG50 SubhaloID=8: Inclination Sweep ({mode_title})\n'
+                f'TNG50 SubhaloID={SHOWCASE_SUBHALO_ID}: Inclination Sweep ({mode_title})\n'
                 f'Gas-stellar L offset: {offset_angle:.1f}°, z={target_z}',
                 fontsize=11,
                 y=1.02,
@@ -2682,7 +2689,7 @@ class TestDiagnosticPlots:
 
     def test_orientation_sweep_pa(self, output_dir):
         """
-        Show SubhaloID=8 at fixed resolution/SNR across PA sweep.
+        Show SHOWCASE_SUBHALO_ID at fixed resolution/SNR across PA sweep.
 
         Generates TWO plots:
         1. preserve_gas_stellar_offset=True (default): Gas keeps intrinsic misalignment
@@ -2699,10 +2706,8 @@ class TestDiagnosticPlots:
         import matplotlib.pyplot as plt
         from mpl_toolkits.axes_grid1 import ImageGrid
 
-        # Load SubhaloID=8
         tng_data = TNG50MockData()
-        # galaxy = tng_data.get_galaxy(subhalo_id=8)
-        galaxy = tng_data.get_galaxy(index=0)
+        galaxy = tng_data.get_galaxy(subhalo_id=SHOWCASE_SUBHALO_ID)
         gen = TNGDataVectorGenerator(galaxy)
 
         # Zoomed out view
@@ -2842,7 +2847,7 @@ class TestDiagnosticPlots:
             # Add info about gas-stellar offset
             offset_angle = gen._gas_stellar_L_angle_deg
             fig.suptitle(
-                f'TNG50 SubhaloID=8: PA Sweep ({mode_title})\n'
+                f'TNG50 SubhaloID={SHOWCASE_SUBHALO_ID}: PA Sweep ({mode_title})\n'
                 f'inc={gen.native_inclination_deg:.1f}°, Gas-stellar L offset: {offset_angle:.1f}°',
                 fontsize=11,
                 y=1.02,

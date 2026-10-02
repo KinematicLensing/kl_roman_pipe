@@ -4,72 +4,87 @@ This directory contains comprehensive tests for the `kl_pipe` kinematic lensing 
 
 ## Test Organization
 
-### Unit Tests
-- **`test_velocity.py`**: Velocity model evaluation, coordinate transformations, parameter conversions
-- **`test_intensity.py`**: Intensity model evaluation, flux conservation, inclination effects
-- **`test_priors.py`**: Prior distributions (Uniform, Gaussian, TruncatedNormal, PriorDict)
-- **`test_utils.py`**: Shared test utilities, tolerance configuration, plotting helpers
-- **`test_jax.py`**: JAX-specific functionality (JIT compilation, gradients)
+Files are grouped by what they cover. Module docstrings give details.
 
-### PSF Tests
-- **`test_psf.py`**: PSF convolution pipeline, oversampled rendering, GalSim regression
-- **`test_psf_tng.py`**: PSF convolution with TNG50 mock data
+### Models and rendering
+- `test_velocity.py`, `test_intensity.py`: velocity and exponential intensity models, transforms, flux conservation
+- `test_intensity_spergel.py`, `test_intensity_sersic.py`, `test_composite_intensity.py`: Spergel / de Vaucouleurs, Sersic emulator, `CompositeIntensityModel` / `BulgeDiskModel`
+- `test_cusp_guard.py`: Spergel cusp prior validation at construction
+- `test_los_quadrature.py`: tanh-substituted line-of-sight quadrature vs the windowed reference
+- `test_coordinates.py`: WCS-derived rotation and shear rotation
+- `test_render.py`, `test_render_config.py`: `RenderConfig` grid sizing and effective maxk
+- `test_psf.py`, `test_pixel_integration.py`, `test_pixel_readout.py`: PSF convolution, k-space pixel response, post-dispersion pixel readout
+- `test_galsim_conventions.py`, `test_galsim_reference.py`: GalSim convention checks and GalSim-chromatic grism reference gate
+- `test_jax.py`: JIT and gradient compatibility
+- `test_precision.py`, `test_precision_robustness.py`, `test_cpu_devices.py`: `KLPIPE_FP32` precision control, float32 robustness, host-device count
 
-### Integration Tests (Parameter Recovery)
-- **`test_likelihood_slices.py`**: Brute-force likelihood slicing for parameter recovery
-- **`test_optimizer_recovery.py`**: Gradient-based optimization for parameter recovery
+### SourceModel, observations, grism
+- `test_source.py`, `test_source_render.py`: `SourceModel` / `EmissionLine` construction and render methods
+- `test_observation.py`, `test_obs_image_rotation.py`: `ImageObs` / `VelocityObs` / `GrismObs` builders
+- `test_datacube.py`, `test_cube_psf.py`, `test_spectral_methods.py`, `test_spectral_resolution.py`: datacube assembly, cube PSF, spectral bin integration, grism resolution
+- `test_grism_core.py`, `test_analytic_dispersal.py`, `test_grism_bandwidth.py`, `test_grism_psf_mode.py`, `test_grism_shared_cube.py`: dispersion, analytic dispersal, grism grid sizing, `psf_mode`, shared cube across rolls
+- `test_grism_validation.py`: cross-code comparison against geko (requires reference data)
+- `test_synth_source_parity.py`: `synthetic.py` vs `SourceModel` rendering parity
 
-### Sampling Tests
-- **`test_sampling.py`**: Sampler config validation, factory pattern, InferenceTask
-- **`test_sampling_diagnostics.py`**: emcee + nautilus full MCMC with diagnostic plots
-- **`test_numpyro.py`**: NumPyro NUTS velocity + joint recovery, convergence (R-hat, ESS)
-- **`test_blackjax.py`**: BlackJAX HMC/NUTS velocity-only diagnostics
+### Likelihood, inference, recovery
+- `test_from_obs.py`, `test_grism_likelihood.py`: `InferenceTask.from_obs` and the grism likelihood
+- `test_noise.py`, `test_noise_calibration.py`: noise generation and chi-square calibration at truth
+- `test_priors.py`: prior distributions and `PriorDict`
+- `test_likelihood_slices.py`: likelihood slicing (three-gate design, see below)
+- `test_optimizer_recovery.py`, `test_optimization.py`: optimizer recovery (k-sigma design) and `multi_start_minimize`
+- `test_flagship.py`: joint Roman-like broadband + grism inference
+- `test_posterior_slices.py`: posterior-slice diagnostics
 
-### TNG50 Tests
-- **`test_tng_loaders.py`**: TNG50 data loading, galaxy access, particle data validation
-- **`test_tng_data_vectors.py`**: Rendering, orientation transforms, gridding, diagnostic plots (40 tests)
-- **`test_tng_mock_data.py`**: Mock data structure validation
-- **`test_tng_likelihood.py`**: Model fitting with TNG truth data
+### Sampling
+- `test_sampling.py`: sampler configs, factory, `InferenceTask`
+- `test_sampling_transforms.py`, `test_initialization.py`: unconstrained-coordinate bijections, fit-initialization toolkit
+- `test_sampling_diagnostics.py`: emcee + nautilus runs with diagnostic plots
+- `test_numpyro.py`, `test_blackjax.py`: NUTS / HMC recovery and convergence
 
-TNG tests require data files in `data/tng50/` (see `data/cyverse/README.md` for download).
+### Photometry and surveys
+- `test_photometry.py`, `test_surveys_roman.py`: unit conversions and published Roman HLWAS parameters
+- `test_lines.py`: vacuum rest-wavelength registry and air <-> vacuum conversion
 
-#### TNG Diagnostic Outputs
+### TNG50 (require data in `data/tng50/`, see `data/cyverse/README.md`)
+- `test_tng_loaders.py`, `test_tng_mock_data.py`: data loading and structure
+- `test_tng_data_vectors.py`: rendering, 3D rotations, gridding, diagnostic plots
+- `test_tng_synthetic_fixture.py`: synthetic TNG files (`fixtures/tng_synthetic.py`) load and render; runs without TNG data
+- `test_tng_likelihood.py`, `test_psf_tng.py`, `test_tng_sampling_diagnostics.py`: fitting, PSF, and sampling on TNG mocks
 
-Run diagnostic tests with:
-```bash
-make test-tng-diagnostics
-```
+### Ensemble tooling (internal; mostly marked `roman_ensemble`)
+- `test_ensemble*.py`, `test_population*.py`, `test_calibration.py`, `test_prior_provenance.py`, `test_roman_psf.py`, `test_bench.py`, `test_dashboard.py`: ensemble specs, catalog populations, shear calibration, prior provenance, Roman PSF option, benchmark records, run dashboard
 
-**Diagnostic plots** are saved to `tests/out/tng_diagnostics/`:
-- `high_res_native_orientation_all_galaxies.png`: All 5 galaxies at 1024x1024 resolution
-- `cic_vs_ngp_comparison_*.png`: Gridding algorithm comparison with particle overlay
-- `symmetry_breaking_*.png`: Complementary inclinations showing TNG asymmetry  
-- `resolution_grid_*.png`: 16, 32, 64, 128 pixel resolution comparison
-- `snr_grid_*.png`: Clean vs SNR=100, 50, 20
-- `glamour_shot_subhalo_8.png`: High-res showcase of best-looking galaxy
-- `inclination_sweep_preserved_*.png`: Face-on to edge-on with gas-stellar offset preserved (realistic)
-- `inclination_sweep_aligned_*.png`: Same but forcing perfect alignment (synthetic)
-- `pa_sweep_*.png`: 0°, 45°, 90°, 135° position angles
-- `multi_galaxy_inclination_sweep_*.png`: All 5 galaxies × inclinations
-- `vertical_extent_*.png`: Disk thickness vs inclination analysis
+### Support
+- `test_utils.py`: shared utilities, `TestConfig`, plotting helpers
+- `test_validation_utils.py`: `scripts/validation/utils.py`
+- `conftest.py`: shared fixtures
+- `fixtures/tng_synthetic.py`: writes synthetic TNG50-format files; `make test-tutorials` uses it when `data/tng50/` is absent
 
-**CSV outputs** (quantitative diagnostics, also in `tests/out/tng_diagnostics/`):
-- `vertical_extent_<subhalo_id>.csv`: Disk thickness measurements
-  - Columns: `cosi`, `inclination_deg`, `z_extent_kpc`, `z_extent_arcsec`, `normalized_z_extent`
-  - Shows how disk vertical extent varies with viewing angle (validates 3D transformation)
-  - Edge-on views show maximum thickness, face-on minimum
-  
-- `inclination_sweep_summary_<subhalo_id>.csv`: Rendering diagnostics per orientation
-  - Columns: `cosi`, `inclination_deg`, `total_flux`, `velocity_range_km_s`, `nonzero_pixels`, `mean_intensity`
-  - Tracks how observables change with inclination
-  - Validates flux conservation and projection effects
+### Pytest markers
 
-Diagnostics validate:
-1. Vertical extent analysis: 3D rotations preserve realistic disk thickness (not 2D projections)
-2. Inclination sweep: Physically realistic variation in observables with viewing angle
-3. Gas-stellar offset plots: ~30-40° misalignment correctly preserved or removed
-4. Gridding comparison: CIC produces smoother maps while conserving flux
-5. Symmetry breaking: TNG galaxies are asymmetric (not perfectly symmetric disks)
+Defined in `pyproject.toml`.
+
+| Marker | Meaning |
+|--------|---------|
+| `tng50` | Requires TNG50 data (`data/tng50/`) |
+| `tng_diagnostics` | Slow TNG diagnostic plots |
+| `slow` | Significant runtime |
+| `diagnostic_plots` | Produces diagnostic figures (also `slow`) |
+| `grism_validation` | Cross-code grism validation (requires geko reference data) |
+| `galsim_reference` | GalSim-chromatic reference render (self-contained) |
+| `cosmohub` | Requires downloaded CosmoHub / Q1 catalog data |
+| `roman_ensemble` | Ensemble tooling tier; excluded from `make test`, run via `make test-roman-ensemble` |
+
+### TNG diagnostic outputs
+
+`make test-tng-diagnostics` writes plots and CSV summaries to
+`tests/out/tng_diagnostics/`: native high-resolution renders, CIC vs NGP
+gridding, inclination and position-angle sweeps (with and without the
+gas-stellar offset), resolution and SNR grids, and vertical-extent
+measurements versus inclination. These check that 3D rotations preserve
+disk thickness, that observables vary physically with viewing angle, that
+CIC gridding conserves flux, and that the gas-stellar offset is preserved
+or removed as requested.
 
 ---
 
@@ -278,8 +293,11 @@ change to a frozen table needs a stated measurement and rule.
 
 ### Run full test suite
 ```bash
-make test                  # All tests with verbose output
-make test-fast             # Stop on first failure
+make test-basic            # Fast tests, no data downloads needed (start here)
+make test                  # Fast tests (excludes slow, TNG diagnostics, grism validation, cosmohub, roman_ensemble)
+make test-fast             # Same marker filter as `make test`, plus -x (stop at first failure)
+make test-extended         # Everything except TNG diagnostics, grism validation, cosmohub
+make test-roman-ensemble   # Ensemble tooling tier
 make test-coverage         # With coverage report
 ```
 

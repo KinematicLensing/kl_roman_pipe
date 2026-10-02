@@ -18,7 +18,7 @@ Architecture and implementation reference for the MCMC sampling infrastructure. 
 | `emcee.py` | `EmceeSampler` -- ensemble MCMC (gradient-free) |
 | `nautilus.py` | `NautilusSampler` -- neural nested sampling |
 | `blackjax.py` | `BlackJAXSampler` -- JAX-native HMC/NUTS |
-| `numpyro.py` | `NumpyroSampler` -- NUTS with Z-score reparam (RECOMMENDED) |
+| `numpyro.py` | `NumpyroSampler` -- NUTS; Laplace-preconditioned unconstrained coords in production, Z-score reparam when unpreconditioned (RECOMMENDED) |
 | `ultranest.py` | `UltraNestSampler` -- placeholder, NOT IMPLEMENTED |
 | `diagnostics.py` | Trace plots, corner plots, recovery plots, sampler comparison |
 
@@ -73,7 +73,7 @@ Sampled parameter order is always **sorted alphabetically** -- this is the canon
 
 ### Z-Score Reparameterization (NumPyro)
 
-The NumPyro backend samples in a standardized latent space where all parameters are O(1). For each parameter:
+Used only when `precondition` is unset. With `precondition='laplace'` (the production setting) the backend samples in `UnconstrainingTransform` coordinates with the MAP-Hessian Laplace metric as the initial dense mass matrix instead. Without preconditioning the NumPyro backend samples in a standardized latent space where all parameters are O(1). For each parameter:
 
 ```
 z ~ Normal(0, 1)           # latent variable
@@ -238,6 +238,23 @@ coordinates) replaces the Laplace metric as the kernel's initial metric -- e.g.
 donating a previous same-fit run's warmup-adapted matrix
 (`diagnostics['adapted_inverse_mass_matrix']`, recorded with
 `precondition_adapt_mass=True`) to an escalation rerun.
+
+The preconditioner is assembled by `kl_pipe/sampling/initialization.py`:
+`Initializer(task, InitConfig(), seed).run()` gives the starts, MAP, metric,
+preconditioner and summary columns in one `InitResult`; the pieces (start
+proposals incl. image-moment starts, multi-start MAP finder with basin
+clustering and Newton polish, `EigenFloor` rules, chain initial points) stay
+public. See `docs/fit_initialization.md` for the user pathway and the
+provenance of the defaults.
+
+A completed preconditioned run keeps its warm state: `sampler.continue_sampling(n)`
+draws `n` more per chain from the final position, step size and metric with no
+warmup and returns the union of all draws so far (chain-major; r-hat/ESS on the
+union; per-draw diagnostics concatenated; `metadata['continuations']` counts the
+calls). Repeated calls extend the same chains; same-size calls reuse one MCMC
+object. This is how a marginal run (r-hat 1.05-1.2, no divergences) is cheaply
+brought over a convergence gate: draw a block, check, repeat. Chains in
+different basins (r-hat well above 1.2) need a fresh start, not more draws.
 
 ---
 

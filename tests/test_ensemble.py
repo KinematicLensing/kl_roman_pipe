@@ -387,9 +387,12 @@ class TestScene:
         )
         priors = scene_priors(truth, canonical_q, dev_spec)
 
-        # drawn params carry their generating distribution
-        assert isinstance(priors.get_prior('theta_int'), Uniform)
-        assert priors.get_prior('theta_int').bounds == (0.0, np.pi)
+        # position angle: full-circle fit prior (both rotation directions)
+        from kl_pipe.priors import CircularUniform
+
+        th = priors.get_prior('theta_int')
+        assert isinstance(th, CircularUniform)
+        assert np.isclose(th.period, 2 * np.pi) and th.bounds == (None, None)
         vc = priors.get_prior('vel.vcirc')
         assert isinstance(vc, LogNormal)
         assert np.isclose(vc.median, 200.0)
@@ -503,6 +506,30 @@ class TestExpander:
         assert len(manifest) == 4
         # snapshot, not live registry: hash matches the copied file
         assert config.content_hash == record['observation_config_hash']
+        # resolved spec: every fit knob written out; reload is identical
+        resolved_path = run_dir / 'provenance' / 'ensemble_spec_resolved.yaml'
+        resolved = yaml.safe_load(resolved_path.read_text())
+        raw = yaml.safe_load(Path(DEV_SPEC).read_text())
+        for key in (
+            'pa_prior',
+            'eig_floor_mode',
+            'map_bounded',
+            'chain_init',
+            'hessian_method',
+            'max_tree_depth',
+        ):
+            assert key not in raw['fit'], f"{key} set in DEV_SPEC; pick another"
+            assert key in resolved['fit']
+        assert resolved['fit']['escalation']['continue_block'] == 300
+        assert resolved['model']['render']['line_window_mode'] == 'global'
+        assert EnsembleSpec.from_yaml(resolved_path) == spec
+        assert record['resolved_spec_hash'] != record['spec_hash']
+        # the reload reads the resolved spec, so an edited default in the
+        # original file does not leak into it
+        assert spec == EnsembleSpec.from_yaml(resolved_path)
+        resolved_path.unlink()
+        with pytest.warns(UserWarning, match='resolved'):
+            load_run(run_dir)
 
     def test_expand_refuses_overwrite(self, tmp_path):
         expand(DEV_SPEC, REGISTRY, tmp_path / 'runs')
@@ -658,6 +685,31 @@ class TestCollate:
         assert desc['g1']['scale'] == dev_spec.shear_fit_prior_sigma
         # a truth-pinned param is recorded as fixed
         assert desc['z']['dist'] == 'fixed'
+
+    def test_scene_priors_flat_shear_option(self, dev_spec, canonical_q):
+        import dataclasses
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        flat = dataclasses.replace(
+            dev_spec, shear_fit_prior_type='uniform', shear_fit_prior_halfwidth=0.3
+        )
+        desc = scene_priors(truth, canonical_q, flat).describe()
+        for g in ('g1', 'g2'):
+            assert desc[g]['dist'] == 'uniform'
+            assert desc[g]['low'] == -0.3 and desc[g]['high'] == 0.3
+        bad = dataclasses.replace(dev_spec, shear_fit_prior_type='boxcar')
+        with pytest.raises(ValueError, match="shear_prior_type"):
+            scene_priors(truth, canonical_q, bad)
 
     def test_is_catastrophic_thresholds(self):
         from kl_pipe.ensemble.collate import (
@@ -845,6 +897,71 @@ def test_grism_noise_is_line_normalized(dev_spec, canonical_q):
 
 
 @pytest.mark.slow
+def test_donor_mass_matrix_symmetrizes_working_precision_roundoff():
+    """A float32 warmup-adapted metric carries ~1e-7 relative asymmetry; the
+    donor must come back exactly symmetric in float64 (so the sampler config's
+    fp64 symmetry check accepts it) and pooled over chains. Asymmetry beyond
+    roundoff is refused."""
+    from kl_pipe.ensemble.worker import _donor_mass_matrix
+
+    rng = np.random.default_rng(3)
+    A = rng.normal(size=(5, 5))
+    base = A @ A.T + 5.0 * np.eye(5)
+    noise = 3e-7 * rng.normal(size=(2, 5, 5)) * np.abs(base).max()
+    stacked = (base[None] + noise).astype(np.float32)
+    assert np.abs(stacked[0] - stacked[0].T).max() > 1e-10 * np.abs(base).max()
+
+    donor = _donor_mass_matrix({'adapted_inverse_mass_matrix': stacked})
+    assert donor.dtype == np.float64
+    np.testing.assert_array_equal(donor, donor.T)
+    # pooled donor recovers the base to the injected noise level
+    np.testing.assert_allclose(donor, base, rtol=0.0, atol=1e-6 * np.abs(base).max())
+
+    bad = base.copy()
+    bad[0, 1] += 1e-2 * np.abs(base).max()
+    with pytest.raises(RuntimeError, match='asymmetric beyond'):
+        _donor_mass_matrix({'adapted_inverse_mass_matrix': bad})
+    with pytest.raises(RuntimeError, match='none found'):
+        _donor_mass_matrix({})
+
+
+def test_hessian_method_spec_knob(dev_spec):
+    import dataclasses
+
+    assert dev_spec.hessian_method == 'fd'
+    assert dataclasses.replace(dev_spec, hessian_method='ad').hessian_method == 'ad'
+    with pytest.raises(ValueError, match="hessian_method"):
+        dataclasses.replace(dev_spec, hessian_method='bfgs')
+
+
+def test_local_window_spec_knob_reaches_fit_obs_only(dev_spec, canonical_q):
+    """model.render.line_window_mode switches the FIT observations' deposit
+    window; the mock data vector stays on the global window (bit-identical)."""
+    import dataclasses
+
+    truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+    truth.update(
+        {
+            'cosi': 0.5,
+            'theta_int': 0.6,
+            'g1': 0.02,
+            'g2': -0.01,
+            'vel.vcirc': 200.0,
+            'z': 1.2,
+        }
+    )
+    local_spec = dataclasses.replace(dev_spec, render_line_window_mode='local')
+    kw = dict(band_snrs={b: 100.0 for b in canonical_q.bands}, line_snr=40.0)
+    inp_g = build_fit_inputs(truth, 12345, dev_spec, canonical_q, **kw)
+    inp_l = build_fit_inputs(truth, 12345, local_spec, canonical_q, **kw)
+    for key, obs_l in inp_l.grism_obs.items():
+        obs_g = inp_g.grism_obs[key]
+        assert obs_l.line_window_mode == 'local' and obs_g.line_window_mode == 'global'
+        np.testing.assert_array_equal(np.asarray(obs_l.data), np.asarray(obs_g.data))
+    with pytest.raises(ValueError, match="line_window_mode"):
+        dataclasses.replace(dev_spec, render_line_window_mode='nearest')
+
+
 def test_shear_information_increases_with_line_snr():
     """Data-only galaxy-frame shear widths (sigma_g+, sigma_gx) strictly
     decrease as emission-line SNR rises: the line-SNR knob controls the
@@ -972,8 +1089,11 @@ def test_shear_information_increases_with_line_snr():
 
 class TestPAStratifiedStarts:
     def test_grid_covers_prior_range(self, dev_spec, canonical_q):
+        import dataclasses
+
         from kl_pipe.ensemble.worker import _pa_stratified_starts
 
+        dev_spec = dataclasses.replace(dev_spec, pa_fit_prior='half_turn')
         truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
         truth.update(
             {
@@ -1004,6 +1124,17 @@ class TestPAStratifiedStarts:
         d['fit']['n_map_starts'] = 8
         spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
         assert spec.n_map_starts == 8
+
+    def test_max_tree_depth_spec_knob(self, tmp_path):
+        d = _spec_dict()
+        assert EnsembleSpec.from_yaml(_write_spec(tmp_path, d)).max_tree_depth == 10
+        d['fit']['max_tree_depth'] = 8
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.max_tree_depth == 8
+        for bad in (0, 13, 8.0):
+            d['fit']['max_tree_depth'] = bad
+            with pytest.raises(ValueError, match='max_tree_depth'):
+                EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
 
 
 class TestSlurmEmission:
@@ -1062,6 +1193,29 @@ def _write_fake_results(run_dir):
             summary[f'post.{p}.mean'] = row[f'truth.{p}'] + rng.normal(0, std)
             summary[f'post.{p}.std'] = std
             summary[f'post.{p}.median'] = summary[f'post.{p}.mean']
+            # gaussian central intervals about the median and the matching rank
+            med = summary[f'post.{p}.median']
+            for label, z in (
+                ('q025', -1.96),
+                ('q16', -1.0),
+                ('q84', 1.0),
+                ('q975', 1.96),
+            ):
+                summary[f'post.{p}.{label}'] = med + z * std
+            from scipy.stats import norm
+
+            summary[f'truth_rank.{p}'] = float(
+                norm.cdf((row[f'truth.{p}'] - med) / std)
+            )
+        summary.update(
+            {
+                'flag_gate': bool(broken),
+                'flag_map_dev': False,
+                'flag_chi2_excess': bool(broken),
+                'flag_rotation_ambiguous': False,
+                'n_flags': 2 if broken else 0,
+            }
+        )
         pd.DataFrame([summary]).to_parquet(
             run_dir / 'results' / f"{row['fit_id']}.parquet", index=False
         )
@@ -1205,3 +1359,564 @@ class TestDiagnostics:
         assert 'pull.g_plus' in pulls.columns
         assert 'pull.g_plus_truth_pa' in pulls.columns
         assert np.isfinite(pulls['pull.g_plus_truth_pa']).all()
+
+
+# ==============================================================================
+# Full-circle position-angle fit prior
+# ==============================================================================
+
+
+class TestPAFitPrior:
+    def test_spec_knob_default_and_validation(self, dev_spec, tmp_path):
+        import dataclasses
+
+        assert dev_spec.pa_fit_prior == 'full_circle'
+        d = _spec_dict()
+        d['fit']['pa_prior'] = 'half_turn'
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.pa_fit_prior == 'half_turn'
+        with pytest.raises(ValueError, match="pa_prior"):
+            dataclasses.replace(dev_spec, pa_fit_prior='wrapped')
+
+    def test_scene_prior_full_circle(self, dev_spec, canonical_q):
+        import dataclasses
+
+        from kl_pipe.priors import CircularUniform
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        base = scene_priors(
+            truth, canonical_q, dataclasses.replace(dev_spec, pa_fit_prior='half_turn')
+        )
+        assert base.get_prior('theta_int').bounds == (0.0, np.pi)
+        full = scene_priors(truth, canonical_q, dev_spec)
+        th = full.get_prior('theta_int')
+        assert isinstance(th, CircularUniform)
+        assert np.isclose(th.period, 2 * np.pi)
+        assert th.bounds == (None, None)
+        # every other prior is untouched
+        base_d, full_d = base.describe(), full.describe()
+        assert set(base_d) == set(full_d)
+        for name in base_d:
+            if name != 'theta_int':
+                assert base_d[name] == full_d[name], name
+        assert full_d['theta_int']['dist'] == 'circular_uniform'
+
+    def test_cosi_fit_prior_range_knob(self, dev_spec, canonical_q, tmp_path):
+        import dataclasses
+
+        assert dev_spec.cosi_fit_prior_range is None
+        gen = dev_spec.generating_cosi_range()
+        assert gen is not None
+        d = _spec_dict()
+        d['fit']['cosi_prior_range'] = [0.02, 1.0]
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.cosi_fit_prior_range == (0.02, 1.0)
+        assert spec.resolve_defaults(d)['fit']['cosi_prior_range'] == [0.02, 1.0]
+        for bad in ((0.0, 1.0), (0.5, 0.5), (0.02, 1.1)):
+            with pytest.raises(ValueError, match="0 < lo < hi <= 1"):
+                dataclasses.replace(dev_spec, cosi_fit_prior_range=bad)
+        # must contain the generating range
+        with pytest.raises(ValueError, match="contain the generating"):
+            dataclasses.replace(
+                dev_spec, cosi_fit_prior_range=(gen[0] + 0.01, min(1.0, gen[1] + 0.02))
+            )
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.6,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 210.0,
+                'z': 1.3,
+            }
+        )
+        base = scene_priors(truth, canonical_q, dev_spec)
+        assert base.get_prior('cosi').bounds == gen
+        wide = scene_priors(truth, canonical_q, spec)
+        assert wide.get_prior('cosi').bounds == (0.02, 1.0)
+        base_d, wide_d = base.describe(), wide.describe()
+        assert set(base_d) == set(wide_d)
+        for name in base_d:
+            if name != 'cosi':
+                assert base_d[name] == wide_d[name], name
+
+    def test_pa_starts_cover_full_circle(self, dev_spec, canonical_q):
+        import dataclasses
+
+        from kl_pipe.ensemble.worker import _pa_stratified_starts
+
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 1.0,
+                'g1': 0.05,
+                'g2': 0.05,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        priors = scene_priors(truth, canonical_q, dev_spec)
+        starts = _pa_stratified_starts(priors, seed=7, n_pa=4)
+        names = list(priors.sampled_names)
+        thetas = starts[:, names.index('theta_int')]
+        # 4 starts per half turn: every isophote orientation in both rotation directions
+        assert starts.shape[0] == 8
+        assert np.allclose(thetas, (np.arange(8) + 0.5) * np.pi / 4)
+        assert np.allclose(np.sort(np.mod(thetas[4:], np.pi)), np.sort(thetas[:4]))
+        for i, name in enumerate(names):
+            lo, hi = priors.get_prior(name).bounds
+            if lo is not None:
+                assert (starts[:, i] >= lo).all()
+            if hi is not None:
+                assert (starts[:, i] <= hi).all()
+
+    def test_pa_flip_margin(self):
+        from kl_pipe.ensemble.worker import _pa_flip_margin
+        from kl_pipe.priors import CircularUniform, PriorDict
+        from kl_pipe.sampling.task import LaplacePreconditioner
+
+        names = ['cosi', 'theta_int']
+        circ = PriorDict({'cosi': Uniform(0.0, 1.0), 'theta_int': CircularUniform()})
+        pre = LaplacePreconditioner(
+            map_point=np.array([0.5, 0.2]),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=3,
+            condition_number=1.0,
+            start_map_points=np.array([[0.5, 0.25], [0.5, 3.4], [0.5, 3.0]]),
+            start_neg_logposts=np.array([10.0, 18.0, 15.0]),
+        )
+        # best counter-rotating start (theta within pi/2 of MAP + pi) is 15 vs MAP 10
+        assert np.isclose(_pa_flip_margin(pre, names, circ), 5.0)
+        # no start in the flipped basin
+        pre_none = LaplacePreconditioner(
+            map_point=np.array([0.5, 0.2]),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=2,
+            condition_number=1.0,
+            start_map_points=np.array([[0.5, 0.25], [0.5, 0.9]]),
+            start_neg_logposts=np.array([10.0, 12.0]),
+        )
+        assert _pa_flip_margin(pre_none, names, circ) == np.inf
+        # half-turn prior: margin undefined
+        half = PriorDict({'cosi': Uniform(0.0, 1.0), 'theta_int': Uniform(0.0, np.pi)})
+        assert np.isnan(_pa_flip_margin(pre, names, half))
+        # preconditioner without start records
+        bare = LaplacePreconditioner(
+            map_point=np.array([0.5, 0.2]),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=1,
+            condition_number=1.0,
+        )
+        assert np.isnan(_pa_flip_margin(bare, names, circ))
+
+
+# ==============================================================================
+# Fit-initialization toolkit knobs (fit.map_*, fit.eig_floor*, fit.chain_init)
+# ==============================================================================
+
+
+class TestInitializationSpecKnobs:
+    def test_defaults_are_the_robust_procedure(self, tmp_path):
+        # defaults = the cosmos25_bank32 A/B winners: bounded MAP + 8-step
+        # polish of 3 basins (988356), prior-unit floor 0.5 (988824), the two
+        # together (990891, the matched reference); moment starts stayed
+        # opt-in (did not change the basin reached) and chain_init map_basins
+        # was refuted on the legacy search (988826)
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, _spec_dict()))
+        assert spec.map_moment_starts is False
+        assert spec.map_bounded is True
+        assert spec.map_polish_steps == 8 and spec.map_polish_basins == 3
+        assert spec.eig_floor_mode == 'prior' and spec.eig_floor is None
+        assert spec.chain_init == 'map_jitter'
+        assert spec.chain_init_max_margin == 20.0
+        from kl_pipe.sampling.initialization import InitConfig
+
+        cfg = InitConfig.from_spec(spec)
+        assert cfg == InitConfig(n_map_starts=spec.n_map_starts)
+        assert cfg.floor.mode == 'prior' and cfg.floor.value == 0.5
+
+    def test_knobs_parse(self, tmp_path):
+        d = _spec_dict()
+        d['fit'].update(
+            {
+                'map_moment_starts': True,
+                'map_bounded': True,
+                'map_polish_steps': 8,
+                'map_polish_basins': 3,
+                'eig_floor_mode': 'prior',
+                'eig_floor': 0.5,
+                'chain_init': 'map_basins',
+                'chain_init_max_margin': 10.0,
+            }
+        )
+        spec = EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+        assert spec.map_moment_starts and spec.map_bounded
+        assert spec.map_polish_steps == 8 and spec.map_polish_basins == 3
+        assert spec.eig_floor_mode == 'prior' and spec.eig_floor == 0.5
+        assert spec.chain_init == 'map_basins'
+        assert spec.chain_init_max_margin == 10.0
+
+    @pytest.mark.parametrize(
+        'key, bad',
+        [
+            ('eig_floor_mode', 'bogus'),
+            ('eig_floor', -1.0),
+            ('chain_init', 'bogus'),
+            ('chain_init_max_margin', 0.0),
+            ('map_moment_starts', 'yes'),
+            ('map_bounded', 1),
+            ('map_polish_steps', -1),
+            ('map_polish_basins', 0),
+            ('map_polish_steps', 2.0),
+        ],
+    )
+    def test_invalid_knobs_rejected(self, tmp_path, key, bad):
+        d = _spec_dict()
+        d['fit'][key] = bad
+        with pytest.raises(ValueError, match=key):
+            EnsembleSpec.from_yaml(_write_spec(tmp_path, d))
+
+
+class TestWorkerStartAssembly:
+    def _task_and_inputs(self, dev_spec, canonical_q):
+        truth = scene_truth_defaults(canonical_q, dev_spec.fixed)
+        truth.update(
+            {
+                'cosi': 0.5,
+                'theta_int': 1.0,
+                'g1': 0.02,
+                'g2': -0.01,
+                'vel.vcirc': 200.0,
+                'z': 1.2,
+            }
+        )
+        inputs = build_fit_inputs(
+            truth,
+            12345,
+            dev_spec,
+            canonical_q,
+            band_snrs={b: 100.0 for b in canonical_q.bands},
+            line_snr=40.0,
+        )
+        from kl_pipe.sampling import InferenceTask
+
+        task = InferenceTask.from_obs(
+            inputs.source,
+            inputs.priors,
+            image_obs=inputs.image_obs,
+            grism_obs=inputs.grism_obs,
+        )
+        return task, inputs, truth
+
+    def test_families_without_moments(self, dev_spec, canonical_q):
+        from kl_pipe.sampling.initialization import InitConfig, Initializer
+
+        task, inputs, _ = self._task_and_inputs(dev_spec, canonical_q)
+        init = Initializer(
+            task, InitConfig.from_spec(dev_spec), seed=7, image_obs=inputs.image_obs
+        )
+        starts = init.starts()
+        fam = starts.families()
+        assert fam['prior'] == dev_spec.n_map_starts
+        assert fam['pa_stratified'] == 2 * init.config.n_pa_starts
+        assert 'moments' not in fam
+        assert init.moment_starts_ok is None
+
+    def test_moment_starts_land_near_truth(self, dev_spec, canonical_q):
+        """Moment starts read the truth off the (SNR 100) mock stamps: size
+        within 25%, centroid within a pixel, both PA directions covered."""
+        from kl_pipe.sampling.initialization import InitConfig, Initializer
+
+        task, inputs, truth = self._task_and_inputs(dev_spec, canonical_q)
+        init = Initializer(
+            task,
+            InitConfig.from_spec(dev_spec, map_moment_starts=True),
+            seed=7,
+            image_obs=inputs.image_obs,
+        )
+        starts = init.starts()
+        assert init.moment_starts_ok is True
+        assert starts.families()['moments'] == 2
+        names = list(task.sampled_names)
+        rows = starts.points[[i for i, l in enumerate(starts.labels) if l == 'moments']]
+        band = canonical_q.bands[0]
+        pix = canonical_q.pixel_scale_arcsec
+        assert abs(rows[0, names.index(f'{band}.x0')] - truth[f'{band}.x0']) < pix
+        assert abs(rows[0, names.index(f'{band}.y0')] - truth[f'{band}.y0']) < pix
+        assert (
+            abs(rows[0, names.index(f'{band}.rscale')] / truth[f'{band}.rscale'] - 1.0)
+            < 0.25
+        )
+        th = rows[:, names.index('theta_int')]
+        assert abs(abs(th[0] - th[1]) - np.pi) < 1e-9
+
+    def test_git_commit_label_format(self):
+        import re
+
+        from kl_pipe.ensemble.expander import git_commit_label
+
+        label = git_commit_label()
+        assert label == 'unknown' or re.fullmatch(r'[0-9a-f]{9}(-dirty)?', label)
+
+    def test_initialization_columns(self):
+        from kl_pipe.sampling.initialization import initialization_columns
+        from kl_pipe.sampling.task import LaplacePreconditioner
+
+        pre = LaplacePreconditioner(
+            map_point=np.zeros(2),
+            inverse_mass_matrix=np.eye(2),
+            n_starts_converged=3,
+            condition_number=1.0,
+            start_labels=['prior', 'moments', 'prior'],
+            start_neg_logposts=np.array([5.0, 1.0, 9.0]),
+            basin_points=np.zeros((2, 2)),
+            basin_neg_logposts=np.array([1.0, 5.0]),
+            n_floored_eigenvalues=2,
+            eig_floor_mode='prior',
+            map_grad_norm=1e-4,
+            map_min_eigenvalue=0.7,
+            polish_gain=3.5,
+        )
+        summary = initialization_columns(pre, True, 'map_basins')
+        assert summary['map_n_basins'] == 2
+        assert summary['map_basin_margin'] == 4.0
+        assert summary['map_winning_start'] == 'moments'
+        assert summary['map_moment_starts_ok'] == 'yes'
+        assert summary['precond_n_floored_eigenvalues'] == 2
+        assert summary['precond_eig_floor_mode'] == 'prior'
+        assert summary['map_grad_norm'] == 1e-4
+        assert summary['map_polish_gain'] == 3.5
+        assert summary['chain_init'] == 'map_basins'
+        pre.basin_neg_logposts = np.array([1.0])
+        single = initialization_columns(pre, None, 'map_jitter')
+        assert single['map_basin_margin'] == np.inf
+        assert single['map_moment_starts_ok'] == 'n/a'
+        assert single['chain_init'] == 'map_jitter'
+        # a reused preconditioner without records (escalation retry path)
+        bare = initialization_columns(None, None, 'map_jitter')
+        assert bare['map_n_basins'] == -1 and bare['map_winning_start'] == ''
+        assert np.isnan(bare['map_basin_margin'])
+
+
+# ==============================================================================
+# Quality columns: intervals, ranks, flags, coverage, timeline
+# ==============================================================================
+
+
+class TestQualityColumns:
+    def test_interval_and_rank_columns_exact(self):
+        from kl_pipe.ensemble.quality import posterior_interval_columns
+
+        n = 1001
+        grid = np.linspace(0.0, 1.0, n)
+        # theta straddles the 2 pi cut: half the draws just below, half just above
+        theta = np.mod(6.2 + 0.2 * grid, 2 * np.pi)
+        samples = np.column_stack([grid, theta])
+        cols = posterior_interval_columns(
+            samples, ['a', 'theta_int'], truth={'a': 0.3, 'theta_int': 6.25}
+        )
+        # quantiles of an evenly spaced grid are the quantile levels themselves
+        assert cols['post.a.q025'] == pytest.approx(0.025)
+        assert cols['post.a.q16'] == pytest.approx(0.16)
+        assert cols['post.a.q84'] == pytest.approx(0.84)
+        assert cols['post.a.q975'] == pytest.approx(0.975)
+        assert cols['truth_rank.a'] == pytest.approx(300 / n)
+        # the periodic parameter is read on one contiguous branch whose median
+        # (6.3 mod 2 pi) lies in [0, 2 pi): the lower half sits below zero
+        assert cols['post.theta_int.q16'] == pytest.approx(6.2 + 0.2 * 0.16 - 2 * np.pi)
+        assert cols['post.theta_int.q84'] == pytest.approx(6.2 + 0.2 * 0.84 - 2 * np.pi)
+        assert cols['truth_rank.theta_int'] == pytest.approx(250 / n)
+        # the same truth on another branch gives the same rank
+        other = posterior_interval_columns(
+            samples, ['a', 'theta_int'], truth={'theta_int': 6.25 - 2 * np.pi}
+        )
+        assert other['truth_rank.theta_int'] == pytest.approx(250 / n)
+        assert 'truth_rank.a' not in other
+        with pytest.raises(ValueError, match='n_draws'):
+            posterior_interval_columns(samples[:, :1], ['a', 'b'])
+
+    def test_quality_flags(self):
+        from kl_pipe.ensemble.quality import FLAG_COLUMNS, quality_flags
+
+        healthy = {
+            'max_rhat': 1.02,
+            'min_ess': 180.0,
+            'map_postmean_max_dev': 1.1,
+            'postmean_chi2': 6100.0,
+            'n_data': 6000,
+            'map_pa_flip_margin': 17.0,
+        }
+        f = quality_flags(healthy, rhat_max=1.05, ess_min=50.0)
+        assert all(f[c] is False for c in FLAG_COLUMNS)
+        assert f['n_flags'] == 0
+        # sqrt(2 * 6000) = 109.5; 5 sigma = 548 above n_data fires the chi2 flag
+        cases = {
+            'flag_gate': {'max_rhat': 1.06},
+            'flag_map_dev': {'map_postmean_max_dev': 24.7},
+            'flag_chi2_excess': {'postmean_chi2': 6000.0 + 600.0},
+            'flag_rotation_ambiguous': {'map_pa_flip_margin': 0.14},
+        }
+        for flag, change in cases.items():
+            f = quality_flags({**healthy, **change}, rhat_max=1.05, ess_min=50.0)
+            assert f[flag] is True, flag
+            assert f['n_flags'] == 1, flag
+            assert all(f[c] is False for c in FLAG_COLUMNS if c != flag), flag
+        # ESS gate and a chi2 excess just below 5 sigma
+        f = quality_flags({**healthy, 'min_ess': 9.0}, rhat_max=1.05, ess_min=50.0)
+        assert f['flag_gate'] is True
+        f = quality_flags(
+            {**healthy, 'postmean_chi2': 6000.0 + 500.0}, rhat_max=1.05, ess_min=50.0
+        )
+        assert f['flag_chi2_excess'] is False
+        # absent or non-finite evidence never flags
+        f = quality_flags({'max_rhat': 1.0, 'min_ess': 500.0}, 1.05, 50.0)
+        assert f['n_flags'] == 0
+        f = quality_flags(
+            {**healthy, 'map_pa_flip_margin': np.inf, 'map_postmean_max_dev': np.nan},
+            1.05,
+            50.0,
+        )
+        assert f['n_flags'] == 0
+
+    def test_coverage_table_exact(self):
+        from kl_pipe.ensemble.diagnostics import coverage_table
+
+        n = 10
+        t = pd.DataFrame(
+            {
+                'fit_id': [f'f{i}' for i in range(n)],
+                'cosi_bin': [0] * 5 + [1] * 5,
+                'truth.cosi': np.linspace(0.1, 0.9, n),
+                'post.a.median': 0.0,
+                'post.a.q16': -1.0,
+                'post.a.q84': 1.0,
+                'post.a.q025': -2.0,
+                'post.a.q975': 2.0,
+                # 6 inside the 68% interval, 2 more inside 95%, 2 outside
+                'truth.a': [0.0, 0.5, -0.5, 1.0, -1.0, 0.9, 1.5, -1.5, 3.0, -3.0],
+                # periodic: median just above 0, truth just below 2 pi
+                'post.theta_int.median': 0.1,
+                'post.theta_int.q16': 0.1 - 0.2,
+                'post.theta_int.q84': 0.1 + 0.2,
+                'post.theta_int.q025': 0.1 - 0.4,
+                'post.theta_int.q975': 0.1 + 0.4,
+                'truth.theta_int': [2 * np.pi - 0.05] * 5 + [0.1 + np.pi] * 5,
+            }
+        )
+        cov = coverage_table(t, params=('a', 'theta_int', 'g1'))
+        assert set(cov['param']) == {'a', 'theta_int'}  # g1 has no columns
+        a_all = cov[(cov['param'] == 'a') & (cov['axis_step'] == -1)].iloc[0]
+        assert a_all['n_fits'] == n
+        assert a_all['frac68'] == pytest.approx(0.6)
+        assert a_all['frac95'] == pytest.approx(0.8)
+        assert a_all['err68'] == pytest.approx(np.sqrt(0.6 * 0.4 / n))
+        a_bin0 = cov[(cov['param'] == 'a') & (cov['axis_step'] == 0)].iloc[0]
+        assert a_bin0['frac68'] == pytest.approx(1.0)
+        assert a_bin0['err68'] == 0.0
+        th = cov[(cov['param'] == 'theta_int') & (cov['axis_step'] == -1)].iloc[0]
+        # first bin: wrapped residual -0.15, inside both intervals; second bin:
+        # the counter-rotating truth (pi away) is outside both
+        assert th['frac68'] == pytest.approx(0.5)
+        assert th['frac95'] == pytest.approx(0.5)
+
+    def test_flags_table(self):
+        from kl_pipe.ensemble.diagnostics import flags_table
+
+        t = pd.DataFrame(
+            {
+                'fit_id': ['a', 'b', 'c'],
+                'truth.cosi': [0.1, 0.5, 0.9],
+                'flag_gate': [False, True, False],
+                'flag_map_dev': [False, False, False],
+                'flag_chi2_excess': [False, True, False],
+                'flag_rotation_ambiguous': [True, False, False],
+            }
+        )
+        f = flags_table(t)
+        assert f['fit_id'].tolist() == ['a', 'b']
+        assert f['flags'].tolist() == ['rotation_ambiguous', 'gate,chi2_excess']
+        assert len(flags_table(t[['fit_id', 'truth.cosi']])) == 0
+
+    def test_draws_per_fit(self, dev_spec):
+        import dataclasses
+
+        from kl_pipe.ensemble.quality import draws_per_fit
+        from kl_pipe.ensemble.spec import EscalationSpec
+
+        spec = dataclasses.replace(
+            dev_spec,
+            n_chains=4,
+            n_samples=300,
+            escalation=EscalationSpec(enabled=True, n_samples=1000, continue_block=300),
+        )
+        t = pd.DataFrame(
+            {
+                'escalation_mode': ['', 'restart', 'continue', None],
+                'escalation_n_blocks': [0, 0, 2, 0],
+            }
+        )
+        d = draws_per_fit(t, spec)
+        assert d.tolist() == [1200.0, 4000.0, 1200.0 + 2 * 1200.0, 1200.0]
+        assert draws_per_fit(pd.DataFrame({'x': [1, 2]}), spec).tolist() == [
+            1200.0,
+            1200.0,
+        ]
+
+    def test_worker_timeline(self, run_dir, tmp_path):
+        from kl_pipe.ensemble.diagnostics import (
+            plot_worker_timeline,
+            worker_timeline_table,
+        )
+
+        _, _, manifest = load_run(run_dir)
+        ids = manifest['fit_id'].tolist()
+        assert plot_worker_timeline(run_dir, tmp_path) is None  # nothing claimed
+        ledger.try_claim(run_dir, ids[0])
+        ledger.mark_done(run_dir, ids[0])
+        ledger.try_claim(run_dir, ids[1])
+        ledger.mark_done(run_dir, ids[1])
+        ledger.try_claim(run_dir, ids[2])  # claimed, never finished: omitted
+        tl = worker_timeline_table(run_dir)
+        assert sorted(tl['fit_id']) == sorted(ids[:2])
+        assert (tl['end'] >= tl['start']).all()
+        assert tl['worker'].nunique() == 1  # one process claimed both
+        path = plot_worker_timeline(run_dir, tmp_path)
+        assert path is not None and path.exists() and path.stat().st_size > 0
+
+    def test_rank_hist_and_coverage_from_fake_results(self, run_dir, tmp_path):
+        from kl_pipe.ensemble.collate import analysis_table, collate_results
+        from kl_pipe.ensemble.diagnostics import (
+            augment_galaxy_frame,
+            coverage_table,
+            flags_table,
+            plot_quality_vs_cosi,
+            plot_rank_hist,
+        )
+        from kl_pipe.ensemble.quality import draws_per_fit
+
+        _write_fake_results(run_dir)
+        collate_results(run_dir)
+        spec, _, _ = load_run(run_dir)
+        table = augment_galaxy_frame(run_dir, analysis_table(run_dir))
+        cov = coverage_table(table)
+        assert set(cov['param']) == {'cosi', 'theta_int', 'g1', 'g2', 'vel.vcirc'}
+        assert (cov['n_fits'] <= 4).all()
+        assert cov['frac68'].between(0, 1).all()
+        flags = flags_table(table)
+        assert len(flags) == 1 and flags['flags'].iloc[0] == 'gate,chi2_excess'
+        paths = plot_rank_hist(table, tmp_path)
+        assert len(paths) == 5 and all(p.exists() for p in paths)
+        out = plot_quality_vs_cosi(table, tmp_path, draws=draws_per_fit(table, spec))
+        assert out.exists()

@@ -603,11 +603,25 @@ def test_delta_function_psf_is_identity(image_pars, test_image):
 
 
 def test_kernel_normalization(image_pars):
-    """All PSF kernels sum to 1."""
+    """The padded kernel carries exactly the unit-normalized PSF flux that can
+    reach the stamp: the full drawn kernel's sum inside the half-width N - 1
+    window (1 when the kernel fits inside the image, less for wide wings)."""
+    n_row, n_col = image_pars.Nrow, image_pars.Ncol
     for psf_obj in PSF_TYPES:
         kernel_shifted, _ = gsobj_to_kernel(psf_obj, image_pars)
+        full = _render_psf_kernel(psf_obj, image_pars.pixel_scale)
+        center_r, center_c = full.shape[0] // 2, full.shape[1] // 2
+        half_r = min(center_r, n_row - 1)
+        half_c = min(center_c, n_col - 1)
+        reachable = full[
+            center_r - half_r : center_r + half_r + 1,
+            center_c - half_c : center_c + half_c + 1,
+        ].sum()
         total = np.sum(kernel_shifted)
-        np.testing.assert_allclose(total, 1.0, atol=1e-10, err_msg=str(psf_obj))
+        assert total <= 1.0 + 1e-12, str(psf_obj)
+        np.testing.assert_allclose(total, reachable, atol=1e-12, err_msg=str(psf_obj))
+        if full.shape[0] <= n_row and full.shape[1] <= n_col:
+            np.testing.assert_allclose(total, 1.0, atol=1e-10, err_msg=str(psf_obj))
 
 
 def test_flux_conservation(image_pars, compact_test_image, psf_data):

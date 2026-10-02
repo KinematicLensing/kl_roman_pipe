@@ -1,0 +1,163 @@
+# Roll-angle-forecast grid: one fiducial galaxy (Xu, Table I) on the forecast's
+# flux x image-SNR x cos i grid through this pipeline, HLWAS rotac rolls and
+# the Roman PSF, one broadband image (F158), matched-filter noise at the
+# published depth. Fiducial: vcirc 251.5 km/s, turnover 0.05", broadband and
+# Halpha half-light radii 0.3" (scale length 0.17875"), line width 0.175 nm
+# rest (80 km/s), zero shear, theta_int pi/2, z 1.0 (assumed; the forecast
+# does not state it), thickness h/R 0.1 (GalSim InclinedExponential default;
+# the forecast model's value is unconfirmed). Line fluxes map to the per-pass
+# label through the published-depth compactness of the galaxy at its cos i.
+# Four noise realizations per cell. Image SNR for this spec: 10.
+# Arm _honest: the _j fit with the directions that carry shape noise freed.
+# Disk thickness drawn per galaxy from LN(0.25, 0.14 dex) and sampled with
+# that distribution as prior; systemic velocity sampled on a 125 km/s prior;
+# sizes on lognormal population priors about the fiducial (0.16 dex disk,
+# 0.2 dex line, 0.3 dex turnover). Centroids and continuum stay fixed (they
+# cost sampler time, not width). Prediction: 1.2-2.5x wider shear at the
+# bright end where the thickness leak matters, unchanged at the faint end.
+run:
+  name: rollgrid_honest_isnr10
+  version: 1
+  description: forecast grid arm honest, image SNR 10, 5 line fluxes x 5 cos i x 4 noise reps
+  seed: 20261001
+  measurement: sigma_eps_vs_line_snr
+  noise_reps: 4
+population:
+  type: sampled
+  stratify:
+    line_flux_cgs:
+      values:
+      - 1.5e-16
+      - 7.622e-16
+      - 3.873e-15
+      - 1.968e-14
+      - 1.0e-13
+  n_gal_per_bin: 5
+  draw:
+    cosi:
+      dist: grid
+      values:
+      - 0.1
+      - 0.3
+      - 0.5
+      - 0.7
+      - 0.9
+    theta_int:
+      dist: grid
+      values:
+      - 1.5707963268
+    vcirc:
+      dist: lognormal_tf
+      center_kms: 251.5
+      sigma_tf_dex: 0.0749
+      truth_sigma_tf_dex: 0.0
+    z:
+      dist: grid
+      values:
+      - 1.0
+    h_over_r:
+      dist: lognormal
+      median: 0.25
+      sigma_dex: 0.14
+  fixed:
+    x0: 0.0
+    y0: 0.0
+    vel.v0: 0.0
+    vel.rscale: 0.05
+    F158.rscale: 0.17875
+    Halpha.rscale: 0.17875
+    Halpha.dispersion: 80.0
+    Halpha.cont.flux_per_nm: 0.0
+  shear:
+    scheme: fixed
+    g1: 0.0
+    g2: 0.0
+  ring:
+    enabled: false
+model:
+  render:
+    oversample: 3
+observation:
+  config: hlwas_medium_roman_rotac_rolls_f158
+  snr:
+    broadband: 10.0
+fit:
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
+  target_accept: 0.9
+  pin_z_to_truth: true
+  record_warmup: true
+  shear_prior_sigma: 0.3
+  cosi_prior_range:
+  - 0.001
+  - 0.999
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    mode: auto
+  pin_to_truth:
+  - x0
+  - y0
+  - Halpha.cont.flux_per_nm
+  prior_overrides:
+    vel.vcirc:
+      dist: lognormal
+      median: 251.5
+      sigma_dex: 0.0749
+      clip_sigmas: 3.0
+    vel.rscale:
+      dist: lognormal
+      median: 0.05
+      sigma_dex: 0.3
+      clip_sigmas: 4.0
+    F158.rscale:
+      dist: lognormal
+      median: 0.17875
+      sigma_dex: 0.16
+      clip_sigmas: 4.0
+    Halpha.rscale:
+      dist: lognormal
+      median: 0.17875
+      sigma_dex: 0.2
+      clip_sigmas: 4.0
+    F158.flux:
+      dist: uniform_relative
+      low: 0.1
+      high: 10.0
+    Halpha.flux:
+      dist: uniform_relative
+      low: 0.1
+      high: 10.0
+    Halpha.dispersion:
+      dist: uniform
+      low: 19.6
+      high: 200.0
+    vel.v0:
+      dist: gaussian
+      loc: 0.0
+      scale: 125.0
+dispatch:
+  backend: local
+  mode: dynamic
+  claim_order: hard_first
+  workers_per_node: 8
+  target_task_walltime_min: 100
+  queue: gb
+  account: JPL-PUB
+  max_fit_walltime_min: 90
+output:
+  save_chains: all
+  save_mocks: subset

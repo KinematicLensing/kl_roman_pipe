@@ -1,0 +1,95 @@
+# Line-SNR sweep arm of census v2 at the Xu et al. 2023 TFR assumptions (0.049 dex,
+# no photometric-mass error): every galaxy's per-pass line SNR multiplied by 10
+# (mock noise only; broadband depth, selection and the line-flux prior stay at the
+# catalog values). 60 census galaxies stratified by cos i (20 each below 0.26,
+# 0.26-0.72, above 0.72), both ring members, same truths and noise seeds as
+# census v2 up to the vcirc nudge of the 0.049 dex scatter. Purpose: where the
+# kinematic channel turns on. Fisher at truth on census fits predicts vsini
+# widths 0.20 -> 0.14-0.23 (x3) -> 0.065-0.087 (x10) and corr(vcirc, cos i)
+# 0.23 -> 0.63 -> 0.89 face-on, ~0.2 at mid and edge-on at any depth.
+run:
+  name: cosmos25_census_v2_xu23_lsnr10x
+  version: 1
+  description: "census v2 line-SNR sweep, per-pass line SNR x10, Xu et al. 2023 TFR (0.049 dex), 60 stratified galaxies x ring pair"
+  seed: 20260728
+  measurement: shear_bias
+  noise_reps: 1
+
+population:
+  type: catalog
+  catalog:
+    kind: cosmos25
+    download: cosmos25_v1          # data/cosmos2025/private/<name>.parquet
+    data_dir: data/cosmos2025/private
+  preprocess:
+    flux_variant: as_delivered
+    h: 0.70                        # LePhare fiducial; masses already physical (adapter ignores)
+  selection:
+    z_range: [0.55, 1.9]
+    snr_line_total_min: 20.0
+    bulge_fraction_max: null
+    bulge_nsersic_range: null
+    min_r50_over_psf_fwhm: 1.0
+  sample:
+    n_galaxies: 200
+    replace: false
+    galaxy_ids: [6, 8, 12, 15, 17, 19, 25, 27, 29, 31, 34, 40, 43, 46, 50, 52, 55, 57, 59, 65, 69, 70, 74, 76, 80, 89, 93, 100, 101, 104, 106, 107, 109, 110, 118, 119, 121, 122, 126, 133, 134, 143, 144, 148, 149, 160, 162, 163, 165, 167, 171, 173, 178, 182, 191, 193, 194, 196, 198, 199]
+  paint:
+    bulge: false
+    # Ubler+2017 Table 2 TFR, inverted to logv|logM form
+    tfr: {logv0: 2.384, logm0: 10.50, slope: 3.60, scatter_dex: 0.049}  # census v2: 0.061 (Ubler+2017)
+    # Ubler+2019 Table 3 sigma0(z) = intercept + slope*z
+    sigma0: {intercept_kms: 21.1, slope_kms: 11.3, scatter_kms: 11.3, min_kms: 5.0}
+  orientation:
+    cosi_range: [0.05, 0.95]
+    ring: {members: 2}
+  shear:
+    sigma: 0.03
+    gmax: 0.1
+  priors:
+    logm_obs_scatter_dex: 0.0      # census v2: 0.25
+
+model:
+  render:
+    oversample: 3
+
+observation:
+  line_snr_scale: 10
+  config: hlwas_medium_roman
+
+fit:
+  sampler: numpyro
+  n_warmup: 200
+  n_samples: 300
+  n_chains: 4
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
+  target_accept: 0.9
+  pin_z_to_truth: true
+  escalation:
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    mode: auto
+
+dispatch:
+  backend: local
+  mode: dynamic
+  claim_order: hard_first
+  workers_per_node: 8
+  target_task_walltime_min: 240
+  queue: gb
+  account: JPL-PUB
+  max_fit_walltime_min: 90
+
+output:
+  save_chains: all
+  save_mocks: all

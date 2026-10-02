@@ -333,7 +333,7 @@ def matched_filter_compactness(
     cosi : np.ndarray
         Cosine of inclination (minor/major axis ratio of the thin disk).
     z : np.ndarray
-        Redshift; sets lambda_obs = 6562.8 * (1 + z) for the PSF proxy.
+        Redshift; sets lambda_obs = HALPHA_REST_A * (1 + z) for the PSF proxy.
 
     Returns
     -------

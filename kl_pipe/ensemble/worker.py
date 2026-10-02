@@ -22,17 +22,22 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 import traceback
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
+from kl_pipe import profiling
 from kl_pipe.ensemble import ledger
 from kl_pipe.ensemble.collate import is_catastrophic
-from kl_pipe.ensemble.expander import truth_from_row
+from kl_pipe.ensemble.expander import git_commit_label, truth_from_row
+from kl_pipe.ensemble.quality import posterior_interval_columns, quality_flags
 from kl_pipe.ensemble.mocks import FitInputs, build_fit_inputs
 from kl_pipe.ensemble.spec import EnsembleSpec, EscalationSpec, ObservationConfig
 
@@ -46,7 +51,7 @@ def _sampler_seed(noise_seed: int) -> int:
 
 
 def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
-    tmp = path.with_name(f'.tmp.{os.getpid()}.{path.name}')
+    tmp = path.with_name(f".tmp.{os.getpid()}.{path.name}")
     df.to_parquet(tmp, index=False)
     os.replace(tmp, path)
 
@@ -54,15 +59,16 @@ def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
 def _atomic_savez(path: Path, arrays: Dict[str, np.ndarray]) -> None:
     # tmp name must keep the .npz suffix LAST: np.savez appends '.npz' to any
     # filename that lacks it, which would break the atomic rename
-    tmp = path.with_name(f'.tmp.{os.getpid()}.{path.name}')
+    tmp = path.with_name(f".tmp.{os.getpid()}.{path.name}")
     np.savez_compressed(tmp, **arrays)
     os.replace(tmp, path)
 
 
 # PA basins are the known multimodality: every fit's MAP multi-start gets
-# this many extra starts with theta_int stratified across its prior range
+# this many extra starts with theta_int stratified across a half turn
 # (random prior draws can all land in the wrong basin, whose shape-shear-
-# compensated mode traps the sampler)
+# compensated mode traps the sampler); a full-circle PA prior doubles them so
+# both rotation directions are tried for every isophote orientation
 _N_PA_STRATIFIED_STARTS = 4
 
 # a fit whose chains come back broken (stuck wrong mode) gets ONE retry with
@@ -72,20 +78,42 @@ _MAX_ATTEMPTS = 2
 
 
 def _pa_stratified_starts(priors, seed: int, n_pa: int = _N_PA_STRATIFIED_STARTS):
-    """Prior-draw start points with theta_int overridden by a PA grid."""
-    import jax
+    """Prior-draw start points with theta_int overridden by a PA grid
+    (``initialization.pa_stratified_starts``; ``None`` when not applicable)."""
+    from kl_pipe.sampling.initialization import pa_stratified_starts
 
-    names = list(priors.sampled_names)
-    if 'theta_int' not in names:
-        return None
-    lo, hi = priors.get_prior('theta_int').bounds
-    if lo is None or hi is None:
-        return None
-    # explicit copy: np.asarray on a jax array returns a read-only view
-    starts = np.array(priors.sample(jax.random.PRNGKey(seed + 2), n_pa))
-    centers = lo + (np.arange(n_pa) + 0.5) * (hi - lo) / n_pa
-    starts[:, names.index('theta_int')] = centers
-    return starts
+    starts = pa_stratified_starts(priors, n_pa=n_pa, seed=seed)
+    return None if starts is None else starts.points
+
+
+def _pa_flip_margin(preconditioner, sampled_names, priors) -> float:
+    """Negative-log-posterior margin of the MAP over the best optimization
+    start that settled in the counter-rotating basin (theta_int within a
+    quarter turn of MAP + half period).
+
+    ``inf`` when no start settled there; ``nan`` when theta_int is not a
+    periodic (full-circle) parameter or the preconditioner kept no start
+    records.
+    """
+    if (
+        preconditioner is None
+        or preconditioner.start_map_points is None
+        or priors is None
+        or "theta_int" not in sampled_names
+    ):
+        return float("nan")
+    period = getattr(priors.get_prior("theta_int"), "period", None)
+    if period is None:
+        return float("nan")
+    i = list(sampled_names).index("theta_int")
+    offset = np.mod(
+        preconditioner.start_map_points[:, i] - preconditioner.map_point[i], period
+    )
+    flipped = np.abs(offset - 0.5 * period) < 0.25 * period
+    if not flipped.any():
+        return float("inf")
+    funs = preconditioner.start_neg_logposts
+    return float(np.min(funs[flipped]) - np.min(funs))
 
 
 @dataclass
@@ -97,6 +125,7 @@ class _AttemptArtifacts:
     task: object  # InferenceTask
     preconditioner: object  # LaplacePreconditioner or None
     sampled_names: List[str]
+    sampler: object = None  # NumpyroSampler holding the warm state, if any
 
 
 def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
@@ -105,10 +134,40 @@ def needs_escalation(summary: Dict, esc: EscalationSpec) -> bool:
     The gate is on convergence quality (max_rhat / min_ess), NOT
     divergences: the silent unconverged class shows zero divergences.
     """
-    return (
-        float(summary['max_rhat']) > esc.rhat_max
-        or float(summary['min_ess']) < esc.ess_min
+    failed = (
+        float(summary["max_rhat"]) > esc.rhat_max
+        or float(summary["min_ess"]) < esc.ess_min
     )
+    if esc.ess_min_shear is not None:
+        ess_shear = min(float(summary["ess_g1"]), float(summary["ess_g2"]))
+        failed = failed or ess_shear < esc.ess_min_shear
+    return failed
+
+
+def restart_reason(summary: Dict, esc: EscalationSpec) -> str:
+    """Why a gate-failing attempt needs a fresh start rather than more draws.
+
+    '' when the attempt is marginal (more draws from the warm chains can
+    pass the gate), 'rhat' when max_rhat exceeds ``continue_rhat_max``
+    (chains in different basins), 'divergences' when the divergence rate
+    exceeds ``continue_divergence_max`` (the metric or step size is wrong).
+    """
+    if float(summary["max_rhat"]) > esc.continue_rhat_max:
+        return "rhat"
+    if float(summary["divergence_rate"]) > esc.continue_divergence_max:
+        return "divergences"
+    return ""
+
+
+def escalation_mode(summary: Dict, esc: EscalationSpec) -> str:
+    """'continue' or 'restart' for a first attempt that failed the gate.
+
+    Under ``mode='auto'`` a marginal first attempt (no ``restart_reason``)
+    is continued; anything worse is restarted.
+    """
+    if esc.mode != "auto":
+        return esc.mode
+    return "continue" if restart_reason(summary, esc) == "" else "restart"
 
 
 def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
@@ -120,7 +179,7 @@ def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
     posterior; the mean of symmetric positive-definite matrices is again a
     valid metric).
     """
-    adapted = diagnostics.get('adapted_inverse_mass_matrix')
+    adapted = diagnostics.get("adapted_inverse_mass_matrix")
     if adapted is None:
         raise RuntimeError(
             "escalation retry needs the first attempt's warmup-adapted "
@@ -129,10 +188,26 @@ def _donor_mass_matrix(diagnostics: Dict) -> np.ndarray:
         )
     adapted = np.asarray(adapted)
     if adapted.ndim == 3:
-        return adapted.mean(axis=0)
-    if adapted.ndim == 2:
-        return adapted
-    raise RuntimeError(f"unexpected adapted inverse mass matrix shape {adapted.shape}")
+        pooled = adapted.mean(axis=0)
+    elif adapted.ndim == 2:
+        pooled = adapted
+    else:
+        raise RuntimeError(
+            f"unexpected adapted inverse mass matrix shape {adapted.shape}"
+        )
+    # the adapted metric carries roundoff asymmetry at the sampler's working
+    # precision (Welford outer products); anything larger is not roundoff
+    eps = np.finfo(adapted.dtype).eps
+    scale = float(np.abs(pooled).max())
+    asym = float(np.abs(pooled - pooled.T).max())
+    if not asym <= 1e3 * eps * scale:
+        raise RuntimeError(
+            "adapted inverse mass matrix is asymmetric beyond "
+            f"{adapted.dtype} roundoff (max |m - m.T| = {asym:.3g}, "
+            f"max |m| = {scale:.3g}); refusing to donate it"
+        )
+    pooled = pooled.astype(np.float64)
+    return 0.5 * (pooled + pooled.T)
 
 
 def run_single_fit(
@@ -158,12 +233,16 @@ def run_single_fit(
 
     Raises on any error -- the caller decides how to record the failure.
     """
-    fit_id = str(row['fit_id'])
+    fit_id = str(row["fit_id"])
     truth = truth_from_row(row)
-    noise_seed = int(row['noise_seed'])
+    noise_seed = int(row["noise_seed"])
 
     if spec.escalation.enabled:
-        return _run_fit_escalated(row, spec, config, run_dir, truth, noise_seed)
+        summary = _run_fit_escalated(row, spec, config, run_dir, truth, noise_seed)
+        summary.update(
+            quality_flags(summary, spec.escalation.rhat_max, spec.escalation.ess_min)
+        )
+        return summary
 
     summary = None
     artifacts = None
@@ -172,21 +251,26 @@ def run_single_fit(
         summary, artifacts = _run_fit_attempt(
             row, spec, config, run_dir, truth, noise_seed, sampler_seed
         )
-        summary['n_attempts'] = attempt + 1
+        summary["n_attempts"] = attempt + 1
         if not is_catastrophic(summary):
             break
         print(
-            f'[fit {fit_id}] attempt {attempt + 1} catastrophic '
+            f"[fit {fit_id}] attempt {attempt + 1} catastrophic "
             f"(max_rhat={summary['max_rhat']:.2f}, "
             f"div={summary['divergence_rate']:.0%}) -- "
             + (
-                'retrying with fresh seed'
+                "retrying with fresh seed"
                 if attempt + 1 < _MAX_ATTEMPTS
-                else 'giving up; recorded as-is'
+                else "giving up; recorded as-is"
             ),
             flush=True,
         )
     _persist_outputs(run_dir, fit_id, row, artifacts)
+    # no gate is configured on this path: the flags use the escalation
+    # defaults (rhat 1.05, ESS 50) so the columns exist on every run
+    summary.update(
+        quality_flags(summary, spec.escalation.rhat_max, spec.escalation.ess_min)
+    )
     return summary
 
 
@@ -202,44 +286,157 @@ def _run_fit_escalated(
 
     The summary row always carries ``escalated``; when the retry ran it also
     carries the first attempt's quality metrics (``first_attempt_*``) and
-    ``fit_wallclock_s`` covers BOTH attempts. Chains: the retry's chains
-    replace the first attempt's; the first attempt's are kept alongside
-    (``<fit_id>.attempt1.npz``) only when the retry also fails the gate.
+    ``fit_wallclock_s`` covers BOTH attempts. Chains: a restart's chains
+    replace the first attempt's, which are kept alongside
+    (``<fit_id>.attempt1.npz``); a continuation's chains contain them.
     """
     esc = spec.escalation
-    fit_id = str(row['fit_id'])
+    fit_id = str(row["fit_id"])
     t_start = time.time()
 
     sampler_seed = _sampler_seed(noise_seed)
     summary, art1 = _run_fit_attempt(
         row, spec, config, run_dir, truth, noise_seed, sampler_seed
     )
-    summary['n_attempts'] = 1
-    summary['escalated'] = False
+    summary["n_attempts"] = 1
+    summary["escalated"] = False
+    summary["escalation_mode"] = ""
+    summary["escalation_n_blocks"] = 0
+    summary["restart_reason"] = ""
+    summary["restart_recommended"] = False
     if not needs_escalation(summary, esc):
         _persist_outputs(run_dir, fit_id, row, art1)
         return summary
 
+    mode = escalation_mode(summary, esc)
+    reason = restart_reason(summary, esc)
+    n_blocks = 0
+    budget_hit = False
+    if mode == "continue":
+        # draw in blocks from the warm chains, re-checking the gate after
+        # each, until it passes or the block budget is spent
+        summary2, art2 = summary, art1
+        # wall estimate of the next block: the previous block's wall, or the
+        # first attempt's sampling wall scaled to the block length
+        block_est_s = (
+            float(summary["fit_wallclock_s"]) - float(summary["precond_wallclock_s"])
+        ) * (esc.continue_block / spec.n_samples)
+        while n_blocks < esc.continue_max_blocks:
+            elapsed_s = time.time() - t_start
+            if (
+                esc.wall_budget_min is not None
+                and elapsed_s + block_est_s > 60.0 * esc.wall_budget_min
+            ):
+                budget_hit = True
+                print(
+                    f"[fit {fit_id}] wall budget: {elapsed_s / 60:.1f} min elapsed "
+                    f"+ ~{block_est_s / 60:.1f} min per block exceeds "
+                    f"{esc.wall_budget_min:g} min -- no further continuation",
+                    flush=True,
+                )
+                break
+            print(
+                f"[fit {fit_id}] attempt 1 "
+                + ("failed" if n_blocks == 0 else f"+ {n_blocks} block(s) still fails")
+                + " the escalation gate "
+                f"(max_rhat={summary2['max_rhat']:.3f} vs {esc.rhat_max}, "
+                f"min_ess={summary2['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
+                f"continuing the warmed chains: {esc.continue_block} more draws "
+                f"per chain (block {n_blocks + 1} of {esc.continue_max_blocks})",
+                flush=True,
+            )
+            summary2, art2 = _continue_fit_attempt(
+                row, spec, config, truth, art2, esc.continue_block, summary
+            )
+            block_est_s = float(summary2["fit_wallclock_s"])
+            n_blocks += 1
+            if not needs_escalation(summary2, esc):
+                break
+        if needs_escalation(summary2, esc) and reason == "":
+            reason = "budget_exhausted" if budget_hit else "blocks_exhausted"
+    else:
+        summary2, art2 = _restart_fit_attempt(
+            row, spec, config, run_dir, truth, noise_seed, sampler_seed, art1, summary
+        )
+    # a continuation the wall budget stopped before its first block ran
+    # nothing beyond attempt 1
+    summary2["n_attempts"] = 2 if (mode == "restart" or n_blocks > 0) else 1
+    summary2["escalated"] = True
+    summary2["escalation_mode"] = mode
+    summary2["escalation_n_blocks"] = n_blocks
+    summary2["first_attempt_max_rhat"] = float(summary["max_rhat"])
+    summary2["first_attempt_min_ess"] = float(summary["min_ess"])
+    summary2["first_attempt_max_rhat_param"] = str(summary["max_rhat_param"])
+    summary2["first_attempt_min_ess_param"] = str(summary["min_ess_param"])
+    summary2["first_attempt_n_divergences"] = int(summary["n_divergences"])
+    summary2["first_attempt_divergence_rate"] = float(summary["divergence_rate"])
+    summary2["first_attempt_wallclock_s"] = float(summary["fit_wallclock_s"])
+    # total wallclock over both attempts (per-attempt time stays available
+    # via first_attempt_wallclock_s)
+    summary2["fit_wallclock_s"] = float(time.time() - t_start)
+
+    retry_failed = needs_escalation(summary2, esc)
+    # restart_reason names why more draws would not (or did not) rescue the
+    # first attempt; restart_recommended marks fits to re-run fresh: any
+    # continuation that ended below the gate, or a forced continuation of an
+    # attempt that had a restart reason to begin with
+    summary2["restart_reason"] = reason
+    summary2["restart_recommended"] = bool(
+        mode == "continue" and (retry_failed or reason != "")
+    )
+    if mode == "restart" and bool(row["save_chains"]):
+        # the restarted fit's final chains do not contain the failing attempt,
+        # so keep it for forensics (a continuation keeps it in the union)
+        _save_chains(run_dir, f"{fit_id}.attempt1", art1.result, art1.sampled_names)
+    _persist_outputs(run_dir, fit_id, row, art2)
+    print(
+        f"[fit {fit_id}] escalation ({mode}) "
+        + (
+            f"still fails the gate (max_rhat={summary2['max_rhat']:.3f}, "
+            f"min_ess={summary2['min_ess']:.0f}); recorded as-is"
+            if retry_failed
+            else f"passed the gate (max_rhat={summary2['max_rhat']:.3f}, "
+            f"min_ess={summary2['min_ess']:.0f})"
+        ),
+        flush=True,
+    )
+    return summary2
+
+
+def _restart_fit_attempt(
+    row: Dict,
+    spec: EnsembleSpec,
+    config: ObservationConfig,
+    run_dir: Path,
+    truth: Dict[str, float],
+    noise_seed: int,
+    sampler_seed: int,
+    art1: "_AttemptArtifacts",
+    summary: Dict,
+) -> Tuple[dict, "_AttemptArtifacts"]:
+    """Escalation by restart: a fresh, longer run with the donated metric."""
+    esc = spec.escalation
+    fit_id = str(row["fit_id"])
     if spec.adapt_mass:
         # adaptive first pass: donate its warmup-adapted metric to the retry
         donor = _donor_mass_matrix(art1.result.diagnostics)
         retry_adapt_mass = None
-        retry_metric_note = 'donated adapted metric'
+        retry_metric_note = "donated adapted metric"
     else:
         # frozen first pass records no adapted metric; the retry re-enables
         # mass adaptation on top of the Laplace preconditioner instead
         donor = None
         retry_adapt_mass = True
-        retry_metric_note = 'adaptive retry (frozen first pass)'
+        retry_metric_note = "adaptive retry (frozen first pass)"
     print(
-        f'[fit {fit_id}] attempt 1 failed the escalation gate '
+        f"[fit {fit_id}] attempt 1 failed the escalation gate "
         f"(max_rhat={summary['max_rhat']:.3f} vs {esc.rhat_max}, "
         f"min_ess={summary['min_ess']:.0f} vs {esc.ess_min:.0f}) -- "
-        f'escalating: n_warmup={esc.n_warmup}, n_samples={esc.n_samples}, '
-        f'{retry_metric_note}',
+        f"escalating: n_warmup={esc.n_warmup}, n_samples={esc.n_samples}, "
+        f"{retry_metric_note}",
         flush=True,
     )
-    summary2, art2 = _run_fit_attempt(
+    return _run_fit_attempt(
         row,
         spec,
         config,
@@ -253,44 +450,50 @@ def _run_fit_escalated(
         adapt_mass=retry_adapt_mass,
         reuse=art1,
     )
-    summary2['n_attempts'] = 2
-    summary2['escalated'] = True
-    summary2['first_attempt_max_rhat'] = float(summary['max_rhat'])
-    summary2['first_attempt_min_ess'] = float(summary['min_ess'])
-    summary2['first_attempt_n_divergences'] = int(summary['n_divergences'])
-    summary2['first_attempt_divergence_rate'] = float(summary['divergence_rate'])
-    summary2['first_attempt_wallclock_s'] = float(summary['fit_wallclock_s'])
-    # total wallclock over both attempts (per-attempt time stays available
-    # via first_attempt_wallclock_s)
-    summary2['fit_wallclock_s'] = float(time.time() - t_start)
 
-    retry_failed = needs_escalation(summary2, esc)
-    if retry_failed and bool(row['save_chains']):
-        # keep the first attempt's chains for forensics only when the retry
-        # also failed the gate
-        _save_chains(run_dir, f'{fit_id}.attempt1', art1.result, art1.sampled_names)
-    _persist_outputs(run_dir, fit_id, row, art2)
-    print(
-        f'[fit {fit_id}] escalation retry '
-        + (
-            f"still fails the gate (max_rhat={summary2['max_rhat']:.3f}, "
-            f"min_ess={summary2['min_ess']:.0f}); recorded as-is"
-            if retry_failed
-            else f"passed the gate (max_rhat={summary2['max_rhat']:.3f}, "
-            f"min_ess={summary2['min_ess']:.0f})"
-        ),
-        flush=True,
+
+def _continue_fit_attempt(
+    row: Dict,
+    spec: EnsembleSpec,
+    config: ObservationConfig,
+    truth: Dict[str, float],
+    art1: "_AttemptArtifacts",
+    n_samples: int,
+    summary1: Dict,
+) -> Tuple[dict, "_AttemptArtifacts"]:
+    """Escalation by continuation: more draws from the first attempt's warm
+    chains; the result carries the first attempt's draws too."""
+    if art1.sampler is None or not hasattr(art1.sampler, "continue_sampling"):
+        raise RuntimeError(
+            f"[fit {row['fit_id']}] escalation mode 'continue' needs the first "
+            "attempt's sampler with a warm state; none was kept"
+        )
+    t_start = time.time()
+    with profiling.trace(f'{row["fit_id"]}/sampler_continue'):
+        result = art1.sampler.continue_sampling(n_samples)
+    summary = _summary_row(
+        row,
+        spec,
+        result,
+        art1.preconditioner,
+        art1.sampled_names,
+        wallclock_s=time.time() - t_start,
+        precond_s=float(summary1["precond_wallclock_s"]),
+        truth=truth,
+        priors=art1.inputs.priors,
     )
-    return summary2
+    _finish_attempt_summary(summary, row, config, art1.inputs, summary1["sampler_seed"])
+    _fit_quality_columns(summary, art1.task, art1.inputs, art1.sampled_names)
+    return summary, dataclasses.replace(art1, result=result)
 
 
 def _persist_outputs(
     run_dir: Path, fit_id: str, row: Dict, artifacts: _AttemptArtifacts
 ) -> None:
     """Write the (final) attempt's chains/mocks per the row's save flags."""
-    if bool(row['save_chains']):
+    if bool(row["save_chains"]):
         _save_chains(run_dir, fit_id, artifacts.result, artifacts.sampled_names)
-    if bool(row['save_mocks']):
+    if bool(row["save_mocks"]):
         _save_mocks(
             run_dir,
             fit_id,
@@ -298,6 +501,48 @@ def _persist_outputs(
             artifacts.preconditioner,
             artifacts.sampled_names,
         )
+
+
+def build_sampler_config(
+    spec: EnsembleSpec,
+    *,
+    n_samples: Optional[int] = None,
+    n_warmup: Optional[int] = None,
+    adapt_mass: Optional[bool] = None,
+    init_inverse_mass=None,
+    seed: int = 0,
+):
+    """NumPyro sampler config from the spec's fit block.
+
+    The single mapping used by the worker; ``expand`` calls it once as a
+    preflight so a fit block the sampler rejects fails at expansion instead
+    of in every worker on the node. The keyword overrides are the
+    escalation retry's draw counts and donated metric.
+    """
+    from kl_pipe.sampling.configs import NumpyroSamplerConfig
+
+    return NumpyroSamplerConfig(
+        n_samples=n_samples if n_samples is not None else spec.n_samples,
+        n_warmup=n_warmup if n_warmup is not None else spec.n_warmup,
+        n_chains=spec.n_chains,
+        target_accept_prob=spec.target_accept,
+        precondition=spec.precondition,
+        precondition_unconstrained=spec.unconstrained,
+        precondition_adapt_mass=(
+            adapt_mass if adapt_mass is not None else spec.adapt_mass
+        ),
+        init_inverse_mass_matrix=init_inverse_mass,
+        n_map_starts=spec.n_map_starts,
+        hessian_method=spec.hessian_method,
+        max_tree_depth=spec.max_tree_depth,
+        chain_init=spec.chain_init,
+        chain_init_max_margin=spec.chain_init_max_margin,
+        warmup_metric=spec.warmup_metric,
+        warmup_stage2_draws=spec.warmup_stage2_draws,
+        warmup_stage2_adapt=spec.warmup_stage2_adapt,
+        record_warmup=spec.record_warmup,
+        seed=seed,
+    )
 
 
 def _run_fit_attempt(
@@ -335,19 +580,19 @@ def _run_fit_attempt(
     else:
         # catalog manifests carry per-band published-depth SNR columns;
         # sampled manifests carry one shared scalar for all bands
-        if f'broadband_snr_{config.bands[0]}' in row:
+        if f"broadband_snr_{config.bands[0]}" in row:
             band_snrs = {
-                band: float(row[f'broadband_snr_{band}']) for band in config.bands
+                band: float(row[f"broadband_snr_{band}"]) for band in config.bands
             }
         else:
-            band_snrs = {band: float(row['broadband_snr']) for band in config.bands}
+            band_snrs = {band: float(row["broadband_snr"]) for band in config.bands}
         inputs = build_fit_inputs(
             truth,
             noise_seed,
             spec,
             config,
             band_snrs=band_snrs,
-            line_snr=float(row['line_snr']),
+            line_snr=float(row["line_snr"]),
             # catalog-mode priors read the row's pop.* columns
             row=row,
         )
@@ -358,37 +603,37 @@ def _run_fit_attempt(
             grism_obs=inputs.grism_obs,
         )
 
-    sampler_config = NumpyroSamplerConfig(
-        n_samples=n_samples if n_samples is not None else spec.n_samples,
-        n_warmup=n_warmup if n_warmup is not None else spec.n_warmup,
-        n_chains=spec.n_chains,
-        target_accept_prob=spec.target_accept,
-        precondition=spec.precondition,
-        precondition_unconstrained=spec.unconstrained,
-        precondition_adapt_mass=(
-            adapt_mass if adapt_mass is not None else spec.adapt_mass
-        ),
-        init_inverse_mass_matrix=init_inverse_mass,
-        n_map_starts=spec.n_map_starts,
+    sampler_config = build_sampler_config(
+        spec,
+        n_samples=n_samples,
+        n_warmup=n_warmup,
+        adapt_mass=adapt_mass,
+        init_inverse_mass=init_inverse_mass,
         seed=sampler_seed,
     )
 
     preconditioner = reuse.preconditioner if reuse is not None else None
-    if preconditioner is None and spec.precondition == 'laplace':
-        # build explicitly (rather than letting the sampler build it
-        # internally) so the MAP point and precond diagnostics reach the
-        # summary row; PA-stratified extra starts guarantee the position-
-        # angle basins are all visited
-        preconditioner = task.laplace_preconditioner(
-            n_starts=sampler_config.n_map_starts,
-            seed=sampler_seed,
-            hessian_method=sampler_config.hessian_method,
-            extra_starts=_pa_stratified_starts(inputs.priors, sampler_seed),
-        )
+    if preconditioner is None and spec.precondition == "laplace":
+        # built here (not inside the sampler) so the MAP point and the
+        # initialization records reach the summary row
+        from kl_pipe.sampling.initialization import InitConfig, Initializer
+
+        init_config = InitConfig.from_spec(spec, n_pa_starts=_N_PA_STRATIFIED_STARTS)
+        with profiling.trace(f'{row["fit_id"]}/precondition'):
+            init = Initializer(
+                task, init_config, seed=sampler_seed, image_obs=inputs.image_obs
+            ).run()
+        preconditioner = init.preconditioner
+        init_columns = init.columns()
+    else:
+        from kl_pipe.sampling.initialization import initialization_columns
+
+        init_columns = initialization_columns(preconditioner, None, spec.chain_init)
     t_precond = time.time()
 
     sampler = NumpyroSampler(task, sampler_config, preconditioner=preconditioner)
-    result = sampler.run()
+    with profiling.trace(f'{row["fit_id"]}/sampler'):
+        result = sampler.run()
     t_end = time.time()
 
     sampled_names = list(inputs.priors.sampled_names)
@@ -403,14 +648,9 @@ def _run_fit_attempt(
         truth=truth,
         priors=inputs.priors,
     )
-    summary['sampler_seed'] = sampler_seed
-    summary['has_chains'] = bool(row['save_chains'])
-    # realized per-channel matched-filter SNR against the actual mock
-    # variance (equals the labels under matched_filter; includes shot noise
-    # under poisson) -- the subsample-analysis axis
-    summary['noise_model'] = str(config.noise_model)
-    for key, value in (inputs.snr_effective or {}).items():
-        summary[f'snr_effective_{key}'] = float(value)
+    summary.update(init_columns)
+    _finish_attempt_summary(summary, row, config, inputs, sampler_seed)
+    _fit_quality_columns(summary, task, inputs, sampled_names)
 
     artifacts = _AttemptArtifacts(
         result=result,
@@ -418,8 +658,64 @@ def _run_fit_attempt(
         task=task,
         preconditioner=preconditioner,
         sampled_names=sampled_names,
+        sampler=sampler,
     )
     return summary, artifacts
+
+
+def _fit_quality_columns(summary: dict, task, inputs, sampled_names) -> None:
+    """Goodness-of-fit and MAP-vs-posterior columns.
+
+    ``map_chi2`` / ``postmean_chi2`` are -2 log L at the MAP and at the
+    posterior mean (the likelihood carries no data constant, so these are
+    plain chi-squares against ``n_data`` masked pixels); ``map_postmean_max_dev``
+    is the largest |MAP - posterior mean| / sigma over the sampled parameters.
+    A MAP stuck in a wrong basin shows up as a chi-square far above ``n_data``
+    or a deviation of order ten sigma. Without a MAP (``precondition: none``)
+    the MAP columns are NaN and the parameter label empty; ``n_data`` and
+    ``postmean_chi2`` are always written.
+    """
+    n_data = 0
+    for obs in list(inputs.image_obs.values()) + list(inputs.grism_obs.values()):
+        mask = getattr(obs, "mask", None)
+        n_data += (
+            int(np.sum(np.asarray(mask)))
+            if mask is not None
+            else int(np.asarray(obs.data).size)
+        )
+    theta_mean = np.array([summary[f"post.{n}.mean"] for n in sampled_names])
+    summary["n_data"] = n_data
+    summary["postmean_chi2"] = float(
+        -2.0 * task.log_likelihood(jnp.asarray(theta_mean))
+    )
+    has_map = all(f"map.{n}" in summary for n in sampled_names)
+    if not has_map:
+        summary["map_chi2"] = np.nan
+        summary["map_postmean_max_dev"] = np.nan
+        summary["map_postmean_max_dev_param"] = ""
+        return
+    theta_map = np.array([summary[f"map.{n}"] for n in sampled_names])
+    summary["map_chi2"] = float(-2.0 * task.log_likelihood(jnp.asarray(theta_map)))
+    devs = {
+        n: abs(float(summary[f"map_minus_postmean_over_sigma.{n}"]))
+        for n in sampled_names
+    }
+    worst = max(devs, key=devs.get)
+    summary["map_postmean_max_dev"] = devs[worst]
+    summary["map_postmean_max_dev_param"] = worst
+
+
+def _finish_attempt_summary(
+    summary: dict, row: Dict, config: ObservationConfig, inputs, sampler_seed: int
+) -> None:
+    summary["sampler_seed"] = sampler_seed
+    summary["has_chains"] = bool(row["save_chains"])
+    # realized per-channel matched-filter SNR against the actual mock
+    # variance (equals the labels under matched_filter; includes shot noise
+    # under poisson) -- the subsample-analysis axis
+    summary["noise_model"] = str(config.noise_model)
+    for key, value in (inputs.snr_effective or {}).items():
+        summary[f"snr_effective_{key}"] = float(value)
 
 
 def _summary_row(
@@ -434,8 +730,8 @@ def _summary_row(
     priors=None,
 ) -> dict:
     diag = result.diagnostics
-    r_hat = diag.get('r_hat', {})
-    ess = diag.get('ess', {})
+    r_hat = diag.get("r_hat", {})
+    ess = diag.get("ess", {})
     if not r_hat or not ess:
         raise RuntimeError(
             "sampler diagnostics missing r_hat/ess -- cannot write an honest "
@@ -448,59 +744,118 @@ def _summary_row(
     )
 
     out: dict = {
-        'fit_id': str(row['fit_id']),
-        'status': 'succeeded',
-        'error_message': '',
+        "fit_id": str(row["fit_id"]),
+        "status": "succeeded",
+        "error_message": "",
+        "git_commit": git_commit_label(),
         # quality columns (inclusive -- gate policy applied post hoc)
-        'max_rhat': float(max(r_hat.values())),
-        'min_ess': float(min(ess.values())),
-        'ess_g1': float(ess.get('g1', np.nan)),
-        'ess_g2': float(ess.get('g2', np.nan)),
-        'n_divergences': int(diag.get('n_divergences', -1)),
-        'divergence_rate': float(diag.get('divergence_rate', np.nan)),
-        'mean_accept_prob': float(diag.get('mean_accept_prob', np.nan)),
-        'num_steps_total': float(np.sum(diag.get('num_steps', np.nan))),
-        'converged': bool(result.converged),
-        'chain_method': str(diag.get('chain_method', '')),
-        'n_map_starts_converged': (
+        "max_rhat": float(max(r_hat.values())),
+        "min_ess": float(min(ess.values())),
+        # which parameter sets each gate quantity (failure correlation)
+        "max_rhat_param": str(max(r_hat, key=r_hat.get)),
+        "min_ess_param": str(min(ess, key=ess.get)),
+        "ess_g1": float(ess.get("g1", np.nan)),
+        "ess_g2": float(ess.get("g2", np.nan)),
+        "n_divergences": int(diag.get("n_divergences", -1)),
+        "divergence_rate": float(diag.get("divergence_rate", np.nan)),
+        "mean_accept_prob": float(diag.get("mean_accept_prob", np.nan)),
+        "num_steps_total": float(np.sum(diag.get("num_steps", np.nan))),
+        # two-stage warmup columns (-1 / nan on the single-stage path)
+        "warmup_metric": str(result.metadata.get("warmup_metric", "adapted")),
+        "warmup_stage1_steps": int(result.metadata.get("warmup_stage1_steps", -1)),
+        "warmup_stage2_steps": int(result.metadata.get("warmup_stage2_steps", -1)),
+        "warmup_chain_metric_mismatch_max": float(
+            max(result.metadata.get("warmup_chain_metric_mismatch", [np.nan]))
+        ),
+        "converged": bool(result.converged),
+        "chain_method": str(result.metadata.get("chain_method", "")),
+        # sampler-efficiency columns (nan where the path does not record them)
+        "mean_tree_depth": (
+            float(diag["mean_tree_depth"])
+            if diag.get("mean_tree_depth") is not None
+            else np.nan
+        ),
+        **_per_chain_columns("step_size", diag.get("step_size")),
+        **_per_chain_columns("e_bfmi", diag.get("e_bfmi")),
+        "nuts_wallclock_s": float(result.metadata.get("nuts_wallclock_s", np.nan)),
+        "logprob_wallclock_s": float(
+            result.metadata.get("logprob_wallclock_s", np.nan)
+        ),
+        "continue_wallclock_s": float(result.metadata.get("continue_wallclock_s", 0.0)),
+        "warmup_wallclock_s": float(result.metadata.get("warmup_wallclock_s", np.nan)),
+        "sampling_wallclock_s": float(
+            result.metadata.get("sampling_wallclock_s", np.nan)
+        ),
+        "warmup_num_steps_total": (
+            float(np.sum(diag["warmup_num_steps"]))
+            if "warmup_num_steps" in diag
+            else np.nan
+        ),
+        "n_map_starts_converged": (
             int(preconditioner.n_starts_converged) if preconditioner is not None else -1
         ),
-        'precond_condition_number': (
+        "precond_n_negative_eigenvalues": (
+            int(preconditioner.n_negative_eigenvalues)
+            if preconditioner is not None
+            else -1
+        ),
+        "precond_min_eigenvalue_ratio": (
+            float(preconditioner.min_eigenvalue_ratio)
+            if preconditioner is not None
+            else np.nan
+        ),
+        "precond_condition_number": (
             float(preconditioner.condition_number)
             if preconditioner is not None
             else np.nan
         ),
-        'fit_wallclock_s': float(wallclock_s),
-        'precond_wallclock_s': float(precond_s),
+        # MAP margin over the counter-rotating PA basin (full-circle PA prior)
+        "map_pa_flip_margin": _pa_flip_margin(preconditioner, sampled_names, priors),
+        "fit_wallclock_s": float(wallclock_s),
+        "precond_wallclock_s": float(precond_s),
     }
 
     for i, name in enumerate(sampled_names):
         s = stats[name]
-        out[f'post.{name}.mean'] = float(s['mean'])
-        out[f'post.{name}.std'] = float(s['std'])
-        out[f'post.{name}.median'] = float(s['quantiles'][0.5])
+        out[f"post.{name}.mean"] = float(s["mean"])
+        out[f"post.{name}.std"] = float(s["std"])
+        out[f"post.{name}.median"] = float(s["quantiles"][0.5])
         if map_theta is not None:
-            out[f'map.{name}'] = float(map_theta[i])
-            out[f'map_minus_postmean_over_sigma.{name}'] = float(
-                (map_theta[i] - s['mean']) / s['std']
+            out[f"map.{name}"] = float(map_theta[i])
+            out[f"map_minus_postmean_over_sigma.{name}"] = float(
+                (map_theta[i] - s["mean"]) / s["std"]
             )
+    # central intervals and truth ranks from the pooled draws
+    out.update(
+        posterior_interval_columns(np.asarray(result.samples), sampled_names, truth)
+    )
 
     # galaxy-frame shear (g+, gx): the interpretable KL diagnostic. Rotate the
     # posterior samples per the configured angle convention (default: each
     # sample by its own theta_int) so g+/gx replace g1/g2 in all diagnostics.
-    if all(n in sampled_names for n in ('g1', 'g2', 'theta_int')):
+    if all(n in sampled_names for n in ("g1", "g2", "theta_int")):
         from kl_pipe.coordinates import galaxy_frame_samples
 
         samples = np.asarray(result.samples)
-        ig1, ig2, ith = (sampled_names.index(n) for n in ('g1', 'g2', 'theta_int'))
-        theta_truth = float(truth['theta_int']) if truth is not None else np.nan
+        ig1, ig2, ith = (sampled_names.index(n) for n in ("g1", "g2", "theta_int"))
+        theta_truth = float(truth["theta_int"]) if truth is not None else np.nan
         gp, gx = galaxy_frame_samples(
             samples[:, ig1], samples[:, ig2], samples[:, ith], theta_truth
         )
-        for nm, arr in (('g_plus', gp), ('g_cross', gx)):
-            out[f'post.{nm}.mean'] = float(np.mean(arr))
-            out[f'post.{nm}.std'] = float(np.std(arr, ddof=1))
-            out[f'post.{nm}.median'] = float(np.median(arr))
+        for nm, arr in (("g_plus", gp), ("g_cross", gx)):
+            out[f"post.{nm}.mean"] = float(np.mean(arr))
+            out[f"post.{nm}.std"] = float(np.std(arr, ddof=1))
+            out[f"post.{nm}.median"] = float(np.median(arr))
+
+    # projected rotation amplitude v sin i = vcirc * sqrt(1 - cos^2 i), the
+    # quantity the grism measures and the kinematic-lensing comparison metric
+    if all(n in sampled_names for n in ("vel.vcirc", "cosi")):
+        samples = np.asarray(result.samples)
+        iv, ic = (sampled_names.index(n) for n in ("vel.vcirc", "cosi"))
+        vsini = samples[:, iv] * np.sqrt(np.clip(1.0 - samples[:, ic] ** 2, 0.0, None))
+        out["post.vsini.mean"] = float(np.mean(vsini))
+        out["post.vsini.std"] = float(np.std(vsini, ddof=1))
+        out["post.vsini.median"] = float(np.median(vsini))
 
     # priors actually used for this fit (ground truth: the object passed to the
     # sampler). Flat prior.<param>.{dist,loc,scale,low,high,parent} columns,
@@ -510,32 +865,65 @@ def _summary_row(
     # prior conditions on.
     if priors is not None:
         for name, rec in priors.describe().items():
-            out[f'prior.{name}.dist'] = rec['dist']
-            out[f'prior.{name}.loc'] = rec['loc']
-            out[f'prior.{name}.scale'] = rec['scale']
-            out[f'prior.{name}.low'] = rec['low']
-            out[f'prior.{name}.high'] = rec['high']
-            out[f'prior.{name}.parent'] = rec.get('parent')
+            out[f"prior.{name}.dist"] = rec["dist"]
+            out[f"prior.{name}.loc"] = rec["loc"]
+            out[f"prior.{name}.scale"] = rec["scale"]
+            out[f"prior.{name}.low"] = rec["low"]
+            out[f"prior.{name}.high"] = rec["high"]
+            out[f"prior.{name}.parent"] = rec.get("parent")
     return out
+
+
+def _per_chain_columns(name: str, values) -> dict:
+    """min / median / max over chains of a per-chain diagnostic."""
+    if values is None:
+        return {f"{name}_min": np.nan, f"{name}_median": np.nan, f"{name}_max": np.nan}
+    v = np.atleast_1d(np.asarray(values, dtype=np.float64))
+    return {
+        f"{name}_min": float(v.min()),
+        f"{name}_median": float(np.median(v)),
+        f"{name}_max": float(v.max()),
+    }
 
 
 def failed_summary_row(row: Dict, message: str) -> dict:
     return {
-        'fit_id': str(row['fit_id']),
-        'status': 'failed',
-        'error_message': message,
+        "fit_id": str(row["fit_id"]),
+        "status": "failed",
+        "error_message": message,
+        "git_commit": git_commit_label(),
     }
 
 
 def _save_chains(run_dir: Path, fit_id: str, result, sampled_names) -> None:
-    path = Path(run_dir) / 'chains' / f'{fit_id}.npz'
+    path = Path(run_dir) / "chains" / f"{fit_id}.npz"
     arrays = {
-        'samples': np.asarray(result.samples),
-        'log_prob': np.asarray(result.log_prob),
-        'param_names': np.array(sampled_names),
+        "samples": np.asarray(result.samples),
+        "log_prob": np.asarray(result.log_prob),
+        "param_names": np.array(sampled_names),
     }
     if result.chains is not None:
-        arrays['chains'] = np.asarray(result.chains)
+        arrays["chains"] = np.asarray(result.chains)
+    # per-draw sampler records, chain-major like the samples
+    for key, dtype in (
+        ("num_steps", None),
+        ("accept_prob", np.float32),
+        ("diverging", bool),
+        ("energy", np.float64),
+        ("step_size", np.float64),
+        ("e_bfmi", np.float64),
+        ("warmup_num_steps", None),
+        ("warmup_accept_prob", np.float32),
+        ("warmup_diverging", bool),
+        ("warmup_step_size", np.float64),
+    ):
+        value = result.diagnostics.get(key)
+        if value is not None:
+            arrays[key] = np.asarray(value, dtype=dtype)
+    # warmup-adapted inverse mass matrix (sampling coordinates), per chain
+    adapted = result.diagnostics.get("adapted_inverse_mass_matrix")
+    if adapted is not None:
+        arrays["adapted_inverse_mass_matrix"] = np.asarray(adapted)
     _atomic_savez(path, arrays)
 
 
@@ -551,33 +939,58 @@ def _save_mocks(
             map_pars[name] = float(np.asarray(preconditioner.map_point)[i])
 
     for band, obs in inputs.image_obs.items():
-        arrays[f'image.{band}.data'] = np.asarray(obs.data)
-        arrays[f'image.{band}.variance'] = np.asarray(obs.variance)
-        arrays[f'image.{band}.truth_render'] = np.asarray(
+        arrays[f"image.{band}.data"] = np.asarray(obs.data)
+        arrays[f"image.{band}.variance"] = np.asarray(obs.variance)
+        arrays[f"image.{band}.truth_render"] = np.asarray(
             inputs.source.render_broadband(inputs.truth, obs, band)
         )
         if map_pars is not None:
-            arrays[f'image.{band}.map_render'] = np.asarray(
+            arrays[f"image.{band}.map_render"] = np.asarray(
                 inputs.source.render_broadband(map_pars, obs, band)
             )
     for key, obs in inputs.grism_obs.items():
-        arrays[f'grism.{key}.data'] = np.asarray(obs.data)
-        arrays[f'grism.{key}.variance'] = np.asarray(obs.variance)
-        arrays[f'grism.{key}.truth_render'] = np.asarray(
+        arrays[f"grism.{key}.data"] = np.asarray(obs.data)
+        arrays[f"grism.{key}.variance"] = np.asarray(obs.variance)
+        arrays[f"grism.{key}.truth_render"] = np.asarray(
             inputs.source.render_grism(inputs.truth, obs)
         )
         if map_pars is not None:
-            arrays[f'grism.{key}.map_render'] = np.asarray(
+            arrays[f"grism.{key}.map_render"] = np.asarray(
                 inputs.source.render_grism(map_pars, obs)
             )
 
-    path = Path(run_dir) / 'mocks' / f'{fit_id}.npz'
+    path = Path(run_dir) / "mocks" / f"{fit_id}.npz"
     _atomic_savez(path, arrays)
+
+
+def claim_order_index(manifest: pd.DataFrame, claim_order: str) -> np.ndarray:
+    """Row order in which a dynamic worker walks the manifest.
+
+    'manifest' keeps the row order. 'hard_first' puts the predicted-slow fits
+    first: truth cos i farthest from 0.5 (the cosmos25_bank32_robust arm ran
+    the two fits at cos i 0.054 at 2.3x the median steps and the face-on
+    fits at 1.3x), ties broken by lower line SNR. 'easy_first' is the exact
+    reverse (cos i nearest 0.5 first, higher line SNR first), for a short
+    job that should finish as many fits as it can. A proxy for scheduling
+    only; it does not change which fits run or how they are fit.
+    """
+    if claim_order == "manifest":
+        return np.arange(len(manifest))
+    if claim_order in ("hard_first", "easy_first"):
+        extremity = -((manifest["truth.cosi"].to_numpy(dtype=float) - 0.5) ** 2)
+        snr = (
+            manifest["line_snr"].to_numpy(dtype=float)
+            if "line_snr" in manifest
+            else np.zeros(len(manifest))
+        )
+        order = np.lexsort((snr, extremity))
+        return order if claim_order == "hard_first" else order[::-1]
+    raise ValueError(f"unknown claim_order {claim_order!r}")
 
 
 def worker_loop(
     run_dir: Path,
-    worker_label: str = 'worker0',
+    worker_label: str = "worker0",
     max_fits: Optional[int] = None,
     shard_index: int = 0,
     shard_count: int = 1,
@@ -616,41 +1029,42 @@ def worker_loop(
         raise ValueError(f"invalid shard {shard_index}/{shard_count}")
     if shard_count > 1:
         manifest = manifest.iloc[shard_index::shard_count]
-    counts = {'succeeded': 0, 'failed': 0, 'skipped': 0}
+    manifest = manifest.iloc[claim_order_index(manifest, spec.claim_order)]
+    counts = {"succeeded": 0, "failed": 0, "skipped": 0}
 
     for _, row in manifest.iterrows():
-        fit_id = str(row['fit_id'])
+        fit_id = str(row["fit_id"])
         if max_fits is not None and (
-            counts['succeeded'] + counts['failed'] >= max_fits
+            counts["succeeded"] + counts["failed"] >= max_fits
         ):
             break
         if ledger.is_done(run_dir, fit_id):
-            counts['skipped'] += 1
+            counts["skipped"] += 1
             continue
         if not ledger.try_claim(run_dir, fit_id):
-            counts['skipped'] += 1
+            counts["skipped"] += 1
             continue
 
-        print(f'[{worker_label}] fit {fit_id} starting', flush=True)
+        print(f"[{worker_label}] fit {fit_id} starting", flush=True)
         try:
             summary = run_single_fit(row, spec, config, run_dir)
         except Exception:
             message = traceback.format_exc()
-            print(f'[{worker_label}] fit {fit_id} FAILED\n{message}', flush=True)
+            print(f"[{worker_label}] fit {fit_id} FAILED\n{message}", flush=True)
             ledger.mark_failed(run_dir, fit_id, message)
             _atomic_write_parquet(
                 pd.DataFrame([failed_summary_row(dict(row), message)]),
-                run_dir / 'results' / f'{fit_id}.parquet',
+                run_dir / "results" / f"{fit_id}.parquet",
             )
-            counts['failed'] += 1
+            counts["failed"] += 1
             continue
 
         _atomic_write_parquet(
             pd.DataFrame([summary]),
-            run_dir / 'results' / f'{fit_id}.parquet',
+            run_dir / "results" / f"{fit_id}.parquet",
         )
         ledger.mark_done(run_dir, fit_id)
-        counts['succeeded'] += 1
+        counts["succeeded"] += 1
         print(
             f"[{worker_label}] fit {fit_id} done "
             f"({summary['fit_wallclock_s']:.1f} s, "
