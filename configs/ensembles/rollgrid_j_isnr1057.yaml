@@ -90,7 +90,7 @@ fit:
   n_samples: 300
   n_chains: 4
   precondition: none
-  adapt_mass: true
+  adapt_mass: false
   target_accept: 0.9
   pin_z_to_truth: true
   shear_prior_sigma: 0.3
