@@ -161,9 +161,10 @@ class TestPreconditionPathKnobs:
 
         for name in ("rollgrid_j_isnr47", "rollgrid_j_isnr224"):
             spec = EnsembleSpec.from_yaml(DEV_SPEC.parent / f"{name}.yaml")
-            assert spec.precondition == "none"
+            assert spec.precondition == "laplace"
             cfg = build_sampler_config(spec)
-            assert cfg.precondition == "none"
+            assert cfg.precondition == "laplace"
+            assert cfg.precondition_adapt_mass and cfg.precondition_unconstrained
             assert cfg.n_warmup == spec.n_warmup
             # the escalation retry's overrides go through the same mapping
             cfg2 = build_sampler_config(spec, n_warmup=800, n_samples=1000)

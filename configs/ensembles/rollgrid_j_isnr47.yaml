@@ -13,18 +13,19 @@
 # U(0.001, 0.999), full-circle PA, Tully-Fisher lognormal 0.0749 dex on vcirc
 # clipped at 3 sigma (the forecast places it on V2.2, a constant factor at
 # this fixed turnover); centroids, systemic velocity, continuum and thickness
-# fixed at truth. Sampler: no Laplace preconditioning (the flat turnover and
-# line-width priors put the MAP on their lower edges, where the clipped Hessian
-# gives a useless metric; the Z-score path with dense adaptation and 400 warmup
-# draws samples cleanly; escalation is a Laplace-path feature and is off, so
-# r-hat and ESS gates are read at analysis time). Grism geometry stays the HLWAS four-pass set
-# 0/10/167/177 at per-pass depth (the forecast uses two exposures at 0/170
-# carrying the same coadded depth); native 0.11" pixels. Prediction: posterior
-# widths within 10% of the forecast's table at every grid point. The
-# forecast's 1.5e-16 row (per-pass label 2-3 here) is left out: its widths
-# are the flat prior box in both codes (sigma(v sin i) 140-160 km/s, g1 0.15),
-# and on this sampler path that box-filling posterior is catastrophic (r-hat
-# 39, 58% divergences on the first warm fit) at 20+ min per attempt.
+# fixed at truth. Sampler: the production Laplace path (MAP with basin
+# starts, Hessian metric, dense re-adaptation, escalation). Two prior floors
+# depart from the forecast's boxes: turnover 0.01" (forecast 0.001") and line
+# width 30 km/s (forecast 19.6): the likelihood is flat below the pixel in
+# both directions, so a MAP on the forecast's lower edges gave a useless
+# metric, while the Z-score path without a MAP could not cross the
+# multimodal flat-box posterior of the faint edge-on cells (r-hat 39, 58%
+# divergences). The forecast's 1.5e-16 row is left out: its widths are the
+# flat prior box in both codes (sigma(v sin i) 140-160 km/s, g1 0.15). Grism
+# geometry stays the HLWAS four-pass set 0/10/167/177 at per-pass depth (the
+# forecast uses two exposures at 0/170 carrying the same coadded depth);
+# native 0.11" pixels. Prediction: posterior widths within 10% of the
+# forecast's table at every grid point.
 run:
   name: rollgrid_j_isnr47
   version: 1
@@ -89,19 +90,31 @@ observation:
     broadband: 47.2871
 fit:
   sampler: numpyro
-  n_warmup: 400
+  n_warmup: 200
   n_samples: 300
   n_chains: 4
-  precondition: none
-  adapt_mass: false
+  precondition: laplace
+  unconstrained: true
+  adapt_mass: true
+  map_bounded: true
+  map_polish_steps: 8
+  map_polish_basins: 3
+  eig_floor_mode: prior
+  eig_floor: 0.5
   target_accept: 0.9
   pin_z_to_truth: true
+  record_warmup: true
   shear_prior_sigma: 0.3
   cosi_prior_range:
   - 0.001
   - 0.999
   escalation:
-    enabled: false
+    enabled: true
+    rhat_max: 1.05
+    ess_min: 50
+    n_warmup: 800
+    n_samples: 1000
+    mode: auto
   pin_to_truth:
   - x0
   - y0
@@ -115,7 +128,7 @@ fit:
       clip_sigmas: 3.0
     vel.rscale:
       dist: uniform
-      low: 0.001
+      low: 0.01
       high: 1.0
     F158.rscale:
       dist: uniform
@@ -135,7 +148,7 @@ fit:
       high: 10.0
     Halpha.dispersion:
       dist: uniform
-      low: 19.6
+      low: 30.0
       high: 200.0
 dispatch:
   backend: local
