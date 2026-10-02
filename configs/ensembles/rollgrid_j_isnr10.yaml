@@ -20,11 +20,15 @@
 # r-hat and ESS gates are read at analysis time). Grism geometry stays the HLWAS four-pass set
 # 0/10/167/177 at per-pass depth (the forecast uses two exposures at 0/170
 # carrying the same coadded depth); native 0.11" pixels. Prediction: posterior
-# widths within 10% of the forecast's table at every grid point.
+# widths within 10% of the forecast's table at every grid point. The
+# forecast's 1.5e-16 row (per-pass label 2-3 here) is left out: its widths
+# are the flat prior box in both codes (sigma(v sin i) 140-160 km/s, g1 0.15),
+# and on this sampler path that box-filling posterior is catastrophic (r-hat
+# 39, 58% divergences on the first warm fit) at 20+ min per attempt.
 run:
   name: rollgrid_j_isnr10
   version: 1
-  description: forecast grid arm j, image SNR 10, 5 line fluxes x 5 cos i x 4 noise reps
+  description: forecast grid arm j, image SNR 10, 4 line fluxes x 5 cos i x 4 noise reps
   seed: 20261001
   measurement: sigma_eps_vs_line_snr
   noise_reps: 4
@@ -33,7 +37,6 @@ population:
   stratify:
     line_flux_cgs:
       values:
-      - 1.5e-16
       - 7.622e-16
       - 3.873e-15
       - 1.968e-14

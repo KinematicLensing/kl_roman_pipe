@@ -546,7 +546,8 @@ class TestGridAndLognormalDraws:
         assert spec.stratify_param == "line_flux_cgs"
         config = ObservationConfig.from_yaml(F158_CONFIG)
         m = build_manifest(spec, config)
-        assert len(m) == 5 * 5 * 4 == spec.n_fits
+        assert len(m) == len(spec.sweep_values) * 5 * 4 == spec.n_fits
+        assert len(spec.sweep_values) == 4
         # cos i cycles through the five grid values by galaxy index
         by_gal = m.drop_duplicates("galaxy_id").sort_values("galaxy_id")
         np.testing.assert_allclose(by_gal["truth.cosi"], [0.1, 0.3, 0.5, 0.7, 0.9])
