@@ -72,7 +72,7 @@ class LaplacePreconditioner:
     # unregularized scale-normalized Hessian spectrum at the MAP: negative
     # eigenvalues mean the optimizer stopped on a saddle or a lower basin
     n_negative_eigenvalues: int = 0
-    min_eigenvalue_ratio: float = float('nan')
+    min_eigenvalue_ratio: float = float("nan")
     start_map_points: Optional[np.ndarray] = None
     start_neg_logposts: Optional[np.ndarray] = None
     # start family per row of start_map_points ('prior', 'pa_stratified',
@@ -83,12 +83,12 @@ class LaplacePreconditioner:
     basin_neg_logposts: Optional[np.ndarray] = None
     # eigenvalue-floor bookkeeping (initialization.EigenFloor)
     n_floored_eigenvalues: int = -1
-    eig_floor_mode: str = 'prior'
+    eig_floor_mode: str = "prior"
     eig_floor_value: float = 0.5
     # MAP stationarity from initialization.find_map (nan without a polish
     # stage): scaled gradient norm and smallest prior-scaled Hessian eigenvalue
-    map_grad_norm: float = float('nan')
-    map_min_eigenvalue: float = float('nan')
+    map_grad_norm: float = float("nan")
+    map_min_eigenvalue: float = float("nan")
     polish_gain: float = 0.0
 
 
@@ -124,7 +124,7 @@ def _check_priors_fit_obs_rc(model, priors, obs, obs_rc):
             priors,
             obs.image_pars.pixel_scale,
             pixel_response=obs.pixel_response,
-            psf=getattr(obs, 'psf', None),
+            psf=getattr(obs, "psf", None),
         )
     except (KeyError, NotImplementedError, AttributeError):
         return  # priors-based sizing not applicable for this model
@@ -147,8 +147,8 @@ from kl_pipe.source import _component_priors_for_intensity  # noqa: E402, F401
 
 
 def _check_source_priors_fit_obs(
-    source: 'SourceModel',
-    priors: 'PriorDict',
+    source: "SourceModel",
+    priors: "PriorDict",
     obs,
     *,
     component_key: Optional[str] = None,
@@ -208,13 +208,13 @@ def _check_source_priors_fit_obs(
             # analytic dispersal needs a static deposit window under JIT;
             # size it from prior extremes when the caller left it None
             if (
-                rc.dispersal_method != 'analytic'
+                rc.dispersal_method != "analytic"
                 or rc.line_window_halfwidth is not None
             ):
                 return rc
             size = (
                 local_line_window_halfwidth_for_priors
-                if rc.line_window_mode == 'local'
+                if rc.line_window_mode == "local"
                 else line_window_halfwidth_for_priors
             )
             hw = size(source, priors, obs.grism_pars, rc.oversample)
@@ -269,7 +269,7 @@ def _check_source_priors_fit_obs(
         sub_priors = _component_priors_for_intensity(
             priors, component_key, model.PARAMETER_NAMES
         )
-        if hasattr(model, 'check_priors_safe'):
+        if hasattr(model, "check_priors_safe"):
             model.check_priors_safe(sub_priors)
 
         from kl_pipe.render import RenderConfig, build_image_render_config
@@ -290,6 +290,11 @@ def _check_source_priors_fit_obs(
     raise TypeError(
         f"_check_source_priors_fit_obs: unrecognized obs type " f"{type(obs).__name__}"
     )
+
+
+# per-component shear bound for bounded optimizers: |g1|, |g2| <= 0.7 gives
+# |g| <= 0.99, inside the shear transform's domain |g| < 1
+SHEAR_COMPONENT_BOUND = 0.7
 
 
 @dataclass
@@ -348,9 +353,9 @@ class InferenceTask:
     >>> log_prob_fn = task.get_log_posterior_fn()
     """
 
-    model: Union['Model', 'SourceModel']
+    model: Union["Model", "SourceModel"]
     likelihood_fn: Callable[[jnp.ndarray], float]
-    priors: 'PriorDict'
+    priors: "PriorDict"
     data: Dict[str, jnp.ndarray]
     variance: Dict[str, Union[jnp.ndarray, float]]
     mask: Dict[str, Optional[jnp.ndarray]] = field(default_factory=dict)
@@ -591,7 +596,24 @@ class InferenceTask:
             List of (low, high) bounds for each sampled parameter.
             None indicates unbounded in that direction.
         """
-        return self.priors.get_bounds()
+        bounds = []
+        for name, (lo, hi) in zip(self.sampled_names, self.priors.get_bounds()):
+            if name.split(".")[-1] in ("g1", "g2"):
+                # the shear transform is singular at |g| = 1; a per-component
+                # bound keeps |g| < 1 for any pair, so a bounded optimizer
+                # never walks an unbounded shear prior into a NaN likelihood
+                lo = (
+                    SHEAR_COMPONENT_BOUND * -1
+                    if lo is None
+                    else max(lo, -SHEAR_COMPONENT_BOUND)
+                )
+                hi = (
+                    SHEAR_COMPONENT_BOUND
+                    if hi is None
+                    else min(hi, SHEAR_COMPONENT_BOUND)
+                )
+            bounds.append((lo, hi))
+        return bounds
 
     def sample_prior(self, rng_key: jax.Array, n_samples: int = 1) -> jnp.ndarray:
         """
@@ -619,16 +641,16 @@ class InferenceTask:
         eig_floor: Optional[float] = None,
         maxiter: int = 2000,
         seed: int = 0,
-        hessian_method: str = 'fd',
+        hessian_method: str = "fd",
         fd_rel_step: float = 1e-5,
         extra_starts: Optional[np.ndarray] = None,
         *,
-        starts: Optional['StartSet'] = None,
-        eig_floor_mode: str = 'prior',
+        starts: Optional["StartSet"] = None,
+        eig_floor_mode: str = "prior",
         bounded: bool = True,
         polish_steps: int = 8,
         polish_basins: int = 3,
-    ) -> 'LaplacePreconditioner':
+    ) -> "LaplacePreconditioner":
         """Compute a Laplace preconditioner (MAP + regularized inverse Hessian).
 
         Keyword interface to the pieces of ``kl_pipe.sampling.initialization``
@@ -705,7 +727,7 @@ class InferenceTask:
             prior_starts,
         )
 
-        if hessian_method not in ('ad', 'fd'):
+        if hessian_method not in ("ad", "fd"):
             raise ValueError(
                 f"hessian_method must be 'ad' or 'fd', got '{hessian_method}'"
             )
@@ -720,7 +742,7 @@ class InferenceTask:
                     )
                 starts = combine_starts(
                     starts,
-                    StartSet(extra, ['extra'] * extra.shape[0], starts.names),
+                    StartSet(extra, ["extra"] * extra.shape[0], starts.names),
                 )
         map_result = find_map(
             self,
@@ -835,7 +857,7 @@ class InferenceTask:
             from kl_pipe.render import RenderConfig
 
             pixel_scale = obs.image_pars.pixel_scale
-            pixel_response = getattr(obs, 'pixel_response', None)
+            pixel_response = getattr(obs, "pixel_response", None)
 
             rc = RenderConfig.for_priors(
                 model,
@@ -868,18 +890,18 @@ class InferenceTask:
     @classmethod
     def from_obs(
         cls,
-        source: 'SourceModel',
-        priors: 'PriorDict',
+        source: "SourceModel",
+        priors: "PriorDict",
         *,
-        image_obs: Optional[Dict[str, 'ImageObs']] = None,
-        grism_obs: Optional[Dict[str, 'GrismObs']] = None,
-        velocity_obs: Optional['VelocityObs'] = None,
+        image_obs: Optional[Dict[str, "ImageObs"]] = None,
+        grism_obs: Optional[Dict[str, "GrismObs"]] = None,
+        velocity_obs: Optional["VelocityObs"] = None,
         meta_pars: Optional[Dict] = None,
         spectral_oversample: Optional[int] = None,
         spectral_method: Optional[str] = None,
         psf_mode: Optional[str] = None,
         cube_mode: Optional[str] = None,
-    ) -> 'InferenceTask':
+    ) -> "InferenceTask":
         """Unified SourceModel inference factory.
 
         Builds an InferenceTask whose likelihood sums Gaussian
@@ -1028,7 +1050,7 @@ class InferenceTask:
             or (velocity_obs is not None and velocity_obs.flux_weight_key is not None)
         )
         if renders_intensity:
-            cosi_low, _ = priors.get_param_bounds('cosi')
+            cosi_low, _ = priors.get_param_bounds("cosi")
             if cosi_low is not None and cosi_low < COSI_FLOOR:
                 raise ValueError(
                     f"cosi prior lower bound ({cosi_low:g}) reaches the edge-on "
@@ -1090,7 +1112,7 @@ class InferenceTask:
                 )
             spectral_method = unique_methods.pop()
         elif spectral_method is None:
-            spectral_method = 'erf'  # unused (no grism), but pass a concrete str
+            spectral_method = "erf"  # unused (no grism), but pass a concrete str
 
         # resolve psf_mode the same way (every roll must agree)
         if psf_mode is None and grism_obs:
@@ -1103,7 +1125,7 @@ class InferenceTask:
                 )
             psf_mode = unique_modes.pop()
         elif psf_mode is None:
-            psf_mode = 'post_dispersion'  # unused (no grism); concrete str
+            psf_mode = "post_dispersion"  # unused (no grism); concrete str
 
         # resolve cube_mode the same way (every roll must agree)
         if cube_mode is None and grism_obs:
@@ -1116,7 +1138,7 @@ class InferenceTask:
                 )
             cube_mode = unique_cmodes.pop()
         elif cube_mode is None:
-            cube_mode = 'shared'  # unused (no grism); concrete str
+            cube_mode = "shared"  # unused (no grism); concrete str
 
         likelihood_fn = create_jitted_likelihood_from_obs(
             source,
