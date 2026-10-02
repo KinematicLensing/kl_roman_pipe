@@ -574,4 +574,4 @@ class TestGridAndLognormalDraws:
         # common random numbers across the flux sweep
         for _, g in m.groupby(["galaxy_id", "noise_rep"]):
             assert g["noise_seed"].nunique() == 1
-            assert len(g) == 5
+            assert len(g) == len(spec.sweep_values)
