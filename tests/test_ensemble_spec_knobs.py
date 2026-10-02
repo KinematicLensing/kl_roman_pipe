@@ -289,3 +289,245 @@ class TestPaintScaleRatios:
         }
         with pytest.raises(ValueError, match='vel_rscale_ratio'):
             EnsembleSpec.from_yaml(_write(tmp_path, d))
+
+
+ROLLGRID_SPEC = REPO_ROOT / 'configs' / 'ensembles' / 'rollgrid_j_isnr47.yaml'
+ROLLGRID_HONEST_SPEC = (
+    REPO_ROOT / 'configs' / 'ensembles' / 'rollgrid_honest_isnr47.yaml'
+)
+F158_CONFIG = (
+    REPO_ROOT / 'configs' / 'observation' / 'hlwas_medium_roman_rotac_rolls_f158.yaml'
+)
+
+
+class TestPriorOverrides:
+    def test_default_parse_and_resolve(self, tmp_path):
+        spec = EnsembleSpec.from_yaml(DEV_SPEC)
+        assert spec.prior_overrides == {}
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit']['prior_overrides'] = {
+            'vel.rscale': {'dist': 'uniform', 'low': 0.001, 'high': 1.0},
+            'vcirc': {
+                'dist': 'lognormal',
+                'median': 251.5,
+                'sigma_dex': 0.0749,
+                'clip_sigmas': 3,
+            },
+            'Halpha.flux': {'dist': 'uniform_relative', 'low': 0.1, 'high': 10.0},
+            'vel.v0': {'dist': 'gaussian', 'loc': 0.0, 'scale': 125.0},
+        }
+        spec2 = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        # the vcirc alias resolves to the dotted name
+        assert set(spec2.prior_overrides) == {
+            'vel.rscale',
+            'vel.vcirc',
+            'Halpha.flux',
+            'vel.v0',
+        }
+        assert spec2.prior_overrides['vel.vcirc'].params['clip_sigmas'] == 3.0
+        resolved = spec2.resolve_defaults(d)['fit']['prior_overrides']
+        assert resolved['vel.rscale'] == {'dist': 'uniform', 'low': 0.001, 'high': 1.0}
+        assert (
+            spec.resolve_defaults(yaml.safe_load(DEV_SPEC.read_text()))['fit'][
+                'prior_overrides'
+            ]
+            == {}
+        )
+
+    def test_validation(self, tmp_path):
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['fit']['prior_overrides'] = {
+            'vel.rscale': {'dist': 'cauchy', 'low': 0, 'high': 1}
+        }
+        with pytest.raises(ValueError, match='unknown prior override dist'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['fit']['prior_overrides'] = {
+            'vel.rscale': {'dist': 'uniform', 'low': 1.0, 'high': 0.5}
+        }
+        with pytest.raises(ValueError, match='must be > low'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['fit']['prior_overrides'] = {
+            'vel.rscale': {'dist': 'uniform_relative', 'low': 0.0, 'high': 2.0}
+        }
+        with pytest.raises(ValueError, match='must be > 0'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['fit']['prior_overrides'] = {'vel.rscale': {'low': 0.1, 'high': 1.0}}
+        with pytest.raises(ValueError, match="'dist' key"):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['fit']['prior_overrides'] = {
+            'vel.v0': {'dist': 'gaussian', 'loc': 0.0, 'scale': 10.0}
+        }
+        d['fit']['pin_to_truth'] = ['vel.v0']
+        with pytest.raises(ValueError, match='conflicts with fit.pin_to_truth'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+
+    def test_scene_priors_apply_overrides(self):
+        """The forecast-match arm: 11 sampled parameters with the table's priors."""
+        import math
+
+        from kl_pipe.ensemble.expander import build_manifest
+        from kl_pipe.ensemble.scene import scene_priors
+        from kl_pipe.ensemble.spec import ObservationConfig
+        from kl_pipe.priors import Gaussian, TruncatedLogNormal, Uniform
+
+        spec = EnsembleSpec.from_yaml(ROLLGRID_SPEC)
+        config = ObservationConfig.from_yaml(F158_CONFIG)
+        m = build_manifest(spec, config)
+        row = m.iloc[7]
+        truth = {
+            k[len('truth.') :]: float(v)
+            for k, v in row.items()
+            if k.startswith('truth.')
+        }
+        priors = scene_priors(truth, config, spec, row=row)
+        assert len(priors.sampled_names) == 11
+        assert set(priors.sampled_names) == {
+            'F158.flux',
+            'F158.rscale',
+            'Halpha.flux',
+            'Halpha.rscale',
+            'Halpha.dispersion',
+            'cosi',
+            'theta_int',
+            'g1',
+            'g2',
+            'vel.vcirc',
+            'vel.rscale',
+        }
+        flux = priors.get_prior('F158.flux')
+        assert isinstance(flux, Uniform)
+        assert flux.bounds == pytest.approx(
+            (0.1 * truth['F158.flux'], 10.0 * truth['F158.flux'])
+        )
+        tf = priors.get_prior('vel.vcirc')
+        assert isinstance(tf, TruncatedLogNormal)
+        sigma = 0.0749 * math.log(10.0)
+        assert tf.low == pytest.approx(251.5 * math.exp(-3 * sigma))
+        assert tf.high == pytest.approx(251.5 * math.exp(3 * sigma))
+        assert priors.get_prior('cosi').bounds == (0.001, 0.999)
+        assert isinstance(priors.get_prior('g1'), Gaussian)
+        assert priors.get_prior('g1').sigma == 0.3
+        # overriding a parameter the scene fixes is an error
+        bad = dataclasses.replace(
+            spec,
+            prior_overrides={
+                **spec.prior_overrides,
+                'F158.h_over_r': spec.prior_overrides['vel.rscale'],
+            },
+        )
+        with pytest.raises(ValueError, match='not a sampled scene parameter'):
+            scene_priors(truth, config, bad, row=row)
+
+    def test_honest_arm_shared_thickness(self):
+        """A drawn h_over_r is one shared sampled parameter with the draw's prior."""
+        from kl_pipe.ensemble.expander import build_manifest
+        from kl_pipe.ensemble.scene import scene_priors
+        from kl_pipe.ensemble.spec import ObservationConfig
+        from kl_pipe.priors import LogNormal
+
+        spec = EnsembleSpec.from_yaml(ROLLGRID_HONEST_SPEC)
+        config = ObservationConfig.from_yaml(F158_CONFIG)
+        m = build_manifest(spec, config)
+        h_cols = [c for c in m.columns if c.endswith('h_over_r')]
+        assert 'truth.h_over_r' in h_cols and len(h_cols) == 4
+        for c in h_cols:
+            np.testing.assert_array_equal(
+                m[c].to_numpy(), m['truth.h_over_r'].to_numpy()
+            )
+        assert m['truth.h_over_r'].nunique() > 1
+        row = m.iloc[3]
+        truth = {
+            k[len('truth.') :]: float(v)
+            for k, v in row.items()
+            if k.startswith('truth.')
+        }
+        priors = scene_priors(truth, config, spec, row=row)
+        assert 'h_over_r' in priors.sampled_names
+        assert not any(n.endswith('.h_over_r') for n in priors.sampled_names)
+        assert isinstance(priors.get_prior('h_over_r'), LogNormal)
+        assert 'vel.v0' in priors.sampled_names
+        assert len(priors.sampled_names) == 13
+
+
+class TestGridAndLognormalDraws:
+    def test_parse_and_validation(self, tmp_path):
+        d = yaml.safe_load(DEV_SPEC.read_text())
+        d['population']['draw']['theta_int'] = {'dist': 'grid', 'values': [0.0, 1.0]}
+        d['population']['draw']['vcirc'] = {
+            'dist': 'lognormal_tf',
+            'center_kms': 251.5,
+            'sigma_tf_dex': 0.075,
+            'truth_sigma_tf_dex': 0.0,
+        }
+        spec = EnsembleSpec.from_yaml(_write(tmp_path, d))
+        assert spec.draw['theta_int'].dist == 'grid'
+        assert spec.draw['vel.vcirc'].params['truth_sigma_tf_dex'] == 0.0
+        d['population']['draw']['theta_int'] = {'dist': 'grid', 'values': []}
+        with pytest.raises(ValueError, match='non-empty'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['population']['draw']['theta_int'] = {'dist': 'grid', 'values': [1.0, 1.0]}
+        with pytest.raises(ValueError, match='unique'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['population']['draw']['theta_int'] = {
+            'dist': 'uniform',
+            'low': 0.0,
+            'high': 3.0,
+        }
+        d['population']['draw']['vcirc']['truth_sigma_tf_dex'] = -0.1
+        with pytest.raises(ValueError, match='truth_sigma_tf_dex'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+        d['population']['draw']['vcirc'] = {
+            'dist': 'lognormal_tf',
+            'center_kms': 200.0,
+            'sigma_tf_dex': 0.08,
+        }
+        d['population']['draw']['h_over_r'] = {
+            'dist': 'lognormal',
+            'median': 0.25,
+            'sigma_dex': 0.0,
+        }
+        with pytest.raises(ValueError, match='lognormal draw'):
+            EnsembleSpec.from_yaml(_write(tmp_path, d))
+
+    def test_rollgrid_manifest(self):
+        """Grid draws cycle by galaxy index, fixed-truth vcirc, flux-anchored labels."""
+        from kl_pipe.ensemble.expander import build_manifest
+        from kl_pipe.ensemble.spec import ObservationConfig
+        from kl_pipe.photometry import EXP_R50_OVER_RSCALE
+        from kl_pipe.surveys.roman import (
+            compute_line_snr_per_pass,
+            matched_filter_compactness,
+        )
+
+        spec = EnsembleSpec.from_yaml(ROLLGRID_SPEC)
+        assert spec.stratify_param == 'line_flux_cgs'
+        config = ObservationConfig.from_yaml(F158_CONFIG)
+        m = build_manifest(spec, config)
+        assert len(m) == 5 * 5 * 4 == spec.n_fits
+        # cos i cycles through the five grid values by galaxy index
+        by_gal = m.drop_duplicates('galaxy_id').sort_values('galaxy_id')
+        np.testing.assert_allclose(by_gal['truth.cosi'], [0.1, 0.3, 0.5, 0.7, 0.9])
+        np.testing.assert_allclose(m['truth.theta_int'], np.pi / 2)
+        assert (m['truth.vel.vcirc'] == 251.5).all()
+        assert (m['truth.z'] == 1.0).all()
+        assert sorted(m['line_flux_cgs'].unique()) == sorted(spec.sweep_values)
+        # the label is the published-depth per-pass line SNR of that flux for
+        # a galaxy of this disk r50 at its cos i and z
+        for _, r in m.drop_duplicates(['sweep_step', 'galaxy_id']).iterrows():
+            r50 = EXP_R50_OVER_RSCALE * r['truth.F158.rscale']
+            c = matched_filter_compactness(
+                np.array([r50]), np.array([r['truth.cosi']]), np.array([r['truth.z']])
+            )
+            expect = compute_line_snr_per_pass(np.array([r['line_flux_cgs']]), c)[0]
+            assert r['line_snr'] == pytest.approx(expect, rel=1e-12)
+        # more face-on, less compact, lower label at fixed flux
+        step = (
+            m[m['sweep_step'] == 1]
+            .drop_duplicates('galaxy_id')
+            .sort_values('truth.cosi')
+        )
+        assert (np.diff(step['line_snr'].to_numpy()) < 0).all()
+        # common random numbers across the flux sweep
+        for _, g in m.groupby(['galaxy_id', 'noise_rep']):
+            assert g['noise_seed'].nunique() == 1
+            assert len(g) == 5

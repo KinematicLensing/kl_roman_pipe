@@ -399,6 +399,19 @@ def scene_priors(
             return Uniform(draw.params['low'], draw.params['high'])
         if draw.dist == 'lognormal_tf':
             return make_tf_prior(draw.params['center_kms'], draw.params['sigma_tf_dex'])
+        if draw.dist == 'lognormal':
+            return LogNormal(
+                math.log(draw.params['median']),
+                draw.params['sigma_dex'] * math.log(10.0),
+            )
+        if draw.dist == 'grid':
+            values = [float(v) for v in draw.params['values']]
+            if len(values) < 2:
+                raise ValueError(
+                    f"single-value grid draw for '{name}' has no population "
+                    f"prior; set fit.prior_overrides['{name}'] or pin it"
+                )
+            return Uniform(min(values), max(values))
         raise ValueError(f"no prior rule for draw dist '{draw.dist}' ({name})")
 
     # catalog truths carry the catalog disk scale length, which exceeds the
@@ -639,11 +652,20 @@ def scene_priors(
         if spec.stratify_param == 'cosi':
             prior_spec['cosi'] = Uniform(*spec.stratify_range)
 
-        # drawn params: generating distribution = fit prior (self-consistent)
+        # drawn params: generating distribution = fit prior (self-consistent);
+        # z is pinned above, theta_int takes the PA fit prior below, and cosi
+        # takes fit.cosi_prior_range below when the spec sets it
         for name, draw in spec.draw.items():
-            if name == 'z':
-                continue  # z is pinned above in v1
+            if name in ('z', 'theta_int'):
+                continue
+            if name == 'cosi' and spec.cosi_fit_prior_range is not None:
+                continue
             prior_spec[name] = population_prior(name, draw)
+        if 'h_over_r' in spec.draw:
+            # drawn thickness is one shared sampled parameter; the
+            # per-component pins give way to the top-level key
+            for comp in _geometry_components(config):
+                del prior_spec[f'{comp}.h_over_r']
 
     # fit prior wider than the generating range, when the spec asks for it
     if spec.cosi_fit_prior_range is not None:
@@ -654,7 +676,7 @@ def scene_priors(
             "cosi has no prior: it must be either the stratified axis or a "
             "population.draw entry"
         )
-    if 'theta_int' not in prior_spec:
+    if 'theta_int' not in prior_spec and 'theta_int' not in spec.draw:
         raise ValueError(
             "spec population.draw must include theta_int (position angle population)"
         )
@@ -665,6 +687,15 @@ def scene_priors(
         raise ValueError(
             "spec population.draw must include vcirc (Tully-Fisher population)"
         )
+
+    # fit.prior_overrides: replacement priors for sampled parameters
+    for name, ov in spec.prior_overrides.items():
+        if name not in prior_spec or not isinstance(prior_spec[name], Prior):
+            raise ValueError(
+                f"fit.prior_overrides '{name}' is not a sampled scene parameter; "
+                f"sampled: {sorted(k for k, v in prior_spec.items() if isinstance(v, Prior))}"
+            )
+        prior_spec[name] = _override_prior(name, ov, truth)
 
     # fit.pin_to_truth: fix the listed sampled parameters at the manifest
     # truth; a bare name broadcasts to every sampled '<component>.<name>'
@@ -689,6 +720,31 @@ def scene_priors(
             prior_spec[key] = truth[key]
 
     return PriorDict(prior_spec)
+
+
+def _override_prior(name: str, ov, truth: Dict[str, float]) -> Prior:
+    """Build the fit prior for one ``fit.prior_overrides`` entry."""
+    p = ov.params
+    if ov.dist == 'uniform':
+        return Uniform(p['low'], p['high'])
+    if ov.dist == 'uniform_relative':
+        # bounds are multiples of this fit's truth
+        if name not in truth or truth[name] <= 0:
+            raise ValueError(
+                f"prior_overrides '{name}': uniform_relative needs a positive "
+                f"truth, got {truth.get(name)!r}"
+            )
+        return Uniform(p['low'] * truth[name], p['high'] * truth[name])
+    if ov.dist == 'gaussian':
+        return Gaussian(p['loc'], p['scale'])
+    if ov.dist == 'lognormal':
+        mu = math.log(p['median'])
+        sigma = p['sigma_dex'] * math.log(10.0)
+        if 'clip_sigmas' in p:
+            k = p['clip_sigmas'] * sigma
+            return TruncatedLogNormal(mu, sigma, math.exp(mu - k), math.exp(mu + k))
+        return LogNormal(mu, sigma)
+    raise ValueError(f"prior_overrides '{name}': unknown dist '{ov.dist}'")
 
 
 # per-fit varying truth parameters the expander fills (everything else comes

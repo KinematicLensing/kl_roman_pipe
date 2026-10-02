@@ -115,15 +115,46 @@ def compute_fit_id(
     return hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
-def _draw_value(draw: DrawSpec, rng: np.random.Generator) -> float:
+def _draw_value(draw: DrawSpec, rng: np.random.Generator, galaxy_id: int) -> float:
     if draw.dist == 'uniform':
         return float(rng.uniform(draw.params['low'], draw.params['high']))
     if draw.dist == 'lognormal_tf':
-        sigma_ln = draw.params['sigma_tf_dex'] * np.log(10.0)
+        # truth scatter may differ from the fit-prior width (0 = every galaxy
+        # at the center); the normal draw is consumed either way so the other
+        # draws' streams do not move
+        truth_dex = draw.params.get('truth_sigma_tf_dex', draw.params['sigma_tf_dex'])
+        sigma_ln = truth_dex * np.log(10.0)
         return float(
             np.exp(np.log(draw.params['center_kms']) + sigma_ln * rng.normal())
         )
+    if draw.dist == 'lognormal':
+        sigma_ln = draw.params['sigma_dex'] * np.log(10.0)
+        return float(np.exp(np.log(draw.params['median']) + sigma_ln * rng.normal()))
+    if draw.dist == 'grid':
+        values = draw.params['values']
+        return float(values[galaxy_id % len(values)])
     raise ValueError(f"unknown draw dist '{draw.dist}'")
+
+
+def _line_label_from_flux(
+    f_line_cgs: float, truth: Dict[str, float], config: ObservationConfig
+) -> float:
+    """Per-pass line SNR label of a physical line flux at the published depth.
+
+    Uses the catalog-mode convention: the galaxy's compactness from its
+    broadband disk r50 (first band), cos i and redshift.
+    """
+    from kl_pipe.photometry import EXP_R50_OVER_RSCALE
+    from kl_pipe.surveys.roman import (
+        compute_line_snr_per_pass,
+        matched_filter_compactness,
+    )
+
+    r50 = EXP_R50_OVER_RSCALE * float(truth[f'{config.bands[0]}.rscale'])
+    compactness = matched_filter_compactness(
+        np.array([r50]), np.array([float(truth['cosi'])]), np.array([float(truth['z'])])
+    )
+    return float(compute_line_snr_per_pass(np.array([f_line_cgs]), compactness)[0])
 
 
 def _galaxy_rng(spec_seed: int, cosi_bin: int, galaxy_id: int):
@@ -247,8 +278,15 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
             rng = _galaxy_rng(spec.seed, cosi_bin, galaxy_id)
             # fixed draw order = stable across spec-dict insertion order
             drawn = {
-                name: _draw_value(spec.draw[name], rng) for name in sorted(spec.draw)
+                name: _draw_value(spec.draw[name], rng, galaxy_id)
+                for name in sorted(spec.draw)
             }
+            if 'h_over_r' in drawn:
+                # one drawn thickness shared by every component (the fit
+                # samples the top-level key, the mock reads the components)
+                for key in list(base_truth):
+                    if key.endswith('.h_over_r'):
+                        drawn[key] = drawn['h_over_r']
             for ring_member in ring_members:
                 theta = drawn['theta_int']
                 if ring_member == 90:
@@ -267,6 +305,17 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
                                     'g2': shear['g2'],
                                 }
                             )
+                            if sweep_value is None:
+                                line_snr = spec.line_snr
+                                line_flux = None
+                            elif spec.stratify_param == 'line_flux_cgs':
+                                line_flux = float(sweep_value)
+                                line_snr = _line_label_from_flux(
+                                    line_flux, truth, config
+                                )
+                            else:
+                                line_snr = float(sweep_value)
+                                line_flux = None
                             id_args = (
                                 spec.run_name,
                                 spec.version,
@@ -311,10 +360,11 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
                                 ),
                                 'observation_config_id': config.id,
                                 'broadband_snr': spec.broadband_snr,
-                                'line_snr': (
-                                    float(sweep_value)
-                                    if sweep_value is not None
-                                    else spec.line_snr
+                                'line_snr': line_snr,
+                                # physical line flux [erg/s/cm2] on a flux
+                                # sweep; NaN when the label is set directly
+                                'line_flux_cgs': (
+                                    line_flux if line_flux is not None else np.nan
                                 ),
                                 'save_chains': spec.save_chains == 'all',
                                 'save_mocks': spec.save_mocks == 'all',

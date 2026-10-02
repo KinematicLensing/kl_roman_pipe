@@ -402,3 +402,43 @@ worth chi2 1.3 edge-on, 0.2 mid and 0.03 face-on at per-pass line SNR 10,
 before marginalising over the line size whose signal map has nearly the same
 shape. The census sample sits at per-pass line SNR 10-30; the x3 regime is
 0.5% of it and x10 does not exist in the medium tier.
+
+## 18. The roll-angle forecast agrees per galaxy; its headline is a weighting and a fixed thickness
+
+Jiachuan's forecast table (1125 chains of one fiducial galaxy on a grid of
+line flux, image SNR, cos i and roll angle) read at each of 147 census fits'
+flux, realized broadband SNR and inclination gives median klpipe / forecast
+width ratios of 1.14 for g+, 1.26 for cos i and 0.97 for v sin i (16-84%
+0.98-1.51 on g+). The two codes measure the same shape noise for the same
+galaxy. The ratios for gx (2.2) and theta (3.6) do not agree and are not
+explained by orientation to the dispersion axis, frame definition, rotation
+amplitude, thickness or exposure count; they are the data-limited
+quantities, and either his two super-sampled exposures carry more depth
+than one of our passes or the codes model opposed dispersion differently.
+
+His table has two routes to a small g+ width. Along line flux at fixed
+image SNR, sigma(v sin i) falls 140 -> 0.15 km/s and sigma(gx) 0.09 ->
+0.0002 while sigma(g+) falls 0.08 -> 0.006: kinematic lensing, above
+F_Ha ~ 4e-15 where COSMOS25 has 2 galaxies per deg2. Along image SNR at
+fixed flux 7.6e-16, sigma(g+) and sigma(cos i) fall 0.12 -> 0.003 while
+sigma(v sin i) stays at 20-26 km/s: inclination read off the image through
+a fixed disk thickness and exact profile. klpipe with sampled thickness
+stays at 0.1 over its image SNR range, as the 2026-09-16 Fisher bank
+found (10x broadband depth: pinned 0.07 -> 0.009, honest 0.128 -> 0.119).
+
+Folding his table over the real COSMOS25 population: median galaxy 0.094,
+plain mean 0.090, inverse-variance weighted 0.042 (CMC 0.042), with 61% of
+the weight in the 2.4% of galaxies above image SNR 1000 and N_eff 76 of
+3662. Capping image SNR at 224 returns 0.093. klpipe's own fits: median
+0.111, weighted 0.097, N_eff 101 of 147. The CMC sample has 3-4x the
+COSMOS25 Halpha density at every flux. Report the median, the weighted
+value and N_eff together; a weighted number alone with the full N
+overstates the sample's power by N / N_eff.
+
+klpipe's sigma(v sin i) is flat at 20-30 km/s against flux: the TF prior
+edge-on, the inclination error through sin i face-on, never the data;
+sigma(vcirc) sits in the TF-prior band at every flux fit. Comparing
+sigma(v sin i) between codes with different vcirc priors compares priors.
+
+Tooling: `np.isclose` on fluxes of order 1e-16 with the default atol 1e-8
+matches every value. Pass `atol=0` or compare labels.

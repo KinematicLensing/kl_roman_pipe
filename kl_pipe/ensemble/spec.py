@@ -22,7 +22,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -504,7 +504,13 @@ class ObservationConfig:
 # =============================================================================
 
 _NOISE_MODELS = ('matched_filter', 'poisson')
-_DRAW_DISTS = ('uniform', 'lognormal_tf')
+_DRAW_DISTS = ('uniform', 'lognormal_tf', 'lognormal', 'grid')
+# fit.prior_overrides distributions
+_OVERRIDE_DISTS = ('uniform', 'uniform_relative', 'gaussian', 'lognormal')
+# sampled-mode config-sweep axes: the per-pass line SNR label directly, or a
+# physical line flux [erg/s/cm2] converted per fit to the label through the
+# published-depth compactness scaling (kl_pipe.surveys.roman)
+_SWEEP_PARAMS = ('line_snr', 'line_flux_cgs')
 _POPULATION_TYPES = ('sampled', 'catalog')
 _SHEAR_SCHEMES = ('fixed', 'grid')
 _DISPATCH_MODES = ('static', 'dynamic')
@@ -547,6 +553,81 @@ class DrawSpec:
             _require_keys(
                 self.params, ('center_kms', 'sigma_tf_dex'), 'draw:lognormal_tf'
             )
+            _reject_unknown(
+                self.params,
+                ('center_kms', 'sigma_tf_dex', 'truth_sigma_tf_dex'),
+                'draw:lognormal_tf',
+            )
+            # truth scatter defaults to the prior width; 0 draws every galaxy
+            # at center_kms while the fit prior keeps sigma_tf_dex
+            truth_dex = self.params.get(
+                'truth_sigma_tf_dex', self.params['sigma_tf_dex']
+            )
+            if truth_dex < 0 or self.params['sigma_tf_dex'] <= 0:
+                raise ValueError(
+                    "lognormal_tf draw: sigma_tf_dex must be > 0 and "
+                    f"truth_sigma_tf_dex >= 0, got {self.params}"
+                )
+        elif self.dist == 'lognormal':
+            _require_keys(self.params, ('median', 'sigma_dex'), 'draw:lognormal')
+            _reject_unknown(self.params, ('median', 'sigma_dex'), 'draw:lognormal')
+            if self.params['median'] <= 0 or self.params['sigma_dex'] <= 0:
+                raise ValueError(
+                    f"lognormal draw: median and sigma_dex must be > 0, got {self.params}"
+                )
+        elif self.dist == 'grid':
+            # deterministic cycle through the listed values by galaxy index
+            _require_keys(self.params, ('values',), 'draw:grid')
+            _reject_unknown(self.params, ('values',), 'draw:grid')
+            values = self.params['values']
+            if not isinstance(values, (list, tuple)) or len(values) == 0:
+                raise ValueError(
+                    f"grid draw: values must be a non-empty list, got {values!r}"
+                )
+            if len(set(float(v) for v in values)) != len(values):
+                raise ValueError(f"grid draw: values must be unique, got {values!r}")
+
+
+@dataclass(frozen=True)
+class PriorOverrideSpec:
+    """One ``fit.prior_overrides`` entry: a replacement fit prior for a sampled parameter."""
+
+    dist: str
+    params: Dict[str, float]
+
+    def __post_init__(self):
+        if self.dist not in _OVERRIDE_DISTS:
+            raise ValueError(
+                f"unknown prior override dist '{self.dist}'; supported: {_OVERRIDE_DISTS}"
+            )
+        ctx = f'prior_overrides:{self.dist}'
+        if self.dist in ('uniform', 'uniform_relative'):
+            _require_keys(self.params, ('low', 'high'), ctx)
+            _reject_unknown(self.params, ('low', 'high'), ctx)
+            if self.params['high'] <= self.params['low']:
+                raise ValueError(
+                    f"{ctx}: high ({self.params['high']}) must be > low ({self.params['low']})"
+                )
+            if self.dist == 'uniform_relative' and self.params['low'] <= 0:
+                raise ValueError(
+                    f"{ctx}: bounds are multiples of the truth and must be > 0"
+                )
+        elif self.dist == 'gaussian':
+            _require_keys(self.params, ('loc', 'scale'), ctx)
+            _reject_unknown(self.params, ('loc', 'scale'), ctx)
+            if self.params['scale'] <= 0:
+                raise ValueError(
+                    f"{ctx}: scale must be > 0, got {self.params['scale']}"
+                )
+        elif self.dist == 'lognormal':
+            _require_keys(self.params, ('median', 'sigma_dex'), ctx)
+            _reject_unknown(self.params, ('median', 'sigma_dex', 'clip_sigmas'), ctx)
+            if self.params['median'] <= 0 or self.params['sigma_dex'] <= 0:
+                raise ValueError(
+                    f"{ctx}: median and sigma_dex must be > 0, got {self.params}"
+                )
+            if 'clip_sigmas' in self.params and self.params['clip_sigmas'] <= 0:
+                raise ValueError(f"{ctx}: clip_sigmas must be > 0")
 
 
 @dataclass(frozen=True)
@@ -1101,7 +1182,7 @@ class EnsembleSpec:
     # the stratify/draw machinery is unused (catalog_population carries the
     # whole population definition).
     population_type: str  # 'sampled' | 'catalog'
-    stratify_param: str  # 'cosi' | 'line_snr'
+    stratify_param: str  # 'cosi' | 'line_snr' | 'line_flux_cgs'
     stratify_n_bins: int  # cosi axis only; 0 for a config sweep
     stratify_range: Tuple[float, float]  # cosi axis only; (0, 0) for a sweep
     sweep_values: Tuple[float, ...]  # config-sweep axis only; () for cosi
@@ -1244,6 +1325,9 @@ class EnsembleSpec:
     # instead of sampled. Dotted names address one parameter; a bare name
     # ('x0', 'y0', ...) addresses every sampled '<component>.<name>'.
     pin_to_truth: Tuple[str, ...] = ()
+    # fit.prior_overrides: replacement fit priors for sampled scene
+    # parameters, by dotted name (applied before pin_to_truth)
+    prior_overrides: Dict[str, PriorOverrideSpec] = field(default_factory=dict)
     # catalog populations: multiplier on every galaxy's per-pass line SNR
     # (mock noise only; selection and the line-flux prior use the catalog value)
     line_snr_scale: float = 1.0
@@ -1330,6 +1414,20 @@ class EnsembleSpec:
             )
         if len(set(self.pin_to_truth)) != len(self.pin_to_truth):
             raise ValueError(f"fit.pin_to_truth has duplicates: {self.pin_to_truth!r}")
+        for name, ov in self.prior_overrides.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(ov, PriorOverrideSpec)
+            ):
+                raise ValueError(
+                    f"fit.prior_overrides must map parameter names to override "
+                    f"specs, got {name!r}: {ov!r}"
+                )
+            if name in self.pin_to_truth:
+                raise ValueError(
+                    f"fit.prior_overrides['{name}'] conflicts with fit.pin_to_truth"
+                )
         if not isinstance(self.map_bounded, bool):
             raise ValueError(
                 f"fit.map_bounded must be a boolean, got {self.map_bounded!r}"
@@ -1419,10 +1517,10 @@ class EnsembleSpec:
                     f"0 < lo < hi <= 1"
                 )
         elif self.measurement == 'sigma_eps_vs_line_snr':
-            if self.stratify_param != 'line_snr':
+            if self.stratify_param not in _SWEEP_PARAMS:
                 raise ValueError(
-                    f"measurement sigma_eps_vs_line_snr sweeps line_snr, "
-                    f"got '{self.stratify_param}'"
+                    f"measurement sigma_eps_vs_line_snr sweeps one of "
+                    f"{_SWEEP_PARAMS}, got '{self.stratify_param}'"
                 )
             if len(self.sweep_values) < 2:
                 raise ValueError(
@@ -1587,6 +1685,9 @@ class EnsembleSpec:
         draw = self.draw.get('cosi')
         if draw is not None and draw.dist == 'uniform':
             return (float(draw.params['low']), float(draw.params['high']))
+        if draw is not None and draw.dist == 'grid':
+            values = [float(v) for v in draw.params['values']]
+            return (min(values), max(values))
         return None
 
     def resolve_defaults(self, raw: dict) -> dict:
@@ -1641,6 +1742,10 @@ class EnsembleSpec:
                 'warmup_stage2_adapt': self.warmup_stage2_adapt,
                 'record_warmup': self.record_warmup,
                 'pin_to_truth': list(self.pin_to_truth),
+                'prior_overrides': {
+                    name: {'dist': ov.dist, **ov.params}
+                    for name, ov in self.prior_overrides.items()
+                },
                 'escalation': {
                     'enabled': esc.enabled,
                     'rhat_max': esc.rhat_max,
@@ -1808,7 +1913,7 @@ class EnsembleSpec:
                     f"parameter, got {list(stratify)}"
                 )
             strat_param, strat_cfg = next(iter(stratify.items()))
-            if strat_param == 'line_snr':
+            if strat_param in _SWEEP_PARAMS:
                 _reject_unknown(
                     strat_cfg, ('values',), f"{path}:population.stratify.{strat_param}"
                 )
@@ -1819,8 +1924,8 @@ class EnsembleSpec:
                 if 'line' in snr:
                     raise ValueError(
                         f"{path}: observation.snr.line conflicts with the "
-                        f"line_snr sweep axis; remove it (per-fit values come "
-                        f"from population.stratify.line_snr.values)"
+                        f"{strat_param} sweep axis; remove it (per-fit values "
+                        f"come from population.stratify.{strat_param}.values)"
                     )
             else:
                 if 'line' not in snr:
@@ -1926,6 +2031,7 @@ class EnsembleSpec:
                 'warmup_stage2_adapt',
                 'record_warmup',
                 'pin_to_truth',
+                'prior_overrides',
                 'escalation',
             ),
             f"{path}:fit",
@@ -2011,6 +2117,9 @@ class EnsembleSpec:
             pin_to_truth=_parse_pin_to_truth(
                 fit.get('pin_to_truth', ()), f"{path}:fit"
             ),
+            prior_overrides=_parse_prior_overrides(
+                fit.get('prior_overrides'), f"{path}:fit"
+            ),
             ring_enabled=ring_enabled,
             catalog_population=catalog_population,
             render_oversample=render_oversample,
@@ -2067,6 +2176,34 @@ def _parse_pin_to_truth(raw, context: str) -> Tuple[str, ...]:
             f"{context}.pin_to_truth must be a list of parameter names, got {raw!r}"
         )
     return tuple(str(name) for name in raw)
+
+
+def _parse_prior_overrides(raw, context: str) -> Dict[str, PriorOverrideSpec]:
+    """Parse ``fit.prior_overrides`` ({dotted name: {dist, ...params}})."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{context}.prior_overrides must be a mapping of parameter names "
+            f"to prior definitions, got {raw!r}"
+        )
+    out: Dict[str, PriorOverrideSpec] = {}
+    for name, cfg in raw.items():
+        if not isinstance(cfg, dict) or 'dist' not in cfg:
+            raise ValueError(
+                f"{context}.prior_overrides.{name}: expected a mapping with a "
+                f"'dist' key, got {cfg!r}"
+            )
+        cfg = dict(cfg)
+        dist = str(cfg.pop('dist'))
+        params = {
+            k: (list(v) if isinstance(v, (list, tuple)) else float(v))
+            for k, v in cfg.items()
+        }
+        out[_PARAM_ALIASES.get(str(name), str(name))] = PriorOverrideSpec(
+            dist=dist, params=params
+        )
+    return out
 
 
 def _resolve_fixed_block(fixed_raw: dict, context: str) -> Dict[str, float]:

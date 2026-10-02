@@ -819,6 +819,16 @@ def _summary_row(
             out[f'post.{nm}.std'] = float(np.std(arr, ddof=1))
             out[f'post.{nm}.median'] = float(np.median(arr))
 
+    # projected rotation amplitude v sin i = vcirc * sqrt(1 - cos^2 i), the
+    # quantity the grism measures and the kinematic-lensing comparison metric
+    if all(n in sampled_names for n in ('vel.vcirc', 'cosi')):
+        samples = np.asarray(result.samples)
+        iv, ic = (sampled_names.index(n) for n in ('vel.vcirc', 'cosi'))
+        vsini = samples[:, iv] * np.sqrt(np.clip(1.0 - samples[:, ic] ** 2, 0.0, None))
+        out['post.vsini.mean'] = float(np.mean(vsini))
+        out['post.vsini.std'] = float(np.std(vsini, ddof=1))
+        out['post.vsini.median'] = float(np.median(vsini))
+
     # priors actually used for this fit (ground truth: the object passed to the
     # sampler). Flat prior.<param>.{dist,loc,scale,low,high,parent} columns,
     # every param -- sampled and fixed (dist='fixed', loc=value) -- so the

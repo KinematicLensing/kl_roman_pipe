@@ -306,12 +306,15 @@ def _grism_psf_kernel_size(
                 "kernel size can be pinned at the ensemble's largest observed "
                 "wavelength"
             )
-        if z_draw.dist != 'uniform':
+        if z_draw.dist == 'uniform':
+            z_max = z_draw.params['high']
+        elif z_draw.dist == 'grid':
+            z_max = max(float(v) for v in z_draw.params['values'])
+        else:
             raise NotImplementedError(
-                f"grism kernel-size pinning knows the z range for uniform "
-                f"draws only, got dist '{z_draw.dist}'"
+                f"grism kernel-size pinning knows the z range for uniform and "
+                f"grid draws only, got dist '{z_draw.dist}'"
             )
-        z_max = z_draw.params['high']
     psf_max = _build_grism_psf(config.grism_psf, z_max, mock=mock)
     fine_ps = config.pixel_scale_arcsec / spec.render_oversample
     size = int(psf_max.getGoodImageSize(fine_ps))
