@@ -13,7 +13,8 @@ set -euo pipefail
 
 : "${ARM:?set ARM=pinned or ARM=sampled}"
 export KLPIPE_REPO="$STOCKYARD/repos/kl_roman_pipe_xu23"
-source "$KLPIPE_REPO/experiments/sweverett/vista_kit/env_vista.sh"
+# module init scripts are not set -u clean
+set +u; source "$KLPIPE_REPO/experiments/sweverett/vista_kit/env_vista.sh"; set -u
 export JAX_PLATFORMS=cpu
 export KLPIPE_CPU_DEVICES=4
 
@@ -22,7 +23,8 @@ OUT="$SCRATCH/image_only_shear/out"
 LOGS="$SCRATCH/image_only_shear/logs/$SLURM_JOB_ID"
 mkdir -p "$OUT" "$LOGS"
 N_WORKERS=36
-N_TASKS=$($KLPIPE_PYTHON "$SCRIPT" list --arm "$ARM" 2>/dev/null | tail -1)
+N_TASKS=$($KLPIPE_PYTHON "$SCRIPT" list --arm "$ARM" | tail -1)
+[[ "$N_TASKS" =~ ^[0-9]+$ ]] || { echo "task count not an integer: '$N_TASKS'" >&2; exit 1; }
 echo "arm $ARM: $N_TASKS tasks over $N_WORKERS workers, out $OUT"
 
 for w in $(seq 0 $((N_WORKERS - 1))); do
