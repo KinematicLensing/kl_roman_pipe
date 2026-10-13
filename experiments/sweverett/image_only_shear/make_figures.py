@@ -77,46 +77,60 @@ def style(ax):
     ax.tick_params(colors=MUTED, labelcolor=INK)
 
 
+ARM_TITLES = {
+    'pinned': r'$h/R=0.1$ pinned in truth and fit',
+    'sampled': r'$h/R\sim\mathrm{LN}(0.25,\,0.14\,\mathrm{dex})$, sampled with that prior',
+}
+# multiplicative x offsets so the six cos i series do not overlap on the log SNR axis
+COSI_XOFF = dict(zip(COSI_COLORS, np.linspace(-0.06, 0.06, len(COSI_COLORS))))
+
+
 def fig_width_vs_snr(fits, path, label):
     import matplotlib.pyplot as plt
 
     sel = [f for f in fits if f['pa'] in ('pa45', 'pa45rot')]
     fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.0), sharey=True)
     for ax, comp, ylab in (
-        (axes[0], 'gp', r'$\sigma_{g_+}$'),
-        (axes[1], 'gx', r'$\sigma_{g_\times}$'),
+        (axes[0], 'gp', r'median posterior $\sigma_{g_+}$'),
+        (axes[1], 'gx', r'median posterior $\sigma_{g_\times}$'),
     ):
         for cosi, col in COSI_COLORS.items():
-            xs, ys, conv = [], [], []
+            xs, ys, lo, hi, conv = [], [], [], [], []
             for snr in sorted({f['snr'] for f in sel}):
                 cell = [f for f in sel if f['snr'] == snr and f['cosi'] == cosi]
                 if not cell:
                     continue
-                xs.append(snr)
-                ys.append(np.nanmedian([f[f'std_{comp}0'] for f in cell]))
+                w = np.array([f[f'std_{comp}0'] for f in cell])
+                xs.append(snr * 10 ** COSI_XOFF[cosi])
+                ys.append(np.nanmedian(w))
+                lo.append(np.nanpercentile(w, 16))
+                hi.append(np.nanpercentile(w, 84))
                 conv.append(np.mean([f['converged'] for f in cell]) >= 0.5)
             if not xs:
                 continue
+            ys, lo, hi = np.array(ys), np.array(lo), np.array(hi)
+            ax.errorbar(
+                xs,
+                ys,
+                yerr=[ys - lo, hi - ys],
+                fmt='none',
+                ecolor=col,
+                elinewidth=1,
+                capsize=0,
+            )
             ax.plot(xs, ys, '-', color=col, lw=2, label=rf'$\cos i={cosi:g}$')
             for x, y, ok in zip(xs, ys, conv):
                 ax.plot(x, y, 'o', ms=8, mfc=col if ok else 'white', mec=col, mew=2)
         ax.axhline(BOX_STD, color=MUTED, lw=1, ls='--')
         ax.set_xscale('log')
-        ax.set_yscale('log')
-        ax.set_xlabel(r'image $\mathrm{SNR}$ (F158, matched filter)', color=INK)
+        ax.set_ylim(0, 0.135)
+        ax.set_xlabel(r'image $\mathrm{SNR}$ (F158)', color=INK)
         ax.set_ylabel(ylab, color=INK)
         style(ax)
-    axes[0].text(
-        12,
-        BOX_STD * 1.05,
-        r'prior $U(-0.2,0.2)$ std',
-        color=MUTED,
-        fontsize=8,
-        va='bottom',
-    )
     axes[1].legend(frameon=False, fontsize=8, loc='lower left')
     fig.suptitle(
-        rf'image only, $h/R={0.1:g}$ ({label}), disk at $45^\circ$ to pixels; open = <50% of fits converged',
+        f'image only, {ARM_TITLES[label]}, disk at $45^\\circ$ to pixels; '
+        'bars = 16-84% of fits; open = <50% converged; dashed = prior std',
         fontsize=10,
         color=INK,
     )
@@ -125,48 +139,71 @@ def fig_width_vs_snr(fits, path, label):
     print(f'wrote {path}')
 
 
+def _response(cell, k, comp, pas):
+    """Median over +/- pairs (shared noise) of (ghat(+) - ghat(-)) / 2 g_true for one disk-frame component."""
+    pairs = {}
+    for f in cell:
+        if f['pa'] in pas:
+            pairs.setdefault((f['cosi'], f['pa'], f['rep']), {})[f['sign']] = f
+    rk = []
+    for pr in pairs.values():
+        if 1 in pr and -1 in pr:
+            gt = pr[1][f'gt_{"plus" if comp == "gp" else "cross"}']
+            rk.append((pr[1][f'mean_{comp}{k}'] - pr[-1][f'mean_{comp}{k}']) / (2 * gt))
+    return np.nanmedian(rk) if rk else np.nan
+
+
 def fig_shear_prior(fits, path, label):
     import matplotlib.pyplot as plt
 
     snrs = sorted({f['snr'] for f in fits if f['snr'] >= 47})
     x = np.arange(len(PRIORS))
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4.0))
-    for snr in snrs:
-        col = SNR_COLORS.get(snr, MUTED)
-        cell = [f for f in fits if f['snr'] == snr]
-        widths = [
-            np.nanmedian([f[f'std_gp{k}'] for f in cell]) for k in range(len(PRIORS))
-        ]
-        axes[0].plot(
-            x, widths, 'o-', color=col, lw=2, ms=8, label=rf'$\mathrm{{SNR}}={snr:g}$'
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7.5), sharex=True)
+    # pure-g+ truth: pa0 and pa45rot; pure-gx truth: pa45
+    rows = (('gp', '+', ('pa0', 'pa45rot')), ('gx', r'\times', ('pa45',)))
+    for r, (comp, sym, pas) in enumerate(rows):
+        for snr in snrs:
+            col = SNR_COLORS.get(snr, MUTED)
+            cell = [f for f in fits if f['snr'] == snr]
+            widths = [
+                np.nanmedian([f[f'std_{comp}{k}'] for f in cell])
+                for k in range(len(PRIORS))
+            ]
+            axes[r, 0].plot(
+                x,
+                widths,
+                'o-',
+                color=col,
+                lw=2,
+                ms=8,
+                label=rf'$\mathrm{{SNR}}={snr:g}$',
+            )
+            axes[r, 1].plot(
+                x,
+                [_response(cell, k, comp, pas) for k in range(len(PRIORS))],
+                'o-',
+                color=col,
+                lw=2,
+                ms=8,
+            )
+        axes[r, 0].set_ylabel(rf'median posterior $\sigma_{{g_{sym}}}$', color=INK)
+        axes[r, 1].set_ylabel(
+            rf'response $R_{sym}=(\hat g_{sym}^{{(+)}}-\hat g_{sym}^{{(-)}})/2g_{sym}$',
+            color=INK,
         )
-        # response of g+ from +/- pairs with pure-g+ truth (pa0, pa45rot), shared noise
-        resp = []
-        for k in range(len(PRIORS)):
-            rk = []
-            pairs = {}
-            for f in cell:
-                if f['pa'] in ('pa0', 'pa45rot'):
-                    pairs.setdefault((f['cosi'], f['pa'], f['rep']), {})[f['sign']] = f
-            for pr in pairs.values():
-                if 1 in pr and -1 in pr:
-                    num = pr[1][f'mean_gp{k}'] - pr[-1][f'mean_gp{k}']
-                    rk.append(num / (2 * pr[1]['gt_plus']))
-            resp.append(np.nanmedian(rk) if rk else np.nan)
-        axes[1].plot(x, resp, 'o-', color=col, lw=2, ms=8)
-    axes[0].set_ylabel(r'median $\sigma_{g_+}$', color=INK)
-    axes[1].set_ylabel(
-        r'median response $R_+=(\hat g_+^{(+)}-\hat g_+^{(-)})/2g_+$', color=INK
-    )
-    axes[1].axhline(1.0, color=MUTED, lw=1, ls='--')
-    for ax in axes:
+        axes[r, 1].axhline(1.0, color=MUTED, lw=1, ls='--')
+        axes[r, 0].set_ylim(0, 0.12)
+        axes[r, 1].set_ylim(-0.1, 1.15)
+    for ax in axes.flat:
         ax.set_xticks(x)
         ax.set_xticklabels([p[0] for p in PRIORS], fontsize=9)
-        ax.set_xlabel('shear prior', color=INK)
         style(ax)
-    axes[0].legend(frameon=False, fontsize=8)
+    for ax in axes[1]:
+        ax.set_xlabel('shear prior', color=INK)
+    axes[0, 0].legend(frameon=False, fontsize=8)
     fig.suptitle(
-        rf'image only, $h/R=0.1$ ({label}), all fits; $|g_\mathrm{{true}}|=0.05$; '
+        f'image only, {ARM_TITLES[label]}, all fits; '
+        r'$|g_\mathrm{true}|=0.05$; '
         r'$|g|<0.2$ is the disk prior, $|g_i|<b$ per-component boxes',
         fontsize=10,
         color=INK,
