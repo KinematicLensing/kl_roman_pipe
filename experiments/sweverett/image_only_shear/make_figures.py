@@ -30,12 +30,29 @@ SNR_COLORS = {47.0: '#86b6ef', 224.0: '#3987e5', 1057.0: '#1c5cab', 5000.0: '#0d
 INK, MUTED, GRID = '#0b0b0b', '#52514e', '#e4e3df'
 BOX_STD = 0.2 / math.sqrt(3.0)
 # (label, membership test on (g1, g2) samples)
+# (label, membership test on (g1, g2) samples, per-component prior std)
 PRIORS = [
-    (r'$|g_i|<0.2$', lambda g1, g2: (np.abs(g1) < 0.2) & (np.abs(g2) < 0.2)),
-    (r'$|g|<0.2$', lambda g1, g2: np.hypot(g1, g2) < 0.2),
-    (r'$|g_i|<0.15$', lambda g1, g2: (np.abs(g1) < 0.15) & (np.abs(g2) < 0.15)),
-    (r'$|g_i|<0.1$', lambda g1, g2: (np.abs(g1) < 0.1) & (np.abs(g2) < 0.1)),
-    (r'$|g_i|<0.07$', lambda g1, g2: (np.abs(g1) < 0.07) & (np.abs(g2) < 0.07)),
+    (
+        r'$|g_i|<0.2$',
+        lambda g1, g2: (np.abs(g1) < 0.2) & (np.abs(g2) < 0.2),
+        0.2 / math.sqrt(3),
+    ),
+    (r'$|g|<0.2$', lambda g1, g2: np.hypot(g1, g2) < 0.2, 0.2 / 2),
+    (
+        r'$|g_i|<0.15$',
+        lambda g1, g2: (np.abs(g1) < 0.15) & (np.abs(g2) < 0.15),
+        0.15 / math.sqrt(3),
+    ),
+    (
+        r'$|g_i|<0.1$',
+        lambda g1, g2: (np.abs(g1) < 0.1) & (np.abs(g2) < 0.1),
+        0.1 / math.sqrt(3),
+    ),
+    (
+        r'$|g_i|<0.07$',
+        lambda g1, g2: (np.abs(g1) < 0.07) & (np.abs(g2) < 0.07),
+        0.07 / math.sqrt(3),
+    ),
 ]
 
 
@@ -52,8 +69,12 @@ def load(arm_dir: Path):
         th = row['truth.theta_int']
         c, s = math.cos(2 * th), math.sin(2 * th)
         row['gt_plus'] = row['truth.g1'] * c + row['truth.g2'] * s
+        if 'h_over_r' in names:
+            row['std_lnh'] = float(
+                np.std(np.log(npz['samples'][:, names.index('h_over_r')]))
+            )
         row['gt_cross'] = -row['truth.g1'] * s + row['truth.g2'] * c
-        for k, (_, keep_fn) in enumerate(PRIORS):
+        for k, (_, keep_fn, _) in enumerate(PRIORS):
             keep = keep_fn(g1, g2)
             gp, gx = (g1 * c + g2 * s)[keep], (-g1 * s + g2 * c)[keep]
             row[f'n_keep{k}'] = int(keep.sum())
@@ -78,8 +99,8 @@ def style(ax):
 
 
 ARM_TITLES = {
-    'pinned': r'$h/R=0.1$ pinned in truth and fit',
-    'sampled': r'$h/R\sim\mathrm{LN}(0.25,\,0.14\,\mathrm{dex})$, sampled with that prior',
+    'pinned': r'$h/R=0.1$ fixed',
+    'sampled': r'$h/R\sim\mathrm{LN}(0.25,\,0.14\,\mathrm{dex})$ sampled',
 }
 # multiplicative x offsets so the six cos i series do not overlap on the log SNR axis
 COSI_XOFF = dict(zip(COSI_COLORS, np.linspace(-0.06, 0.06, len(COSI_COLORS))))
@@ -129,8 +150,9 @@ def fig_width_vs_snr(fits, path, label):
         style(ax)
     axes[1].legend(frameon=False, fontsize=8, loc='lower left')
     fig.suptitle(
-        f'image only, {ARM_TITLES[label]}, disk at $45^\\circ$ to pixels; '
-        'bars = 16-84% of fits; open = <50% converged; dashed = prior std',
+        'Shear precision from the image alone\n'
+        f'{ARM_TITLES[label]}, '
+        r'$|g_\mathrm{true}|=0.05$, shear prior $U(-0.2,\,0.2)$',
         fontsize=10,
         color=INK,
     )
@@ -186,6 +208,14 @@ def fig_shear_prior(fits, path, label):
                 lw=2,
                 ms=8,
             )
+        axes[r, 0].plot(
+            x,
+            [p[2] for p in PRIORS],
+            '--',
+            color=INK,
+            lw=1.2,
+            label='prior std' if r == 0 else None,
+        )
         axes[r, 0].set_ylabel(rf'median posterior $\sigma_{{g_{sym}}}$', color=INK)
         axes[r, 1].set_ylabel(
             rf'response $R_{sym}=(\hat g_{sym}^{{(+)}}-\hat g_{sym}^{{(-)}})/2g_{sym}$',
@@ -202,9 +232,66 @@ def fig_shear_prior(fits, path, label):
         ax.set_xlabel('shear prior', color=INK)
     axes[0, 0].legend(frameon=False, fontsize=8)
     fig.suptitle(
-        f'image only, {ARM_TITLES[label]}, all fits; '
-        r'$|g_\mathrm{true}|=0.05$; '
-        r'$|g|<0.2$ is the disk prior, $|g_i|<b$ per-component boxes',
+        'Shear precision and response vs shear prior\n'
+        f'{ARM_TITLES[label]}, '
+        r'$|g_\mathrm{true}|=0.05$',
+        fontsize=10,
+        color=INK,
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    print(f'wrote {path}')
+
+
+def fig_compare(pinned, sampled, path):
+    import matplotlib.pyplot as plt
+
+    arms = (('pinned', pinned, '#2a78d6'), ('sampled', sampled, '#eb6834'))
+    cosis = sorted(COSI_COLORS)
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7.5), sharex=True)
+    for j, snr in enumerate((1057.0, 5000.0)):
+        for name, fits, col in arms:
+            w45 = [
+                np.nanmedian(
+                    [
+                        f['std_gp0']
+                        for f in fits
+                        if f['snr'] == snr
+                        and f['cosi'] == c
+                        and f['pa'] in ('pa45', 'pa45rot')
+                    ]
+                )
+                for c in cosis
+            ]
+            axes[0, j].plot(
+                cosis, w45, 'o-', color=col, lw=2, ms=8, label=ARM_TITLES[name]
+            )
+            resp = [
+                _response(
+                    [f for f in fits if f['snr'] == snr and f['cosi'] == c],
+                    0,
+                    'gp',
+                    ('pa0', 'pa45rot'),
+                )
+                for c in cosis
+            ]
+            axes[1, j].plot(cosis, resp, 'o-', color=col, lw=2, ms=8)
+        axes[0, j].axhline(BOX_STD, color=INK, lw=1.2, ls='--', label='prior std')
+        axes[0, j].set_ylim(0, 0.135)
+        axes[1, j].axhline(1.0, color=MUTED, lw=1, ls='--')
+        axes[1, j].set_ylim(-0.3, 1.3)
+        axes[0, j].set_title(rf'image $\mathrm{{SNR}}={snr:g}$', color=INK, fontsize=10)
+        axes[1, j].set_xlabel(r'$\cos i$', color=INK)
+    axes[0, 0].set_ylabel(r'median posterior $\sigma_{g_+}$', color=INK)
+    axes[1, 0].set_ylabel(
+        r'response $R_+=(\hat g_+^{(+)}-\hat g_+^{(-)})/2g_+$', color=INK
+    )
+    axes[0, 0].legend(frameon=False, fontsize=8)
+    for ax in axes.flat:
+        style(ax)
+    fig.suptitle(
+        'Shear from the image alone: fixed vs free disk thickness\n'
+        r'$|g_\mathrm{true}|=0.05$, shear prior $U(-0.2,\,0.2)$',
         fontsize=10,
         color=INK,
     )
@@ -217,7 +304,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('arm_dir', type=Path)
     ap.add_argument('--label', default='pinned')
+    ap.add_argument(
+        '--compare',
+        type=Path,
+        default=None,
+        help='second arm dir (sampled) for the comparison figure',
+    )
     args = ap.parse_args()
+    if args.compare is not None:
+        fig_compare(
+            load(args.arm_dir),
+            load(args.compare),
+            Path(__file__).parent / 'out' / 'fig_compare_thickness.png',
+        )
+        return
     fits = load(args.arm_dir)
     print(f'{len(fits)} fits')
     out = Path(__file__).parent / 'out'
