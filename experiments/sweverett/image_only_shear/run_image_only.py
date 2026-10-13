@@ -248,7 +248,8 @@ def converged(row: dict) -> bool:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['list', 'run'])
+    ap.add_argument('cmd', choices=['list', 'order', 'run'])
+    ap.add_argument('--min-snr', type=float, default=0.0)
     ap.add_argument('--arm', required=True, choices=['pinned', 'sampled'])
     ap.add_argument(
         '--tasks', default=None, help="slice 'a:b' or comma list of indices"
@@ -261,6 +262,12 @@ def main():
     all_tasks = tasks(args.arm)
     if args.cmd == 'list':
         print(len(all_tasks))
+        return
+    if args.cmd == 'order':
+        # highest SNR first so a capped job keeps the constraining cells
+        keep = [i for i, t in enumerate(all_tasks) if t['snr'] >= args.min_snr]
+        keep.sort(key=lambda i: -all_tasks[i]['snr'])
+        print(','.join(str(i) for i in keep))
         return
     if args.tasks is None:
         idx = range(len(all_tasks))
