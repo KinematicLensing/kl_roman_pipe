@@ -57,6 +57,9 @@ def cell_table(df: pd.DataFrame, box: float = 0.2) -> pd.DataFrame:
         rec['sig_gp'] = conv[f'std.gp.b{box}'].median() if len(conv) else np.nan
         rec['sig_gx'] = conv[f'std.gx.b{box}'].median() if len(conv) else np.nan
         rec['sig_cosi'] = conv['std.cosi'].median() if len(conv) else np.nan
+        # all fits regardless of convergence (unconverged chains tend to under-explore, so these are lower bounds)
+        rec['sig_gp_all'] = g[f'std.gp.b{box}'].median()
+        rec['sig_gx_all'] = g[f'std.gx.b{box}'].median()
         # response from +/- pairs where both members converged
         resp = []
         for _, pair in conv.groupby('rep'):
@@ -92,6 +95,12 @@ def plot(df: pd.DataFrame, path: Path):
                 t = tab[(tab.pa == pa) & (tab.cosi == c)].sort_values('snr')
                 ax.plot(
                     t.snr,
+                    t[f'sig_{comp}_all'],
+                    ':',
+                    color=cmap(c_i / max(1, len(cosis) - 1)),
+                )
+                ax.plot(
+                    t.snr,
                     t[f'sig_{comp}'],
                     'o-',
                     color=cmap(c_i / max(1, len(cosis) - 1)),
@@ -111,7 +120,7 @@ def plot(df: pd.DataFrame, path: Path):
                 ax.set_xlabel('image SNR (F158 matched filter)')
     axes[0, 0].legend(fontsize=7)
     fig.suptitle(
-        'image-only posterior shear width, converged fits; dashed = U(-0.2, 0.2) box std'
+        'image-only posterior shear width: solid = converged fits, dotted = all fits; dashed = U(-0.2, 0.2) box std'
     )
     fig.tight_layout()
     fig.savefig(path, dpi=130)
