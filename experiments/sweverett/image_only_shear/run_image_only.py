@@ -262,6 +262,12 @@ def main():
         default=None,
         help='comma list of PA configs to keep (order subcommand)',
     )
+    ap.add_argument(
+        '--max-rep',
+        type=int,
+        default=N_REPS - 1,
+        help='keep noise draws 0..max-rep (order subcommand)',
+    )
     ap.add_argument('--arm', required=True, choices=['pinned', 'sampled', 'thin'])
     ap.add_argument(
         '--tasks', default=None, help="slice 'a:b' or comma list of indices"
