@@ -29,6 +29,8 @@ sys.path.insert(0, str(HERE.parent / 'kinematic_regime'))
 import run_image_only as rio  # noqa: E402
 
 COSI = 0.3
+# major axis along the horizontal display axis
+THETA = math.pi / 2
 SNR = 1000.0
 G = 0.05
 H_THICK, H_THIN = 0.25, 0.005
@@ -67,7 +69,7 @@ def derivatives(h_over_r, psf):
         'e1_int',
         'e2_int',
     ]
-    x0 = jnp.array([0.0, 0.0, COSI, 0.0, rio.FLUX, rio.RSCALE, h_over_r, 0.0, 0.0])
+    x0 = jnp.array([0.0, 0.0, COSI, THETA, rio.FLUX, rio.RSCALE, h_over_r, 0.0, 0.0])
 
     def image(x):
         p = {f'{band}.x0': 0.0, f'{band}.y0': 0.0}
@@ -83,7 +85,12 @@ def derivatives(h_over_r, psf):
 
     img = np.asarray(image(x0))
     jac = np.asarray(jax.jacfwd(image)(x0))  # (ny, nx, n_params)
-    return img, {n: jac[..., i] for i, n in enumerate(names)}
+    d = {n: jac[..., i] for i, n in enumerate(names)}
+    # disk-frame shear derivatives: g+ along the disk axes, gx at 45 deg
+    c, sn = math.cos(2 * THETA), math.sin(2 * THETA)
+    d['gp'] = c * d['g1'] + sn * d['g2']
+    d['gx'] = -sn * d['g1'] + c * d['g2']
+    return img, d
 
 
 def unique_part(target, others):
@@ -124,7 +131,7 @@ def main():
             ['h_over_r', 'e1_int', 'e2_int'],
         ),
     ]
-    comps = (('g1', 'g2', r'$g_+$'), ('g2', 'g1', r'$g_\times$'))
+    comps = (('gp', 'gx', r'$g_+$'), ('gx', 'gp', r'$g_\times$'))
     cmap = LinearSegmentedColormap.from_list('div', ['#2a78d6', '#e4e3df', '#eb6834'])
     ext = np.array([-1, 1, -1, 1]) * STAMP * 0.11 / 2
     grid = np.linspace(ext[0], ext[1], STAMP)
@@ -157,11 +164,11 @@ def main():
     cax_change = fig.add_subplot(gs[len(cases), 1:3])
     cax_left = fig.add_subplot(gs[len(cases), 3:5])
     titles = [
-        rf'galaxy ($\cos i={COSI:g}$)',
+        rf'galaxy ($\cos i={COSI:g}$); dashed: other disk',
         r'change from $g_+=0.05$',
         r'change from $g_\times=0.05$',
-        r'$g_+$ change left after' '\n' r'refitting everything else',
-        r'$g_\times$ change left after' '\n' r'refitting everything else',
+        r'$g_+$ left after refitting the rest',
+        r'$g_\times$ left after refitting the rest',
     ]
     for r, (disk, label, _) in enumerate(cases):
         img = renders[disk][0]
@@ -172,13 +179,19 @@ def main():
             cmap='Greys',
             extent=ext,
         )
+        other_img = renders['thick' if disk == 'thin' else 'thin'][0]
+        lv = np.array([0.02, 0.08, 0.3, 0.7])
+        ax.contour(
+            grid, grid, img.T, levels=img.max() * lv, colors='#2a78d6', linewidths=1.2
+        )
         ax.contour(
             grid,
             grid,
-            img.T,
-            levels=img.max() * np.array([0.02, 0.08, 0.3, 0.7]),
-            colors='#2a78d6',
+            other_img.T,
+            levels=other_img.max() * lv,
+            colors='#eb6834',
             linewidths=1,
+            linestyles='--',
         )
         ax.set_ylabel(label, color=INK, fontsize=10)
         for c, (comp, _, sym) in enumerate(comps):
@@ -198,11 +211,7 @@ def main():
             axes[r, 3 + c].text(
                 0.03,
                 0.04,
-                (
-                    rf'{sym}$=0.05$ seen at {nsig:.2g}$\sigma$'
-                    if nsig > 1e-3
-                    else rf'{sym}$=0.05$ seen at 0$\sigma$'
-                ),
+                rf'{sym}$=0.05$ seen at {nsig:.2f}$\sigma$',
                 transform=axes[r, 3 + c].transAxes,
                 color=INK,
                 fontsize=9.5,
@@ -228,6 +237,18 @@ def main():
         color=INK,
         fontsize=12,
         y=0.955,
+    )
+    fig.text(
+        0.5,
+        0.045,
+        'Left after refitting the rest: the image change from a 0.05 shear minus the closest copy the other free '
+        'parameters (tilt, rotation, size, flux, and anything the row frees) can make.\nOnly this leftover lets the '
+        'fit separate shear; its quadrature sum in pixel-noise units is the significance N at which a 0.05 shear is '
+        'detected, so the shear uncertainty is 0.05 / N.',
+        ha='center',
+        va='top',
+        color=MUTED,
+        fontsize=9.5,
     )
     out = HERE / 'out' / 'fig_explainer.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
