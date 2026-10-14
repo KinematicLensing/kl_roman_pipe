@@ -51,6 +51,8 @@ G_TRUE = 0.05
 RSCALE = 0.17875
 FLUX = 1.0
 H_PINNED = 0.1
+# near-thin disk: projection is close to affine, so shear and inclination are degenerate in the image
+H_THIN = 0.005
 H_MEDIAN, H_SCATTER_DEX = 0.25, 0.14
 SHEAR_PRIOR_HALFWIDTH = 0.2
 BAND = 'F158'
@@ -89,6 +91,8 @@ def truth_for(t: dict) -> dict:
     g = t['sign'] * G_TRUE
     if t['arm'] == 'pinned':
         h = H_PINNED
+    elif t['arm'] == 'thin':
+        h = H_THIN
     elif t['arm'] == 'sampled':
         # shared across the +/- pair: same seed parts without the sign
         rng = np.random.default_rng(_seed('h', t['snr'], t['cosi'], t['pa'], t['rep']))
@@ -124,6 +128,8 @@ def build_priors(arm: str):
     }
     if arm == 'pinned':
         pd_['h_over_r'] = H_PINNED
+    elif arm == 'thin':
+        pd_['h_over_r'] = H_THIN
     else:
         pd_['h_over_r'] = LogNormal(math.log(H_MEDIAN), H_SCATTER_DEX * math.log(10.0))
     return PriorDict(pd_)
@@ -250,7 +256,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd', choices=['list', 'order', 'run'])
     ap.add_argument('--min-snr', type=float, default=0.0)
-    ap.add_argument('--arm', required=True, choices=['pinned', 'sampled'])
+    ap.add_argument('--max-snr', type=float, default=math.inf)
+    ap.add_argument(
+        '--pas',
+        default=None,
+        help='comma list of PA configs to keep (order subcommand)',
+    )
+    ap.add_argument('--arm', required=True, choices=['pinned', 'sampled', 'thin'])
     ap.add_argument(
         '--tasks', default=None, help="slice 'a:b' or comma list of indices"
     )
@@ -265,7 +277,12 @@ def main():
         return
     if args.cmd == 'order':
         # highest SNR first so a capped job keeps the constraining cells
-        keep = [i for i, t in enumerate(all_tasks) if t['snr'] >= args.min_snr]
+        pas = set(args.pas.split(',')) if args.pas else set(PA_CONFIGS)
+        keep = [
+            i
+            for i, t in enumerate(all_tasks)
+            if args.min_snr <= t['snr'] <= args.max_snr and t['pa'] in pas
+        ]
         keep.sort(key=lambda i: -all_tasks[i]['snr'])
         print(','.join(str(i) for i in keep))
         return

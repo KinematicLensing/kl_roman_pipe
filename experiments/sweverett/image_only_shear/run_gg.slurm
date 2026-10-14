@@ -1,7 +1,7 @@
 #!/bin/bash
 # image-only shear arm on Vista gg (Grace CPU, 0.33 SU/node-hr): array of nodes x 36 workers x 4 cores; tasks in
 # descending image SNR, interleaved over nodes then workers.
-# Usage: sbatch -a 0-1 --export=ALL,ARM=pinned,MIN_SNR=47 run_gg.slurm   (resubmitting resumes: finished fits skipped)
+# Usage: sbatch -a 0-1 --export=ALL,ARM=pinned,MIN_SNR=47[,MAX_SNR=224,PAS=pa0:pa45] run_gg.slurm   (resubmitting resumes: finished fits skipped)
 #SBATCH -J io_shear
 #SBATCH -p gg
 #SBATCH -A JPL-PUB
@@ -26,7 +26,7 @@ mkdir -p "$OUT" "$LOGS"
 N_WORKERS=36
 N_NODES=$SLURM_ARRAY_TASK_COUNT
 NODE=$SLURM_ARRAY_TASK_ID
-ORDER=$($KLPIPE_PYTHON "$SCRIPT" order --arm "$ARM" --min-snr "${MIN_SNR:-0}" | grep -E "^[0-9,]+$" | tail -1 || true)
+ORDER=$($KLPIPE_PYTHON "$SCRIPT" order --arm "$ARM" --min-snr "${MIN_SNR:-0}" --max-snr "${MAX_SNR:-inf}" ${PAS:+--pas "${PAS//:/,}"} | grep -E "^[0-9,]+$" | tail -1 || true)
 [[ "$ORDER" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo "task order not an index list: '$ORDER'" >&2; exit 1; }
 IFS=, read -ra ALL <<< "$ORDER"
 echo "arm $ARM node $NODE/$N_NODES: ${#ALL[@]} tasks (min SNR ${MIN_SNR:-0}) over $N_NODES x $N_WORKERS workers, out $OUT"
