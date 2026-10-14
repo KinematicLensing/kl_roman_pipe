@@ -101,6 +101,7 @@ def style(ax):
 ARM_TITLES = {
     'pinned': r'$h/R=0.1$ fixed',
     'sampled': r'$h/R\sim\mathrm{LN}(0.25,\,0.14\,\mathrm{dex})$ sampled',
+    'thin': r'$h/R=0.005$ fixed (thin disk)',
 }
 # multiplicative x offsets so the six cos i series do not overlap on the log SNR axis
 COSI_XOFF = dict(zip(COSI_COLORS, np.linspace(-0.06, 0.06, len(COSI_COLORS))))
