@@ -107,10 +107,10 @@ ARM_TITLES = {
 COSI_XOFF = dict(zip(COSI_COLORS, np.linspace(-0.06, 0.06, len(COSI_COLORS))))
 
 
-def fig_width_vs_snr(fits, path, label):
+def fig_width_vs_snr(fits, path, label, pas=('pa45', 'pa45rot')):
     import matplotlib.pyplot as plt
 
-    sel = [f for f in fits if f['pa'] in ('pa45', 'pa45rot')]
+    sel = [f for f in fits if f['pa'] in pas]
     fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.0), sharey=True)
     for ax, comp, ylab in (
         (axes[0], 'gp', r'median posterior $\sigma_{g_+}$'),
@@ -146,6 +146,8 @@ def fig_width_vs_snr(fits, path, label):
         ax.axhline(BOX_STD, color=MUTED, lw=1, ls='--')
         ax.set_xscale('log')
         ax.set_ylim(0, 0.135)
+        # common SNR range across arms so a flat curve reads as no gain
+        ax.set_xlim(7, 7000)
         ax.set_xlabel(r'image $\mathrm{SNR}$ (F158)', color=INK)
         ax.set_ylabel(ylab, color=INK)
         style(ax)
@@ -322,7 +324,11 @@ def main():
     fits = load(args.arm_dir)
     print(f'{len(fits)} fits')
     out = Path(__file__).parent / 'out'
-    fig_width_vs_snr(fits, out / f'fig_width_vs_snr_{args.label}.png', args.label)
+    # the thin arm ran with the disk aligned with the pixels only
+    pas = ('pa0',) if args.label == 'thin' else ('pa45', 'pa45rot')
+    fig_width_vs_snr(
+        fits, out / f'fig_width_vs_snr_{args.label}.png', args.label, pas=pas
+    )
     fig_shear_prior(fits, out / f'fig_shear_prior_{args.label}.png', args.label)
 
 

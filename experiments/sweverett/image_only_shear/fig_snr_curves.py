@@ -67,6 +67,22 @@ def main():
 
     fig, axes = plt.subplots(2, len(COSIS), figsize=(13, 7.5), sharex=True, sharey=True)
     for j, cosi in enumerate(COSIS):
+        # same true thickness as the free arm, fixed: isolates the cost of freeing the thickness
+        wfix = fisher_width_at_snr1(0.25, False, cosi, psf)
+        fw_fix = np.array([wfix(s) for s in SNR_GRID])
+        for r in range(2):
+            axes[r, j].plot(
+                SNR_GRID,
+                1.0 / np.sqrt(1.0 / fw_fix[:, r] ** 2 + 1.0 / BOX_STD**2),
+                '--',
+                color='#eb6834',
+                lw=1.2,
+                label=(
+                    r'thick disk ($h/R=0.25$ fixed, Fisher only)'
+                    if (r, j) == (0, 0)
+                    else None
+                ),
+            )
         for arm, label, col, h, free_h in ARMS:
             wfn = fisher_width_at_snr1(h, free_h, cosi, psf)
             fw = np.array([wfn(s) for s in SNR_GRID])
@@ -121,7 +137,7 @@ def main():
         handles,
         labels,
         loc='lower center',
-        ncol=3,
+        ncol=2,
         frameon=False,
         fontsize=9,
         bbox_to_anchor=(0.5, 0.03),
