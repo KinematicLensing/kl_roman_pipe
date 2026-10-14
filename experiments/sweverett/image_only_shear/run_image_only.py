@@ -281,7 +281,9 @@ def main():
         keep = [
             i
             for i, t in enumerate(all_tasks)
-            if args.min_snr <= t['snr'] <= args.max_snr and t['pa'] in pas
+            if args.min_snr <= t['snr'] <= args.max_snr
+            and t['pa'] in pas
+            and t['rep'] <= args.max_rep
         ]
         keep.sort(key=lambda i: -all_tasks[i]['snr'])
         print(','.join(str(i) for i in keep))

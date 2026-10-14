@@ -26,7 +26,7 @@ mkdir -p "$OUT" "$LOGS"
 N_WORKERS=36
 N_NODES=$SLURM_ARRAY_TASK_COUNT
 NODE=$SLURM_ARRAY_TASK_ID
-ORDER=$($KLPIPE_PYTHON "$SCRIPT" order --arm "$ARM" --min-snr "${MIN_SNR:-0}" --max-snr "${MAX_SNR:-inf}" ${PAS:+--pas "${PAS//:/,}"} | grep -E "^[0-9,]+$" | tail -1 || true)
+ORDER=$($KLPIPE_PYTHON "$SCRIPT" order --arm "$ARM" --min-snr "${MIN_SNR:-0}" --max-snr "${MAX_SNR:-inf}" ${PAS:+--pas "${PAS//:/,}"} ${MAX_REP:+--max-rep "$MAX_REP"} | grep -E "^[0-9,]+$" | tail -1 || true)
 [[ "$ORDER" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo "task order not an index list: '$ORDER'" >&2; exit 1; }
 IFS=, read -ra ALL <<< "$ORDER"
 echo "arm $ARM node $NODE/$N_NODES: ${#ALL[@]} tasks (min SNR ${MIN_SNR:-0}) over $N_NODES x $N_WORKERS workers, out $OUT"
