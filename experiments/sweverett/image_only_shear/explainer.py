@@ -1,20 +1,13 @@
 """Explainer figure: what the image alone tells the fit about each shear component.
 
-For each shear component (g+ along the major axis, gx at 45 deg) the figure shows, in units of the per-pixel noise at
-a stated image SNR, the image change produced by a shear of 0.05, and the part of that change that no other parameter
-can mimic (the least-squares residual of the shear derivative after regressing out every other free parameter's
-derivative). The quadrature sum of that unique part is the detection significance of a 0.05 shear, i.e.
-0.05 / sigma_g from the Fisher matrix.
+Rows are four modelling cases (thin disk; thick disk with thickness known and a round face-on disk; thickness free;
+thickness and intrinsic face-on shape free). Columns: the galaxy; the pixel change from g+ = 0.05 and gx = 0.05 in
+pixel-noise units; and each change left after refitting the rest (least-squares residual of the shear derivative after
+regressing out every other free parameter's derivative). The quadrature sum of that leftover is the significance N at
+which a 0.05 shear is detected, so sigma_g = 0.05 / N (the Fisher marginal width).
 
-Columns:
-  1. noise-free image of the thick disk (h/r 0.25) with contours
-  2. raw change from a 0.05 shear (thick disk)
-  3. unique part, thin disk (h/r 0.02), round disk assumed
-  4. unique part, thick disk, thickness known and round disk assumed (the mock's assumptions)
-  5. unique part, thick disk, thickness and intrinsic ellipticity free (what real disks require)
-
-Scene: Jiachuan fiducial (r1/2 0.3"), Roman F158 PSF, 0.11" pixels, theta 0 so the major axis is along x, g1 = g+ and
-g2 = gx.
+Scene: Jiachuan fiducial (half-light radius 0.3", scale length 0.179"), cos i 0.3, Roman F158 PSF, disk horizontal.
+Default: 0.11" pixels at image SNR 1000 (the Roman case). --hires: 4x finer pixels (0.0275") at SNR 5000, same PSF.
 """
 
 import math
@@ -31,14 +24,12 @@ import run_image_only as rio  # noqa: E402
 COSI = 0.3
 # major axis along the horizontal display axis
 THETA = math.pi / 2
-SNR = 1000.0
 G = 0.05
 H_THICK, H_THIN = 0.25, 0.005
-STAMP = 24
 INK, MUTED = '#0b0b0b', '#52514e'
 
 
-def derivatives(h_over_r, psf):
+def derivatives(h_over_r, psf, pixel, stamp):
     """Image and its derivatives wrt every parameter of the elliptical inclined exponential at e_int = 0."""
     import jax
     import jax.numpy as jnp
@@ -52,7 +43,7 @@ def derivatives(h_over_r, psf):
     band = rio.BAND
     src = SourceModel(broadband_models={band: EllipticalInclinedExponentialModel()})
     obs = build_image_obs(
-        ImagePars(shape=(STAMP, STAMP), pixel_scale=0.11, indexing='ij'),
+        ImagePars(shape=(stamp, stamp), pixel_scale=pixel, indexing='ij'),
         psf=psf,
         render_config=RenderConfig(oversample=rio.OVERSAMPLE),
         int_model=src.broadband_models[band],
@@ -102,7 +93,7 @@ def unique_part(target, others):
     return (target.ravel() - a @ coef).reshape(target.shape)
 
 
-def main():
+def main(pixel: float, stamp: int, snr: float, out_name: str):
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
 
@@ -111,9 +102,12 @@ def main():
 
     config = ObservationConfig.from_yaml(rio.OBS_CONFIG)
     psf = _build_band_psf(config.band_psf[rio.BAND], rio.BAND, rio.Z, mock=True)
-    renders = {'thin': derivatives(H_THIN, psf), 'thick': derivatives(H_THICK, psf)}
+    renders = {
+        'thin': derivatives(H_THIN, psf, pixel, stamp),
+        'thick': derivatives(H_THICK, psf, pixel, stamp),
+    }
     # per-pixel noise of the matched-filter convention at this image SNR, per disk
-    noise = {k: math.sqrt(np.sum(img**2)) / SNR for k, (img, _) in renders.items()}
+    noise = {k: math.sqrt(np.sum(img**2)) / snr for k, (img, _) in renders.items()}
 
     base = ['cosi', 'theta_int', 'flux', 'rscale']
     # (disk, row label, extra parameters the fit is allowed to adjust beyond tilt, rotation, size, flux)
@@ -133,8 +127,8 @@ def main():
     ]
     comps = (('gp', 'gx', r'$g_+$'), ('gx', 'gp', r'$g_\times$'))
     cmap = LinearSegmentedColormap.from_list('div', ['#2a78d6', '#e4e3df', '#eb6834'])
-    ext = np.array([-1, 1, -1, 1]) * STAMP * 0.11 / 2
-    grid = np.linspace(ext[0], ext[1], STAMP)
+    ext = np.array([-1, 1, -1, 1]) * stamp * pixel / 2
+    grid = np.linspace(ext[0], ext[1], stamp)
 
     # change and leftover images for every case and component, in pixel-noise units for a 0.05 shear
     change, left = {}, {}
@@ -164,7 +158,7 @@ def main():
     cax_change = fig.add_subplot(gs[len(cases), 1:3])
     cax_left = fig.add_subplot(gs[len(cases), 3:5])
     titles = [
-        rf'galaxy ($\cos i={COSI:g}$); dashed: other disk',
+        rf'galaxy ($\cos i={COSI:g}$)',
         r'change from $g_+=0.05$',
         r'change from $g_\times=0.05$',
         r'$g_+$ left after refitting the rest',
@@ -194,6 +188,21 @@ def main():
             linestyles='--',
         )
         ax.set_ylabel(label, color=INK, fontsize=10)
+        from matplotlib.lines import Line2D
+
+        this, other = ('thin', 'thick') if disk == 'thin' else ('thick', 'thin')
+        ax.legend(
+            handles=[
+                Line2D([], [], color='#2a78d6', lw=1.2, label=f'{this} disk'),
+                Line2D([], [], color='#eb6834', lw=1, ls='--', label=f'{other} disk'),
+            ],
+            loc='upper right',
+            fontsize=7,
+            frameon=True,
+            framealpha=0.85,
+            handlelength=1.6,
+            borderpad=0.3,
+        )
         for c, (comp, _, sym) in enumerate(comps):
             im_c = axes[r, 1 + c].imshow(
                 change[r, comp].T,
@@ -233,7 +242,7 @@ def main():
     )
     fig.suptitle(
         'What the image alone tells the fit about shear\n'
-        rf'image $\mathrm{{SNR}}={SNR:g}$, half-light radius $0.3^{{\prime\prime}}$, Roman F158 PSF, $0.11^{{\prime\prime}}$ pixels',
+        rf'image $\mathrm{{SNR}}={snr:g}$, half-light radius $0.3^{{\prime\prime}}$, Roman F158 PSF, ${pixel:g}^{{\prime\prime}}$ pixels',
         color=INK,
         fontsize=12,
         y=0.955,
@@ -250,10 +259,13 @@ def main():
         color=MUTED,
         fontsize=9.5,
     )
-    out = HERE / 'out' / 'fig_explainer.png'
+    out = HERE / 'out' / out_name
     fig.savefig(out, dpi=150, bbox_inches='tight')
     print(f'wrote {out}')
 
 
 if __name__ == '__main__':
-    main()
+    if '--hires' in sys.argv:
+        main(pixel=0.0275, stamp=96, snr=5000.0, out_name='fig_explainer_hires.png')
+    else:
+        main(pixel=0.11, stamp=24, snr=1000.0, out_name='fig_explainer.png')
