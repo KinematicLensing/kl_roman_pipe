@@ -31,7 +31,7 @@ import run_image_only as rio  # noqa: E402
 COSI = 0.3
 SNR = 1000.0
 G = 0.05
-H_THICK, H_THIN = 0.25, 0.02
+H_THICK, H_THIN = 0.25, 0.005
 STAMP = 24
 INK, MUTED = '#0b0b0b', '#52514e'
 
@@ -104,129 +104,130 @@ def main():
 
     config = ObservationConfig.from_yaml(rio.OBS_CONFIG)
     psf = _build_band_psf(config.band_psf[rio.BAND], rio.BAND, rio.Z, mock=True)
-    img_thick, d_thick = derivatives(H_THICK, psf)
-    img_thin, d_thin = derivatives(H_THIN, psf)
-    # per-pixel noise of the matched-filter convention at this image SNR, separately per disk
-    sig_thick = math.sqrt(np.sum(img_thick**2)) / SNR
-    sig_thin = math.sqrt(np.sum(img_thin**2)) / SNR
+    renders = {'thin': derivatives(H_THIN, psf), 'thick': derivatives(H_THICK, psf)}
+    # per-pixel noise of the matched-filter convention at this image SNR, per disk
+    noise = {k: math.sqrt(np.sum(img**2)) / SNR for k, (img, _) in renders.items()}
 
     base = ['cosi', 'theta_int', 'flux', 'rscale']
-    rows = [
+    # (disk, row label, extra parameters the fit is allowed to adjust beyond tilt, rotation, size, flux)
+    cases = [
+        ('thin', f'thin disk ($h/R={H_THIN:g}$)\nthickness known, round', []),
+        ('thick', f'thick disk ($h/R={H_THICK:g}$)\nthickness known, round', []),
         (
-            'g1',
-            r'$g_+$: stretch along the disk axes',
-            ['g2'],
-            ['h_over_r', 'e1_int', 'e2_int'],
+            'thick',
+            f'thick disk ($h/R={H_THICK:g}$)\nthickness free, round',
+            ['h_over_r'],
         ),
         (
-            'g2',
-            r'$g_\times$: stretch at $45^\circ$ to the disk axes',
-            ['g1'],
+            'thick',
+            f'thick disk ($h/R={H_THICK:g}$)\nthickness free,\nintrinsic shape free',
             ['h_over_r', 'e1_int', 'e2_int'],
         ),
     ]
+    comps = (('g1', 'g2', r'$g_+$'), ('g2', 'g1', r'$g_\times$'))
     cmap = LinearSegmentedColormap.from_list('div', ['#2a78d6', '#e4e3df', '#eb6834'])
-    fig, axes = plt.subplots(
-        2, 5, figsize=(17, 7.6), gridspec_kw=dict(wspace=0.08, hspace=0.12)
-    )
     ext = np.array([-1, 1, -1, 1]) * STAMP * 0.11 / 2
-    for r, (comp, row_label, other_shear, realistic) in enumerate(rows):
-        raw = G * d_thick[comp] / sig_thick
-        thin = (
-            G
-            * unique_part(d_thin[comp], [d_thin[n] for n in base + other_shear])
-            / sig_thin
-        )
-        thick = (
-            G
-            * unique_part(d_thick[comp], [d_thick[n] for n in base + other_shear])
-            / sig_thick
-        )
-        real = (
-            G
-            * unique_part(
-                d_thick[comp], [d_thick[n] for n in base + other_shear + realistic]
+    grid = np.linspace(ext[0], ext[1], STAMP)
+
+    # change and leftover images for every case and component, in pixel-noise units for a 0.05 shear
+    change, left = {}, {}
+    for r, (disk, _, extra) in enumerate(cases):
+        img, d = renders[disk]
+        for comp, other, _ in comps:
+            change[r, comp] = G * d[comp] / noise[disk]
+            left[r, comp] = (
+                G
+                * unique_part(d[comp], [d[n] for n in base + [other] + extra])
+                / noise[disk]
             )
-            / sig_thick
-        )
-        vmax = np.max(np.abs(raw))
-        # unique-part panels share their own scale (set by the thick, thickness-known case)
-        umax = np.max(np.abs(thick))
+    cmax = max(np.abs(v).max() for v in change.values())
+    lmax = max(np.abs(v).max() for v in left.values())
+
+    fig = plt.figure(figsize=(15, 13.5))
+    gs = fig.add_gridspec(
+        len(cases) + 1,
+        5,
+        height_ratios=[1] * len(cases) + [0.06],
+        wspace=0.06,
+        hspace=0.1,
+    )
+    axes = np.array(
+        [[fig.add_subplot(gs[r, c]) for c in range(5)] for r in range(len(cases))]
+    )
+    cax_change = fig.add_subplot(gs[len(cases), 1:3])
+    cax_left = fig.add_subplot(gs[len(cases), 3:5])
+    titles = [
+        rf'galaxy ($\cos i={COSI:g}$)',
+        r'change from $g_+=0.05$',
+        r'change from $g_\times=0.05$',
+        r'$g_+$ change left after' '\n' r'refitting everything else',
+        r'$g_\times$ change left after' '\n' r'refitting everything else',
+    ]
+    for r, (disk, label, _) in enumerate(cases):
+        img = renders[disk][0]
         ax = axes[r, 0]
         ax.imshow(
-            np.log10(np.maximum(img_thick, img_thick.max() * 1e-4)).T,
+            np.log10(np.maximum(img, img.max() * 1e-4)).T,
             origin='lower',
             cmap='Greys',
             extent=ext,
         )
         ax.contour(
-            np.linspace(ext[0], ext[1], STAMP),
-            np.linspace(ext[2], ext[3], STAMP),
-            img_thick.T,
-            levels=img_thick.max() * np.array([0.02, 0.08, 0.3, 0.7]),
+            grid,
+            grid,
+            img.T,
+            levels=img.max() * np.array([0.02, 0.08, 0.3, 0.7]),
             colors='#2a78d6',
             linewidths=1,
         )
-        ax.set_title(
-            rf'thick disk, $\cos i={COSI:g}$' if r == 0 else '', color=INK, fontsize=10
-        )
-        ax.set_ylabel(row_label, color=INK, fontsize=11)
-        panels = [
-            (raw, 'change from a 0.05 shear', None, vmax),
-            (thin, 'part nothing else can copy:\nthin disk', thin, umax),
-            (
-                thick,
-                'part nothing else can copy:\nthick disk, thickness known,\nround disk assumed (mock)',
-                thick,
-                umax,
-            ),
-            (
-                real,
-                'part nothing else can copy:\nthick disk, thickness and\nintrinsic shape free',
-                real,
-                umax,
-            ),
-        ]
-        ims = []
-        for c, (arr, title, uniq, lim) in enumerate(panels, start=1):
-            ax = axes[r, c]
-            ims.append(
-                ax.imshow(
-                    arr.T, origin='lower', cmap=cmap, vmin=-lim, vmax=lim, extent=ext
-                )
+        ax.set_ylabel(label, color=INK, fontsize=10)
+        for c, (comp, _, sym) in enumerate(comps):
+            im_c = axes[r, 1 + c].imshow(
+                change[r, comp].T,
+                origin='lower',
+                cmap=cmap,
+                vmin=-cmax,
+                vmax=cmax,
+                extent=ext,
             )
-            if r == 0:
-                ax.set_title(title, color=INK, fontsize=9.5)
-            if uniq is not None:
-                ax.text(
-                    0.03,
-                    0.04,
-                    rf'{math.sqrt(np.sum(uniq**2)):.2g}$\sigma$ detection',
-                    transform=ax.transAxes,
-                    color=INK,
-                    fontsize=10,
-                    bbox=dict(fc='white', ec='none', alpha=0.8),
-                )
-        im = ims[-1]
-        fig.colorbar(ims[0], ax=axes[r, 1], shrink=0.85, pad=0.02).ax.tick_params(
-            labelsize=8
-        )
-        fig.colorbar(
-            im,
-            ax=axes[r, 2:].tolist(),
-            shrink=0.85,
-            pad=0.01,
-            label='pixel change / pixel noise',
-        )
+            arr = left[r, comp]
+            im_l = axes[r, 3 + c].imshow(
+                arr.T, origin='lower', cmap=cmap, vmin=-lmax, vmax=lmax, extent=ext
+            )
+            nsig = math.sqrt(np.sum(arr**2))
+            axes[r, 3 + c].text(
+                0.03,
+                0.04,
+                (
+                    rf'{sym}$=0.05$ seen at {nsig:.2g}$\sigma$'
+                    if nsig > 1e-3
+                    else rf'{sym}$=0.05$ seen at 0$\sigma$'
+                ),
+                transform=axes[r, 3 + c].transAxes,
+                color=INK,
+                fontsize=9.5,
+                bbox=dict(fc='white', ec='none', alpha=0.85),
+            )
+    for c, t in enumerate(titles):
+        axes[0, c].set_title(t, color=INK, fontsize=10)
     for ax in axes.flat:
         ax.set_xticks([])
         ax.set_yticks([])
+    fig.colorbar(
+        im_c,
+        cax=cax_change,
+        orientation='horizontal',
+        label='pixel change / pixel noise',
+    )
+    fig.colorbar(
+        im_l, cax=cax_left, orientation='horizontal', label='pixel change / pixel noise'
+    )
     fig.suptitle(
-        'What the image alone tells the fit about each shear component\n'
-        rf'image $\mathrm{{SNR}}={SNR:g}$, shear 0.05, $r_{{1/2}}=0.3^{{\prime\prime}}$, '
-        r'Roman F158 PSF, $0.11^{\prime\prime}$ pixels',
+        'What the image alone tells the fit about shear\n'
+        rf'image $\mathrm{{SNR}}={SNR:g}$, half-light radius $0.3^{{\prime\prime}}$, Roman F158 PSF, $0.11^{{\prime\prime}}$ pixels',
         color=INK,
-        fontsize=11,
+        fontsize=12,
+        y=0.955,
     )
     out = HERE / 'out' / 'fig_explainer.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
