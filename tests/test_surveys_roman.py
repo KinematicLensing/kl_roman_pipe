@@ -67,9 +67,9 @@ class TestLineSnrReference:
     """The source F_LIM is referenced to (roman.SNR_LINE_REFERENCE).
 
     Getting this wrong double-counts (or omits) the extended-source penalty.
-    Wang et al. 2022 Sect. 5 derive the published Roman line-flux limits for
-    a galaxy of half-light radius 0.25 arcsec at 1.5 micron, not for a point
-    source; 'extended_fiducial' encodes that convention.
+    ROTAC Table 1 quotes the HLWAS grism limit as a "5 sigma extended
+    source (r_1/2=0.3 arcsec) line threshold", not a point-source limit;
+    'extended_fiducial' encodes that convention.
     """
 
     @pytest.fixture(autouse=True)
@@ -83,8 +83,8 @@ class TestLineSnrReference:
         # the HLSS PIT for "line flux limits for a realistic extended source"
         # (Appendix B.2 item 1a) while asking separately for point-source and
         # extended imaging depths (B.1 item 1a), Sect. 3.1 labels only the
-        # imaging depth "5 sigma point source", and Sect. 4.2.1 refers to
-        # Wang et al. 2022, whose limits are for r50 = 0.25 arcsec. A
+        # imaging depth "5 sigma point source", and the Table 1 caption gives
+        # the grism threshold for an r_1/2 = 0.3 arcsec extended source. A
         # point-source reading would also put our yield 12x below the 14.2M
         # Halpha over 2400 deg2 that ROTAC forecasts in Sect. 4.4.3.
         assert roman.SNR_LINE_REFERENCE == 'extended_fiducial'
@@ -189,15 +189,17 @@ class TestPublishedConstants:
         assert roman.F_LIM_NSIGMA == 5.0
         assert roman.N_GRISM_PASSES == 4
 
-    def test_extended_fiducial_matches_wang22(self):
-        # Wang et al. 2022 (arXiv:2110.01829) Sect. 5.1: limits derived
-        # "for galaxies with radius 0.25 arcsec at 1.5 micron"
-        assert roman.F_LIM_REF_R50_ARCSEC == 0.25
+    def test_extended_fiducial_matches_rotac(self):
+        # ROTAC Final Report Table 1 caption (arXiv:2505.10574 v1 and v2):
+        # "5 sigma extended source (r_1/2=0.3 arcsec) line thresholds in
+        # erg/cm2/s for the grism"; the 1.5 micron reference wavelength is
+        # Wang et al. 2022 Sect. 5.1 (ROTAC states none)
+        assert roman.F_LIM_REF_R50_ARCSEC == 0.3
         assert roman.F_LIM_REF_LAMBDA_A == 1.5e4
         # the resulting reference compactness, which divides every galaxy's
-        # C and therefore sets the overall yield normalization (re-pinned
-        # from 0.4148 when EXP_R50_OVER_RSCALE unified to the exact 1.67835)
-        assert roman.fiducial_compactness() == pytest.approx(0.41486, abs=5e-5)
+        # C and therefore sets the overall yield normalization (0.41486 under
+        # the earlier 0.25 arcsec reference read from Wang et al. 2022)
+        assert roman.fiducial_compactness() == pytest.approx(0.35518, abs=5e-5)
 
     def test_imaging_depths_match_rotac(self):
         # ROTAC Final Report Table 1 (arXiv:2505.10574): HLWAS medium

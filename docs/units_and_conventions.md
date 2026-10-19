@@ -79,7 +79,7 @@ that assembly per fit.
      depth: render the source the published limit refers to (imaging: a
      point source through the config's PSF, averaged over subpixel
      positions since a published depth describes a randomly placed source;
-     grism: the 0.25″ reference disk in `surveys/roman.py`), and set
+     grism: the 0.3″ half-light reference disk of ROTAC Table 1, in `surveys/roman.py`), and set
      `sigma_bkg` so that source is recovered at exactly 5σ. One value per
      band; one per grism roll.
   2. The source's own shot noise: pixel flux converted to detected

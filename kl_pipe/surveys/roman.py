@@ -56,41 +56,33 @@ F_LIM_NSIGMA = 5.0
 #                          half-light radius F_LIM_REF_R50_ARCSEC observed
 #                          at F_LIM_REF_LAMBDA_A.
 #
-# The ROTAC limit is an extended-source limit. It does not say so in the
-# sentence quoting the number, but four independent lines agree:
+# The ROTAC limit is an extended-source limit with a stated reference size.
+# ROTAC Final Report Table 1 caption (arXiv:2505.10574 report p. 2, identical
+# in v1 2025-05-13 and v2 2025-10-23): depths are "5 sigma point source
+# detection thresholds in AB magnitudes (r_1/2=0.3 arcsec extended source
+# thresholds are typically ~1.1 mag brighter); or 5 sigma extended source
+# (r_1/2=0.3 arcsec) line thresholds in erg/cm2/s for the grism". The same
+# table row gives 4x2x190 s and 1.5e-16 for the medium-tier grism. The STScI
+# HLWAS page (updated 2026-08-24) quotes the same 1.5e-16 coadd (4.4e-16 per
+# dither, 3.1e-16 per pass) without a source size.
 #
-#   - The committee's own request to the HLSS PIT (Appendix B.2, item 1a)
-#     asks for "Line flux limits for a realistic extended source at 1.1,
-#     1.2, 1.5, 1.8, 1.9 mu". The parallel imaging request (B.1, item 1a)
-#     asks separately for "point sources and rexp=0.3 arcsec extended
-#     sources", so the distinction is deliberate and spectroscopy was asked
-#     for extended only.
-#   - Sect. 3.1 labels the imaging depth "5 sigma point source" and, in the
-#     same sentence, the spectroscopic depth only "5 sigma line flux limit".
-#     The point-source qualifier is used where it applies.
-#   - Sect. 4.2.1 refers the reader to Wang et al. 2022 for HLWAS
-#     spectroscopy. Wang Sect. 5.1 adopts "line flux limits derived for
-#     galaxies with radius 0.25 arcsec at 1.5 micron", that radius being the
-#     median half-light radius of Halpha emitters at z ~ 1.5 from WISP (Dore
-#     et al. 2018 Fig. 17), and warns that "the point source sensitivity is
-#     significantly better than for galaxies with a finite size".
-#   - Arithmetic. Wang's 8.5e-17 (5 sigma, 0.25") is at 8 x 301 s; scaled to
-#     ROTAC's 8 x 190 s in the background-limited regime that is ~1.1e-16,
-#     within 1.4x of the 1.5e-16 ROTAC published (ROTAC Sect. 4.4.3 notes it
-#     ran its own ETC calculation folding in chip gaps and ecliptic-latitude
-#     variation, so a somewhat shallower characteristic depth is expected). A
-#     point-source limit would be ~4e-17, i.e. 3-4x DEEPER than the number
-#     published -- the wrong direction by a wide margin.
+# Wang et al. 2022 Sect. 5.1 uses "galaxies with radius 0.25 arcsec at 1.5
+# micron", but that radius belongs to Wang's own limit (8.5e-17 at 5 sigma,
+# 8 x 301 s); ROTAC ran its own ETC calculation (Sect. 4.4.3: exposure time,
+# chip gaps, ecliptic latitude), so the 1.5e-16 carries ROTAC's 0.3 arcsec.
+# ROTAC states no wavelength; 1.5 micron is kept from Wang. Arithmetic check:
+# Wang's 8.5e-17 scaled to 8 x 190 s is ~1.07e-16 at 0.25", ~1.2e-16 at
+# 0.3", within 1.25x of the published 1.5e-16. A point-source limit would be
+# ~4e-17, 3-4x deeper than published.
 #
-# End-to-end cross-check: under 'extended_fiducial' this selection returns
-# 4114 Halpha/deg2 at the published coadded depth over 99.5 deg2 of
-# Flagship2, against the 5917/deg2 ROTAC forecasts for the medium tier
-# (14.2M Halpha redshifts over 2400 deg2, Sect. 4.4.3) -- 0.70x, the right
-# ballpark for a pure line-SNR count against a secure-redshift count.
-# 'point_source' returns 504/deg2, low by 12x against a forecast made with
-# the same ETC that produced the flux limit we consume.
+# End-to-end cross-check: Flagship2 v1 (99.5 deg2, Halpha model 3 with
+# extinction, disk_r50 > 0) above total line SNR 5 gives 5973/deg2 with the
+# catalog inclinations (6346 isotropic), against the 5917/deg2 ROTAC
+# forecasts for the medium tier (14.2M Halpha redshifts over 2400 deg2,
+# Sect. 4.4.3). A 0.25 arcsec reference gives 4399 (0.74x); 'point_source'
+# is low by ~12x.
 SNR_LINE_REFERENCE = 'extended_fiducial'
-F_LIM_REF_R50_ARCSEC = 0.25
+F_LIM_REF_R50_ARCSEC = 0.3
 F_LIM_REF_LAMBDA_A = 1.5e4
 
 # ROTAC Final Report Table 1 (arXiv:2505.10574, report p. 2; verified against
@@ -228,8 +220,8 @@ def grism_electrons_per_f17_per_pass(lambda_obs_a: ArrayLike) -> ArrayLike:
 # that is not an error.
 
 # The grism reference source, pinned as the dumbest defensible reading of
-# the Wang et al. 2022 convention ("galaxies with radius 0.25 arcsec at
-# 1.5 micron"): a round face-on exponential disk of half-light radius
+# the ROTAC Table 1 convention ("5 sigma extended source (r_1/2=0.3 arcsec)
+# line thresholds"): a round face-on exponential disk of half-light radius
 # F_LIM_REF_R50_ARCSEC with zero rotation and a small intrinsic line width,
 # Halpha observed at F_LIM_REF_LAMBDA_A (z ~ 1.286). The publication does
 # not specify kinematics; realistic rotation would smear the line by under
@@ -244,7 +236,7 @@ GRISM_REF_LINE_WIDTH_KMS = 30.0
 # 32-pixel stamps at 1.1 nm/pixel, oversample 3), pinned so users can import
 # a number instead of rendering reference templates; a test re-derives both.
 # Each anchor's reference source is fixed by its published depth's convention
-# (point source for imaging, the 0.25" disk for the grism) -- what varies is
+# (point source for imaging, the 0.3" disk for the grism) -- what varies is
 # the instrument model, which moves the anchor at the tens-of-percent level,
 # so a different PSF or pixel scale means re-anchoring through the functions
 # below rather than editing these. Rendered with galsim 2.8.4 (the PSF model
@@ -254,7 +246,7 @@ GRISM_REF_LINE_WIDTH_KMS = 30.0
 # used before 2026-08-28 gave anchors 13/6 percent deeper (5.9396e-3 /
 # 5.7246e-3).
 SIGMA_BKG_DEFAULT_UJY = {'F129': 6.8460e-3, 'F158': 6.0594e-3}
-GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17 = 0.641615
+GRISM_SIGMA_BKG_DEFAULT_PER_PASS_F17 = 0.558655
 
 
 def band_sigma_bkg_ujy(band: str, psf_l2_norm: float) -> float:
@@ -434,8 +426,8 @@ def fiducial_compactness() -> float:
     """Compactness C of the source the published flux limit refers to.
 
     A round (cos i = 1) galaxy of half-light radius ``F_LIM_REF_R50_ARCSEC``
-    observed at ``F_LIM_REF_LAMBDA_A`` -- the source Wang et al. 2022 derive
-    the Roman HLSS line-flux limits for. Returns 1.0 for a point-source
+    observed at ``F_LIM_REF_LAMBDA_A`` -- the source ROTAC Table 1 quotes
+    the HLWAS grism line-flux limit for. Returns 1.0 for a point-source
     reference, which is the identity normalization.
     """
     if SNR_LINE_REFERENCE == 'point_source':

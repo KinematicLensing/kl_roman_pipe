@@ -366,8 +366,8 @@ There are three noise pathways:
 
 Where the background level comes from: a published depth is a statement
 about one specific reference source -- "a point source at f_lim reaches
-5 sigma" for the imaging bands, "a 0.25 arcsec disk at f_lim reaches
-5 sigma" for the grism. The reference source is fixed by the publication
+5 sigma" for the imaging bands, "a 0.3 arcsec (half-light) disk at f_lim
+reaches 5 sigma" for the grism (ROTAC Final Report Table 1). The reference source is fixed by the publication
 and is never a choice you make. Turning that statement into a per-pixel
 sigma does require the instrument model (how the PSF and pixel scale spread
 the reference's flux), so the anchor is a property of survey + instrument.
@@ -459,7 +459,7 @@ print(f'matched-filter path at target {snr_realized:.1f}: uniform sigma = '
 
 **The grism channel follows the same recipe with two changes.** First, its
 published limit refers to the extended reference source described above, so
-the pinned anchor was derived by dispersing that 0.25" disk through the
+the pinned anchor was derived by dispersing that 0.3" disk through the
 default grism model. Second, a grism SNR should normalize on the
 emission line alone: the continuum dominates the dispersed power but
 carries no kinematic signal (`kl_pipe.noise.grism_line_noise` implements
@@ -490,7 +490,7 @@ def halpha_truth(f_line_cgs, z, **overrides):
         'vel.vcirc': 0.0,
         'vel.rscale': 1.0,
         'Halpha.flux': f_line_cgs * CGS_TO_F17,       # -> 1e-17 erg/s/cm2 units
-        'Halpha.rscale': 0.25 / EXP_R50_OVER_RSCALE,  # r50 = 0.25"
+        'Halpha.rscale': roman.F_LIM_REF_R50_ARCSEC / EXP_R50_OVER_RSCALE,
         'Halpha.h_over_r': 0.1,
         'Halpha.x0': 0.0,
         'Halpha.y0': 0.0,
