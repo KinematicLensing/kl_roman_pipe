@@ -357,7 +357,7 @@ priors = PriorDict({
 
 ### Key Concepts
 
-- **17 galaxies**: SubhaloIDs 184941, 229935, 294869, 485056, 490815, 507293, 520311, 554798, 561676, 574615, 583256, 595887, 627128, 636848, 657568, 687075, 715911 (`TNG50MockData`; ~2.4 GB in `data/tng50/` via `make download-cyverse-data`)
+- **16 galaxies** (upstream gold set 2026-07-06; 294869 dropped): SubhaloIDs 184941, 229935, 485056, 490815, 507293, 520311, 554798, 561676, 574615, 583256, 595887, 627128, 636848, 657568, 687075, 715911 (`TNG50MockData`; ~2.4 GB in `data/tng50/` via `make download-cyverse-data`)
 - **3D rotations** via Rodrigues formula (NOT 2D projections) — preserves disk thickness
 - **Gas-stellar offset**: ~30-40 deg misalignment is real physics. `preserve_gas_stellar_offset=True` (default) keeps it; `False` forces alignment (synthetic tests only)
 - **Redshift scaling**: TNG native z~0.01 spans ~1300". Always use `target_redshift=0.5-1.0` for Roman-like sub-arcsec observations

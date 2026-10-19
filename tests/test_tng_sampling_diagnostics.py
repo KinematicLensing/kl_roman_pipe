@@ -63,7 +63,7 @@ pytestmark = [pytest.mark.tng50, pytest.mark.tng_diagnostics, pytest.mark.slow]
 TEST_SUBHALO_IDS = [
     184941,
     229935,
-    294869,
+    485056,
 ]  # Use index=0 galaxy for testing to avoid SubhaloID issues
 
 # Standard image parameters - smaller for faster likelihood evaluation
