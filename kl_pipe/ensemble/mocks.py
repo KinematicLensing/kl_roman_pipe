@@ -166,6 +166,8 @@ def _get_roman_wfi_psf(
     if key not in _ROMAN_PSF_CACHE:
         while len(_ROMAN_PSF_CACHE) >= _ROMAN_PSF_CACHE_MAX:
             _ROMAN_PSF_CACHE.pop(next(iter(_ROMAN_PSF_CACHE)))
+        # bound galsim's per-wavelength pupil-aperture cache (~16 MB each, 1024 deep)
+        roman.roman_psfs._make_aperture.resize(_ROMAN_PSF_CACHE_MAX)
         psf = roman.getPSF(
             SCA=key[0], bandpass=bandpass, wavelength=key[2], pupil_bin=key[1]
         )

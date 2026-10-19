@@ -661,6 +661,30 @@ class TestRomanObs:
             _build_grism_psf(ROMAN_SPEC, 1.0 + 0.01 * i)
         assert len(mocks_mod._ROMAN_PSF_CACHE) <= mocks_mod._ROMAN_PSF_CACHE_MAX
 
+    def test_galsim_aperture_cache_bounded_and_values_unchanged(self):
+        # galsim's own per-wavelength aperture cache must be bounded too, and
+        # rebuilding an evicted aperture must give the identical PSF
+        import galsim
+        from galsim.roman import roman_psfs
+
+        from kl_pipe.ensemble import mocks as mocks_mod
+
+        lam = 1500.0
+        ref = galsim.roman.getPSF(SCA=10, bandpass=None, wavelength=lam, pupil_bin=4)
+        ref_img = ref.drawImage(scale=0.11, nx=32, ny=32).array
+        mocks_mod._ROMAN_PSF_CACHE.clear()
+        for i in range(mocks_mod._ROMAN_PSF_CACHE_MAX + 5):
+            _get_roman_wfi_psf(10, 4, lam + 10.0 * (i + 1), bandpass=None)
+        assert roman_psfs._make_aperture.maxsize == mocks_mod._ROMAN_PSF_CACHE_MAX
+        live = [k for k in roman_psfs._make_aperture.cache if isinstance(k, tuple)]
+        assert len(live) <= mocks_mod._ROMAN_PSF_CACHE_MAX
+        img = (
+            _get_roman_wfi_psf(10, 4, lam, bandpass=None)
+            .drawImage(scale=0.11, nx=32, ny=32)
+            .array
+        )
+        np.testing.assert_array_equal(img, ref_img)
+
     def test_folding_threshold_shrinks_pinned_kernel(self):
         # a looser folding threshold trades far-wing truncation for a much
         # smaller kernel stamp (and padded convolution FFT); measured at
