@@ -130,7 +130,7 @@ class TestLineLambdasResolution:
             }
         )
         assert src.emission_lines['Halpha'].lambda_rest == LINE_LAMBDAS['Halpha']
-        assert src.emission_lines['Halpha'].lambda_rest == pytest.approx(656.28)
+        assert src.emission_lines['Halpha'].lambda_rest == pytest.approx(656.461)
 
     def test_doublet_auto_resolved(self):
         src = SourceModel(

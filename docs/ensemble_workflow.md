@@ -93,9 +93,52 @@ Key blocks:
   the position-angle basins are the known multimodality, and random draws
   alone can land every start in the wrong basin, whose shape-shear-
   compensated mode traps the sampler); `pin_z_to_truth: true` (v1 -- sampled
-  narrow-spec-z planned). A fit whose chains come back broken (max_rhat >
-  1.1 or divergence rate > 0.9) is retried once with a fresh sampler seed;
-  `n_attempts` is recorded in the summary row.
+  narrow-spec-z planned); `pa_prior: full_circle` (default; the position
+  angle is sampled on the circle so both rotation directions are in the
+  prior) or `half_turn` (Uniform(0, pi)); `cosi_prior_range: [lo, hi]` (fit
+  prior on cos i wider than the generating range, so no truth sits on a
+  support wall; default = the generating range); `hessian_method: fd | ad`,
+  `max_tree_depth`, `shear_prior_type: gaussian | uniform`, and the render
+  knob `model.render.line_window_mode` are the remaining sampler-side
+  switches (see `kl_pipe/ensemble/spec.py` for provenance).
+- fit-initialization knobs (`docs/fit_initialization.md`; same names as
+  `kl_pipe.sampling.initialization.InitConfig`, defaults = the robust
+  procedure from the bank A/Bs 988356 / 988824 / 990891): `map_moment_starts`
+  (image-moment optimizer starts, default off), `map_bounded` (projected
+  L-BFGS-B on the prior support, default on), `map_polish_steps` /
+  `map_polish_basins` (Newton polish of the leading optimizer basins, default
+  8 / 3), `eig_floor_mode: prior | relative` + `eig_floor` (Laplace-metric
+  eigenvalue floor rule, default prior 0.5), `chain_init: map_jitter |
+  map_basins` + `chain_init_max_margin` (chain initial points). Summary
+  columns `map_n_basins`, `map_basin_margin`, `map_winning_start`,
+  `map_moment_starts_ok`, `map_grad_norm`, `map_min_eigenvalue`,
+  `map_polish_gain`, `precond_n_floored_eigenvalues`, `precond_eig_floor_mode`,
+  `chain_init` record what the initialization did.
+- two-stage warmup knobs (`NumpyroSamplerConfig.warmup_*`, opt-in, requires
+  `precondition: laplace` + `adapt_mass: true`): `warmup_metric: adapted |
+  pooled` (default adapted = single-stage), `warmup_stage2_draws` (default 50),
+  `warmup_stage2_adapt` (default false = the pooled metric stays frozen for
+  the production draws; true re-adapts it per chain). Summary columns `warmup_metric`,
+  `warmup_stage1_steps`, `warmup_stage2_steps`,
+  `warmup_chain_metric_mismatch_max` (-1 / nan on the single-stage path).
+- `fit.escalation`: quality-gated retry. A first attempt that fails the gate
+  (`max_rhat > rhat_max` = 1.05 or `min_ess < ess_min` = 50) is escalated
+  once. `mode: restart` (default) reruns with `n_warmup`/`n_samples`
+  (800/1000) and the first attempt's warmup-adapted metric donated as the
+  initial mass matrix. `mode: continue` draws more from the warm chains
+  instead -- no re-warmup, first-attempt draws kept -- in blocks of
+  `continue_block` (300) draws per chain, re-checking the gate after each
+  block, up to `continue_max_blocks` (4). `mode: auto` continues a marginal
+  first attempt (`max_rhat <= continue_rhat_max` = 1.2 and divergence rate
+  `<= continue_divergence_max` = 0.05) and restarts anything worse, since
+  chains sitting in different basins need a new start, not more draws.
+  Summary columns: `n_attempts`, `escalated`, `escalation_mode`,
+  `escalation_n_blocks`, `first_attempt_*`, `restart_reason` ('' | 'rhat' |
+  'divergences' | 'blocks_exhausted') and `restart_recommended` (a
+  continuation that ended below the gate, or a forced continuation of an
+  attempt that had a restart reason): fits to re-run fresh in a special
+  mode. See `docs/sampler_failure_ledger.md` for the measured effect of
+  each mode.
 - `output.save_chains/save_mocks`: `none | subset | all`. `subset` = the
   first galaxy of each cos-i bin; chains -> `chains/<fit_id>.npz`, mock
   datavectors + truth/MAP renders -> `mocks/<fit_id>.npz`.
@@ -227,6 +270,13 @@ export KLPIPE_PYTHON="apptainer exec --nv \
 (the from-source galsim finds fftw via `LD_PRELOAD` of the copy provision
 embeds in the sidecar -- no fftw bind or `LD_LIBRARY_PATH` needed.)
 
+Float32 runs (`KLPIPE_FP32=1`) need a released JAX in place of the container
+nightly, whose XLA cannot create single-precision cuFFT plans: install the
+release sidecar once per `experiments/sweverett/vista_kit/SETUP.md` section 3b,
+then `export KLPIPE_JAX_RELEASE=0.11.1` before sourcing `env_vista.sh`. The
+launcher swaps the JAX stack and compilation cache; everything else is
+unchanged. Float64 speed is identical on both stacks.
+
 **idev micro-run** (an idev node is just a local machine -- use the local
 backend; no SLURM machinery involved):
 
@@ -283,10 +333,50 @@ columns (`max_rhat`, `min_ess`, `ess_g1/g2`, `n_divergences`,
 `max_rhat > 1.01 OR min_ess < 400 OR divergence-rate outlier`) is applied
 post hoc in analysis -- nothing is filtered at write time.
 
+`run_report` also writes `coverage.csv` (fraction of truths inside the
+posterior 68% and 95% intervals per parameter and cosi bin, from the
+`post.<param>.q16/q84/q025/q975` columns; the calibration test a mean-based
+pull cannot give for a skewed or bounded parameter), `rank_hist_<param>.png`
+(rank of the truth among the draws, `truth_rank.<param>`, uniform when the
+posterior is calibrated), `flags.csv` (fits with any `flag_*` set: gate,
+MAP deviation, chi-square excess, rotation ambiguity; thresholds in
+`kl_pipe/ensemble/quality.py`), the per-draw cost panels in
+`quality_vs_cosi.png` (leapfrog steps and min ESS per posterior draw against
+truth cos i) and `worker_timeline.png` (one bar per fit on its worker's row
+from the claim and done timestamps, so packing gaps and the end-of-run tail
+are visible).
+
 Join truth with recovery via `kl_pipe.ensemble.collate.analysis_table(run_dir)`
 (manifest joined with results on `fit_id`), then feed `kl_pipe/ensemble/calibration.py`
 (`measure_shear_bias`, `compute_shape_noise`) and
 `kl_pipe.coordinates.rotate_to_galaxy_frame`.
+
+### Inspecting a fit's posterior surface
+
+`kl_pipe.diagnostics.posterior_slices` rebuilds one fit's exact log-posterior
+from the run directory (manifest row + frozen provenance regenerate the mock
+from the noise seed; a saved `mocks/<fit_id>.npz` is checked against the
+rebuilt data to roundoff) and evaluates it on 2D grids or a 3D grid:
+
+```bash
+python -m kl_pipe.diagnostics.posterior_slices --run-dir runs/<run> --fit-id <fit_id> \
+    --planes g2,theta_int eigen:0,1 --mode profile --n 40 --out runs/<run>/slices \
+    [--iso g2,theta_int,cosi --n3 18] \
+    [--results other.parquet --chains-dir DIR --mocks-dir DIR]   # explicit-path overrides
+```
+
+Planes are parameter pairs or `eigen:i,j` (eigenvectors of the chain
+correlation matrix, or of the inverse MAP Hessian when no chains were saved;
+mode 0 is the softest direction and the grid coordinate is in mode-sigma
+units). Chain draws, MAP, and truth are overlaid; contours at delta log P =
+-0.5, -2, -4.5 are the 1/2/3-sigma levels of a Gaussian. Read the mode in the
+title: a `conditional` slice holds every other parameter at the MAP and shows
+only the local curvature, which on a correlated 24-parameter ridge is ~10x
+narrower than the chain's marginal scatter; a `profile` slice maximizes over
+the other parameters at each grid point (one L-BFGS-B per point, warm-started
+from its neighbour) and follows the ridge, at roughly two orders of magnitude
+more evaluations per point. Each figure is written with an `.npz` of the grid,
+and the CLI prints `n_evals` and wall time per figure.
 
 ## Catalog-mode runs
 

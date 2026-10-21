@@ -145,6 +145,20 @@ def catalog_registry(
         reg[entry.param] = entry
 
     # --- shared geometry -----------------------------------------------------
+    if spec.shear_fit_prior_type == 'uniform':
+        shear_fit = (
+            f'U(-{spec.shear_fit_prior_halfwidth}, {spec.shear_fit_prior_halfwidth})'
+        )
+        shear_why = (
+            'Flat so the posterior mean needs no shrinkage correction; the '
+            'edges sit far outside the injected |g| < gmax range.'
+        )
+    else:
+        shear_fit = f'N(0, {spec.shear_fit_prior_sigma})'
+        shear_why = (
+            'Wide so the posterior width comes from the data; unbounded '
+            'to avoid a prior edge.'
+        )
     for g in ('g1', 'g2'):
         add(
             PriorProvenance(
@@ -153,10 +167,9 @@ def catalog_registry(
                 '--',
                 f'N(0, {cp.shear_sigma}), redrawn to |g| < {cp.shear_gmax}, '
                 'pair-shared',
-                f'N(0, {spec.shear_fit_prior_sigma})',
+                shear_fit,
                 'paint',
-                'Wide so the posterior width comes from the data; unbounded '
-                'to avoid a prior edge.',
+                shear_why,
                 compact_meaning='shear',
                 compact_painted=f'N(0, {cp.shear_sigma})',
                 compact_note=f'pair-shared; |g| < {cp.shear_gmax}',
@@ -184,12 +197,15 @@ def catalog_registry(
             'intrinsic position angle',
             'rad',
             'U(0, pi); ring partner at +pi/2',
-            'U(0, pi)',
+            'uniform on the circle (period 2 pi)',
             'paint',
             'Ring partner at +pi/2 averages orientation-dependent residuals '
-            'out of the ensemble shear.',
+            'out of the ensemble shear. The fit prior admits both rotation '
+            'directions with no support walls; the painted range is one '
+            'half turn.',
             compact_meaning='intrinsic PA',
             compact_painted='U(0, pi)',
+            compact_prior='U(circle)',
             compact_note='ring partner at +pi/2',
         )
     )
@@ -455,7 +471,26 @@ def catalog_registry(
         'C/A ellipsoid inversions are upper bounds. A dedicated subset run '
         'samples the thickness to isolate its effect.'
     )
-    for comp in ('Halpha', 'Halpha.cont'):
+    if spec.sample_h_over_r:
+        median, scatter_dex = spec.catalog_population.paint_h_over_r
+        add(
+            PriorProvenance(
+                'h_over_r',
+                'disk scale height / scale length, shared by every component',
+                '--',
+                f'LN({median}, {scatter_dex} dex)',
+                'same LN',
+                'paint',
+                'One thickness per galaxy, shared by the bands, the line and '
+                'the continuum. Direct sech^2 z0/Rd measurements span 0.2-0.38 '
+                'in this convention. Prior equals paint, so marginalization is '
+                'exact.',
+                ('Kregel2002', 'Yu2026', 'vanAsselt2026'),
+                compact_meaning='disk thickness',
+                compact_note='shared; prior equals paint',
+            )
+        )
+    for comp in () if spec.sample_h_over_r else ('Halpha', 'Halpha.cont'):
         add(
             PriorProvenance(
                 f'{comp}.h_over_r',
@@ -471,7 +506,7 @@ def catalog_registry(
             )
         )
     disk_h_key = '{band}.disk_h_over_r' if bulge else '{band}.h_over_r'
-    for band in config.bands:
+    for band in () if spec.sample_h_over_r else config.bands:
         add(
             PriorProvenance(
                 disk_h_key.format(band=band),

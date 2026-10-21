@@ -106,14 +106,16 @@ use `for_priors`. No parallel sizing logic.
 
 ### Drift prevention
 
-`InferenceTask.from_intensity_obs(model, priors, obs)` does NOT recompute
-rc from priors. It reads `obs.render_config` directly and validates
-priors fit within the obs's pre-built grid:
+`InferenceTask.from_obs(source, priors, image_obs=..., grism_obs=...)`
+handles each obs's rc in one of two ways:
 
-- Priors imply tighter rc → use obs's rc as-is (slightly oversized but
-  correct).
-- Priors imply WIDER rc than obs was built for → raise `ValueError`
-  with rebuild instructions:
+- Obs built without an explicit `render_config` (builder default) → rc is
+  derived from the priors (`build_image_render_config` /
+  `build_grism_render_config` in `kl_pipe/render.py`) and the obs is
+  rebuilt with it.
+- Obs built with an explicit `render_config` → validated against the
+  priors; if the priors imply a wider grid, raise `ValueError` with
+  rebuild instructions:
   ```
   rc = RenderConfig.for_priors(model, priors, pixel_scale, pixel_response=...)
   obs = build_image_obs(image_pars, ..., render_config=rc)
@@ -171,24 +173,25 @@ for flux/pixel comparison. See base commit `63a30d5` for the migration.
 
 ## Cube and grism rendering
 
-The cube intermediate `KLModel.render_cube` is the **post-PSF,
-pre-pixel-response** representation of intensity as it arrives at the
-detector. Pixel response is treated as a detector property and applies
+`SourceModel.render_grism` builds the intrinsic cube with
+`SourceModel.build_cube` (no PSF). The PSF is applied either once to the
+dispersed 2D image (`psf_mode='post_dispersion'`, default) or to every
+wavelength slice before dispersion (`psf_mode='per_slice'`). Pixel response is treated as a detector property and applies
 once at the 2D dispersed observable in `render_grism`, not per-channel
 on the cube.
 
 | Step | Function | Resolution | Pixel response |
 |---|---|---|---|
 | Per-channel intensity | `intensity_model.render_unconvolved` | fine when `obs.oversample > 1` | none (point-sampled) |
-| Per-channel PSF | `psf.convolve_fft(bin=False)` | stays fine | none |
+| PSF (per slice, or once after dispersion) | `psf.convolve_fft(bin=False)` | stays fine | none |
 | Cube → 2D dispersion | `disperse_cube(..., oversample=N)` | output matches input cube (fine) | none |
-| 2D readout | `_apply_post_dispersion_pixel_response` (in `render_grism`) | **fine → coarse** via BoxPixel sinc + sum-bin | applied here |
+| 2D readout | `_apply_post_dispersion_pixel_response` (in `render_grism`) | **fine → coarse** via BoxPixel sinc + sample at coarse pixel centers | applied here |
 
 Two switches make this work:
 
 - **`convolve_fft(image, psf_data, bin=False)`** — discrete-image analog
   of `pixel_response=None` on the analytic intensity-model k-space path.
-  PSF in k-space, no sum-bin. Used by `render_cube` when
+  PSF in k-space, no sum-bin. Used by `render_grism` when
   `obs.oversample > 1` so the cube stays at fine spatial resolution.
 - **`disperse_cube(cube, grism_pars, lambda_grid, oversample=N)`** —
   scales `pixel_offsets` (driven by wavelength and `grism_pars.dispersion`,

@@ -32,13 +32,12 @@ from kl_pipe.ensemble.population import (
     BULGE_SIZE_RATIO_MEDIAN,
     CENTROID_SCATTER_ARCSEC,
     CONT_CENTROID_OFFSET_ARCSEC,
-    HALPHA_RSCALE_RATIO_DEX,
-    HALPHA_RSCALE_RATIO_MEDIAN,
-    VEL_RSCALE_RATIO_DEX,
-    VEL_RSCALE_RATIO_MEDIAN,
+    scale_ratio_paints,
 )
 from kl_pipe.photometry import CGS_TO_F17, EXP_R50_OVER_RSCALE
 from kl_pipe.priors import (
+    Prior,
+    CircularUniform,
     ConditionalLogNormal,
     Gaussian,
     LogNormal,
@@ -324,6 +323,33 @@ def _bulge_nsersic_prior() -> TruncatedNormalMixture:
     )
 
 
+def _shear_fit_prior(spec) -> Prior:
+    """Per-component shear fit prior from the spec: isotropic Gaussian or
+    flat on a symmetric interval."""
+    if spec.shear_fit_prior_type == 'gaussian':
+        return Gaussian(0.0, spec.shear_fit_prior_sigma)
+    if spec.shear_fit_prior_type == 'uniform':
+        hw = spec.shear_fit_prior_halfwidth
+        if not 0.0 < hw < 1.0:
+            raise ValueError(f"shear_prior_halfwidth must be in (0, 1), got {hw}")
+        return Uniform(-hw, hw)
+    raise ValueError(
+        "shear_prior_type must be 'gaussian' or 'uniform', got "
+        f"{spec.shear_fit_prior_type!r}"
+    )
+
+
+def _pa_fit_prior(spec) -> Prior:
+    """Fit prior on the intrinsic position angle from the spec."""
+    if spec.pa_fit_prior == 'half_turn':
+        return Uniform(0.0, math.pi)
+    if spec.pa_fit_prior == 'full_circle':
+        return CircularUniform(2.0 * math.pi)
+    raise ValueError(
+        "pa_prior must be 'half_turn' or 'full_circle', got " f"{spec.pa_fit_prior!r}"
+    )
+
+
 def scene_priors(
     truth: Dict[str, float],
     config: 'ObservationConfig',
@@ -373,6 +399,19 @@ def scene_priors(
             return Uniform(draw.params['low'], draw.params['high'])
         if draw.dist == 'lognormal_tf':
             return make_tf_prior(draw.params['center_kms'], draw.params['sigma_tf_dex'])
+        if draw.dist == 'lognormal':
+            return LogNormal(
+                math.log(draw.params['median']),
+                draw.params['sigma_dex'] * math.log(10.0),
+            )
+        if draw.dist == 'grid':
+            values = [float(v) for v in draw.params['values']]
+            if len(values) < 2:
+                raise ValueError(
+                    f"single-value grid draw for '{name}' has no population "
+                    f"prior; set fit.prior_overrides['{name}'] or pin it"
+                )
+            return Uniform(min(values), max(values))
         raise ValueError(f"no prior rule for draw dist '{draw.dist}' ({name})")
 
     # catalog truths carry the catalog disk scale length, which exceeds the
@@ -385,8 +424,8 @@ def scene_priors(
         # reflect the data's shear constraint, not the prior; unbounded --
         # truncation would re-inject a prior edge (matches the flagship).
         # Width is spec-configurable (wider -> more data-driven sigma_eps).
-        'g1': Gaussian(0.0, spec.shear_fit_prior_sigma),
-        'g2': Gaussian(0.0, spec.shear_fit_prior_sigma),
+        'g1': _shear_fit_prior(spec),
+        'g2': _shear_fit_prior(spec),
         # nuisance kinematics (flagship prior widths/bounds, centered on the
         # fit's truth -- identical to scene defaults unless the spec fixed
         # block overrides them)
@@ -469,6 +508,16 @@ def scene_priors(
             )
             prior_spec[f'{band}.h_over_r'] = truth[f'{band}.h_over_r']
 
+    if spec.sample_h_over_r:
+        # one shared thickness ratio, sampled with the paint distribution as
+        # its prior; the per-component pins give way to the top-level key
+        for comp in _geometry_components(config):
+            del prior_spec[f'{comp}.h_over_r']
+        median, scatter_dex = spec.catalog_population.paint_h_over_r
+        prior_spec['h_over_r'] = LogNormal(
+            math.log(median), scatter_dex * math.log(10.0)
+        )
+
     if is_catalog:
         cp = spec.catalog_population
         # observable-conditioned TFR prior: mu = TFR evaluated at the NOISY
@@ -481,7 +530,7 @@ def scene_priors(
         )
         # orientation: the generating distributions (isotropic redraw)
         prior_spec['cosi'] = Uniform(*cp.cosi_range)
-        prior_spec['theta_int'] = Uniform(0.0, math.pi)
+        prior_spec['theta_int'] = _pa_fit_prior(spec)
         # self-consistent population prior on the painted dispersion:
         # sigma0(z) = intercept + slope*z with the paint scatter
         # (Ubler+2019 affine evolution); bounds = the paint floor and the
@@ -524,17 +573,18 @@ def scene_priors(
             )
         if not bulge_bands:
             parent = f'{config.bands[0]}.rscale'
+        (vel_median, vel_dex), (line_median, line_dex) = scale_ratio_paints(cp)
         prior_spec['vel.rscale'] = ConditionalLogNormal(
             parent,
-            math.log(VEL_RSCALE_RATIO_MEDIAN),
-            VEL_RSCALE_RATIO_DEX * ln10,
+            math.log(vel_median),
+            vel_dex * ln10,
             rscale_low,
             rscale_high,
         )
         prior_spec['Halpha.rscale'] = ConditionalLogNormal(
             parent,
-            math.log(HALPHA_RSCALE_RATIO_MEDIAN),
-            HALPHA_RSCALE_RATIO_DEX * ln10,
+            math.log(line_median),
+            line_dex * ln10,
             rscale_low,
             rscale_high,
         )
@@ -602,27 +652,99 @@ def scene_priors(
         if spec.stratify_param == 'cosi':
             prior_spec['cosi'] = Uniform(*spec.stratify_range)
 
-        # drawn params: generating distribution = fit prior (self-consistent)
+        # drawn params: generating distribution = fit prior (self-consistent);
+        # z is pinned above, theta_int takes the PA fit prior below, and cosi
+        # takes fit.cosi_prior_range below when the spec sets it
         for name, draw in spec.draw.items():
-            if name == 'z':
-                continue  # z is pinned above in v1
+            if name in ('z', 'theta_int'):
+                continue
+            if name == 'cosi' and spec.cosi_fit_prior_range is not None:
+                continue
             prior_spec[name] = population_prior(name, draw)
+        if 'h_over_r' in spec.draw:
+            # drawn thickness is one shared sampled parameter; the
+            # per-component pins give way to the top-level key
+            for comp in _geometry_components(config):
+                del prior_spec[f'{comp}.h_over_r']
+
+    # fit prior wider than the generating range, when the spec asks for it
+    if spec.cosi_fit_prior_range is not None:
+        prior_spec['cosi'] = Uniform(*spec.cosi_fit_prior_range)
 
     if 'cosi' not in prior_spec:
         raise ValueError(
             "cosi has no prior: it must be either the stratified axis or a "
             "population.draw entry"
         )
-    if 'theta_int' not in prior_spec:
+    if 'theta_int' not in prior_spec and 'theta_int' not in spec.draw:
         raise ValueError(
             "spec population.draw must include theta_int (position angle population)"
         )
+    # the drawn (generating) PA range is a half turn; the fit prior is set by
+    # the spec knob (full circle by default)
+    prior_spec['theta_int'] = _pa_fit_prior(spec)
     if 'vel.vcirc' not in prior_spec:
         raise ValueError(
             "spec population.draw must include vcirc (Tully-Fisher population)"
         )
 
+    # fit.prior_overrides: replacement priors for sampled parameters
+    for name, ov in spec.prior_overrides.items():
+        if name not in prior_spec or not isinstance(prior_spec[name], Prior):
+            raise ValueError(
+                f"fit.prior_overrides '{name}' is not a sampled scene parameter; "
+                f"sampled: {sorted(k for k, v in prior_spec.items() if isinstance(v, Prior))}"
+            )
+        prior_spec[name] = _override_prior(name, ov, truth)
+
+    # fit.pin_to_truth: fix the listed sampled parameters at the manifest
+    # truth; a bare name broadcasts to every sampled '<component>.<name>'
+    for name in spec.pin_to_truth:
+        if name in prior_spec:
+            targets = [name]
+        else:
+            targets = [
+                key
+                for key, value in prior_spec.items()
+                if key.endswith(f'.{name}') and isinstance(value, Prior)
+            ]
+            if not targets:
+                raise ValueError(
+                    f"fit.pin_to_truth '{name}' matches no sampled scene parameter"
+                )
+        for key in targets:
+            if not isinstance(prior_spec[key], Prior):
+                raise ValueError(
+                    f"fit.pin_to_truth '{key}' is already fixed in this scene"
+                )
+            prior_spec[key] = truth[key]
+
     return PriorDict(prior_spec)
+
+
+def _override_prior(name: str, ov, truth: Dict[str, float]) -> Prior:
+    """Build the fit prior for one ``fit.prior_overrides`` entry."""
+    p = ov.params
+    if ov.dist == 'uniform':
+        return Uniform(p['low'], p['high'])
+    if ov.dist == 'uniform_relative':
+        # bounds are multiples of this fit's truth
+        if name not in truth or truth[name] <= 0:
+            raise ValueError(
+                f"prior_overrides '{name}': uniform_relative needs a positive "
+                f"truth, got {truth.get(name)!r}"
+            )
+        return Uniform(p['low'] * truth[name], p['high'] * truth[name])
+    if ov.dist == 'gaussian':
+        return Gaussian(p['loc'], p['scale'])
+    if ov.dist == 'lognormal':
+        mu = math.log(p['median'])
+        sigma = p['sigma_dex'] * math.log(10.0)
+        if 'clip_sigmas' in p:
+            k = p['clip_sigmas'] * sigma
+            return TruncatedLogNormal(mu, sigma, math.exp(mu - k), math.exp(mu + k))
+        return LogNormal(mu, sigma)
+    raise ValueError(f"prior_overrides '{name}': unknown dist '{ov.dist}'")
 
 
 # per-fit varying truth parameters the expander fills (everything else comes

@@ -1,0 +1,21 @@
+# hlwas_medium_roman_rotac_rolls with a single broadband image (F158), for
+# comparisons against forecasts that model one combined broadband image.
+id: hlwas_medium_roman_rotac_rolls_f158
+bands: [F158]
+grism:
+  rolls_deg: [0.0, 10.0, 167.0, 177.0]
+  dispersion_nm_per_pix: 1.1
+lines: [Halpha]
+psf:
+  broadband:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+  grism:
+    type: roman_wfi
+    sca: 10
+    pupil_bin: 4
+    folding_threshold_tiers: [{z_max: 1.2, ft: 0.01}, {z_max: null, ft: 5.0e-3}]
+pixel_scale_arcsec: 0.11
+stamp: {broadband_pix: 32, grism_pix: 32}

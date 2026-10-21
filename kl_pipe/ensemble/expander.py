@@ -29,11 +29,13 @@ import hashlib
 import json
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from kl_pipe.ensemble.catalogs import get_catalog_adapter
 from kl_pipe.ensemble.population import (
@@ -55,10 +57,11 @@ EXPANDER_VERSION = 2
 _GALAXY_STREAM = 1
 _NOISE_STREAM = 2
 _CENTROID_STREAM = 3
+_THICKNESS_STREAM = 4
 
 
-TRUTH_PREFIX = 'truth.'
-POP_PREFIX = 'pop.'
+TRUTH_PREFIX = "truth."
+POP_PREFIX = "pop."
 
 # population-table columns carried through to the manifest (prefixed 'pop.')
 # for prior construction (prior_vcirc_*), selection/binning diagnostics, and
@@ -66,30 +69,30 @@ POP_PREFIX = 'pop.'
 # are prepended at expansion time; bulge columns apply only when the
 # catalog carries them.
 _POP_PASSTHROUGH = (
-    'snr_line_per_pass',
-    'snr_line_total',
-    'ew_rest_a',
-    'logm',
-    'logm_obs',
-    'prior_vcirc_mu_kms',
-    'prior_vcirc_sigma_dex',
-    'sigma0_kms',
-    'bulge_fraction',
-    'bulge_r50_arcsec',
-    'bulge_nsersic',
-    'f_line_cgs',
+    "snr_line_per_pass",
+    "snr_line_total",
+    "ew_rest_a",
+    "logm",
+    "logm_obs",
+    "prior_vcirc_mu_kms",
+    "prior_vcirc_sigma_dex",
+    "sigma0_kms",
+    "bulge_fraction",
+    "bulge_r50_arcsec",
+    "bulge_nsersic",
+    "f_line_cgs",
     # physical flux truths, simulated measurements (prior centers), and
     # measurement errors; per-band imaging SNRs against the published depths
-    'f_line_obs_cgs',
-    'f_line_sigma_cgs',
+    "f_line_obs_cgs",
+    "f_line_sigma_cgs",
 ) + tuple(
-    f'{stem}_{band.lower()}{suffix}'
+    f"{stem}_{band.lower()}{suffix}"
     for band in ROMAN_IMAGING_BANDS
     for stem, suffix in (
-        ('flux', '_ujy'),
-        ('flux_obs', '_ujy'),
-        ('flux_sigma', '_ujy'),
-        ('snr_bb', ''),
+        ("flux", "_ujy"),
+        ("flux_obs", "_ujy"),
+        ("flux_sigma", "_ujy"),
+        ("snr_bb", ""),
     )
 )
 
@@ -106,21 +109,52 @@ def compute_fit_id(
 ) -> str:
     """Stable fit id from the integer index tuple (plus run identity)."""
     key = (
-        f'{run_name}|{version}|{cosi_bin}|{galaxy_id}|{ring_member}'
-        f'|{noise_rep}|{shear_step}|{sweep_step}'
+        f"{run_name}|{version}|{cosi_bin}|{galaxy_id}|{ring_member}"
+        f"|{noise_rep}|{shear_step}|{sweep_step}"
     )
     return hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
-def _draw_value(draw: DrawSpec, rng: np.random.Generator) -> float:
-    if draw.dist == 'uniform':
-        return float(rng.uniform(draw.params['low'], draw.params['high']))
-    if draw.dist == 'lognormal_tf':
-        sigma_ln = draw.params['sigma_tf_dex'] * np.log(10.0)
+def _draw_value(draw: DrawSpec, rng: np.random.Generator, galaxy_id: int) -> float:
+    if draw.dist == "uniform":
+        return float(rng.uniform(draw.params["low"], draw.params["high"]))
+    if draw.dist == "lognormal_tf":
+        # truth scatter may differ from the fit-prior width (0 = every galaxy
+        # at the center); the normal draw is consumed either way so the other
+        # draws' streams do not move
+        truth_dex = draw.params.get("truth_sigma_tf_dex", draw.params["sigma_tf_dex"])
+        sigma_ln = truth_dex * np.log(10.0)
         return float(
-            np.exp(np.log(draw.params['center_kms']) + sigma_ln * rng.normal())
+            np.exp(np.log(draw.params["center_kms"]) + sigma_ln * rng.normal())
         )
+    if draw.dist == "lognormal":
+        sigma_ln = draw.params["sigma_dex"] * np.log(10.0)
+        return float(np.exp(np.log(draw.params["median"]) + sigma_ln * rng.normal()))
+    if draw.dist == "grid":
+        values = draw.params["values"]
+        return float(values[galaxy_id % len(values)])
     raise ValueError(f"unknown draw dist '{draw.dist}'")
+
+
+def _line_label_from_flux(
+    f_line_cgs: float, truth: Dict[str, float], config: ObservationConfig
+) -> float:
+    """Per-pass line SNR label of a physical line flux at the published depth.
+
+    Uses the catalog-mode convention: the galaxy's compactness from its
+    broadband disk r50 (first band), cos i and redshift.
+    """
+    from kl_pipe.photometry import EXP_R50_OVER_RSCALE
+    from kl_pipe.surveys.roman import (
+        compute_line_snr_per_pass,
+        matched_filter_compactness,
+    )
+
+    r50 = EXP_R50_OVER_RSCALE * float(truth[f"{config.bands[0]}.rscale"])
+    compactness = matched_filter_compactness(
+        np.array([r50]), np.array([float(truth["cosi"])]), np.array([float(truth["z"])])
+    )
+    return float(compute_line_snr_per_pass(np.array([f_line_cgs]), compactness)[0])
 
 
 def _galaxy_rng(spec_seed: int, cosi_bin: int, galaxy_id: int):
@@ -131,6 +165,12 @@ def _galaxy_rng(spec_seed: int, cosi_bin: int, galaxy_id: int):
 def _centroid_rng(spec_seed: int, ids: tuple):
     """CENTROID-stream generator keyed on the catalog adapter's id values."""
     ss = np.random.SeedSequence([spec_seed, _CENTROID_STREAM, *(int(v) for v in ids)])
+    return np.random.default_rng(ss)
+
+
+def _thickness_rng(spec_seed: int, ids: tuple):
+    """THICKNESS-stream generator keyed on the catalog adapter's id values."""
+    ss = np.random.SeedSequence([spec_seed, _THICKNESS_STREAM, *(int(v) for v in ids)])
     return np.random.default_rng(ss)
 
 
@@ -155,12 +195,12 @@ def _cosi_bin_centers(spec: EnsembleSpec) -> np.ndarray:
 
 
 def _shear_for_step(spec: EnsembleSpec, step: int) -> Dict[str, float]:
-    if spec.shear_scheme == 'fixed':
-        return {'g1': spec.g1, 'g2': spec.g2}
+    if spec.shear_scheme == "fixed":
+        return {"g1": spec.g1, "g2": spec.g2}
     value = spec.shear_grid[step]
-    if spec.shear_component == 'g1':
-        return {'g1': value, 'g2': 0.0}
-    return {'g1': 0.0, 'g2': value}
+    if spec.shear_component == "g1":
+        return {"g1": value, "g2": 0.0}
+    return {"g1": 0.0, "g2": value}
 
 
 def build_manifest(
@@ -195,7 +235,7 @@ def build_manifest(
         rows = _sampled_rows(spec, config)
 
     manifest = pd.DataFrame(rows)
-    if manifest['fit_id'].duplicated().any():
+    if manifest["fit_id"].duplicated().any():
         raise RuntimeError("duplicate fit_id in manifest -- expander bug")
     if len(manifest) != spec.n_fits:
         raise RuntimeError(
@@ -210,7 +250,7 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
     """Manifest rows for a sampled (stratified/swept) population."""
     base_truth = scene_truth_defaults(config, spec.fixed)
 
-    required_draws = {'theta_int', 'vel.vcirc', 'z'}
+    required_draws = {"theta_int", "vel.vcirc", "z"}
     missing = required_draws - set(spec.draw)
     if missing:
         raise ValueError(
@@ -218,7 +258,7 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
             f"missing {sorted(missing)}"
         )
 
-    n_shear = len(spec.shear_grid) if spec.shear_scheme == 'grid' else 1
+    n_shear = len(spec.shear_grid) if spec.shear_scheme == "grid" else 1
     ring_members = (0, 90) if spec.ring_enabled else (0,)
 
     if spec.sweep_values:
@@ -228,7 +268,7 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
     else:
         # truth stratification: a galaxy bank per cosi bin
         bank_bins = [
-            (b, {'cosi': float(c)}) for b, c in enumerate(_cosi_bin_centers(spec))
+            (b, {"cosi": float(c)}) for b, c in enumerate(_cosi_bin_centers(spec))
         ]
         sweep_steps = [(0, None)]
 
@@ -238,10 +278,17 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
             rng = _galaxy_rng(spec.seed, cosi_bin, galaxy_id)
             # fixed draw order = stable across spec-dict insertion order
             drawn = {
-                name: _draw_value(spec.draw[name], rng) for name in sorted(spec.draw)
+                name: _draw_value(spec.draw[name], rng, galaxy_id)
+                for name in sorted(spec.draw)
             }
+            if "h_over_r" in drawn:
+                # one drawn thickness shared by every component (the fit
+                # samples the top-level key, the mock reads the components)
+                for key in list(base_truth):
+                    if key.endswith(".h_over_r"):
+                        drawn[key] = drawn["h_over_r"]
             for ring_member in ring_members:
-                theta = drawn['theta_int']
+                theta = drawn["theta_int"]
                 if ring_member == 90:
                     theta = (theta + np.pi / 2) % np.pi
                 for shear_step in range(n_shear):
@@ -253,11 +300,22 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
                             truth.update(strat_truth)
                             truth.update(
                                 {
-                                    'theta_int': float(theta),
-                                    'g1': shear['g1'],
-                                    'g2': shear['g2'],
+                                    "theta_int": float(theta),
+                                    "g1": shear["g1"],
+                                    "g2": shear["g2"],
                                 }
                             )
+                            if sweep_value is None:
+                                line_snr = spec.line_snr
+                                line_flux = None
+                            elif spec.stratify_param == "line_flux_cgs":
+                                line_flux = float(sweep_value)
+                                line_snr = _line_label_from_flux(
+                                    line_flux, truth, config
+                                )
+                            else:
+                                line_snr = float(sweep_value)
+                                line_flux = None
                             id_args = (
                                 spec.run_name,
                                 spec.version,
@@ -280,38 +338,39 @@ def _sampled_rows(spec: EnsembleSpec, config: ObservationConfig) -> List[dict]:
                                     sweep_step,
                                 )
                                 if spec.ring_enabled
-                                else ''
+                                else ""
                             )
                             row = {
-                                'fit_id': fit_id,
-                                'run_name': spec.run_name,
-                                'cosi_bin': cosi_bin,
-                                'galaxy_id': galaxy_id,
-                                'ring_member': ring_member,
-                                'ring_partner_id': ring_partner,
-                                'noise_rep': noise_rep,
-                                'shear_step': shear_step,
-                                'sweep_step': sweep_step,
+                                "fit_id": fit_id,
+                                "run_name": spec.run_name,
+                                "cosi_bin": cosi_bin,
+                                "galaxy_id": galaxy_id,
+                                "ring_member": ring_member,
+                                "ring_partner_id": ring_partner,
+                                "noise_rep": noise_rep,
+                                "shear_step": shear_step,
+                                "sweep_step": sweep_step,
                                 # CRN: seed excludes shear_step AND sweep_step
-                                'noise_seed': _noise_seed(
+                                "noise_seed": _noise_seed(
                                     spec.seed,
                                     cosi_bin,
                                     galaxy_id,
                                     ring_member,
                                     noise_rep,
                                 ),
-                                'observation_config_id': config.id,
-                                'broadband_snr': spec.broadband_snr,
-                                'line_snr': (
-                                    float(sweep_value)
-                                    if sweep_value is not None
-                                    else spec.line_snr
+                                "observation_config_id": config.id,
+                                "broadband_snr": spec.broadband_snr,
+                                "line_snr": line_snr,
+                                # physical line flux [erg/s/cm2] on a flux
+                                # sweep; NaN when the label is set directly
+                                "line_flux_cgs": (
+                                    line_flux if line_flux is not None else np.nan
                                 ),
-                                'save_chains': spec.save_chains == 'all',
-                                'save_mocks': spec.save_mocks == 'all',
+                                "save_chains": spec.save_chains == "all",
+                                "save_mocks": spec.save_mocks == "all",
                             }
                             row.update(
-                                {f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()}
+                                {f"{TRUTH_PREFIX}{k}": v for k, v in truth.items()}
                             )
                             rows.append(row)
     return rows
@@ -378,29 +437,29 @@ def _catalog_rows(
     pop_passthrough = adapter.id_columns + tuple(
         c
         for c in _POP_PASSTHROUGH
-        if (cp.paint_bulge or c not in ('bulge_r50_arcsec', 'bulge_nsersic'))
-        and (adapter.has_bulge or c != 'bulge_fraction')
+        if (cp.paint_bulge or c not in ("bulge_r50_arcsec", "bulge_nsersic"))
+        and (adapter.has_bulge or c != "bulge_fraction")
     )
 
     rows: List[dict] = []
     for pop_index, g in population.iterrows():
-        rscale = float(g['rscale_arcsec'])
-        z = float(g['z'])
+        rscale = float(g["rscale_arcsec"])
+        z = float(g["z"])
         for ring_member in ring_members:
-            theta = float(g['theta_int'])
+            theta = float(g["theta_int"])
             if ring_member == 90:
                 theta = (theta + np.pi / 2) % np.pi
             for noise_rep in range(spec.m_noise):
                 truth = dict(base_truth)
                 truth.update(
                     {
-                        'cosi': float(g['cosi']),
-                        'theta_int': theta,
-                        'g1': float(g['g1']),
-                        'g2': float(g['g2']),
-                        'z': z,
-                        'vel.vcirc': float(g['vcirc_kms']),
-                        'Halpha.dispersion': float(g['sigma0_kms']),
+                        "cosi": float(g["cosi"]),
+                        "theta_int": theta,
+                        "g1": float(g["g1"]),
+                        "g2": float(g["g2"]),
+                        "z": z,
+                        "vel.vcirc": float(g["vcirc_kms"]),
+                        "Halpha.dispersion": float(g["sigma0_kms"]),
                     }
                 )
                 # the catalog disk scale length sets the disk spatial scales
@@ -414,23 +473,23 @@ def _catalog_rows(
                 # disabled, bands are single-disk too, with the same catalog
                 # flux, so the twin's total broadband flux matches.
                 for band in config.bands:
-                    band_flux_ujy = float(g[f'flux_{band.lower()}_ujy'])
+                    band_flux_ujy = float(g[f"flux_{band.lower()}_ujy"])
                     if cp.paint_bulge:
-                        truth[f'{band}.total_flux'] = band_flux_ujy
-                        truth[f'{band}.disk_rscale'] = rscale
-                        truth[f'{band}.bulge_frac'] = float(g['bulge_fraction'])
-                        truth[f'{band}.bulge_hlr'] = float(g['bulge_r50_arcsec'])
-                        truth[f'{band}.bulge_n_sersic'] = float(g['bulge_nsersic'])
+                        truth[f"{band}.total_flux"] = band_flux_ujy
+                        truth[f"{band}.disk_rscale"] = rscale
+                        truth[f"{band}.bulge_frac"] = float(g["bulge_fraction"])
+                        truth[f"{band}.bulge_hlr"] = float(g["bulge_r50_arcsec"])
+                        truth[f"{band}.bulge_n_sersic"] = float(g["bulge_nsersic"])
                     else:
-                        truth[f'{band}.flux'] = band_flux_ujy
-                        truth[f'{band}.rscale'] = rscale
+                        truth[f"{band}.flux"] = band_flux_ujy
+                        truth[f"{band}.rscale"] = rscale
                 # the continuum under the line is the same stellar disk as the
                 # broadband, so it shares that scale exactly; the line and the
                 # rotation curve carry painted ratios to it
-                truth['Halpha.cont.rscale'] = rscale
-                truth['Halpha.rscale'] = rscale * float(g['halpha_rscale_ratio'])
-                truth['vel.rscale'] = rscale * float(g['vel_rscale_ratio'])
-                truth['vel.v0'] = float(g['v0_kms'])
+                truth["Halpha.cont.rscale"] = rscale
+                truth["Halpha.rscale"] = rscale * float(g["halpha_rscale_ratio"])
+                truth["vel.rscale"] = rscale * float(g["vel_rscale_ratio"])
+                truth["vel.v0"] = float(g["v0_kms"])
 
                 # each component is registered independently, so every one
                 # gets its own offset. The continuum sits near the line but
@@ -438,22 +497,33 @@ def _catalog_rows(
                 # continuum traces the older stellar disk, so it takes the
                 # line's position plus a small physical offset
                 crng = _centroid_rng(spec.seed, tuple(g[c] for c in adapter.id_columns))
-                for comp in list(config.bands) + ['Halpha']:
-                    truth[f'{comp}.x0'] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
-                    truth[f'{comp}.y0'] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
-                truth['Halpha.cont.x0'] = truth['Halpha.x0'] + crng.normal(
+                for comp in list(config.bands) + ["Halpha"]:
+                    truth[f"{comp}.x0"] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
+                    truth[f"{comp}.y0"] = crng.normal(0.0, CENTROID_SCATTER_ARCSEC)
+                truth["Halpha.cont.x0"] = truth["Halpha.x0"] + crng.normal(
                     0.0, CONT_CENTROID_OFFSET_ARCSEC
                 )
-                truth['Halpha.cont.y0'] = truth['Halpha.y0'] + crng.normal(
+                truth["Halpha.cont.y0"] = truth["Halpha.y0"] + crng.normal(
                     0.0, CONT_CENTROID_OFFSET_ARCSEC
                 )
+                if cp.paint_h_over_r is not None:
+                    # one thickness per galaxy, shared by every component and
+                    # sampled by the fit as the top-level h_over_r
+                    median, scatter_dex = cp.paint_h_over_r
+                    trng = _thickness_rng(
+                        spec.seed, tuple(g[c] for c in adapter.id_columns)
+                    )
+                    h_over_r = float(median * 10.0 ** (scatter_dex * trng.normal()))
+                    truth["h_over_r"] = h_over_r
+                    for comp in list(config.bands) + ["Halpha", "Halpha.cont"]:
+                        truth[f"{comp}.h_over_r"] = h_over_r
                 # line flux truth: the painted flux in 1e-17 erg/s/cm2 (the
                 # scene's line-channel unit); the continuum amplitude follows
                 # from the catalog rest-frame EW in the same unit per nm:
                 # EW_obs [nm] = ew_rest_a [A] * (1 + z) / 10
-                truth['Halpha.flux'] = float(g['f_line_cgs']) * CGS_TO_F17
-                ew_obs_nm = float(g['ew_rest_a']) * (1.0 + z) / 10.0
-                truth['Halpha.cont.flux_per_nm'] = truth['Halpha.flux'] / ew_obs_nm
+                truth["Halpha.flux"] = float(g["f_line_cgs"]) * CGS_TO_F17
+                ew_obs_nm = float(g["ew_rest_a"]) * (1.0 + z) / 10.0
+                truth["Halpha.cont.flux_per_nm"] = truth["Halpha.flux"] / ew_obs_nm
 
                 id_args = (spec.run_name, spec.version, 0, int(pop_index))
                 fit_id = compute_fit_id(*id_args, ring_member, noise_rep, 0, 0)
@@ -462,38 +532,38 @@ def _catalog_rows(
                         *id_args, 90 if ring_member == 0 else 0, noise_rep, 0, 0
                     )
                     if cp.ring_members == 2
-                    else ''
+                    else ""
                 )
                 row = {
-                    'fit_id': fit_id,
-                    'run_name': spec.run_name,
-                    'cosi_bin': 0,
-                    'galaxy_id': int(pop_index),
-                    'ring_member': ring_member,
-                    'ring_partner_id': ring_partner,
-                    'noise_rep': noise_rep,
-                    'shear_step': 0,
-                    'sweep_step': 0,
-                    'noise_seed': _noise_seed(
+                    "fit_id": fit_id,
+                    "run_name": spec.run_name,
+                    "cosi_bin": 0,
+                    "galaxy_id": int(pop_index),
+                    "ring_member": ring_member,
+                    "ring_partner_id": ring_partner,
+                    "noise_rep": noise_rep,
+                    "shear_step": 0,
+                    "sweep_step": 0,
+                    "noise_seed": _noise_seed(
                         spec.seed, 0, int(pop_index), ring_member, noise_rep
                     ),
-                    'observation_config_id': config.id,
+                    "observation_config_id": config.id,
                     # per-galaxy PER-PASS line SNR from the population's
                     # matched-filter calculation: the mock noise is drawn
                     # once per grism roll, so each roll gets one pass's
                     # depth. The coadded depth the fit sees, and the one the
                     # selection cut is applied to, is snr_line_total.
-                    'line_snr': float(g['snr_line_per_pass']),
-                    'save_chains': spec.save_chains == 'all',
-                    'save_mocks': spec.save_mocks == 'all',
+                    "line_snr": float(g["snr_line_per_pass"]) * spec.line_snr_scale,
+                    "save_chains": spec.save_chains == "all",
+                    "save_mocks": spec.save_mocks == "all",
                 }
                 # per-band imaging depth: the mock noise of each band is
                 # normalized to the galaxy's own matched-filter SNR against
                 # the published point-source depth (population columns)
                 for band in config.bands:
-                    row[f'broadband_snr_{band}'] = float(g[f'snr_bb_{band.lower()}'])
-                row.update({f'{TRUTH_PREFIX}{k}': v for k, v in truth.items()})
-                row.update({f'{POP_PREFIX}{c}': g[c] for c in pop_passthrough})
+                    row[f"broadband_snr_{band}"] = float(g[f"snr_bb_{band.lower()}"])
+                row.update({f"{TRUTH_PREFIX}{k}": v for k, v in truth.items()})
+                row.update({f"{POP_PREFIX}{c}": g[c] for c in pop_passthrough})
                 rows.append(row)
     return rows
 
@@ -505,16 +575,16 @@ def _apply_subset_policy(manifest: pd.DataFrame, spec: EnsembleSpec) -> None:
     noise rep, first shear step) -- one diagnostic-grade fit per bin.
     """
     for policy, col in [
-        (spec.save_chains, 'save_chains'),
-        (spec.save_mocks, 'save_mocks'),
+        (spec.save_chains, "save_chains"),
+        (spec.save_mocks, "save_mocks"),
     ]:
-        if policy != 'subset':
+        if policy != "subset":
             continue
         mask = (
-            (manifest['galaxy_id'] == 0)
-            & (manifest['ring_member'] == 0)
-            & (manifest['noise_rep'] == 0)
-            & (manifest['shear_step'] == 0)
+            (manifest["galaxy_id"] == 0)
+            & (manifest["ring_member"] == 0)
+            & (manifest["noise_rep"] == 0)
+            & (manifest["shear_step"] == 0)
         )
         manifest[col] = mask
 
@@ -533,7 +603,7 @@ def truth_from_row(row: Dict) -> Dict[str, float]:
 def _git_commit() -> str:
     try:
         out = subprocess.run(
-            ['git', 'rev-parse', 'HEAD'],
+            ["git", "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
@@ -541,7 +611,30 @@ def _git_commit() -> str:
         )
         return out.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return 'unknown'
+        return "unknown"
+
+
+def git_commit_label() -> str:
+    """Short sha of the kl_pipe checkout, with ``-dirty`` when kl_pipe/ has
+    uncommitted changes; ``'unknown'`` outside a git checkout."""
+    sha = _git_commit()
+    if sha == "unknown":
+        return sha
+    label = sha[:9]
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", "."],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return label
+    return f"{label}-dirty" if status else label
+
+
+RESOLVED_SPEC_NAME = "ensemble_spec_resolved.yaml"
 
 
 def expand(
@@ -586,7 +679,12 @@ def expand(
     """
     spec_path = Path(spec_path)
     spec = EnsembleSpec.from_yaml(spec_path)
-    config_path = Path(registry_dir) / f'{spec.observed_config}.yaml'
+    # preflight: the fit block must build the sampler config the worker will
+    # build, so a rejected combination fails here and not on the node
+    from kl_pipe.ensemble.worker import build_sampler_config
+
+    build_sampler_config(spec)
+    config_path = Path(registry_dir) / f"{spec.observed_config}.yaml"
     if not config_path.exists():
         raise FileNotFoundError(
             f"observation config '{spec.observed_config}' not found at "
@@ -604,13 +702,13 @@ def expand(
         shutil.rmtree(run_dir)
 
     for sub in (
-        'provenance',
-        'status/claims',
-        'status/done',
-        'status/failed',
-        'results',
-        'chains',
-        'mocks',
+        "provenance",
+        "status/claims",
+        "status/done",
+        "status/failed",
+        "results",
+        "chains",
+        "mocks",
     ):
         (run_dir / sub).mkdir(parents=True)
 
@@ -622,34 +720,42 @@ def expand(
         population, pop_meta = build_population(spec)
         pop_parquet, _ = write_population(run_dir, population, pop_meta)
         population_record = {
-            'population_sha256': hashlib.sha256(pop_parquet.read_bytes()).hexdigest(),
-            'population_stage_counts': {
-                'n_raw': pop_meta['n_raw'],
-                'n_disk': pop_meta['n_disk'],
-                'kills': pop_meta['kills'],
-                'n_selected': pop_meta['n_selected'],
-                'n_sampled': pop_meta['n_sampled'],
+            "population_sha256": hashlib.sha256(pop_parquet.read_bytes()).hexdigest(),
+            "population_stage_counts": {
+                "n_raw": pop_meta["n_raw"],
+                "n_disk": pop_meta["n_disk"],
+                "kills": pop_meta["kills"],
+                "n_selected": pop_meta["n_selected"],
+                "n_sampled": pop_meta["n_sampled"],
             },
         }
 
     manifest = build_manifest(spec, config, population=population)
-    manifest.to_parquet(run_dir / 'manifest.parquet', index=False)
+    manifest.to_parquet(run_dir / "manifest.parquet", index=False)
 
-    shutil.copy2(spec_path, run_dir / 'provenance' / 'ensemble_spec.yaml')
-    shutil.copy2(config_path, run_dir / 'provenance' / 'observation_config.yaml')
+    shutil.copy2(spec_path, run_dir / "provenance" / "ensemble_spec.yaml")
+    # every defaulted knob written out, so a rebuild at later code (with
+    # different defaults) reproduces the fits as run
+    resolved_text = yaml.safe_dump(
+        spec.resolve_defaults(yaml.safe_load(spec_path.read_text())),
+        sort_keys=False,
+    )
+    (run_dir / "provenance" / RESOLVED_SPEC_NAME).write_text(resolved_text)
+    shutil.copy2(config_path, run_dir / "provenance" / "observation_config.yaml")
     expansion_record = {
-        'run_name': spec.run_name,
-        'spec_version': spec.version,
-        'expander_version': EXPANDER_VERSION,
-        'n_fits': int(len(manifest)),
-        'observation_config_id': config.id,
-        'observation_config_hash': config.content_hash,
-        'spec_hash': hashlib.sha256(spec_path.read_bytes()).hexdigest(),
-        'git_commit': _git_commit(),
+        "run_name": spec.run_name,
+        "spec_version": spec.version,
+        "expander_version": EXPANDER_VERSION,
+        "n_fits": int(len(manifest)),
+        "observation_config_id": config.id,
+        "observation_config_hash": config.content_hash,
+        "spec_hash": hashlib.sha256(spec_path.read_bytes()).hexdigest(),
+        "resolved_spec_hash": hashlib.sha256(resolved_text.encode()).hexdigest(),
+        "git_commit": _git_commit(),
         **population_record,
     }
-    (run_dir / 'provenance' / 'expansion.json').write_text(
-        json.dumps(expansion_record, indent=2) + '\n'
+    (run_dir / "provenance" / "expansion.json").write_text(
+        json.dumps(expansion_record, indent=2) + "\n"
     )
     return run_dir
 
@@ -657,9 +763,20 @@ def expand(
 def load_run(run_dir: Path):
     """Load (spec, config, manifest) from a run directory's provenance."""
     run_dir = Path(run_dir)
-    spec = EnsembleSpec.from_yaml(run_dir / 'provenance' / 'ensemble_spec.yaml')
+    resolved = run_dir / "provenance" / RESOLVED_SPEC_NAME
+    if resolved.exists():
+        spec = EnsembleSpec.from_yaml(resolved)
+    else:
+        warnings.warn(
+            f"{run_dir}: no provenance/{RESOLVED_SPEC_NAME} (expanded before "
+            "resolved specs were written); knobs absent from ensemble_spec.yaml "
+            "resolve to the CURRENT code defaults, which may differ from the "
+            "values the fits ran with",
+            stacklevel=2,
+        )
+        spec = EnsembleSpec.from_yaml(run_dir / "provenance" / "ensemble_spec.yaml")
     config = ObservationConfig.from_yaml(
-        run_dir / 'provenance' / 'observation_config.yaml'
+        run_dir / "provenance" / "observation_config.yaml"
     )
-    manifest = pd.read_parquet(run_dir / 'manifest.parquet')
+    manifest = pd.read_parquet(run_dir / "manifest.parquet")
     return spec, config, manifest

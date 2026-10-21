@@ -529,7 +529,7 @@ class TestBuildCube:
         shift = lam_mean_v0 - lam_mean_zero
 
         # Expected shift: lambda_rest * (1+z) * v0 / c
-        # lambda_rest is the Halpha registry value (656.28 nm)
+        # lambda_rest is the Halpha registry value
         from kl_pipe.lines import LINE_LAMBDAS
 
         z = pars_zero['z']

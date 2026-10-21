@@ -315,8 +315,16 @@ class TestRomanKernel:
         )
         kernel_fft = np.asarray(psf_data.kernel_fft)
         assert np.all(np.isfinite(kernel_fft))
-        # unit-sum kernel: DC component of its FFT is exactly the sum
-        assert kernel_fft[0, 0].real == pytest.approx(1.0, abs=1e-12)
+        # the DC component is the padded kernel's sum: the unit-normalized
+        # drawn kernel's flux within half-width N - 1 of the stamp (the only
+        # part that can reach the retained crop); the Roman wings put a few
+        # percent beyond 31 coarse pixels
+        full = psf.drawImage(nx=pin, ny=pin, scale=PIXEL_SCALE).array.astype(float)
+        full /= full.sum()
+        center = pin // 2
+        reachable = full[center - 31 : center + 32, center - 31 : center + 32].sum()
+        assert reachable < 1.0
+        assert kernel_fft[0, 0].real == pytest.approx(reachable, abs=1e-12)
         assert kernel_fft[0, 0].imag == pytest.approx(0.0, abs=1e-12)
 
     def test_pinned_shape_constant_across_z(self):
@@ -652,6 +660,40 @@ class TestRomanObs:
         for i in range(n):
             _build_grism_psf(ROMAN_SPEC, 1.0 + 0.01 * i)
         assert len(mocks_mod._ROMAN_PSF_CACHE) <= mocks_mod._ROMAN_PSF_CACHE_MAX
+
+    def test_roman_psf_cache_keeps_reused_keys(self):
+        # z-independent PSFs used by every fit survive any number of fits
+        from kl_pipe.ensemble import mocks as mocks_mod
+
+        mocks_mod._ROMAN_PSF_CACHE.clear()
+        band = _get_roman_wfi_psf(10, 4, 1293.6, bandpass='J129')
+        for i in range(3 * mocks_mod._ROMAN_PSF_CACHE_MAX):
+            _get_roman_wfi_psf(10, 4, 1600.0 + 5.0 * i, bandpass=None)
+            assert _get_roman_wfi_psf(10, 4, 1293.6, bandpass='J129') is band
+
+    def test_galsim_aperture_cache_bounded_and_values_unchanged(self):
+        # galsim's own per-wavelength aperture cache must be bounded too, and
+        # rebuilding an evicted aperture must give the identical PSF
+        import galsim
+        from galsim.roman import roman_psfs
+
+        from kl_pipe.ensemble import mocks as mocks_mod
+
+        lam = 1500.0
+        ref = galsim.roman.getPSF(SCA=10, bandpass=None, wavelength=lam, pupil_bin=4)
+        ref_img = ref.drawImage(scale=0.11, nx=32, ny=32).array
+        mocks_mod._ROMAN_PSF_CACHE.clear()
+        for i in range(mocks_mod._ROMAN_PSF_CACHE_MAX + 5):
+            _get_roman_wfi_psf(10, 4, lam + 10.0 * (i + 1), bandpass=None)
+        assert roman_psfs._make_aperture.maxsize == mocks_mod._ROMAN_PSF_CACHE_MAX
+        live = [k for k in roman_psfs._make_aperture.cache if isinstance(k, tuple)]
+        assert len(live) <= mocks_mod._ROMAN_PSF_CACHE_MAX
+        img = (
+            _get_roman_wfi_psf(10, 4, lam, bandpass=None)
+            .drawImage(scale=0.11, nx=32, ny=32)
+            .array
+        )
+        np.testing.assert_array_equal(img, ref_img)
 
     def test_folding_threshold_shrinks_pinned_kernel(self):
         # a looser folding threshold trades far-wing truncation for a much

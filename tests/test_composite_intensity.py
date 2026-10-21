@@ -1031,9 +1031,9 @@ class TestCompositeGridSizing:
     def test_maxk_grid_adequate(self, bulge_disk_shared):
         """Auto-sized grid (from maxk/stepk) matches an over-resolved grid.
 
-        Uses a sharp n=4 bulge -- the highest-frequency case -- so an
-        under-sized maxk would alias visibly. Reference forces a much finer
-        k-grid (maxk_threshold 1e-5, folding 1e-4); agreement to < 1e-4
+        Uses a sharp n=4 bulge (hlr 1.8 pixels) -- the highest-frequency case
+        -- so an under-sized maxk would alias visibly. Reference forces a much
+        finer k-grid (maxk_threshold 1e-5, folding 1e-4); agreement to < 1e-4
         confirms the default grid resolves the composite.
         """
         model = BulgeDiskModel(bulge_nsersic=4.0, shared_centroids=True)
@@ -1048,11 +1048,13 @@ class TestCompositeGridSizing:
             'bulge_frac': 0.25,
             'disk_rscale': 0.3,
             'disk_h_over_r': 0.1,
-            'bulge_hlr': 0.1,
+            'bulge_hlr': 0.2,
             'bulge_h_over_hlr': 0.3,
         }
         theta = model.pars2theta(pars)
-        ip = ImagePars(shape=(32, 32), pixel_scale=0.11, indexing='xy')
+        # a 32 px stamp with hlr 0.1 passed at the same 2.6e-7 agreement but
+        # its reference is a 14272^2 FFT (36 GB peak); this keeps it under 3 GB
+        ip = ImagePars(shape=(16, 16), pixel_scale=0.11, indexing='xy')
 
         auto = model.render_image(theta, image_pars=ip)
         rc_fine = RenderConfig.for_model(

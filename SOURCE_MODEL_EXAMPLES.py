@@ -1,9 +1,10 @@
 """
 Pseudocode examples for the SourceModel API.
 
-NOT meant to execute as a single script — this file illustrates the
-design for collaborators. Sections marked as commented-out workflows
-reference rendering / inference factory methods that may not yet exist.
+Illustrates the SourceModel API for collaborators. The model examples
+run as written; the commented-out workflows sketch rendering and
+inference calls and omit some keyword arguments (see
+``InferenceTask.from_obs`` for the full signature).
 
 Coverage:
   - Example A:  minimal grism+broadband (Halpha only)

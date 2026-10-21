@@ -122,10 +122,12 @@ def gsobj_to_kernel(
     kernel of half-width ``H = K//2`` and corner-placed image, wrap-around
     only touches output pixels with ``|y - x| >= P - H``, and ``P >= N + H``
     pushes that past the crop. Kernel tails that exceed the padded grid are
-    folded modulo ``P``, which is exact under the same condition. For
-    kernels much wider than the image (e.g. Roman WFI wings) this shrinks
-    the FFT grid several-fold at zero accuracy cost relative to the classic
-    ``N + K - 1`` full-linear padding.
+    folded modulo ``P``, which is exact under the same condition. Kernel
+    values at ``|offset| >= N`` cannot reach the crop at all, so the rendered
+    kernel is first cropped to half-width ``N - 1``: the padded grid is at
+    most ``next_fast_len(2N - 1)`` however wide GalSim draws the PSF (Roman
+    WFI wings span hundreds of fine pixels). Both steps are exact; only FFT
+    round-off differs from the classic ``N + K - 1`` full-linear padding.
 
     Returns
     -------
@@ -180,8 +182,16 @@ def gsobj_to_kernel(
     # normalize to unit sum
     kernel /= kernel.sum()
 
-    row_half = kernel.shape[0] // 2
-    col_half = kernel.shape[1] // 2
+    # kernel values at |offset| >= N never reach the retained [0, N) crop
+    # (source and output pixels are both inside the stamp), so a kernel
+    # wider than the image is cropped to half-width N - 1 before padding
+    row_half = min(kernel.shape[0] // 2, image_shape[0] - 1)
+    col_half = min(kernel.shape[1] // 2, image_shape[1] - 1)
+    center_r, center_c = kernel.shape[0] // 2, kernel.shape[1] // 2
+    kernel = kernel[
+        center_r - row_half : center_r + row_half + 1,
+        center_c - col_half : center_c + col_half + 1,
+    ]
 
     # minimum padding exact on the retained [0, N) crop (see docstring)
     nrow_pad = next_fast_len(image_shape[0] + row_half)

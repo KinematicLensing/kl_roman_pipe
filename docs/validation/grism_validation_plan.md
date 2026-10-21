@@ -2,7 +2,7 @@
 
 ## Motivation
 
-Current datacube/grism tests compare JAX `SpectralModel.build_cube()` against a numpy
+Current datacube/grism tests compare JAX `SourceModel.build_cube()` against a numpy
 re-implementation in `synthetic.py` that encodes identical algorithms. A shared bug
 passes both. We need a genuine, independent validation via cross-code comparison: render the
 same galaxy through multiple independent codes and compare pixel-level outputs.
@@ -133,7 +133,7 @@ Every test is tagged with the physics and/or data rendering axis it tests:
 Datacube factorizes as `I(x,y) x S(lambda)` -- analytically verifiable independent of
 any code.
 
-The base case parameters are as follows:
+The base case parameters are as follows (flat YAML names such as `vel_rscale` / `int_rscale`; these are config keys, not kl_pipe's dotted `vel.rscale` / `<band>.rscale` parameter keys):
 ```yaml
 base_params:
   # source properties
@@ -318,7 +318,7 @@ NOTE: These are initial "estimates" (i.e. made-up). All will need be refined aft
 |------|-------------|
 | `scripts/validation/test_params.yaml` | Single source of truth: base params, 35 tests, tolerances |
 | `scripts/validation/utils.py` | Config reader, per-code param mappers, comparison metrics |
-| `scripts/validation/render_kl_pipe.py` | Renders all tests via KLModel, outputs .npz |
+| `scripts/validation/render_kl_pipe.py` | Renders all tests via kl_pipe, outputs .npz (pending migration to `SourceModel`, issue #50; does not import today) |
 | `scripts/validation/render_geko.py` | Renders all tests via geko |
 | `scripts/validation/render_kl_tools.py` | Renders all tests via kl-tools |
 | `scripts/validation/render_grizli.py` | Renders all tests via grizli |

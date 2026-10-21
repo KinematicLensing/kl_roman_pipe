@@ -5,7 +5,7 @@ This directory contains configuration for downloading large test data files from
 ## Quick Start
 
 1. **Download TNG50 mock data:** `make download-cyverse-data`
-2. **Run TNG50 tests:** `make test-tng50`
+2. **Run TNG50 tests:** `make test-tng`
 
 To use the data in your code:
 ```python
@@ -68,7 +68,7 @@ https://data.cyverse.org/dav-anon/iplant/commons/cyverse_curated/<path>
 
 ```bash
 make download-cyverse-data  # Download configured files
-make test-tng50            # Run TNG50 tests (downloads data first if needed)
+make test-tng              # Run TNG50 tests (downloads data first if needed)
 make test-all              # Run all tests including TNG50
 make clean-cyverse-data    # Remove downloaded files
 ```
@@ -87,8 +87,8 @@ def test_with_tng50_data():
 ```
 
 This allows:
-- `make test` - Basic tests only (no download required)
-- `make test-tng50` - TNG50 tests (downloads data automatically)
+- `make test-basic` - Tests that need no downloaded data
+- `make test-tng` - TNG50 tests (downloads data automatically)
 - `make test-all` - Everything
 
 ## Notes

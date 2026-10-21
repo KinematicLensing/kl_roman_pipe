@@ -250,9 +250,26 @@ def _paint_kinematics(
     return vcirc, sigma0
 
 
+def scale_ratio_paints(
+    cp: CatalogPopulationSpec,
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """(median, scatter_dex) of the rotation-curve and Halpha scale ratios.
+
+    The spec's paint block overrides the module defaults; mock paint and the
+    conditional fit priors both read this.
+    """
+    vel = cp.paint_vel_rscale_ratio or (VEL_RSCALE_RATIO_MEDIAN, VEL_RSCALE_RATIO_DEX)
+    line = cp.paint_halpha_rscale_ratio or (
+        HALPHA_RSCALE_RATIO_MEDIAN,
+        HALPHA_RSCALE_RATIO_DEX,
+    )
+    return vel, line
+
+
 def _paint_structure(
     seed: int,
     ids: np.ndarray,
+    cp: CatalogPopulationSpec,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Paint the component scale ratios and the systemic velocity offset.
 
@@ -260,6 +277,7 @@ def _paint_structure(
     disk scale length, plus v0 in km/s. One generator per galaxy; the draw
     order must never change.
     """
+    (vel_median, vel_dex), (line_median, line_dex) = scale_ratio_paints(cp)
     n = len(ids)
     vel_ratio = np.empty(n, dtype=np.float64)
     line_ratio = np.empty(n, dtype=np.float64)
@@ -267,12 +285,8 @@ def _paint_structure(
     ln10 = np.log(10.0)
     for i in range(n):
         rng = _galaxy_rng(seed, _POP_STRUCTURE, ids[i])
-        vel_ratio[i] = VEL_RSCALE_RATIO_MEDIAN * np.exp(
-            rng.normal(0.0, VEL_RSCALE_RATIO_DEX * ln10)
-        )
-        line_ratio[i] = HALPHA_RSCALE_RATIO_MEDIAN * np.exp(
-            rng.normal(0.0, HALPHA_RSCALE_RATIO_DEX * ln10)
-        )
+        vel_ratio[i] = vel_median * np.exp(rng.normal(0.0, vel_dex * ln10))
+        line_ratio[i] = line_median * np.exp(rng.normal(0.0, line_dex * ln10))
         v0[i] = rng.normal(0.0, V0_SCATTER_KMS)
     return vel_ratio, line_ratio, v0
 
@@ -549,7 +563,7 @@ def build_population(
     z_sample = sample['z'].to_numpy(dtype=np.float64)
     vcirc, sigma0 = _paint_kinematics(spec.seed, ids, logm, z_sample, cp)
     g1, g2 = _draw_shear(spec.seed, ids, cp)
-    vel_ratio, line_ratio, v0_kms = _paint_structure(spec.seed, ids)
+    vel_ratio, line_ratio, v0_kms = _paint_structure(spec.seed, ids, cp)
     logm_obs, prior_mu, prior_sigma_dex = _draw_mass_prior(spec.seed, ids, logm, cp)
 
     # per-band imaging SNR against the published point-source depths, plus

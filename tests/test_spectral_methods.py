@@ -218,7 +218,9 @@ class TestGradients:
             ('vel.vcirc', 1e-4),
             ('z', 1e-8),
             ('Halpha.dispersion', 1e-4),
-            ('g2', 1e-7),
+            # 1e-7 is round-off limited (FD rel err 0.7-3.1e-6 across line
+            # centres); 1e-5 gives 1-4e-8
+            ('g2', 1e-5),
         ]:
             p_plus = dict(pars_jax)
             p_plus[key] = pars_jax[key] + eps

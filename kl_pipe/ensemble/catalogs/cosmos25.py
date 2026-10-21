@@ -61,6 +61,10 @@ if TYPE_CHECKING:
 # lines are only coherent with the v1 sections.
 COSMOS25_SOURCE_VERSION = 'v1'
 
+# Halpha rest wavelength [Angstrom, air] the painting used for lambda_Ha_obs;
+# only a join check, the pipeline observed wavelength is vacuum
+PAINT_HALPHA_REST_AIR_A = 6562.8
+
 # the SE++ single-Sersic effective radius is read as the disk r50 under
 # the ensemble's disk-only convention; r50 = EXP_R50_OVER_RSCALE * rscale
 
@@ -196,7 +200,8 @@ class Cosmos25Adapter(CatalogAdapter):
 
         Unit chain (dimensional sanity):
         - f_line = painted F_Ha [erg/s/cm2], verbatim
-        - lambda_obs = painted lambda_Ha_obs [A] (== 6562.8 * (1 + z))
+        - lambda_obs = HALPHA_REST_A (vacuum) * (1 + z) [A]; painted
+          lambda_Ha_obs (air, 6562.8 * (1 + z)) is only join-checked
         - f_nu (SE++ model photometry at lambda_obs) [uJy] * 1e-29
           -> [erg/cm2/s/Hz]
         - f_lambda = f_nu * c / lambda_obs^2
@@ -238,12 +243,16 @@ class Cosmos25Adapter(CatalogAdapter):
             raise ValueError("preprocess: no rows survive the quality cuts")
 
         z = out['zfinal'].to_numpy(dtype=np.float64)
-        lambda_obs_a = out['lambda_Ha_obs'].to_numpy(dtype=np.float64)
-        if not np.allclose(lambda_obs_a, HALPHA_REST_A * (1.0 + z), rtol=1e-6):
+        painted_lambda_a = out['lambda_Ha_obs'].to_numpy(dtype=np.float64)
+        if not np.allclose(
+            painted_lambda_a, PAINT_HALPHA_REST_AIR_A * (1.0 + z), rtol=1e-6
+        ):
             raise ValueError(
                 "preprocess: painted lambda_Ha_obs disagrees with "
-                "6562.8 * (1 + zfinal); the join or the painting is broken"
+                f"{PAINT_HALPHA_REST_AIR_A} * (1 + zfinal); the join or the "
+                "painting is broken"
             )
+        lambda_obs_a = HALPHA_REST_A * (1.0 + z)
 
         # single variant: the regenerated painting is used verbatim (module
         # docstring records the retired correction variants)

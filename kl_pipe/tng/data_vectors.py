@@ -90,6 +90,7 @@ This avoids negative cos(i) in projection math.
 - Xu et al. (2022): arXiv:2201.00739 (kinematic lensing formalism)
 """
 
+import warnings
 from typing import Dict, Optional, Tuple
 import numpy as np
 from dataclasses import dataclass
@@ -121,6 +122,8 @@ TNG_COSMOLOGY = FlatLambdaCDM(
 # TNG50 snapshot 99 redshift (all galaxies in our dataset)
 # TNG50_SNAPSHOT_99_REDSHIFT = 0.0108
 TNG50_SNAPSHOT_99_REDSHIFT = 0.0
+# TNG50-1 box side: 35 Mpc/h comoving = physical kpc at snapshot 99 (a = 1)
+TNG50_BOX_KPC = 35000.0 / 0.6774
 
 # Default data directory. This is needed to load the auxillary data files for the BC03 models, which are used for converting between
 # luminosity and magnitude, and for distance conversions. The BC03 models are stored in a preprocessed HDF5 file that contains the
@@ -222,7 +225,7 @@ class TNGRenderConfig:
         If True (default), gas disk keeps its intrinsic misalignment relative to
         stellar disk. The user's (cosi, theta_int) refers to the STELLAR disk
         orientation, and gas will be tilted/rotated by its natural offset
-        (~30-40° typical in TNG). This is the physically realistic behavior.
+        (inner star-forming gas: ~2-3 deg median). This is the physically realistic behavior.
         If False, both gas and stellar are forced to the exact same orientation
         (useful for synthetic tests where perfect alignment is desired).
     apply_cosmological_dimming : bool, default=False
@@ -274,7 +277,12 @@ class TNGDataVectorGenerator:
     2. Transform to new orientation (use_native_orientation=False, provide pars)
     """
 
-    def __init__(self, galaxy_data: Dict[str, Dict], data_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        galaxy_data: Dict[str, Dict],
+        data_dir: Optional[Path] = None,
+        verbose: bool = False,
+    ):
         """
         Initialize generator for a specific galaxy.
 
@@ -285,8 +293,12 @@ class TNGDataVectorGenerator:
             the TNG data for one galaxy (from TNG50MockData.get_galaxy())
         data_dir : Path, optional
             Directory containing auxiliary data files (e.g., BC03 models).
+        verbose : bool, default=False
+            Print per-chunk progress and luminosity totals during dust
+            recomputation.
         """
         self.galaxy_data = galaxy_data
+        self.verbose = verbose
         self.stellar = galaxy_data.get('stellar')
         self.gas = galaxy_data.get('gas')
         self.subhalo = galaxy_data.get('subhalo')
@@ -496,8 +508,9 @@ class TNGDataVectorGenerator:
         )[0]
 
         if len(n_out_of_bounds) > 0:
-            print(
-                f'Warning: {len(n_out_of_bounds)} stellar particles out of {len(metallicities_org)} have metallicities out of the galaxev model bounds. They will be set to the nearest bound.'
+            warnings.warn(
+                f'{len(n_out_of_bounds)} stellar particles out of {len(metallicities_org)} have metallicities out of the galaxev model bounds. They will be set to the nearest bound.',
+                stacklevel=2,
             )
             metallicities = np.clip(
                 metallicities_org,
@@ -633,9 +646,10 @@ class TNGDataVectorGenerator:
             age_chunk = ages[start_idx:end_idx]
             mass_chunk = initial_masses[start_idx:end_idx]
 
-            print(
-                f'Processing particles {start_idx} to {end_idx} for galaxy ID {self.subhalo["SubhaloID"]}'
-            )
+            if self.verbose:
+                print(
+                    f'Processing particles {start_idx} to {end_idx} for galaxy ID {self.subhalo["SubhaloID"]}'
+                )
 
             lum_chunk = (
                 numba_bilinear_3d(
@@ -745,14 +759,15 @@ class TNGDataVectorGenerator:
             )
         )
 
-        print(f'Total raw luminosity in band {band}: {total_raw} erg/s')
-        print(f'Total dusted luminosity in band {band}: {total_dusted} erg/s')
-        print(
-            f'Dusted absolute magnitude in band {band}: {self.subhalo["Dusted_Absolute_Magnitude_rotate_" + band]} mag'
-        )
-        print(
-            f'Raw absolute magnitude in band {band}: {self.subhalo["Absolute_Magnitude_rotate_" + band]} mag'
-        )
+        if self.verbose:
+            print(f'Total raw luminosity in band {band}: {total_raw} erg/s')
+            print(f'Total dusted luminosity in band {band}: {total_dusted} erg/s')
+            print(
+                f'Dusted absolute magnitude in band {band}: {self.subhalo["Dusted_Absolute_Magnitude_rotate_" + band]} mag'
+            )
+            print(
+                f'Raw absolute magnitude in band {band}: {self.subhalo["Absolute_Magnitude_rotate_" + band]} mag'
+            )
 
     def hydrogen_column_density(
         self,
@@ -808,7 +823,7 @@ class TNGDataVectorGenerator:
         )
 
         if gas_particles['Coordinates'] is None:
-            print(f'This galaxy has no gas particles.')
+            warnings.warn('This galaxy has no gas particles.', stacklevel=2)
             N_H_cm2 = np.zeros((Ngrid, Ngrid))
             metallicity_sph = np.zeros((Ngrid, Ngrid))
         else:
@@ -871,8 +886,9 @@ class TNGDataVectorGenerator:
             # SPH does not necessarily conserve mass in each pixel, but it should be close to the total input mass when summed over the whole grid.
             # We can check this and print a warning if it's not the case, which may indicate an issue with the SPH projection or the choice of grid parameters.
             if not np.isclose(total_input, total_projected, rtol=5e-2):
-                print(
-                    f'Warning: Mass conserved roughly. Input: {total_input}, Output: {total_projected}'
+                warnings.warn(
+                    f'Mass conserved roughly. Input: {total_input}, Output: {total_projected}',
+                    stacklevel=2,
                 )
 
             # --- compute per-pixel hydrogen mass in grams ---
@@ -892,45 +908,61 @@ class TNGDataVectorGenerator:
         """
         Compute rotation matrices to transform from TNG simulation frame to disk frames.
 
-        Computes SEPARATE rotation matrices for stellar and gas because they can have
-        significantly different angular momentum directions (37° difference is common!).
-
-        - Stellar: Computed from stellar particle positions, velocities, and luminosities
-        - Gas: Computed from gas particle positions, velocities, and masses
+        Disk axes follow Pranjal's recommendations: the stellar axis is the r-band
+        luminosity-weighted angular momentum of the innermost 70% of star
+        particles, the gas axis the SFR-weighted angular momentum of the
+        innermost 10% of gas particles (the star-forming gas that emits
+        Halpha), both about SubhaloPos with periodic unwrapping. With these
+        axes the gas and stellar disks agree to ~2-3 deg (median over the
+        16 gold and 919 spiral galaxies); an all-particle mass-weighted gas
+        axis, which includes extended gas, differs by ~30 deg.
 
         Each matrix aligns the respective angular momentum with the +Z axis.
 
         Also computes and stores diagnostic information comparing our kinematic inclinations
         with the TNG catalog's morphological inclinations.
         """
-        # === Stellar rotation matrix from stellar particles ===
-        # Use luminosity-weighted angular momentum for stellar particles
-        # This is more physical than SubhaloSpin (which includes all particle types)
-        coords_stellar = self.stellar['Coordinates']
-        vel_stellar = self.stellar['Velocities']
+        center = np.array(
+            [
+                self.subhalo['SubhaloPosX'],
+                self.subhalo['SubhaloPosY'],
+                self.subhalo['SubhaloPosZ'],
+            ],
+            dtype=float,
+        )
 
-        # Use r-band luminosity as weights (or masses if not available)
+        def inner_angular_momentum(coords, vel, weights, percentile, label):
+            # minimum-image displacement from the subhalo position
+            d = np.asarray(coords, dtype=float) - center
+            d = (d + 0.5 * TNG50_BOX_KPC) % TNG50_BOX_KPC - 0.5 * TNG50_BOX_KPC
+            r = np.linalg.norm(d, axis=1)
+            sel = r <= np.percentile(r, percentile)
+            w = np.asarray(weights, dtype=float)[sel]
+            if not w.sum() > 0:
+                raise ValueError(
+                    f"SubhaloID {self.subhalo.get('SubhaloID')}: {label} weights sum to "
+                    f"zero in the innermost {percentile}% of particles; no disk axis"
+                )
+            d_sel = d[sel] - np.average(d[sel], axis=0, weights=w)
+            v_sel = np.asarray(vel, dtype=float)[sel]
+            v_sel = v_sel - np.average(v_sel, axis=0, weights=w)
+            L_vec = np.sum(w[:, None] * np.cross(d_sel, v_sel), axis=0)
+            return L_vec / np.linalg.norm(L_vec)
+
+        # === Stellar rotation matrix ===
         if 'Dusted_Luminosity_r' in self.stellar:
             weights_stellar = self.stellar['Dusted_Luminosity_r']
         elif 'Masses' in self.stellar:
             weights_stellar = self.stellar['Masses']
         else:
-            weights_stellar = np.ones(len(coords_stellar))
-
-        # Center on luminosity-weighted centroid
-        center_stellar = np.average(coords_stellar, axis=0, weights=weights_stellar)
-        coords_stellar_cen = coords_stellar - center_stellar
-
-        # Subtract luminosity-weighted mean velocity
-        vel_stellar_mean = np.average(vel_stellar, axis=0, weights=weights_stellar)
-        vel_stellar_cen = vel_stellar - vel_stellar_mean
-
-        # Compute luminosity-weighted angular momentum: L = Σ w_i * (r_i × v_i)
-        L_stellar_vec = np.sum(
-            weights_stellar[:, None] * np.cross(coords_stellar_cen, vel_stellar_cen),
-            axis=0,
+            weights_stellar = np.ones(len(self.stellar['Coordinates']))
+        L_stellar = inner_angular_momentum(
+            self.stellar['Coordinates'],
+            self.stellar['Velocities'],
+            weights_stellar,
+            70,
+            'stellar luminosity',
         )
-        L_stellar = L_stellar_vec / np.linalg.norm(L_stellar_vec)
         self._R_to_disk_stellar = self._rodrigues_rotation(L_stellar)
 
         # Store stellar L direction for diagnostics
@@ -940,25 +972,15 @@ class TNGDataVectorGenerator:
         # This is the "true" kinematic inclination
         self._kinematic_inc_stellar_deg = np.rad2deg(np.arccos(np.abs(L_stellar[2])))
 
-        # === Gas rotation matrix from particle angular momentum ===
+        # === Gas rotation matrix ===
         if self.gas is not None and len(self.gas.get('Coordinates', [])) > 0:
-            coords_gas = self.gas['Coordinates']
-            vel_gas = self.gas['Velocities']
-            masses_gas = self.gas['Masses']
-
-            # Center on mass-weighted centroid
-            center_gas = np.average(coords_gas, axis=0, weights=masses_gas)
-            coords_gas_cen = coords_gas - center_gas
-
-            # Subtract mass-weighted mean velocity
-            vel_gas_mean = np.average(vel_gas, axis=0, weights=masses_gas)
-            vel_gas_cen = vel_gas - vel_gas_mean
-
-            # Mass-weighted angular momentum: L = Σ m_i * (r_i × v_i)
-            L_gas_vec = np.sum(
-                masses_gas[:, None] * np.cross(coords_gas_cen, vel_gas_cen), axis=0
+            L_gas = inner_angular_momentum(
+                self.gas['Coordinates'],
+                self.gas['Velocities'],
+                self.gas['StarFormationRate'],
+                10,
+                'gas SFR',
             )
-            L_gas = L_gas_vec / np.linalg.norm(L_gas_vec)
 
             self._R_to_disk_gas = self._rodrigues_rotation(L_gas)
             self._L_gas = L_gas
@@ -1120,8 +1142,8 @@ class TNGDataVectorGenerator:
         vector to transform particles into the disk frame where Z is aligned
         with angular momentum.
 
-        IMPORTANT: Stellar and gas have DIFFERENT angular momentum directions
-        (can differ by 30-40°!), so we use different rotation matrices for each.
+        Stellar and gas angular momentum directions are computed separately
+        (see _compute_disk_rotation_matrices), so each has its own matrix.
 
         Parameters
         ----------
@@ -1731,8 +1753,6 @@ class TNGDataVectorGenerator:
             from ..psf import gsobj_to_kernel, convolve_flux_weighted_numpy
 
             if intensity_map is None:
-                import warnings
-
                 warnings.warn(
                     'PSF set but no intensity_map provided to generate_velocity_map. '
                     'Generating intensity internally (less efficient).',

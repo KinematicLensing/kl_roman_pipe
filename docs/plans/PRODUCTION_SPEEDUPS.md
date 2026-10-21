@@ -1,7 +1,8 @@
 # Production Speedups -- Findings, Strategy, Decisions
 
-Status: ACTIVE planning doc. Branch `se/speedups` (on top of `se/source-model`,
-PR #53). Created 2026-07-02 from a six-way audit (codebase audits: fp32
+Status: ACTIVE planning doc; see the 2026-09-03 status stanza at the top of
+Sec 7 for what is landed vs open. Originally on branch `se/speedups` (on top of
+`se/source-model`, PR #53); kernel/fp32 follow-up work continues on `se/gpu-speedups`. Created 2026-07-02 from a six-way audit (codebase audits: fp32
 dependence, sampler batching readiness, grism hot-path anatomy; empirical
 flagship profile; external research: Apple-silicon GPU, TACC/HPC GPU + batched
 MCMC). Companion to `docs/papers/kl-roman-pipeline/planning/COMPUTE.md`
@@ -792,6 +793,48 @@ only.
 
 ## 7. TODO (rank-ordered)
 
+Status stanza (2026-09-03, branch `se/gpu-speedups`, measured on the real production
+fit -- cosmos25 poisson spec row 0: Roman WFI PSF, F129+F158, 4 grism rolls,
+32x32 stamps, oversample 3, 24 sampled params -- with
+`experiments/sweverett/production_speedups/kernel_fusion/bench_production_grad.py`,
+M3 Max CPU fp64; JSONs under `kernel_fusion/results/`):
+
+- Batched-NUTS track CONCLUDED negative (2026-08-04): GH200 saturates at ~64
+  lanes, throughput-bound by HBM bandwidth, not by lane count. Sec 3.3's
+  "vectorized chains" assumption is superseded by the 2026-08-28 roofline
+  (solo eval latency-bound on ~2.2k kernel launches; saturated regime
+  bandwidth-bound; ~100 us/grad floor if fused).
+- LANDED, exact (bit-identical log-posterior and gradient):
+  1. Vectorized analytic line dispersal (all taps as one erf/exp tensor + one
+     gather; `dispersion.disperse_line_analytic`): value_and_grad 67.4 ->
+     37.0 ms, HLO fusions 2550 -> 752, bytes 4.10 -> 2.01 GB, compile 14.5 ->
+     2.5 s. GPU (2026-08-28 prototype, GH200): solo grad 1.85x, saturated
+     lane 1.76x.
+  2. PSF kernel cropped to the stamp-reachable support before minimal padding
+     (`psf.gsobj_to_kernel`): kernel values at |offset| >= N never reach the
+     retained crop, so the FFT grid is at most next_fast_len(2N-1) (594 -> 192
+     for the production grism roll). value_and_grad 37.0 -> 21.7 ms, flops
+     3.69 -> 0.68 GFLOP. Roman PSF check vs scipy full-kernel convolution
+     agrees to 7e-16. Makes the ensemble `folding_threshold_tiers` (which
+     shrank the drawn kernel to shrink the FFT) irrelevant to speed -- they
+     can return to the default 5e-3 at the next re-baseline.
+  Net 3.1x on the CPU gradient. Per-roll forward is now ~5 ms: line dispersal
+  2.8 ms (erf/exp tensor 1.0, gather 1.8), PSF FFT 0.26, continuum 0.15,
+  model evals ~0.5. Gather alternatives (static-slice sum, skew reshape, scan,
+  one-hot conv) all lose on forward+backward; the gather stays.
+- Profiling hooks LANDED: `kl_pipe.profiling` (`trace()` context manager
+  gated on `KLPIPE_PROFILE_DIR`, `compiled_stats()`); the ensemble worker
+  wraps the preconditioner and sampler run in traces when the variable is
+  set, otherwise a no-op.
+- OPEN, ranked: fp32 saturation probe on GH200 (user-approved 2026-09-03;
+  Sec 4 acceptance ladder after); per-spaxel local tap window for the line
+  dispersal (taps centred on round(xi) with +-(6 sigma_max + 2) instead of the
+  global +-halfwidth; ~2x fewer erf/exp and gather bytes at z~1, not
+  bit-identical -- needs the numerical-path toggle + tests); roll-vmap
+  (GPU-solo/compile-only win, CPU loses); saddle-escape stage in the Laplace
+  preconditioner; ridge reparam design.
+
+
 - [x] A1 justification: derivation note + PSF-vs-lambda variation quantified
       over the line window (galsim.roman getPSF moments); equivalence-test
       spec w/ tolerances BEFORE implementation. (Proof doc committed;
@@ -843,7 +886,9 @@ only.
 - [ ] B: numpyro vectorized batched path w/ max_tree_depth cap; measure
       trajectory-length variance + idle fraction.
 - [ ] B: JAX-native Laplace head-to-head (accuracy + speed gate).
-- [ ] C: fp32 env-flag mode + fp64 reductions; acceptance protocol Sec 4.
+- [x] C: fp32 env-flag mode landed (`KLPIPE_FP32`, `kl_pipe/_precision.py`,
+      matmul precision pinned 'highest'; fp64 default). OPEN: saturation-regime
+      timing probe, then the Sec 4 acceptance ladder.
 - [ ] D (optional): applejax/jax-mps half-day trial after C.
 - [ ] Ensemble driver + calibration module (paper P0; STRATEGY.md Sec 10) --
       design batch-first: consumes the data-as-argument API from day one.

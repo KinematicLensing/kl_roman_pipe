@@ -73,6 +73,13 @@ fit:
   precondition: laplace
   unconstrained: true
   adapt_mass: true
+  # pinned at the values this arm ran with; the code defaults changed later
+  pa_prior: half_turn
+  map_bounded: false
+  map_polish_steps: 0
+  map_polish_basins: 1
+  eig_floor_mode: relative
+  eig_floor: 1.0e-4
   target_accept: 0.9
   pin_z_to_truth: true
   escalation:

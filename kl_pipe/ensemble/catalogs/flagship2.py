@@ -180,7 +180,7 @@ class Flagship2Adapter(CatalogAdapter):
 
         Unit chain (dimensional sanity):
         - f_line = 10**logf [erg/s/cm2] (integrated line flux)
-        - lambda_obs = 6562.8 * (1 + z) [A]
+        - lambda_obs = HALPHA_REST_A (vacuum) * (1 + z) [A]
         - f_nu (NISP band containing lambda_obs) [erg/cm2/s/Hz]
         - f_lambda = f_nu * c / lambda_obs^2
           -> [erg/cm2/s/Hz] * [A/s] / [A^2] = [erg/cm2/s/A]

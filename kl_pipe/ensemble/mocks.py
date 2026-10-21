@@ -112,14 +112,15 @@ def _build_gaussian_psf(fwhm_arcsec: float):
 
 # process-level cache: getPSF is expensive (~0.5 s) and the worker builds
 # several obs per fit (bands + rolls) plus the pinned-size reference PSF, so
-# repeated wavelengths must not re-run the optics computation. Bounded FIFO:
-# a long-lived worker claims many fits at distinct redshifts, so an unbounded
-# cache would accumulate one GSObject per fit; within-fit reuse only needs a
-# handful of entries.
+# repeated wavelengths must not re-run the optics computation. Bounded LRU: a
+# long-lived worker claims many fits at distinct redshifts, and each entry
+# holds ~100 MB of galsim state. A fit uses 8 keys (2 bands and the z_max
+# kernel-size reference, each at mock and fit fidelity, plus the fit's grism
+# pair), 6 of them z-independent and kept across fits.
 _ROMAN_PSF_CACHE: Dict[
     Tuple[int, int, float, Optional[str], Optional[float]], object
 ] = {}
-_ROMAN_PSF_CACHE_MAX = 16
+_ROMAN_PSF_CACHE_MAX = 8
 
 
 def _get_roman_wfi_psf(
@@ -163,9 +164,14 @@ def _get_roman_wfi_psf(
         bandpass,
         folding_threshold,
     )
-    if key not in _ROMAN_PSF_CACHE:
+    if key in _ROMAN_PSF_CACHE:
+        # most recently used last
+        _ROMAN_PSF_CACHE[key] = _ROMAN_PSF_CACHE.pop(key)
+    else:
         while len(_ROMAN_PSF_CACHE) >= _ROMAN_PSF_CACHE_MAX:
             _ROMAN_PSF_CACHE.pop(next(iter(_ROMAN_PSF_CACHE)))
+        # bound galsim's per-wavelength pupil-aperture cache (~16 MB each, 1024 deep)
+        roman.roman_psfs._make_aperture.resize(_ROMAN_PSF_CACHE_MAX)
         psf = roman.getPSF(
             SCA=key[0], bandpass=bandpass, wavelength=key[2], pupil_bin=key[1]
         )
@@ -306,12 +312,15 @@ def _grism_psf_kernel_size(
                 "kernel size can be pinned at the ensemble's largest observed "
                 "wavelength"
             )
-        if z_draw.dist != 'uniform':
+        if z_draw.dist == 'uniform':
+            z_max = z_draw.params['high']
+        elif z_draw.dist == 'grid':
+            z_max = max(float(v) for v in z_draw.params['values'])
+        else:
             raise NotImplementedError(
-                f"grism kernel-size pinning knows the z range for uniform "
-                f"draws only, got dist '{z_draw.dist}'"
+                f"grism kernel-size pinning knows the z range for uniform and "
+                f"grid draws only, got dist '{z_draw.dist}'"
             )
-        z_max = z_draw.params['high']
     psf_max = _build_grism_psf(config.grism_psf, z_max, mock=mock)
     fine_ps = config.pixel_scale_arcsec / spec.render_oversample
     size = int(psf_max.getGoodImageSize(fine_ps))
@@ -569,6 +578,7 @@ def _make_roll_obs(
     noise_model='matched_filter',
     sigma_bkg=None,
     electrons_per_f17=None,
+    line_window_mode='global',
 ):
     grism_pars = _grism_pars_for_roll(config, z, roll_deg, single_roll)
     # render truth at the SAME oversample as the fit obs below (mirrors
@@ -609,7 +619,9 @@ def _make_roll_obs(
         grism_pars,
         z=z,
         psf=psf_fit,
-        render_config=RenderConfig(oversample=oversample),
+        render_config=RenderConfig(
+            oversample=oversample, line_window_mode=line_window_mode
+        ),
         data=jnp.asarray(data_noisy),
         variance=variance,
         psf_kernel_size=kernel_size_fit,
@@ -763,6 +775,7 @@ def build_fit_inputs(
                 '1e-17 erg/s/cm2 (integrated line flux)' if is_catalog else None
             ),
             noise_model=config.noise_model,
+            line_window_mode=spec.render_line_window_mode,
             sigma_bkg=grism_sigma_bkg,
             electrons_per_f17=electrons_per_f17,
         )

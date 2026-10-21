@@ -399,9 +399,11 @@ class TestCatalogPriors:
         cosi = priors.get_prior('cosi')
         assert isinstance(cosi, Uniform)
         assert cosi.bounds == spec.catalog_population.cosi_range == (0.05, 0.95)
+        from kl_pipe.priors import CircularUniform
+
         theta = priors.get_prior('theta_int')
-        assert isinstance(theta, Uniform)
-        assert theta.bounds == (0.0, np.pi)
+        assert isinstance(theta, CircularUniform)
+        assert np.isclose(theta.period, 2 * np.pi)
         # z pinned to the per-fit truth
         assert priors.fixed_values['z'] == truth['z']
 
@@ -894,3 +896,226 @@ def _observation_config():
     from kl_pipe.ensemble.spec import ObservationConfig
 
     return ObservationConfig.from_yaml(REGISTRY / 'canonical_P.yaml')
+
+
+# =============================================================================
+# Shared sampled disk thickness (population.paint.h_over_r + fit.sample_h_over_r)
+# =============================================================================
+
+
+def _hfree_spec_dict(data_dir: Path) -> dict:
+    d = _nobulge_spec_dict(data_dir)
+    d['run']['name'] = 'pop_test_hfree'
+    d['population']['paint']['h_over_r'] = {'median': 0.25, 'scatter_dex': 0.14}
+    d.setdefault('fit', {})['sample_h_over_r'] = True
+    return d
+
+
+class TestSampledThicknessSpec:
+    def test_flag_requires_the_paint(self, fake_data_dir, tmp_path):
+        d = _nobulge_spec_dict(fake_data_dir)
+        d.setdefault('fit', {})['sample_h_over_r'] = True
+        with pytest.raises(ValueError, match='paint.h_over_r'):
+            spec_from_dict(tmp_path, d)
+
+    def test_paint_requires_the_flag(self, fake_data_dir, tmp_path):
+        d = _nobulge_spec_dict(fake_data_dir)
+        d['population']['paint']['h_over_r'] = {'median': 0.25, 'scatter_dex': 0.14}
+        with pytest.raises(ValueError, match='sample_h_over_r'):
+            spec_from_dict(tmp_path, d)
+
+    def test_bulge_paint_rejected(self, fake_data_dir, tmp_path):
+        d = _hfree_spec_dict(fake_data_dir)
+        d['population']['paint']['bulge'] = True
+        with pytest.raises(ValueError, match='paint.bulge'):
+            spec_from_dict(tmp_path, d)
+
+    def test_paint_values_validated(self, fake_data_dir, tmp_path):
+        d = _hfree_spec_dict(fake_data_dir)
+        d['population']['paint']['h_over_r'] = {'median': 0.25, 'scatter_dex': 0.0}
+        with pytest.raises(ValueError, match='scatter_dex'):
+            spec_from_dict(tmp_path, d)
+        d['population']['paint']['h_over_r'] = {'median': 0.25, 'sigma': 0.1}
+        with pytest.raises(ValueError, match='unknown keys'):
+            spec_from_dict(tmp_path, d)
+
+    def test_parse_and_resolve(self, fake_data_dir, tmp_path):
+        d = _hfree_spec_dict(fake_data_dir)
+        spec = spec_from_dict(tmp_path, d)
+        assert spec.sample_h_over_r is True
+        assert spec.catalog_population.paint_h_over_r == (0.25, 0.14)
+        assert spec.resolve_defaults(d)['fit']['sample_h_over_r'] is True
+        # default: off, paint absent, nothing else changes
+        base = spec_from_dict(tmp_path, _nobulge_spec_dict(fake_data_dir))
+        assert base.sample_h_over_r is False
+        assert base.catalog_population.paint_h_over_r is None
+
+
+@pytest.fixture(scope='module')
+def hfree_run(fake_data_dir, tmp_path_factory) -> Path:
+    tmp = tmp_path_factory.mktemp('hfree_run')
+    spec_path = tmp / 'spec.yaml'
+    spec_path.write_text(yaml.safe_dump(_hfree_spec_dict(fake_data_dir)))
+    return expand(spec_path, REGISTRY, tmp / 'runs')
+
+
+class TestSampledThicknessRun:
+    def test_truth_is_one_value_per_galaxy_shared_by_every_component(self, hfree_run):
+        spec, config, manifest = load_run(hfree_run)
+        comps = list(config.bands) + ['Halpha', 'Halpha.cont']
+        assert 'truth.h_over_r' in manifest.columns
+        for _, row in manifest.iterrows():
+            h = float(row['truth.h_over_r'])
+            assert h > 0
+            for comp in comps:
+                assert float(row[f'truth.{comp}.h_over_r']) == h
+        per_galaxy = manifest.groupby('galaxy_id')['truth.h_over_r'].nunique()
+        assert (per_galaxy == 1).all()  # ring partners share the draw
+        assert manifest.groupby('galaxy_id')['truth.h_over_r'].first().nunique() > 1
+        # the thickness draw is its own stream: every other truth matches the
+        # pinned twin's expansion galaxy for galaxy
+        base = _nobulge_spec_dict(Path(spec.catalog_population.catalog_data_dir))
+        tmp = hfree_run.parent / 'base_twin'
+        tmp.mkdir(exist_ok=True)
+        (tmp / 'spec.yaml').write_text(yaml.safe_dump(base))
+        _, _, base_manifest = load_run(
+            expand(tmp / 'spec.yaml', REGISTRY, tmp / 'runs')
+        )
+        # fit_id hashes the run name, so pair the rows on their galaxy keys
+        key = ['galaxy_id', 'ring_member', 'noise_rep']
+        for col in ('truth.cosi', 'truth.g1', 'truth.vel.vcirc', 'truth.F129.x0'):
+            np.testing.assert_array_equal(
+                manifest.sort_values(key)[col].to_numpy(),
+                base_manifest.sort_values(key)[col].to_numpy(),
+            )
+
+    def test_priors_carry_one_shared_lognormal(self, hfree_run):
+        spec, config, manifest = load_run(hfree_run)
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        priors = scene_priors(truth, config, spec, row=row)
+        assert 'h_over_r' in priors.sampled_names
+        for comp in list(config.bands) + ['Halpha', 'Halpha.cont']:
+            assert f'{comp}.h_over_r' not in priors.sampled_names
+            assert f'{comp}.h_over_r' not in priors.fixed_names
+        prior = priors.get_prior('h_over_r')
+        assert isinstance(prior, LogNormal)
+        assert prior.mu == pytest.approx(np.log(0.25))
+        assert prior.sigma == pytest.approx(0.14 * np.log(10.0))
+        # prior equals paint: the truth draw is a typical prior draw
+        z = (np.log(truth['h_over_r']) - prior.mu) / prior.sigma
+        assert abs(z) < 5.0
+
+    def test_registry_covers_the_shared_parameter(self, hfree_run):
+        from kl_pipe.ensemble.prior_provenance import catalog_registry
+
+        spec, config, manifest = load_run(hfree_run)
+        row = manifest.iloc[0]
+        priors = scene_priors(truth_from_row(row), config, spec, row=row)
+        registry = catalog_registry(spec, config)
+        assert set(registry) == set(priors.sampled_names) | set(priors.fixed_names)
+        assert registry['h_over_r'].category == 'paint'
+
+    def test_fit_inputs_build_with_the_shared_thickness(self, hfree_run):
+        spec, config, manifest = load_run(hfree_run)
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        inputs = build_fit_inputs(
+            truth,
+            int(row['noise_seed']),
+            spec,
+            config,
+            band_snrs=_row_band_snrs(row, config),
+            line_snr=float(row['line_snr']),
+            row=row,
+        )
+        assert 'h_over_r' in inputs.priors.sampled_names
+
+
+class TestPinToTruthScene:
+    """fit.pin_to_truth fixes sampled scene parameters at the manifest truth."""
+
+    def test_pins_and_broadcasts(self, run_parts):
+        import dataclasses
+
+        from kl_pipe.ensemble.expander import truth_from_row
+
+        spec, config, manifest, _ = run_parts
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        base = scene_priors(truth, config, spec, row=row)
+        pinned_spec = dataclasses.replace(
+            spec, pin_to_truth=('x0', 'y0', 'vel.v0', 'Halpha.cont.flux_per_nm')
+        )
+        priors = scene_priors(truth, config, pinned_spec, row=row)
+        centroid_keys = [
+            k for k in base.sampled_names if k.endswith('.x0') or k.endswith('.y0')
+        ]
+        assert centroid_keys  # broadcast has something to hit
+        expected_fixed = set(centroid_keys) | {'vel.v0', 'Halpha.cont.flux_per_nm'}
+        assert set(base.sampled_names) - set(priors.sampled_names) == expected_fixed
+        for key in expected_fixed:
+            assert priors.fixed_values[key] == truth[key]
+        # every other prior is untouched
+        for key in priors.sampled_names:
+            assert type(priors.get_prior(key)) is type(base.get_prior(key))
+
+    def test_unknown_and_already_fixed_raise(self, run_parts):
+        import dataclasses
+
+        from kl_pipe.ensemble.expander import truth_from_row
+
+        spec, config, manifest, _ = run_parts
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        with pytest.raises(ValueError, match='matches no sampled'):
+            scene_priors(
+                truth,
+                config,
+                dataclasses.replace(spec, pin_to_truth=('nope',)),
+                row=row,
+            )
+        with pytest.raises(ValueError, match='already fixed'):
+            scene_priors(
+                truth, config, dataclasses.replace(spec, pin_to_truth=('z',)), row=row
+            )
+
+
+class TestPaintScaleRatioKnobs:
+    """population.paint.{vel,halpha}_rscale_ratio drive the paint and the priors."""
+
+    def test_paint_and_prior_follow_the_spec(self, run_parts):
+        import dataclasses
+
+        from kl_pipe.ensemble.expander import truth_from_row
+        from kl_pipe.ensemble.population import (
+            HALPHA_RSCALE_RATIO_MEDIAN,
+            VEL_RSCALE_RATIO_MEDIAN,
+            _paint_structure,
+        )
+
+        spec, config, manifest, _ = run_parts
+        cp = spec.catalog_population
+        cp2 = dataclasses.replace(
+            cp,
+            paint_vel_rscale_ratio=(0.28, 0.3),
+            paint_halpha_rscale_ratio=(1.0, 0.2),
+        )
+        ids = np.arange(400).reshape(-1, 1)
+        vel, line, v0 = _paint_structure(spec.seed, ids, cp)
+        vel2, line2, v02 = _paint_structure(spec.seed, ids, cp2)
+        # same seeded normals, rescaled medians; v0 untouched
+        np.testing.assert_allclose(
+            vel2 / vel, 0.28 / VEL_RSCALE_RATIO_MEDIAN, rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            line2 / line, 1.0 / HALPHA_RSCALE_RATIO_MEDIAN, rtol=1e-12
+        )
+        np.testing.assert_array_equal(v0, v02)
+
+        row = manifest.iloc[0]
+        truth = truth_from_row(row)
+        spec2 = dataclasses.replace(spec, catalog_population=cp2)
+        priors = scene_priors(truth, config, spec2, row=row)
+        assert priors.get_prior('vel.rscale').mu_ratio == pytest.approx(np.log(0.28))
+        assert priors.get_prior('Halpha.rscale').mu_ratio == pytest.approx(0.0)

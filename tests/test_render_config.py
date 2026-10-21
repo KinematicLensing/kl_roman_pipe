@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from kl_pipe.lines import LINE_LAMBDAS
 from kl_pipe.intensity import (
     InclinedDeVaucouleursModel,
     InclinedExponentialModel,
@@ -588,7 +589,7 @@ def source_grism_setup():
     grism_pars = GrismPars(
         image_pars=image_pars,
         dispersion=1.1,
-        lambda_ref=656.28 * 2.0,
+        lambda_ref=LINE_LAMBDAS['Halpha'] * 2.0,
         dispersion_angle_detector=0.0,
     )
     psf = galsim.Gaussian(fwhm=0.18)

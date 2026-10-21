@@ -16,7 +16,7 @@ The goal is: **accurate shear estimates** (|m| < 0.01, |c| < 0.001). Everything 
 - 3D sech² intensity model matches GalSim to ~1e-5 (k-space path)
 - K-space pixel integration (sinc + wrap) achieves <0.02% vs GalSim; PSF fused in single FFT pass
 - Three-tier test hierarchy (noiseless three-gate likelihood slices → k-sigma optimizer recovery → MCMC)
-- NumPyro NUTS w/ Z-score reparam handles 14-dim joint posteriors robustly
+- NumPyro NUTS (Laplace-preconditioned unconstrained coords; Z-score reparam when unpreconditioned) handles 14-dim joint posteriors robustly
 
 ### Where it breaks
 | Problem | Evidence | Shear impact |
@@ -49,7 +49,7 @@ The goal is: **accurate shear estimates** (|m| < 0.01, |c| < 0.001). Everything 
 | **1** | **Shear calibration test infrastructure** | Measure m,c bias directly: g_meas = (1+m)g_true + c | Enables quantifying all other improvements | Low |
 | **2** | **Mask support** (already on roadmap) | Exclude bad/missing pixels from likelihood | Unblocks real data | Low |
 | **3** | **Polyex rotation curve** | v(R) = V0(1-exp(-R/r))(1+alpha*R/r); adds 1 param (outer slope) | Reduces RC shape mismatch; Sofue (2016) | Low |
-| **4** | **Split kinematic/morphological PA** | vel_theta_int ≠ int_theta_int in joint model | Breaks PA-shear degeneracy; TNG shows 10-40° offset | Low |
+| **4** | **Split kinematic/morphological PA** | `vel.theta_int` ≠ `<band>.theta_int` in joint model | Breaks PA-shear degeneracy; TNG shows 10-40° offset | Low |
 | **5** | **Intensity-dependent velocity variance** | variance_vel(x,y) ∝ 1/I(x,y) | Correct weighting; already supported by likelihood signature | Low |
 
 #### Tier 2: High impact, moderate effort
@@ -88,25 +88,19 @@ Files: new `tests/test_shear_calibration.py`, extend `tests/test_utils.py` with 
 
 ### Phase 1: Low-hanging fruit (unblocks real data + reduces known biases)
 
-**1a. Mask support in likelihoods**
-- Add `mask_vel`, `mask_int` (boolean 2D arrays) to all 3 likelihood functions
-- Masked pixels: set residual to 0 before chi2 sum; adjust n_data = sum(mask)
-- Freeze mask via `functools.partial` for JIT
-- Files: `kl_pipe/likelihood.py`, `kl_pipe/sampling/task.py`
-- Validation: unit tests (mask-all → constant logL; mask-half → half chi2)
+**1a. Mask support in likelihoods** — done
+- Boolean `mask` on `ImageObs` / `VelocityObs` / `GrismObs`; masked pixels are excluded from the chi² sum (`kl_pipe/likelihood.py`)
 
 **1b. Polyex rotation curve model**
-- New `PolyexVelocityModel` subclass with `vel_alpha` param (outer RC slope)
+- New `PolyexVelocityModel` subclass with an `alpha` param (outer RC slope; sampled as `vel.alpha`)
 - v(R) = vcirc × (1 - exp(-R/rscale)) × (1 + alpha × R/rscale)
 - Register as `'polyex'` in factory
 - Files: `kl_pipe/velocity.py`
 - Validation: unit tests, likelihood slices, optimizer recovery, TNG comparison (arctan vs polyex residual chi2)
 
 **1c. Split kinematic/morphological PA**
-- New `SplitPAVelocityModel` subclass with `vel_theta_int` replacing `theta_int`
-- New `SplitPAIntensityModel` subclass with `int_theta_int` replacing `theta_int`
-- When combined in KLModel, `theta_int` is no longer shared → 1 extra param
-- Files: `kl_pipe/velocity.py`, `kl_pipe/intensity.py`, possibly `kl_pipe/model.py` (KLModel shared-param logic)
+- No new model needed: `SourceModel` resolves `<prefix>.<param>` before the bare top-level key, so sampling `vel.theta_int` and `<band>.theta_int` (instead of a shared `theta_int`) splits the PA → 1 extra param
+- Files: sampling spec / priors only
 - Validation: TNG fit with shared vs split PA; compare g1/g2 posterior widths and bias
 
 **1d. Intensity-dependent velocity variance**
@@ -196,4 +190,4 @@ Files: new `tests/test_shear_calibration.py`, extend `tests/test_utils.py` with 
 
 5. **Is the Donet & Wittman gamma_cross~0.08 floor reducible?** — Their model was simpler than ours (no 3D profile, no PSF). Our pipeline may already do better. Need to replicate their experiment with kl_pipe on TNG50.
 
-6. **Polyex vel_alpha prior**: What range is physical? TNG50 RC outer slopes span ~[-0.1, 0.3]. Is this tight enough to be informative?
+6. **Polyex `vel.alpha` prior**: What range is physical? TNG50 RC outer slopes span ~[-0.1, 0.3]. Is this tight enough to be informative?

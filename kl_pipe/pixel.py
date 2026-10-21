@@ -21,9 +21,8 @@ PixelResponse
 BoxPixel
     Square top-hat pixel (default for all detectors). FT is a 2D sinc.
 
-Future subclasses (not yet implemented):
-- ``RomanPixel``: box pixel + interpixel capacitance (IPC) correction
-  for Roman WFI H4RG-10 detectors (Kannawadi et al. 2016).
+Interpixel capacitance (IPC) for Roman WFI H4RG-10 detectors (Kannawadi
+et al. 2016) is not modeled.
 """
 
 from __future__ import annotations

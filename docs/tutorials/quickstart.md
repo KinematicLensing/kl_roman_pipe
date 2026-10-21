@@ -95,7 +95,7 @@ print("velocity params:", source.velocity_model.PARAMETER_NAMES)
 **Available intensity models** (used for broadband and emission-line components):
 - `InclinedExponentialModel` -- 3D exponential disk (n=1, exact FT); the default
 - `InclinedSpergelModel`, `InclinedSersicModel`, `InclinedDeVaucouleursModel`
-- `CompositeIntensityModel` / `BulgeDiskModel` -- multi-component (Section 7)
+- `CompositeIntensityModel` / `BulgeDiskModel` -- multi-component (Example 7)
 
 ### The parameter convention (dotted keys)
 
@@ -123,7 +123,7 @@ consequences:
   morphology but independent flux, supply the morphology as bare top-level keys
   (`rscale`, `h_over_r`) and only the flux as band-prefixed keys
   (`F087.flux`, `F184.flux`). Each band's missing `F<band>.rscale` falls back to
-  the shared `rscale`. Used in the Section 9 capstone.
+  the shared `rscale`. Used in Example 9.
 - **Per-component override.** The reverse is also allowed: a component-prefixed
   key overrides the shared one for that component only. For example, giving
   `Halpha.cosi` a value (or its own prior) lets the emission line take a
@@ -246,6 +246,55 @@ plt.show()
 print(f"Noise std: {float(np.sqrt(np.mean(variance_vel))):.2f} km/s")
 ```
 
+### Noise and SNR conventions
+
+The `kl_pipe.noise` helpers take a target SNR and return `(noisy, variance)`,
+where `variance` is a per-pixel map to attach to the observation. The fit uses
+a Gaussian likelihood with exactly that variance, so data and likelihood agree
+by construction.
+
+`target_snr` is the **matched-filter (integrated) SNR of the whole stamp**, not
+a per-pixel SNR. For a noiseless template `T` and uniform per-pixel noise
+`sigma`,
+
+$$
+\mathrm{SNR} = \frac{\lVert T \rVert_2}{\sigma} = \frac{\sqrt{\sum_i T_i^2}}{\sigma}
+\quad\Rightarrow\quad \sigma = \frac{\lVert T \rVert_2}{\mathrm{SNR}} .
+$$
+
+Because `||T||` sums over pixels, the per-pixel noise at fixed SNR grows with
+the number of pixels carrying signal. That is why "SNR = 100" on the 64x64
+velocity map above gives a per-pixel sigma of ~49 km/s, comparable to the
+signal in a single pixel:
+
+```{code-cell} python
+from kl_pipe.noise import matched_filter_snr
+
+sigma_v = float(np.sqrt(variance_vel.flat[0]))
+print(f"||v||_2 / SNR          = {np.sqrt(np.sum(velocity_true**2)) / 100:.2f} km/s")
+print(f"per-pixel sigma         = {sigma_v:.2f} km/s")
+print(f"rms |v| / sigma (1 pix) = {np.sqrt(np.mean(velocity_true**2)) / sigma_v:.2f}")
+print(f"realized MF SNR         = {matched_filter_snr(velocity_true, variance_vel):.1f}")
+```
+
+The entry points:
+
+- `add_velocity_noise(v, target_snr)` -- Gaussian, uniform sigma, `T` = the
+  velocity map in km/s. (A velocity map is a moment of the spectral cube, not a
+  photon count, so there is no Poisson option.)
+- `add_intensity_noise(img, target_snr, include_poisson=False, gain=1.0)` --
+  `img` in flux/pixel (what every `render_*` method returns). Gaussian with
+  uniform sigma by default. With `include_poisson=True` it adds shot noise of
+  variance `img / gain` (`gain` = counts per flux unit) and shrinks the
+  Gaussian part so the mean per-pixel variance still equals
+  `(||T|| / SNR)^2`; it raises if shot noise alone would exceed that.
+- `grism_line_noise(full, line_only, line_snr)` -- for grism stamps: the SNR is
+  defined on the emission line alone, since the continuum carries no kinematic
+  signal.
+- `physical_variance_map` + `add_map_noise` -- noise from a physical background
+  level plus source shot noise, with the SNR measured afterwards by
+  `matched_filter_snr` rather than chosen (see `roman_reference.md`).
+
 ---
 
 ## Example 2: Priors, an InferenceTask, and the likelihood
@@ -256,13 +305,13 @@ are *sampled*; entries with a bare number are *fixed*. The sampled names, sorted
 alphabetically, define the canonical sampling vector.
 
 ```{code-cell} python
-from kl_pipe.priors import PriorDict, Uniform, Gaussian
+from kl_pipe.priors import PriorDict, Uniform, Gaussian, CircularUniform
 from kl_pipe.sampling import InferenceTask
 
 priors = PriorDict({
     # shared geometry
     'cosi': Uniform(0.05, 0.99),
-    'theta_int': Uniform(0.0, np.pi),
+    'theta_int': CircularUniform(2 * np.pi),   # periodic, no walls
     'g1': 0.0,                            # fixed (no lensing in this example)
     'g2': 0.0,
     # velocity
@@ -278,6 +327,13 @@ task = InferenceTask.from_obs(source, priors, velocity_obs=vel_obs_data)
 print("Sampled parameters:", task.sampled_names)
 print("Fixed parameters:  ", task.fixed_params)
 ```
+
+The position angle uses `CircularUniform`, a flat prior on a periodic
+parameter with no support boundary. A hard-walled `Uniform(0, pi)` puts walls
+where the posterior can pile up (biasing `theta_int` and slowing samplers), and
+excludes the counter-rotating solution `theta_int + pi`; the full circle keeps
+both. Each `build_*_obs` also accepts `mask=` (boolean, `True` = use the pixel)
+to drop pixels from the likelihood.
 
 The task evaluates a JIT-compiled, differentiable log-posterior on the sampled
 vector (in `sampled_names` order). The simplest forward-model sanity check is to
@@ -376,11 +432,17 @@ for n in task.sampled_names:
 Image(res['output_path'])
 ```
 
-`cosi`, `vcirc`, and `rscale` are typically the worst-recovered parameters here,
-and that is expected, not a bug. A velocity map constrains the line-of-sight
-projection `vcirc * sin(i)`, so `vcirc` and `cosi` trade off along a degeneracy
-that velocity data alone cannot break. The recovery is much better on the
-observable *product* than on the individual parameters:
+The errors are consistent with the noise (compare the posterior widths in
+Example 5). `cosi` is recovered to better than 1%: this disk is well resolved,
+so the `1/cos(i)` stretch of the velocity field pins the inclination. The
+largest relative errors are in `vel.rscale`, which trades off against `vcirc`
+along the rising part of the rotation curve, and in `vel.v0`, whose true value
+is small (the absolute error is ~1 km/s).
+
+The velocity amplitude only constrains the line-of-sight product
+`vcirc * sin(i)`. When the geometric handle on inclination is weak (more
+face-on or less resolved disks), `vcirc` and `cosi` slide along this product
+and it is the quantity the data actually measure:
 
 ```{code-cell} python
 def vcirc_sini(p):
@@ -391,9 +453,11 @@ print(f"vcirc*sin(i):  truth={prod_true:.2f}  fit={prod_fit:.2f}  "
       f"rel err={abs(prod_fit - prod_true) / prod_true:.2%}")
 ```
 
-This is exactly why the optimizer-recovery tests assert on `vcirc * sin(i)`
-rather than on `vcirc` and `cosi` separately. Breaking the degeneracy needs
-external information, which is the subject of the next example.
+Here the product is no better determined than `vcirc` itself, because `cosi`
+is already pinned. In the degenerate regime it is, which is why the
+optimizer-recovery tests assert on `vcirc * sin(i)` rather than on `vcirc` and
+`cosi` separately. Breaking that degeneracy needs external information, the
+subject of the next example.
 
 ---
 
@@ -484,7 +548,7 @@ sigma_tf = 210.0 * np.log(10) * 0.08
 
 shear_free_priors = {
     'cosi': Uniform(0.05, 0.99),
-    'theta_int': Uniform(0.0, np.pi),
+    'theta_int': CircularUniform(2 * np.pi),
     'g1': Uniform(-0.25, 0.25),
     'g2': Uniform(-0.25, 0.25),
     'vel.v0': Gaussian(10.0, 10.0),
@@ -553,13 +617,19 @@ uncertainties and correlations. NumPyro NUTS is the recommended sampler (it uses
 the gradients JAX provides). We fit the same velocity-only problem with the TF
 prior, a small enough setup to converge in under a minute.
 
+`precondition='laplace'` starts the chains at the multi-start MAP, with the
+inverse Hessian there as the mass matrix. With a full-circle position-angle
+prior this matters: chains started from prior draws can stall in the
+counter-rotating half of the circle, where a low-rotation, near face-on fit is
+a local optimum (`sampling.md` covers initialization in depth).
+
 ```{code-cell} python
 from kl_pipe.sampling import NumpyroSamplerConfig, build_sampler
 from kl_pipe.priors import TruncatedNormal
 
 priors_tf = PriorDict({
     'cosi': Uniform(0.05, 0.99),
-    'theta_int': Uniform(0.0, np.pi),
+    'theta_int': CircularUniform(2 * np.pi),
     'g1': 0.0,
     'g2': 0.0,
     'vel.v0': Gaussian(10.0, 10.0),
@@ -572,6 +642,7 @@ task_tf = InferenceTask.from_obs(source, priors_tf, velocity_obs=vel_obs_data)
 config = NumpyroSamplerConfig(
     n_warmup=400, n_samples=600, n_chains=2,
     chain_method='vectorized', seed=0, progress=False,
+    precondition='laplace',   # start chains at the MAP (multi-start optimizer)
 )
 sampler = build_sampler('numpyro', task_tf, config)
 result = sampler.run()
@@ -593,10 +664,15 @@ fig = plot_corner(result, true_values={n: true_pars[n] for n in task_tf.sampled_
 plt.show()
 ```
 
-R-hat near 1.0 indicates the chains converged. With the TF prior, `cosi` and
-`vcirc` are now individually constrained (not just their product), and the
-corner plot shows the residual `vcirc`-`cosi` correlation the TF prior did not
-fully remove.
+R-hat near 1.0 indicates the chains converged. The posterior widths set the
+scale for the optimizer errors in Example 3, and the corner plot shows the
+`vcirc`-`rscale` and `vcirc`-`cosi` correlations discussed there.
+
+---
+
+> **Examples 6-9 are optional and Roman-oriented** (grism, bands, WCS, bulge +
+> disk). Examples 1-5 cover the core workflow; newcomers can stop here and
+> continue with `intensity_models.md`, `grism.md`, and `sampling.md`.
 
 ---
 
@@ -671,7 +747,7 @@ We size the FFT render grid with an explicit `RenderConfig`. `oversample=3` is
 deliberately low to keep this tutorial fast: it trades rendering fidelity for
 speed and is fine here because the priors are loose and we are not chasing
 sub-percent accuracy. For production inference with tight priors you would let
-`InferenceTask.from_obs` auto-derive the grid from the prior bounds (Section 8),
+`InferenceTask.from_obs` auto-derive the grid from the prior bounds (Example 8),
 which guards against the high-spatial-frequency aliasing that a too-low
 oversample would otherwise fold into the likelihood.
 
@@ -702,14 +778,13 @@ for ax in axes: ax.set_xticks([]); ax.set_yticks([])
 plt.tight_layout(); plt.show()
 ```
 
-Two notes on the noise used throughout this tutorial:
+Two notes on the noise here (conventions in Example 1):
 
-- **The requested SNR is the matched-filter SNR of the whole stamp**, and it
-  is realized exactly (`var = ||T||^2 / SNR^2`). For a grism stamp a more
-  physically meaningful label normalizes on the emission line alone
-  (`kl_pipe.noise.grism_line_noise`, with a line-only render as the
-  template): the continuum dominates the dispersed power but carries no
-  kinematic signal. The whole-stamp version here keeps the example short.
+- **The grism SNR is whole-stamp.** A more physically meaningful label
+  normalizes on the emission line alone (`grism_line_noise`, with a line-only
+  render as the template), since the continuum dominates the dispersed power
+  but carries no kinematic signal. The whole-stamp version keeps the example
+  short.
 - **Choosing a pathway.** Declared-SNR noise is the right tool for
   controlled experiments: you pick the depth, it is exact by construction,
   and the flux units stay arbitrary. When the question is instead what
@@ -784,10 +859,11 @@ The straightforward way (dense mass matrix, long warmup):
 # Rough runtime at this 32x32, oversample=3 setup: ~40 min (warmup-dominated).
 ```
 
-The faster way (Laplace preconditioner): NUTS starts at the MAP with a fixed
-inverse-Hessian mass matrix, so warmup only has to tune the step size instead of
-climbing from an identity metric. On the flagship test this is ~5x faster (8.5
-vs ~42 min) with equal recovery and better convergence.
+The faster way (Laplace preconditioner): NUTS starts at the MAP with the inverse
+Hessian there as its mass matrix, so warmup mostly tunes the step size instead
+of climbing from an identity metric. On the full-size joint fit in
+`tests/test_flagship.py` this is ~5x faster (8.5 vs ~42 min) with equal
+recovery.
 
 ```{code-cell} python
 # config_laplace = NumpyroSamplerConfig(
@@ -1208,7 +1284,9 @@ data + variance arrays and the same task runs unchanged.
 - **grism.md** -- datacube assembly and grism dispersion mechanics.
 - **sampling.md** -- inference in depth: emcee, nautilus, NumPyro NUTS, the
   Laplace preconditioner, and convergence diagnostics.
-- **tng50_data.md** -- fitting realistic TNG50 mock galaxies.
+- **roman_reference.md** -- a full-complexity Roman template (real WFI PSF,
+  coadds, multi-roll grism) and physical-unit noise from survey depths.
+- **tng50_data.md** -- rendering TNG50 mock galaxies into data vectors.
 
 Worked references in the test suite: `tests/test_likelihood_slices.py`
 (forward-model validation), `tests/test_optimizer_recovery.py` (gradient fits),

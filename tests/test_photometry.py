@@ -36,8 +36,8 @@ class TestConstants:
         assert CGS_TO_F17 == 1e17
         # c in Angstrom/s at the 4-digit precision the adapters use
         assert C_A_PER_S == 2.998e18
-        # Halpha air rest wavelength; kl_pipe/lines.py carries 656.28 nm
-        assert HALPHA_REST_A == 6562.8
+        # Halpha vacuum rest wavelength, the lines.py registry value in A
+        assert HALPHA_REST_A == pytest.approx(6564.61, abs=1e-9)
         # exponential disk: r50 = 1.678... * scale length, the exact root of
         # 1 - (1 + x) exp(-x) = 1/2 (unified from the rounded 1.678 that the
         # compactness/selection chain carried before the shot-noise branch)
