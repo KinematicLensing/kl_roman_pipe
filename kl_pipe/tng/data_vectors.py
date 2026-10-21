@@ -908,7 +908,7 @@ class TNGDataVectorGenerator:
         """
         Compute rotation matrices to transform from TNG simulation frame to disk frames.
 
-        Disk axes follow Pranjal RS: the stellar axis is the r-band
+        Disk axes follow Pranjal's recommendations: the stellar axis is the r-band
         luminosity-weighted angular momentum of the innermost 70% of star
         particles, the gas axis the SFR-weighted angular momentum of the
         innermost 10% of gas particles (the star-forming gas that emits

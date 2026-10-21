@@ -337,7 +337,7 @@ where K is the skew-symmetric cross-product matrix of the rotation axis.
 
 ### Gas-Stellar Misalignment
 
-**Disk axes** (Pranjal RS): stellar = r-band-weighted angular momentum of the innermost 70% of star particles; gas = SFR-weighted angular momentum of the innermost 10% of gas particles (the Halpha-emitting gas); both about SubhaloPos with periodic unwrapping. The disks then agree to ~2-3° median (>30° in 1.3% of the 919-galaxy spiral sample). The all-particle mass-weighted gas axis used before 2026-10-21 included extended gas and differed by ~30°.
+**Disk axes** follow Pranjal's recommendations: stellar = r-band-weighted angular momentum of the innermost 70% of star particles; gas = SFR-weighted angular momentum of the innermost 10% of gas particles (the Halpha-emitting gas); both about SubhaloPos with periodic unwrapping. The disks then agree to ~2-3° median (>30° in 1.3% of the 919-galaxy spiral sample). The all-particle mass-weighted gas axis used before 2026-10-21 included extended gas and differed by ~30°.
 
 The `preserve_gas_stellar_offset` parameter controls how this is handled:
 
