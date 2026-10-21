@@ -359,7 +359,7 @@ priors = PriorDict({
 
 - **16 galaxies** (upstream gold set 2026-07-06; 294869 dropped): SubhaloIDs 184941, 229935, 485056, 490815, 507293, 520311, 554798, 561676, 574615, 583256, 595887, 627128, 636848, 657568, 687075, 715911 (`TNG50MockData`; ~2.4 GB in `data/tng50/` via `make download-cyverse-data`)
 - **3D rotations** via Rodrigues formula (NOT 2D projections) — preserves disk thickness
-- **Gas-stellar offset**: the gas and stellar angular-momentum axes in `TNGDataVectorGenerator` are computed from ALL particles (gas mass-weighted, incl. extended gas) and differ by ~30 deg median on the gold set; with the star-forming inner gas that emits Halpha (inner 10% of gas, SFR-weighted; inner 70% of stars) the disks align to ~2-3 deg median (919-galaxy spiral sample: >30 deg in 1.3%). `preserve_gas_stellar_offset=True` (default) rotates gas by the all-particle gas axis; `False` forces alignment. Measurements: `experiments/sweverett/tng_nndb/`
+- **Gas-stellar offset**: disk axes follow Pranjal RS (stellar: innermost 70% of stars, r-band weighted; gas: innermost 10% of gas, SFR-weighted, i.e. the Halpha-emitting gas). Gas and stellar disks then agree to ~2-3 deg median (>30 deg in 1.3% of the 919-galaxy spiral sample); an all-particle mass-weighted gas axis (used before 2026-10-21) differs by ~30 deg. `preserve_gas_stellar_offset=True` (default) keeps the gas's own axis; `False` forces alignment. Measurements: `experiments/sweverett/tng_nndb/`
 - **Redshift scaling**: TNG native z~0.01 spans ~1300". Always use `target_redshift=0.5-1.0` for Roman-like sub-arcsec observations
 - **Empty velocity pixels**: set to 0, not NaN — cannot distinguish no-data from zero-velocity
 

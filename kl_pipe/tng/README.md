@@ -245,7 +245,7 @@ print(f"Difference: {gen._catalog_vs_kinematic_offset_deg:.2f}°")
 Diagnostic quantities:
 - `_kinematic_inc_stellar_deg`: Inclination derived from stellar angular momentum (angle from +Z)
 - `_kinematic_inc_gas_deg`: Inclination derived from gas angular momentum
-- `_gas_stellar_L_angle_deg`: 3D angle between the all-particle gas (mass-weighted) and stellar L vectors (~30° median on the gold set; ~2-3° for inner SFR-weighted gas, see below)
+- `_gas_stellar_L_angle_deg`: 3D angle between the gas (innermost 10%, SFR-weighted) and stellar (innermost 70%, r-band weighted) L vectors; ~3° median on the gold set
 - `_catalog_vs_kinematic_offset_deg`: Difference between TNG catalog morphological inclination and our kinematic inclination
 - `_L_stellar`, `_L_gas`: Unit vectors of angular momentum in TNG simulation frame
 - `_R_to_disk_stellar`, `_R_to_disk_gas`: 3D rotation matrices (Rodrigues) for transforming to disk frame
@@ -337,7 +337,7 @@ where K is the skew-symmetric cross-product matrix of the rotation axis.
 
 ### Gas-Stellar Misalignment
 
-**Important:** the gas axis here is the mass-weighted angular momentum of ALL gas particles, which includes extended and halo gas; it differs from the stellar axis by ~30° median on the gold set. The star-forming inner gas that emits Halpha (inner 10% of gas, SFR-weighted, vs inner 70% of stars) is aligned with the stellar disk to ~2-3° median (>30° in 1.3% of the 919-galaxy spiral sample). Prefer the inner SFR-weighted axis for Halpha kinematics.
+**Disk axes** (Pranjal RS): stellar = r-band-weighted angular momentum of the innermost 70% of star particles; gas = SFR-weighted angular momentum of the innermost 10% of gas particles (the Halpha-emitting gas); both about SubhaloPos with periodic unwrapping. The disks then agree to ~2-3° median (>30° in 1.3% of the 919-galaxy spiral sample). The all-particle mass-weighted gas axis used before 2026-10-21 included extended gas and differed by ~30°.
 
 The `preserve_gas_stellar_offset` parameter controls how this is handled:
 
