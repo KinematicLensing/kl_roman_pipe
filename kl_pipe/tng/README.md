@@ -32,7 +32,7 @@ galaxy = tng_data.get_galaxy(subhalo_id=8)  # By SubhaloID
 # - galaxy['subhalo']: Metadata (Inclination_star, Position_Angle_star, DistanceMpc, etc.)
 ```
 
-**Available galaxies:** 5 TNG50 galaxies with SubhaloIDs: 8, 17, 19, 20, 29
+**Available galaxies:** the 16-galaxy gold set (`make download-cyverse-data`; SubhaloIDs listed in the repo CLAUDE.md). The ~925-galaxy spiral parent sample (~100 GB per projection) is documented in `experiments/sweverett/tng_nndb/README.md`.
 
 ### Data Vector Generation (`data_vectors.py`)
 
@@ -245,7 +245,7 @@ print(f"Difference: {gen._catalog_vs_kinematic_offset_deg:.2f}°")
 Diagnostic quantities:
 - `_kinematic_inc_stellar_deg`: Inclination derived from stellar angular momentum (angle from +Z)
 - `_kinematic_inc_gas_deg`: Inclination derived from gas angular momentum
-- `_gas_stellar_L_angle_deg`: 3D angle between gas and stellar L vectors (typically 30-40°)
+- `_gas_stellar_L_angle_deg`: 3D angle between the all-particle gas (mass-weighted) and stellar L vectors (~30° median on the gold set; ~2-3° for inner SFR-weighted gas, see below)
 - `_catalog_vs_kinematic_offset_deg`: Difference between TNG catalog morphological inclination and our kinematic inclination
 - `_L_stellar`, `_L_gas`: Unit vectors of angular momentum in TNG simulation frame
 - `_R_to_disk_stellar`, `_R_to_disk_gas`: 3D rotation matrices (Rodrigues) for transforming to disk frame
@@ -337,7 +337,7 @@ where K is the skew-symmetric cross-product matrix of the rotation axis.
 
 ### Gas-Stellar Misalignment
 
-**Important:** Gas and stellar disks in TNG galaxies are often misaligned by **30-40°**! This is a real physical effect from different formation histories.
+**Important:** the gas axis here is the mass-weighted angular momentum of ALL gas particles, which includes extended and halo gas; it differs from the stellar axis by ~30° median on the gold set. The star-forming inner gas that emits Halpha (inner 10% of gas, SFR-weighted, vs inner 70% of stars) is aligned with the stellar disk to ~2-3° median (>30° in 1.3% of the 919-galaxy spiral sample). Prefer the inner SFR-weighted axis for Halpha kinematics.
 
 The `preserve_gas_stellar_offset` parameter controls how this is handled:
 
@@ -388,7 +388,7 @@ This is mathematically equivalent to the formula above. The 3D rotation matrix n
 
 1. **Empty velocity pixels**: Pixels with no gas particles are set to 0, not NaN. Cannot distinguish "no data" from "zero velocity"
 2. **Gaussian noise only**: Poisson noise is available via `include_poisson=True` but adds complexity for intensity map visualization (negative fluctuations)
-3. **TNG sample size**: Only 5 galaxies currently available (SubhaloIDs: 8, 17, 19, 20, 29)
+3. **TNG sample size**: 16 gold galaxies locally; the ~925-galaxy spiral sample needs the TACC per-galaxy split (`experiments/sweverett/tng_nndb/`)
 
 PSF convolution is supported: pass a `galsim.GSObject` as `TNGRenderConfig.psf` and both `generate_intensity_map` and `generate_velocity_map` convolve with it (flux-weighted for velocity). See `tests/test_psf_tng.py`.
 
