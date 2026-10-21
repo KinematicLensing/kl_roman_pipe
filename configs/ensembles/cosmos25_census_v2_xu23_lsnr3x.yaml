@@ -55,7 +55,7 @@ model:
 
 observation:
   line_snr_scale: 3
-  config: hlwas_medium_roman
+  config: hlwas_medium_roman_iso45
 
 fit:
   sampler: numpyro

@@ -52,7 +52,7 @@ model:
     oversample: 3
 
 observation:
-  config: hlwas_medium_roman
+  config: hlwas_medium_roman_iso45
 
 fit:
   sampler: numpyro

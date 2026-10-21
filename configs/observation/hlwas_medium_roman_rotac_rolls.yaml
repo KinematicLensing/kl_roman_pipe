@@ -4,8 +4,8 @@
 # paired to give opposite orientations"; nearly opposed dispersion breaks the
 # line-centroid / redshift degeneracy). Neither ROTAC nor the STScI HLWAS page
 # gives the grism angles; the opposition uses the imaging passes' 167 deg
-# relative roll and a 10 deg offset within each season. Everything else is
-# identical to hlwas_medium_roman.
+# relative roll and a 10 deg offset within each season. Identical to
+# hlwas_medium_roman since 2026-10-21 (kept so its specs and runs keep their id).
 id: hlwas_medium_roman_rotac_rolls
 bands: [F129, F158]
 grism:
