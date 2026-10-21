@@ -661,6 +661,16 @@ class TestRomanObs:
             _build_grism_psf(ROMAN_SPEC, 1.0 + 0.01 * i)
         assert len(mocks_mod._ROMAN_PSF_CACHE) <= mocks_mod._ROMAN_PSF_CACHE_MAX
 
+    def test_roman_psf_cache_keeps_reused_keys(self):
+        # z-independent PSFs used by every fit survive any number of fits
+        from kl_pipe.ensemble import mocks as mocks_mod
+
+        mocks_mod._ROMAN_PSF_CACHE.clear()
+        band = _get_roman_wfi_psf(10, 4, 1293.6, bandpass='J129')
+        for i in range(3 * mocks_mod._ROMAN_PSF_CACHE_MAX):
+            _get_roman_wfi_psf(10, 4, 1600.0 + 5.0 * i, bandpass=None)
+            assert _get_roman_wfi_psf(10, 4, 1293.6, bandpass='J129') is band
+
     def test_galsim_aperture_cache_bounded_and_values_unchanged(self):
         # galsim's own per-wavelength aperture cache must be bounded too, and
         # rebuilding an evicted aperture must give the identical PSF

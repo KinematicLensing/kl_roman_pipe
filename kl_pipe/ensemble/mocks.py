@@ -112,14 +112,15 @@ def _build_gaussian_psf(fwhm_arcsec: float):
 
 # process-level cache: getPSF is expensive (~0.5 s) and the worker builds
 # several obs per fit (bands + rolls) plus the pinned-size reference PSF, so
-# repeated wavelengths must not re-run the optics computation. Bounded FIFO:
-# a long-lived worker claims many fits at distinct redshifts, so an unbounded
-# cache would accumulate one GSObject per fit; within-fit reuse only needs a
-# handful of entries.
+# repeated wavelengths must not re-run the optics computation. Bounded LRU: a
+# long-lived worker claims many fits at distinct redshifts, and each entry
+# holds ~100 MB of galsim state. A fit uses 8 keys (2 bands and the z_max
+# kernel-size reference, each at mock and fit fidelity, plus the fit's grism
+# pair), 6 of them z-independent and kept across fits.
 _ROMAN_PSF_CACHE: Dict[
     Tuple[int, int, float, Optional[str], Optional[float]], object
 ] = {}
-_ROMAN_PSF_CACHE_MAX = 16
+_ROMAN_PSF_CACHE_MAX = 8
 
 
 def _get_roman_wfi_psf(
@@ -163,7 +164,10 @@ def _get_roman_wfi_psf(
         bandpass,
         folding_threshold,
     )
-    if key not in _ROMAN_PSF_CACHE:
+    if key in _ROMAN_PSF_CACHE:
+        # most recently used last
+        _ROMAN_PSF_CACHE[key] = _ROMAN_PSF_CACHE.pop(key)
+    else:
         while len(_ROMAN_PSF_CACHE) >= _ROMAN_PSF_CACHE_MAX:
             _ROMAN_PSF_CACHE.pop(next(iter(_ROMAN_PSF_CACHE)))
         # bound galsim's per-wavelength pupil-aperture cache (~16 MB each, 1024 deep)
