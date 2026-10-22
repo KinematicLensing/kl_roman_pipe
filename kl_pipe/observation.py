@@ -1143,7 +1143,7 @@ def build_fiber_obs(
         render_config = RenderConfig(oversample=DEFAULT_OVERSAMPLE)
     oversample = render_config.oversample # canonical
 
-    cube_pars = fiber_pars.to_cube_pars(z)
+    cube_pars = fiber_pars.to_cube_pars(z=z, delta_lambda=fiber_pars.delta_lambda, lambda_min=fiber_pars.lambda_min, lambda_max=fiber_pars.lambda_max)
     psf_data = None
     fine_image_pars = None
     pixel_response_fft = None
@@ -1233,7 +1233,6 @@ def build_fiber_obs(
     return obs
 
 #super basic
-#need to add some guardrails or whatever
 #I should only allow for a group when they share the same cubepars, oversampling, etc.
 def group_fiber_obs(
     fiber_obs: Dict[str, 'FiberObs'],
@@ -1241,13 +1240,9 @@ def group_fiber_obs(
     groups: List[Dict[str, 'FiberObs']] = []
     group_reps: List['FiberObs'] = []
     for key, obs in fiber_obs.items():
-        # analytic dispersal builds no cube; always a singleton group
-        #groups.append({key: obs})
-        #group_reps.append(obs)
         placed = False
         for group, rep in zip(groups, group_reps):
             #if _cube_compatible(obs,rep):
-        #for group in groups:
             group[key] = obs
             placed = True
             break

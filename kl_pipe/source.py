@@ -461,7 +461,6 @@ class SourceModel:
         spectral_oversample: int | None = None,
     ) -> jnp.ndarray:
 
-        #first_obs = fiber_obs_group[0]
         first = next(iter(obs_group.values()))
         
         # resolve spectral_oversample: explicit kwarg wins, else read from obs
@@ -502,14 +501,10 @@ class SourceModel:
 
         #plt.imshow(cube[:,:,0])
 
-        #coarse_pixel_scale = obs.fiber_pars.image_pars.pixel_scale
         cube_pixel_scale = build_cube_pars.image_pars.pixel_scale
 
         out = {}
         for key, obs in obs_group.items():
-            #mask = obs.ATMPSF_conv_fiber_mask
-            #throughput = obs.throughput
-            #resolution_matrix = obs.resolution_matrix
             spec_1D = jnp.sum(
                             (obs.ATMPSF_conv_fiber_mask[:, :, jnp.newaxis] * cube),
                             axis=(0, 1))* cube_pixel_scale**2

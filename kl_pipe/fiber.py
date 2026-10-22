@@ -18,6 +18,8 @@ class FiberPars:
     image_pars: ImagePars
     #obs_conf: dict  #not using. Would contain mirror diameter, exptime, gain...
     lambda_ref: float  # reference wavelength nm (zero-offset point) ???
+    lambda_min: float
+    lambda_max: float
     delta_lambda: float
     fiber_radius: float
     fiber_blur: float
@@ -30,7 +32,10 @@ class FiberPars:
         self,
         z: float,
         velocity_window_kms: float = 3000.0,
-        #delta_lambda: float = 0.1,
+        #lambda_array: np.ndarray = None,
+        delta_lambda: float = None,
+        lambda_min: float = None,
+        lambda_max: float = None,
         n_lambda: int = None,
         line_lambdas_rest: tuple = None,
     ) -> 'CubePars':
@@ -72,6 +77,11 @@ class FiberPars:
             n_lambda = max(n_lambda, 3)
 
         lambda_grid = jnp.linspace(lam_min, lam_max, n_lambda)
+
+        #override
+        if lambda_min is not None and lambda_max is not None and delta_lambda is not None:
+            lambda_grid = jnp.arange(lambda_min, lambda_max, delta_lambda)
+
         return CubePars(image_pars=self.image_pars, lambda_grid=lambda_grid)
     
     @property
@@ -89,6 +99,8 @@ def build_fiber_pars_for_line(
     fiber_blur: float,
     fiber_dx: float,
     fiber_dy: float,
+    lambda_min: float = None,
+    lambda_max: float = None,
     bandpass_path: Optional[str] = None,
     throughput: Optional[jnp.ndarray] = None,  # T(lambda), shape (Nlambda,)
     image_pars: ImagePars = None,
@@ -110,7 +122,9 @@ def build_fiber_pars_for_line(
         image_pars=image_pars,
         #obs_conf=obs_conf,
         lambda_ref=lambda_ref,
-        delta_lambda = delta_lambda,
+        lambda_min= lambda_min,
+        lambda_max= lambda_max,
+        delta_lambda= delta_lambda,
         fiber_radius = fiber_radius,
         fiber_blur = fiber_blur,
         fiber_dx = fiber_dx,
@@ -119,7 +133,6 @@ def build_fiber_pars_for_line(
         throughput = throughput
     )
 
-#maybe put these in the fiber.py file
 def get_fiber_mask(image_pars, fiber_pars):
     from photutils.geometry import (
         circular_overlap_grid as cog,
