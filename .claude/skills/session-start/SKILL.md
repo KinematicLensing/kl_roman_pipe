@@ -1,7 +1,7 @@
 ---
 name: session-start
 description: Bootstrap a new kl_roman_pipe session. Reviews recent handoffs, memory, and current project state.
-disable-model-invocation: False
+disable-model-invocation: true
 ---
 
 # /session-start -- Session Onboarding
